@@ -28,6 +28,7 @@ from mammamiradio.core.models import (
     Track,
     safe_media_attribution_dict,
 )
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
 
@@ -326,11 +327,11 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         "detail": (
             "Backup audio is ready to keep the route audible, but primary music still needs attention."
             if readiness["recovery_cover_available"]
-            else "Enable live charts, configure Jamendo, or add local MP3 files."
+            else "Enable live charts, configure Jamendo, or add local audio files."
         ),
         "steps": [
             "Enable live charts or configure Jamendo, or",
-            "Place MP3 files in the configured local music directory.",
+            "Add supported audio files to the local music library.",
         ],
         **shared,
     }
@@ -740,6 +741,7 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
         "clip_audio_class",
         # Render-scoped playlist identity keeps provider truth stable across a
         # metadata-only source swap. It is operational bookkeeping, not part of

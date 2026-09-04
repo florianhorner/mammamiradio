@@ -184,7 +184,7 @@
   {% endif %}
 </main>
 
-<p class="footer-line">{% if expired %}{{ station_name }}{% else %}Questo momento è durato 30 secondi · {{ station_name }}{% endif %}</p>
+<p class="footer-line">{% if expired or not clip_duration_seconds %}{{ station_name }}{% else %}Questo momento è durato {{ clip_duration_seconds }} {{ "secondo" if clip_duration_seconds == 1 else "secondi" }} · {{ station_name }}{% endif %}</p>
 
 </body>
 </html>

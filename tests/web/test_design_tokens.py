@@ -22,6 +22,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
 BASE_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "base.css"
+FIRST_LISTEN_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "first-listen.css"
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
 _ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
 LISTENER_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.css"
@@ -129,6 +130,76 @@ def _css_root_declarations(text: str) -> dict[str, str]:
 
 def _normalized_css_value(value: str) -> str:
     return re.sub(r"\s+", "", value).lower()
+
+
+def _hex_rgb(value: str) -> tuple[float, float, float]:
+    value = value.removeprefix("#")
+    assert len(value) == 6, f"Expected a six-digit hex color, got {value!r}."
+    return (
+        int(value[0:2], 16) / 255,
+        int(value[2:4], 16) / 255,
+        int(value[4:6], 16) / 255,
+    )
+
+
+def _alpha_composite(
+    foreground: tuple[float, float, float],
+    background: tuple[float, float, float],
+    alpha: float,
+) -> tuple[float, float, float]:
+    return (
+        alpha * foreground[0] + (1 - alpha) * background[0],
+        alpha * foreground[1] + (1 - alpha) * background[1],
+        alpha * foreground[2] + (1 - alpha) * background[2],
+    )
+
+
+def _relative_luminance(color: tuple[float, float, float]) -> float:
+    linear = tuple(channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in color)
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(foreground: tuple[float, float, float], background: tuple[float, float, float]) -> float:
+    lighter, darker = sorted((_relative_luminance(foreground), _relative_luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_first_listen_plain_status_chips_meet_normal_text_contrast() -> None:
+    """Every source-chip state must remain legible on the preview surface."""
+    tokens = _css_root_declarations(TOKENS_CSS.read_text(encoding="utf-8"))
+    first_listen_css = FIRST_LISTEN_CSS.read_text(encoding="utf-8")
+    preview = _css_declarations(_css_block(first_listen_css, ".first-listen-panel .first-listen-source-preview"))
+    chip = _css_declarations(_css_block(first_listen_css, ".first-listen-panel .status-chip"))
+
+    assert preview.get("background") == "var(--bg-elevated)"
+    assert _normalized_css_value(chip.get("background", "")) == "color-mix(insrgb,var(--cream)4%,transparent)"
+
+    expected_declarations = {
+        "ready": "var(--ok-text)",
+        "working": "var(--sun)",
+        "degraded": "var(--warning)",
+        "blocked": "color-mix(in srgb, var(--error) 58%, var(--cream))",
+        "idle": "var(--muted)",
+    }
+    for state, expected in expected_declarations.items():
+        selector = f".first-listen-panel .status-chip.{state}"
+        actual = _css_declarations(_css_block(first_listen_css, selector)).get("color")
+        assert _normalized_css_value(actual or "") == _normalized_css_value(expected), (
+            f"{selector} color must remain {expected}, got {actual!r}."
+        )
+
+    preview_background = _hex_rgb(tokens["--bg-elevated"])
+    chip_background = _alpha_composite(_hex_rgb(tokens["--cream"]), preview_background, 0.04)
+    status_colors = {
+        "ready": _hex_rgb(tokens["--ok-text"]),
+        "working": _hex_rgb(tokens["--sun"]),
+        "degraded": _hex_rgb(tokens["--warning"]),
+        "blocked": _alpha_composite(_hex_rgb(tokens["--error"]), _hex_rgb(tokens["--cream"]), 0.58),
+        "idle": _hex_rgb(tokens["--muted"]),
+    }
+    for state, color in status_colors.items():
+        contrast = _contrast_ratio(color, chip_background)
+        assert contrast >= 4.5, f"{state} contrast is {contrast:.3f}:1; normal text requires at least 4.5:1."
 
 
 def test_every_var_ref_resolves_to_a_defined_token() -> None:

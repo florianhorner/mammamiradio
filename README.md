@@ -58,8 +58,8 @@ immediately, but it is not the song library. Normal rotation starts with the
 offline, attributed twelve-track starter collection, so no provider
 account or network music source is required. Open the listener and use **Music
 credits** to see the exact source, license, and modification notice for what is
-playing. Operator-supplied MP3s can also live in `/data/music` in the add-on;
-standalone/Docker installs can point elsewhere with `MAMMAMIRADIO_MUSIC_DIR`.
+playing. Operator-supplied audio in the add-on's `/data/music` directory is
+discovered automatically; standalone installs can set `MAMMAMIRADIO_MUSIC_DIR`.
 
 Jamendo is an optional, default-off transient expansion for acknowledged
 non-commercial API use while provider confirmation is pending. Configure it
@@ -127,6 +127,8 @@ You built the sensors. You wrote the automations. Now somebody finally notices.
 
 ## See it
 
+**[Watch Studio B Transmissions](https://florianhorner.github.io/mammamiradio/shorts/)**
+
 <p align="center">
   <img src="docs/screenshots/listener.png" width="480" alt="Listener page: la radio che ascolta la tua casa">
 </p>
@@ -157,7 +159,7 @@ It starts in layers, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | Nothing | The First Listen mini-show plays right here on this device, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
+| **Hear it first** | Nothing | The First Listen mini-show plays right here on this device, then Demo Radio uses the attributed offline starter collection and a shipped 21-clip bank of reviewed Marco-and-Giulia host breaks. It selects only the clips safe for the active language mode, while stock copy, fallback voices, and recovery cover remain underneath. |
 | **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
 | **Give your home a voice** | AI host key plus prompt-safe Home Assistant context | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 

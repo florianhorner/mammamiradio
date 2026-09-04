@@ -124,7 +124,11 @@ from mammamiradio.core.setup_status import (
     first_listen_continuity_available,
 )
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
-from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
+from mammamiradio.core.spoken_assets import (
+    PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
+    is_approved_packaged_audio_asset,
+    is_approved_spoken_asset,
+)
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import (
     drain_invalidated_label_generation,
@@ -174,6 +178,7 @@ from mammamiradio.playlist.direction import (
     resolve_direction_search_results,
 )
 from mammamiradio.playlist.downloader import external_media_enabled
+from mammamiradio.playlist.local_library import scan_and_reconcile_local_library
 from mammamiradio.playlist.music_admission import (
     YOUTUBE_ADMISSION_SEARCH_DEPTH,
     classify_youtube_candidate,
@@ -859,6 +864,13 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 # After an ad/banter ends we keep its snapshot briefly, so a listener who taps
 # Share a moment too late (music already playing again) still gets the whole bit.
 CLIP_LOOKBACK_SECONDS = 15
+# Upper bound on a duration we are willing to print on the public share page.
+# Nothing shareable comes close: voice segments are capped at
+# CLIP_MAX_SEGMENT_SECONDS and the longest bundled starter track is under ten
+# minutes. Finiteness alone is not proof — 1e308 and a 300-digit integer are
+# both finite and both nonsense — so a value past this ceiling is treated as
+# corrupt metadata and no duration is claimed at all.
+CLIP_MAX_PROVABLE_DURATION_SECONDS = 3600
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 STREAM_MAX_PACKET_SECONDS = 0.125
@@ -1098,6 +1110,7 @@ def _validated_starter_share_snapshot(segment: Segment) -> dict[str, Any] | None
         "type": "starter",
         "title": entry.title,
         "artist": entry.artist,
+        "duration_seconds": entry.duration_seconds,
         "provider_track_id": entry.isrc,
         "attribution": safe_attribution,
     }
@@ -1258,6 +1271,31 @@ def _segment_is_listener_reserved(state: StationState, segment: Segment) -> bool
     if segment.path is not None and segment.path.name.startswith("norm_"):
         return _is_listener_reserved_cache_file(segment.path, reservations)
     return False
+
+
+def _packaged_banter_predecessor_is_current(state: StationState, segment: Segment) -> bool:
+    """Fail closed unless exact-track banter still follows its named starter."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    required_starter_id = str(metadata.get(PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY) or "")
+    if not required_starter_id:
+        return True
+    # ``now_streaming`` is selected/readable truth and can be published before
+    # any listener accepts a byte. The last-audible snapshot advances only at
+    # the accepted-listener commit, so it is the actual predecessor boundary.
+    previous = state._last_audible_stream if isinstance(state._last_audible_stream, dict) else {}
+    if previous.get("type") != SegmentType.MUSIC.value:
+        return False
+    previous_metadata = previous.get("metadata")
+    if not isinstance(previous_metadata, dict):
+        return False
+    source_kind = str(
+        previous_metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY)
+        or previous_metadata.get("source_kind")
+        or previous_metadata.get("audio_source")
+        or ""
+    )
+    return source_kind == "starter" and str(previous_metadata.get("provider_track_id") or "") == required_starter_id
 
 
 def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
@@ -5537,6 +5575,26 @@ async def run_playback_loop(app) -> None:
             gap_clips_served = 0
             continue
 
+        if not _packaged_banter_predecessor_is_current(state, segment):
+            # The clip was selected while its named starter was at queue-tail,
+            # but a later queue/source mutation removed or rejected that song.
+            # Drop at the last unstarted boundary rather than naming whichever
+            # unrelated track actually aired before it.
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_PLAYED_TRACK_REF)
+            _settle_discarded_selection_handoff(
+                segment_queue, state, segment, reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF
+            )
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info("Discarding exact-track packaged banter after its predecessor changed")
+            continue
+
         if not segment.mark_playback_started():
             # Settle like every other pre-air drop site. Without this the
             # segment vanishes with its listener-request reservation still held,
@@ -9135,6 +9193,13 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "purged": purged, "persisted": persisted}
 
 
+@router.post("/api/media-sources/local/scan")
+async def scan_local_music(request: Request, _: None = Depends(require_admin_access)):
+    """Refresh operator-owned files without replacing the active base source."""
+    result = await scan_and_reconcile_local_library(request.app.state)
+    return {"ok": not bool(result.get("error")), **result}
+
+
 @router.post("/api/playlist/remove")
 async def remove_track(request: Request, _: None = Depends(require_admin_access)):
     """Remove a captured track from the rotation pool — a DURABLE ban.
@@ -11140,6 +11205,18 @@ async def create_clip(request: Request):
         "track_artist": track_artist,
         "created_at": int(time.time()),
     }
+    # The starter catalog guarantees a positive duration_seconds for every
+    # entry, but this only claims one if the snapshot actually proves it —
+    # never guess from clip_data's byte length, which is the raw starter
+    # file at its own encode rate, not config.audio.bitrate.
+    snap_duration = snap.get("duration_seconds")
+    if (
+        isinstance(snap_duration, int | float)
+        and not isinstance(snap_duration, bool)
+        and math.isfinite(snap_duration)
+        and snap_duration > 0
+    ):
+        sidecar["duration_seconds"] = round(float(snap_duration), 3)
     if clip_attribution_override is not None:
         sidecar["music_attribution"] = clip_attribution_override
     try:
@@ -11333,6 +11410,7 @@ async def keep_this(request: Request, _: None = Depends(require_admin_access)):
         "station_name": config.display_station_name,
         "track_title": kept_title,
         "track_artist": "",
+        "duration_seconds": round(len(clip_data) / bytes_per_sec, 3),
         "segment_type": kept_type,
         "source": source,
         "created_at": int(now),
@@ -11600,6 +11678,16 @@ async def clip_landing(clip_id: str, request: Request):
     station_name = sidecar.get("station_name") or config.display_station_name
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
+    clip_duration_seconds = None
+    raw_duration = sidecar.get("duration_seconds")
+    if raw_duration is not None and not isinstance(raw_duration, bool):
+        try:
+            parsed_duration = float(raw_duration)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        else:
+            if math.isfinite(parsed_duration) and 0 < parsed_duration <= CLIP_MAX_PROVABLE_DURATION_SECONDS:
+                clip_duration_seconds = max(1, round(parsed_duration))
 
     return _TEMPLATES.TemplateResponse(
         request,
@@ -11610,6 +11698,7 @@ async def clip_landing(clip_id: str, request: Request):
             "station_name": station_name,
             "track_title": track_title,
             "track_artist": track_artist,
+            "clip_duration_seconds": clip_duration_seconds,
             "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
             "og_image_url": f"{public_base_url}/og-card.png",
             "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",
@@ -11758,6 +11847,11 @@ async def status(
                 "recent": [{"kind": r["kind"], "label": r["label"], "ok": r["ok"]} for r in list(state.gen_recent)],
             },
             "playlist_source": _serialize_source(state.playlist_source),
+            # Local paths and scan diagnostics are operator-only. The public
+            # payload intentionally carries only source-readiness summaries.
+            "local_library": dict(
+                getattr(request.app.state, "local_library_status", {"in_progress": False, "roots": []})
+            ),
             "jamendo": safe_jamendo_status(config, getattr(request.app.state, "jamendo_provider", None)),
             "external_extractors": _external_extractors_status(config),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],

@@ -51,6 +51,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.scheduling.handoff import PreparedMusicHandoff, commit_music_handoff
 from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow, _reserve_music_segment
@@ -788,6 +789,71 @@ async def test_stale_queued_companionship_epoch_is_discarded_before_audio(tmp_pa
         assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
         assert state.queued_segments == []
         assert state.now_streaming.get("label") != "Companionship"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_exact_packaged_banter_rechecks_its_audible_predecessor(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    _, listener_queue = app.state.stream_hub.subscribe()
+    audio = b"exact packaged banter"
+    audio_path = tmp_path / "exact-banter.mp3"
+    audio_path.write_bytes(audio)
+
+    def _segment(queue_id: str) -> Segment:
+        return Segment(
+            type=SegmentType.BANTER,
+            path=audio_path,
+            duration_sec=1.0,
+            metadata={
+                "queue_id": queue_id,
+                "title": "Exact banter",
+                "canned": True,
+                PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY: "EXPECTED-ID",
+            },
+            ephemeral=False,
+        )
+
+    # The exact clip was queued behind EXPECTED-ID, then a queue/source
+    # mutation made another starter the actual audible predecessor.
+    state.now_streaming = {
+        "type": "music",
+        "metadata": {"source_kind": "starter", "provider_track_id": "EXPECTED-ID"},
+    }
+    state.current_stream_audible = False
+    state._last_audible_stream = {
+        "type": "music",
+        "metadata": {"source_kind": "starter", "provider_track_id": "OTHER-ID"},
+    }
+    app.state.queue.put_nowait(_segment("stale-exact"))
+    state.queued_segments = [{"id": "stale-exact", "type": "banter"}]
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert listener_queue.empty()
+        assert state.discard_by_reason[GenerationWasteReason.STALE_PLAYED_TRACK_REF] == 1
+        assert audio_path.exists()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    # The same clip remains eligible when its named starter really was the
+    # immediately previous listener-audible segment.
+    state._last_audible_stream = {
+        "type": "music",
+        "metadata": {"source_kind": "starter", "provider_track_id": "EXPECTED-ID"},
+    }
+    app.state.queue.put_nowait(_segment("current-exact"))
+    state.queued_segments = [{"id": "current-exact", "type": "banter"}]
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        assert await asyncio.wait_for(listener_queue.get(), timeout=1.0) == audio
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert state.now_streaming["label"] == "Exact banter"
+        assert state.discard_by_reason[GenerationWasteReason.STALE_PLAYED_TRACK_REF] == 1
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

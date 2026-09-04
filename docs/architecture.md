@@ -74,7 +74,7 @@ rematerializes an older Supervisor value.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
 3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
-5. Restores an eligible persisted base selection. A retired `jamendo://` source is rewritten to the current base; add-on-external selections cannot restore extractor authority. Without an eligible selection, operator-owned local `music/` files win when present, otherwise the hash-pinned attributed starter catalog is the offline base.
+5. Restores an eligible persisted base selection without scanning local files; otherwise the hash-pinned attributed starter catalog is the offline base. A retired `jamendo://` source is rewritten, and add-on-external selections cannot restore extractor authority. Local discovery starts after audio and overlays future rotation.
 6. Initializes the clip ring buffer for WTF clip sharing.
 7. Restores `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or the HA add-on's Supervisor-generated, read-only `/data/options.json` startup projection without arming a first strike.
 8. Creates shared app state, then synchronously admits any safe, receipted,
@@ -919,9 +919,8 @@ durable base; Jamendo is deliberately outside this function:
    external selection may restore. A legacy `jamendo://` selection is retired and
    rewritten to the current base. Both add-ons reject any persisted selection that
    would require extractor authority.
-2. **Operator local files.** MP3s under `music/` become the base when present.
-   They receive no project license claim; the operator owns their provenance and
-   permitted use.
+2. **Operator local files.** Direct callers may use them as a base; production overlays after startup.
+   They receive no project license claim; the operator owns their provenance and permitted use.
 3. **Bundled starter catalog.** With no local base, runtime loads the twelve
    hash-pinned attribution-only derivatives from the canonical manifest
    (Incompetech under CC BY 4.0, Jamendo under CC BY 3.0).
@@ -1056,7 +1055,7 @@ The hot `write_banter` contract does not write persona memory. Instead, `scriptw
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
 
-Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/welcome MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Missing, unlisted, changed, malformed, or truth-unsafe speech invalidates the inventory. Runtime playback admits approved recovery and neutral banter speech; welcome copy and unmanifested directory discovery remain disabled. The release-invariants gate validates this manifest.
+Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/First Listen MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Banter rows also declare Normal vs Super Italian Mode, an optional exact predecessor starter id, and whether the clip is a rare fourth-wall special. The release boundary rejects missing, unlisted, changed, malformed, truth-unsafe, undecodable, off-loudness, or oversized inventory; runtime admission parses the policy-valid manifest snapshot and hashes only the selected file, keeping whole-bank I/O off first-byte and recovery paths. Exact-track banter requires both a matching starter queue tail at selection and the same actual listener-audible predecessor at playback. Forced, urgent, fallback, and uncertain paths use evergreen copy, fourth-wall specials are rare natural breaks, and long packaged banter does not repeat after its mode-safe bank is exhausted. Unmanifested directory discovery remains disabled.
 
 Anonymous listener-session diagnostics and legacy aggregate listener counters appear only on authenticated `/status`. `/public-status` retains its existing schema and exposes neither session diagnostics, cue metadata, nor listener counters.
 

@@ -86,6 +86,19 @@ and deploys `dist/` to GitHub Pages at
 `refs/heads/main`, so the dispatch button tests a branch without publishing it.
 Operator detail lives in `docs/operations.md` under "Explainer page deployment".
 
+The same Pages artifact carries the Studio B hub and three watch routes:
+
+- <https://florianhorner.github.io/mammamiradio/shorts/>
+- <https://florianhorner.github.io/mammamiradio/shorts/archive-receipt/>
+- <https://florianhorner.github.io/mammamiradio/shorts/jealous-microphone/>
+- <https://florianhorner.github.io/mammamiradio/shorts/third-chair/>
+
+The approved MP4 masters remain outside Git and are loaded from tag-pinned
+GitHub Release asset URLs. Every public shorts page states `Contains synthetic
+voices.` Before publishing a changed master, verify playback and seeking in
+Safari and Chromium, then update the pinned URL only after the replacement is
+live. Do not add MP4 files under `docs/explainer/`.
+
 The directory root is also a complete static site on its own: prebuilt files
 plus `.nojekyll`, no build step needed to read it. Serving it from another
 origin needs one edit first. `index.html` names

@@ -4,9 +4,10 @@ name: preship-evidence
 #
 # The local enforcement (scripts/hooks/require-preship-squad.sh) is a Claude Code
 # PreToolUse hook — Codex has no hook layer, so ~60% of sessions could open PRs with no
-# squad check at all. This workflow closes that gap server-side by verifying the
-# committed evidence artifacts. During the compatibility phase, v1's fixed file and
-# v2's immutable content-addressed receipt are evaluated independently.
+# squad check at all. This workflow narrows that gap server-side by verifying the
+# committed evidence: the immutable content-addressed v2 receipt under
+# proof/preship-reviews/v2/. (The legacy fixed-name v1 file is retired — a fixed name
+# meant every pair of concurrent PRs conflicted on evidence.)
 #
 # Data-plane hardening (same pattern as pr-body-lint.yml): the CHECKER runs from the
 # BASE ref, and only evidence DATA comes from the PR head. Running the head's own
@@ -58,32 +59,13 @@ jobs:
           # Fetch objects only. Never check out the PR head or execute code from it.
           git fetch --no-tags origin "$HEAD_SHA"
 
-      - name: Check v1 pre-ship review evidence
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if [ ! -f scripts/check-preship-evidence.sh ]; then
-            echo "::notice::v1 checker is not present on the trusted base; v1 was not evaluated."
-            exit 0
-          fi
-          evidence_file="$RUNNER_TEMP/preship-review-v1.json"
-          if ! git show "$HEAD_SHA:proof/preship-review.json" > "$evidence_file" 2>/dev/null; then
-            echo "::warning::No proof/preship-review.json on this PR. Run the review squad, emit v1 evidence, and commit it. (Report-only — not blocking yet.)"
-            exit 0
-          fi
-          if bash scripts/check-preship-evidence.sh "$evidence_file" "$HEAD_SHA"; then
-            echo "::notice::v1 pre-ship review evidence verified for this PR head."
-          else
-            echo "::warning::v1 pre-ship review evidence is invalid (see log above). Re-run the review and re-emit v1. (Report-only — not blocking yet.)"
-          fi
-
       - name: Check v2 pre-ship review evidence
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ ! -f scripts/landing/__main__.py ]; then
-            echo "::notice::v2 evidence was not evaluated because the trusted base has no v2 verifier; it activates after this bootstrap PR lands."
+            echo "::notice::v2 evidence was not evaluated because this PR's base predates the v2 verifier; integrate current main to get the check."
             exit 0
           fi
           # Invoke the trusted-base package directly. The shell wrapper's venv and

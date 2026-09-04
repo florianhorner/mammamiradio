@@ -149,7 +149,6 @@ they are ever counted as listeners.
      open a fresh `## [Unreleased]`
    - **ha-addon CHANGELOG**: move its `## Unreleased` content under a real
      `## X.Y.Z - <date>` heading
-
    Both are REQUIRED. `pre-release-check.sh` §2 compares `config.yaml` against the
    first *versioned* heading in each file, skipping `## Unreleased`. The extractor
    strips brackets, so `## [X.Y.Z]` and `## X.Y.Z` both parse; the root file uses
@@ -165,8 +164,7 @@ they are ever counted as listeners.
    git fetch origin main --tags
    CUT_SHA="$(git rev-parse origin/main)"
    ```
-   The cut must already contain the physical 20-run HA Green receipt set from
-   the exact clean edge source commit, recorded with the commands in
+   The cut must already contain the physical 20-run HA Green receipt set for its complete release content, recorded with the commands in
    [`docs/music-sources.md`](../music-sources.md). Pre-flight fails loud if the
    evidence is missing, stale, or over its two-second p95, or if the tag/version,
    release metadata, changelog head, or either per-arch `:sha` image disagrees.
@@ -175,8 +173,7 @@ they are ever counted as listeners.
    `pyproject.toml` and `ha-addon/**`, both in the build's path filter).
 
    The long judgment soak belongs *before* the cut, on the edge line. If you want a
-   short confirmation that the cut commit itself boots (it differs from its soaked
-   parent only by version strings and changelog text), pin edge to it:
+   short confirmation that the squash-landed cut commit itself boots, pin edge to it:
    ```bash
    make edge-release ARGS="--target-sha $CUT_SHA"
    ```
@@ -250,8 +247,7 @@ no `:sha` image and pre-flight will reject the tag.
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - The promoted image is built from the cut commit, so it differs from the soaked parent by
-  the version strings and changelog text. The bump reaches runtime (the Dockerfile
-  pip-installs `pyproject.toml`, so `_ASSET_VERSION` and `bridge_app_version` change).
+  finalized proof and release metadata; receipts bind tracked source, not the built image, and the bump reaches runtime because the Dockerfile installs `pyproject.toml`.
   Step 2's `--target-sha` soak is what makes "you ran what you tagged" literally true.
 
 ## Addon stage
@@ -301,9 +297,8 @@ Supervisor client ID when possible, but keeps the source disabled until the
 operator reviews and acknowledges the current boundary. Additional candidate
 tuning can be set in `radio.toml` or container env without exposing Supervisor
 UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
-Add-on local MP3s live at `/data/music`; `run.sh` exports that path as
-`MAMMAMIRADIO_MUSIC_DIR` and moves it under the temporary fallback base only
-when `/data` is not writable.
+Add-on local music lives at `/data/music`; `run.sh` exports that path as
+`MAMMAMIRADIO_MUSIC_DIR`.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -480,10 +475,8 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
 `addon-release.yml` does not rebuild the add-on. It first validates at least 20
-physical Home Assistant Green cold-launch receipts bound to the tested source
-commit, requires nearest-rank first-byte p95 at or below two seconds, and proves
-that the tagged commit changed nothing after that source except the receipt JSON
-files. It then verifies that both per-arch `:${git_sha}` images exist, runs the
+physical HA Green cold-launch receipts with one release version and hardware-neutral content digest, requires p95 at or below two seconds, and proves the tagged tree matches after excluding only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag. Recording assumes a trusted single-writer checkout; pre/post snapshots do not attest against concurrent change-and-restore during a run.
+It then verifies that both per-arch `:${git_sha}` images exist, runs the
 launch and host-published-port proofs for each native architecture before stable
 publishing, and promotes those exact
 images to `:X.Y.Z` without changing the source manifest shape, updates `:latest`
@@ -559,11 +552,8 @@ the other retained files hold provider keys, station memory, and history.
 Generated downloads, normalization outputs, renders, and clips warm again after
 restore.
 
-`/data/music` is the add-on's operator-managed local music library: `run.sh`
-exports it as `MAMMAMIRADIO_MUSIC_DIR`, and the app resolves local MP3s from
-that path (moving under the temporary fallback base only when `/data` is not
-writable). Backing it up restores the local library along with the rest of the
-retained state.
+`/data/music` stays in the add-on backup. The scanner reads it in place and
+never moves or deletes operator files.
 
 This is a live, file-level copy, **not a copy taken from one single exact
 moment** of the retained state. SQLite may commit while Supervisor is
@@ -643,10 +633,15 @@ gates" (single source of truth). The short version:
 
 - `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
   review time) until Florian gives the merge signal.
-- On the signal, run `scripts/land-pr.sh <PR#>`. It verifies the pre-ship
-  squad entry against the PR head (code-state freshness — a soak of days is
-  fine, a push after the review is not), updates the branch if it is behind
-  (CI re-runs on the integrated state), and arms
+- On the signal, run `scripts/land-pr.sh <PR#>`. It verifies committed v2
+  pre-ship evidence on the PR head (portable — works from cloud agents once
+  the receipt is on the branch); a current local gstack ledger supplements that
+  proof and is required if the evidence check is explicitly skipped. It blocks
+  unresolved current Major/Critical/P0/P1 bot threads and fails closed when
+  thread data cannot be read. A behind branch is not changed from the landing
+  seat: return to its feature workspace, merge `origin/main`, run
+  `scripts/emit-review-evidence.sh --reattest --base origin/main`, commit and
+  push the receipt swap, then retry after CI. For an up-to-date head it arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified.
 - Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local
@@ -661,12 +656,12 @@ gates" (single source of truth). The short version:
   authenticated maintainer handles that specific PR. If Dependabot still owns
   the branch, request its rebase as the maintainer; if the branch was edited,
   use `@dependabot recreate` and re-review the new head. Human-authored PRs land
-  through `scripts/land-pr.sh <PR#>`, which updates the branch after verifying
-  pre-ship evidence.
+  through `scripts/land-pr.sh <PR#>`; a behind branch returns to its feature
+  workspace for integration and reattestation.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
-  `allow_auto_merge`, and the required contexts. Run it if landing behaves
-  oddly.
+  `allow_auto_merge`, required contexts, and that the main-branch ruleset
+  enables review thread resolution. Run it if landing behaves oddly.
 
 ## Pre-merge checklist
 
@@ -711,9 +706,11 @@ Before merging ANY change that touches addon files:
    missing-content notice, exit 0); the stable promotion media-proof job in
    `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
    hard gate on the release path. Stable remains blocked until exactly 12
-   approved derivatives total at least 45 minutes and no more than 75 MiB, every
-   full audition receipt is complete, and 20 cold HA Green runs show p95 first
-   accepted non-silent starter byte at or below two seconds.
+   approved derivatives total at least 45 minutes and no more than 75 MiB and
+   every full audition receipt is complete. The 20 cold HA Green runs at p95
+   first accepted non-silent starter byte within two seconds are a separate
+   opt-in gate, armed with `MMR_REQUIRE_HA_RECEIPTS=1`; unset, the cut reports
+   the waiver instead of a pass.
 7. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.

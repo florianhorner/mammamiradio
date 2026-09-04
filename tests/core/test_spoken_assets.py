@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
+
+import pytest
 
 from mammamiradio.core import spoken_assets
 from mammamiradio.core.spoken_assets import (
+    approved_spoken_asset_entries,
     approved_spoken_assets,
     is_approved_packaged_audio_asset,
     is_approved_spoken_asset,
@@ -35,8 +39,25 @@ def test_shipped_manifest_is_valid_and_declares_reviewed_spoken_assets():
     assert validate_spoken_asset_manifest() == []
     recovery = approved_spoken_assets("recovery")
     first_listen = approved_spoken_assets("first_listen")
+    banter = approved_spoken_asset_entries("banter")
     assert [path.name for path in recovery] == ["continuity_1.mp3"]
     assert [path.name for path in first_listen] == ["first_listen_show.mp3"]
+    assert len(banter) == 21
+    assert sum(entry.mode == "normal" for entry in banter) == 15
+    assert sum(entry.mode == "super_italian" for entry in banter) == 6
+    assert sum(bool(entry.required_previous_starter_id) for entry in banter) == 3
+    assert {entry.required_previous_starter_id for entry in banter if entry.required_previous_starter_id} == {
+        "JAMENDO-1215805",
+        "USUAN1100173",
+    }
+    starter_catalog = json.loads(
+        (Path(__file__).resolve().parents[2] / "mammamiradio" / "assets" / "starter" / "catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    starter_ids = {str(entry["isrc"]) for entry in starter_catalog["tracks"]}
+    assert {entry.required_previous_starter_id for entry in banter if entry.required_previous_starter_id} <= starter_ids
+    assert sum(entry.special for entry in banter) == 3
     assert is_approved_spoken_asset(recovery[0]) is True
     assert is_approved_spoken_asset(first_listen[0]) is True
 
@@ -79,7 +100,98 @@ def test_listener_arrival_transcript_is_rejected(tmp_path):
     )
 
     assert approved_spoken_assets("recovery", assets_root=tmp_path) == []
+    assert is_approved_spoken_asset(clip, assets_root=tmp_path) is False
     assert any("listener arrival/return" in error for error in validate_spoken_asset_manifest(assets_root=tmp_path))
+
+
+def test_runtime_admission_hashes_only_the_selected_asset(tmp_path, monkeypatch):
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    selected = recovery / "selected.mp3"
+    unrelated = recovery / "unrelated.mp3"
+    selected_payload = b"selected" * 400
+    unrelated_payload = b"unrelated" * 400
+    selected.write_bytes(selected_payload)
+    unrelated.write_bytes(unrelated_payload)
+    _write_manifest(
+        tmp_path,
+        [
+            _entry("recovery/selected.mp3", selected_payload),
+            _entry("recovery/unrelated.mp3", unrelated_payload),
+        ],
+    )
+    hashed_paths: list[Path] = []
+
+    def _record_hash(path: Path) -> str:
+        hashed_paths.append(Path(path))
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    monkeypatch.setattr(spoken_assets, "_sha256", _record_hash)
+
+    assert is_approved_spoken_asset(selected, assets_root=tmp_path) is True
+    assert hashed_paths == [selected]
+
+
+def test_banter_metadata_is_mode_safe_and_specials_are_evergreen(tmp_path):
+    banter = tmp_path / "banter"
+    banter.mkdir()
+    clip = banter / "unsafe-mode.mp3"
+    payload = b"reviewed" * 400
+    clip.write_bytes(payload)
+    entry = _entry("banter/unsafe-mode.mp3", payload, language="it")
+    entry.update(
+        {
+            "mode": "normal",
+            "required_previous_starter_id": "TRACK-ID",
+            "special": True,
+        }
+    )
+    _write_manifest(tmp_path, [entry])
+
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+
+    assert any("language does not match" in error for error in errors)
+    assert any("special banter must be evergreen" in error for error in errors)
+    assert approved_spoken_asset_entries("banter", assets_root=tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "metadata", "expected_error"),
+    [
+        (
+            "banter/clip.mp3",
+            {"mode": "festival", "required_previous_starter_id": "", "special": False},
+            "banter mode must be",
+        ),
+        (
+            "banter/clip.mp3",
+            {"mode": "normal", "required_previous_starter_id": "bad id", "special": False},
+            "required starter id is invalid",
+        ),
+        (
+            "recovery/clip.mp3",
+            {"mode": "normal", "required_previous_starter_id": "", "special": False},
+            "non-banter asset has banter metadata",
+        ),
+        (
+            "banter/clip.mp3",
+            {"mode": "normal", "required_previous_starter_id": "", "special": "yes"},
+            "banter metadata has invalid types",
+        ),
+    ],
+)
+def test_invalid_banter_metadata_fails_closed(tmp_path, relative_path, metadata, expected_error):
+    asset_dir = tmp_path / Path(relative_path).parent
+    asset_dir.mkdir(parents=True)
+    payload = b"reviewed" * 400
+    (tmp_path / relative_path).write_bytes(payload)
+    entry = _entry(relative_path, payload)
+    entry.update(metadata)
+    _write_manifest(tmp_path, [entry])
+
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+
+    assert any(expected_error in error for error in errors)
 
 
 def test_manifested_tone_is_inventory_valid_but_not_spoken(tmp_path):
