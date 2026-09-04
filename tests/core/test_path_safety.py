@@ -118,6 +118,27 @@ def test_real_symlink_cycle_is_refused_even_when_resolve_does_not_raise(tmp_path
     assert safe_path_within(loop, root, reject_symlinks=True) is None
 
 
+def test_cycle_in_a_parent_component_is_refused_for_reject_symlinks_callers(tmp_path):
+    """reject_symlinks=True does not make the cycle probe redundant.
+
+    is_symlink() calls lstat() and pathlib swallows ELOOP, so it answers False
+    when the cycle is in a parent component rather than the leaf. Nine call
+    sites pass reject_symlinks=True; without this case a future reader could
+    conclude the probe is skippable for them and reopen the hole for every
+    path under a looped directory.
+    """
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a").symlink_to("b")
+    (root / "b").symlink_to("a")
+    child = root / "a" / "child.mp3"
+
+    assert child.is_symlink() is False, "precondition: the leaf itself is not a symlink"
+    assert safe_path_within(child, root, reject_symlinks=True) is None
+    assert safe_path_within(child, root) is None
+
+
 def test_missing_file_is_not_treated_as_a_containment_failure(tmp_path):
     """Only a cycle is an escape. A missing path is the caller's business.
 

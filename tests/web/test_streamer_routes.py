@@ -1275,11 +1275,12 @@ async def test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next(tmp_pat
     # Both satisfy "successor ahead of air-next" -- already dequeued is further
     # ahead, not behind. Pin the invariant, and let the listener assertions
     # below prove the order actually reached air.
-    assert forced in queued_at_boundary
+    # Assert on both shapes, not just the one this interpreter happens to
+    # produce. A bare `if successor in queue` guard is vacuous exactly on
+    # 3.14, where the successor is already dequeued.
+    assert queued_at_boundary[-1] is forced, "air-next must land behind whatever is still queued, never ahead of it"
     if successor in queued_at_boundary:
-        assert queued_at_boundary.index(successor) < queued_at_boundary.index(forced), (
-            "air-next must never be inserted ahead of the committed successor"
-        )
+        assert queued_at_boundary.index(successor) < queued_at_boundary.index(forced)
 
     assert listener_queue.get_nowait() == b"head-audio"
     assert listener_queue.get_nowait() == b"speech-audio"

@@ -31,9 +31,17 @@ def safe_path_within(path: Path, root: Path, *, reject_symlinks: bool = False) -
     ``is_relative_to`` and this function hands back a path it should have
     refused. ``stat()`` reports ``ELOOP`` on every supported interpreter.
 
-    ``reject_symlinks=True`` already covers the cycle case by refusing any
-    symlink up front, so only callers that deliberately allow symlinks depend
-    on the probe.
+    It runs unconditionally, including for ``reject_symlinks=True``. That flag
+    does NOT make it redundant: ``Path.is_symlink()`` calls ``lstat()`` and
+    pathlib swallows ``ELOOP``, so it answers ``False`` when the cycle is in a
+    PARENT component rather than the leaf. Skipping the probe for those
+    callers would reopen the hole for every path under a looped directory.
+
+    ``ELOOP`` is broader than "cycle": Linux also returns it once a single
+    resolution exceeds its symlink-traversal limit, which a long but acyclic
+    chain can do. Such a path is refused too. That is deliberate. This
+    function answers "is this provably inside root", and a path the kernel
+    will not resolve cannot be proven inside anything.
     """
     try:
         if reject_symlinks and path.is_symlink():
