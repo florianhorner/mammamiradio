@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
+import threading
+import time
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -18,14 +21,6 @@ from mammamiradio.playlist.local_library import (
     scan_and_reconcile_local_library,
     scan_local_library,
 )
-
-
-@pytest.fixture(autouse=True)
-def _clear_probe_cache():
-    """The probe memo is a module global; keep it from leaking between tests."""
-    local_library._probe_cache.clear()
-    yield
-    local_library._probe_cache.clear()
 
 
 def _config(root: Path):
@@ -128,7 +123,8 @@ def test_entry_cap_bounds_iterator_and_unreadable_entries(tmp_path, fail_on_stat
 def test_complete_reconcile_updates_only_managed_local_membership(tmp_path):
     """Reconcile rewrites membership and promotes kind to local (crate composition).
 
-    ``playlist_source.kind`` names what is in the crate, not how it was loaded.
+    ``playlist_source.kind`` names what is in the crate for a provider-free bag
+    kind, not how it was loaded.
     Overlaying operator files onto a starter/demo bag must flip kind to ``local``
     so selection and operator copy agree that local is the base.
     """
@@ -506,8 +502,13 @@ def test_probe_is_memoized_for_unchanged_files_across_scans(tmp_path):
     assert second.probe_ok_paths == first.probe_ok_paths
 
 
-def test_exhausted_probe_budget_degrades_to_an_incomplete_scan(tmp_path):
-    """Out of budget, the pass stops probing and keeps what reconcile already knows."""
+def test_exhausted_probe_budget_defers_files_instead_of_guessing(tmp_path):
+    """Out of budget, a file is deferred — not admitted under a filename guess.
+
+    Admitting it would put a fabricated 3:30 in Up Next and hand a banned song
+    a fresh identity, and marking the whole scan incomplete would stop the
+    station noticing files the operator actually deleted.
+    """
     root = tmp_path / "music"
     root.mkdir()
     (root / "Artist - Song.mp3").write_bytes(b"audio")
@@ -519,18 +520,279 @@ def test_exhausted_probe_budget_degrades_to_an_incomplete_scan(tmp_path):
         result = scan_local_library(_config(root))
 
     run.assert_not_called()
-    assert result.complete is False
-    assert result.probe_ok_paths == set()
-    assert result.tracks[0].duration_ms == 210_000
-    assert any("reading song tags" in warning for warning in result.warnings)
+    assert result.tracks == []
+    assert len(result.deferred_paths) == 1
+    assert result.complete is True
 
-    # complete=False is what makes the degradation safe: reconcile keeps tracks
-    # a truncated pass could not confirm instead of pruning them.
+    # A deferred file is not gone: an existing track for that path survives.
     state = StationState(
-        playlist=[_track("Known", source="local", path=root / "gone.mp3")],
+        playlist=[_track("Song", source="local", path=root / "Artist - Song.mp3")],
         playlist_source=PlaylistSource(kind="starter", label="Starter"),
     )
-    assert reconcile_local_library(state, result)["removed"] == 0
+    outcome = reconcile_local_library(state, result)
+    assert outcome == {**outcome, "removed": 0, "added": 0}
+    assert len(state.playlist) == 1
+
+
+def test_probe_budget_resumes_across_passes_until_every_file_is_read(tmp_path):
+    """The budget defers work; it must not abandon it."""
+    root = tmp_path / "music"
+    root.mkdir()
+    for index in range(4):
+        (root / f"Artist - Song {index}.mp3").write_bytes(b"audio")
+
+    calls = {"n": 0}
+
+    def _slow_ffprobe(cmd, **_kwargs):
+        calls["n"] += 1
+        time.sleep(0.05)
+        # Distinct tags per file, or three of the four drop out as duplicates.
+        title = Path(cmd[-1]).stem.split(" - ", 1)[1]
+        payload = {"format": {"duration": "120.0", "tags": {"artist": "Artist", "title": title}}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with (
+        patch.object(local_library, "_SCAN_PROBE_BUDGET_SEC", 0.06),
+        patch("mammamiradio.playlist.local_library.subprocess.run", side_effect=_slow_ffprobe),
+    ):
+        first = scan_local_library(_config(root))
+        assert first.deferred_paths, "budget should not have covered all four files"
+        first_reads = calls["n"]
+
+        # Later passes serve the memo for what pass one read, so the budget is
+        # spent only on files still unread — the scan converges.
+        for _ in range(6):
+            latest = scan_local_library(_config(root))
+            if not latest.deferred_paths:
+                break
+        else:  # pragma: no cover - convergence failure
+            raise AssertionError("probe budget never caught up")
+
+    assert len(latest.tracks) == 4
+    assert len(latest.probe_ok_paths) == 4
+    assert calls["n"] > first_reads
+
+    # Fully warm: a further pass re-reads nothing at all.
+    with patch("mammamiradio.playlist.local_library.subprocess.run") as run:
+        warm = scan_local_library(_config(root))
+    run.assert_not_called()
+    assert len(warm.tracks) == 4
+
+
+def test_a_successful_probe_without_a_duration_keeps_the_measured_one(tmp_path):
+    """probe_ok is not measured_duration: a tagged file may report no duration.
+
+    Separates the two provenance sets. Without the ``measured_duration_paths``
+    gate the 3:30 default would overwrite a real 4:05 even though the probe
+    itself succeeded.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Marco Buono - A Love Like This.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Marco Buono", title="A Love Like This", seconds="245.0"),
+    ):
+        first = scan_local_library(_config(root))
+    state = StationState(playlist=[], playlist_source=PlaylistSource(kind="starter", label="Starter"))
+    reconcile_local_library(state, first)
+    tagged = state.playlist[0]
+    assert tagged.duration_ms == 245_000
+
+    path.write_bytes(b"audio-changed")
+
+    def _no_duration(cmd, **_kwargs):
+        payload = {"format": {"tags": {"artist": "Marco Buono", "title": "A Love Like This"}}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", side_effect=_no_duration):
+        second = scan_local_library(_config(root))
+
+    assert second.probe_ok_paths and second.measured_duration_paths == set()
+    assert second.tracks[0].duration_ms == 210_000
+
+    reconcile_local_library(state, second)
+    assert state.playlist[0] is tagged
+    assert tagged.duration_ms == 245_000
+
+
+def test_probe_failure_does_not_let_a_filename_guess_trip_the_blocklist(tmp_path):
+    """A ban is judged on identity, and a failed probe only has a guess.
+
+    The file is named after a banned song but tagged as something else. Judging
+    the ban on the guess drops it from the scan, which reads downstream as "the
+    file is gone" and deletes a live, legitimate track.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Banned Artist - Banned Song.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Real Artist", title="Real Song", seconds="200.0"),
+    ):
+        first = scan_local_library(_config(root))
+    state = StationState(
+        playlist=[],
+        playlist_source=PlaylistSource(kind="starter", label="Starter"),
+        blocklist={("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}},
+    )
+    reconcile_local_library(state, first)
+    tagged = state.playlist[0]
+    assert (tagged.artist, tagged.title) == ("Real Artist", "Real Song")
+
+    path.write_bytes(b"audio-changed")
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("ffprobe", 5.0),
+    ):
+        second = scan_local_library(_config(root))
+    outcome = reconcile_local_library(state, second)
+
+    assert outcome["removed"] == 0
+    assert outcome["banned"] == 0
+    assert state.playlist == [tagged]
+
+
+def test_a_failed_probe_is_never_memoized(tmp_path):
+    """Caching a failure would make a transient rename permanent."""
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "Artist - Song.mp3").write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("ffprobe", 5.0),
+    ) as failing:
+        scan_local_library(_config(root))
+    assert failing.call_count == 1
+    assert local_library._probe_cache == {}
+
+    # Same file, untouched: the next pass must try again rather than serve the
+    # filename guess it fell back to.
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Tagged", title="Recovered", seconds="200.0"),
+    ) as recovering:
+        result = scan_local_library(_config(root))
+    assert recovering.call_count == 1
+    assert (result.tracks[0].artist, result.tracks[0].title) == ("Tagged", "Recovered")
+
+
+def test_a_temporarily_unavailable_root_keeps_the_probe_memo(tmp_path):
+    """A USB unplug or a slow mount must not cost the whole warm library."""
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "Artist - Song.mp3").write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Artist", title="Song", seconds="120.0"),
+    ) as run:
+        scan_local_library(_config(root))
+        assert run.call_count == 1
+        warm = dict(local_library._probe_cache)
+        assert len(warm) == 1
+
+        # The folder disappears for one pass, then comes back.
+        root.rename(tmp_path / "unplugged")
+        unavailable = scan_local_library(_config(root))
+        assert unavailable.has_available_root is False
+        assert local_library._probe_cache == warm
+
+        (tmp_path / "unplugged").rename(root)
+        scan_local_library(_config(root))
+
+    assert run.call_count == 1
+
+
+def test_a_completed_pass_drops_memo_entries_for_deleted_files(tmp_path):
+    """The memo is bounded by pruning, not only by the cap."""
+    root = tmp_path / "music"
+    root.mkdir()
+    keep = root / "Artist - Keep.mp3"
+    drop = root / "Artist - Drop.mp3"
+    keep.write_bytes(b"audio")
+    drop.write_bytes(b"audio")
+
+    def _tagged(cmd, **_kwargs):
+        payload = {"format": {"duration": "120.0", "tags": {"artist": "Artist", "title": Path(cmd[-1]).stem}}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", side_effect=_tagged):
+        scan_local_library(_config(root))
+        assert len(local_library._probe_cache) == 2
+        drop.unlink()
+        scan_local_library(_config(root))
+
+    assert list(local_library._probe_cache) == [local_library._path_key(keep)]
+
+
+def test_memo_misses_when_size_changes_but_mtime_does_not(tmp_path):
+    """Both halves of the memo key are load-bearing."""
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Artist - Song.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Artist", title="Song", seconds="120.0"),
+    ) as run:
+        scan_local_library(_config(root))
+        before = path.stat()
+        path.write_bytes(b"audio-with-a-longer-body")
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        assert path.stat().st_mtime_ns == before.st_mtime_ns
+        scan_local_library(_config(root))
+
+    assert run.call_count == 2
+
+
+def test_probe_memo_survives_concurrent_scans(tmp_path):
+    """Two threads reach this module: the 60s scanner and producer recovery.
+
+    Only the scanner holds ``local_library_scan_lock``, so pruning used to
+    iterate the memo while the other thread inserted into it and raise
+    ``dictionary changed size during iteration`` into the generation cycle.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    for index in range(40):
+        (root / f"Artist - Song {index}.mp3").write_bytes(b"audio")
+
+    local_library._probe_cache.update({f"/stale/path/{index}": (1, 1, "A", "B", 1000) for index in range(20_000)})
+    errors: list[BaseException] = []
+
+    def _prune_repeatedly():
+        try:
+            for _ in range(40):
+                local_library._prune_probe_cache(set())
+        except BaseException as exc:  # pragma: no cover - the bug being pinned
+            errors.append(exc)
+
+    def _scan_repeatedly():
+        try:
+            with patch(
+                "mammamiradio.playlist.local_library.subprocess.run",
+                side_effect=_ffprobe_ok(artist="Artist", title="Song", seconds="120.0"),
+            ):
+                for _ in range(40):
+                    local_library._probe_cache.clear()
+                    scan_local_library(_config(root))
+        except BaseException as exc:  # pragma: no cover - the bug being pinned
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_prune_repeatedly), threading.Thread(target=_scan_repeatedly)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
 
 
 def test_local_overlay_never_rewrites_a_charts_kind(tmp_path):
@@ -557,7 +819,7 @@ def test_local_overlay_never_rewrites_a_charts_kind(tmp_path):
 
     assert state.playlist_source.kind == "charts"
     assert state.playlist_source.label == "Top 50"
-    assert state.playlist_source.local_overlay is True
+    assert state.playlist_source.source_id == ""
     assert any(track.source == "local" for track in state.playlist)
 
 
@@ -580,4 +842,3 @@ def test_local_overlay_still_promotes_a_starter_bag(tmp_path):
 
     assert state.playlist_source.kind == "local"
     assert state.playlist_source.label == "Local music"
-    assert state.playlist_source.local_overlay is True

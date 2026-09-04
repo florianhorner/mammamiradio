@@ -751,8 +751,8 @@ class PlaylistSource:
     provider (``charts``, ``url``, ``jamendo``, ``classic``) — those drive the
     mid-session chart refresh, the source loader and the persisted-source
     restore, and rewriting one strands the station on a provider it can no
-    longer refresh. ``local_overlay`` carries the mixed-crate fact instead, and
-    rotation reads composition from ``Track.source`` rather than from either.
+    longer refresh. Rotation reads composition from ``Track.source``, never
+    from ``kind``.
     """
 
     kind: str
@@ -761,9 +761,6 @@ class PlaylistSource:
     label: str = ""
     track_count: int = 0
     selected_at: float = 0.0
-    # True while the local-library scanner has operator files in the live crate,
-    # whatever the backing kind. Composition fact, not a provider selector.
-    local_overlay: bool = False
     # Transient load evidence. StationState adopts a revision-scoped clone;
     # persistence and public source serialization deliberately omit it.
     readiness_evidence: SourceReadinessEvidence | None = field(default=None, repr=False, compare=False)

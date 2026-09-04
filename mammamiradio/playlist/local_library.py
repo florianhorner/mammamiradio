@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -39,7 +40,15 @@ _SCAN_PROBE_BUDGET_SEC = 20.0
 _PROBE_CACHE_MAX_ENTRIES = MAX_LOCAL_LIBRARY_TRACKS * 2
 # path key -> (size, mtime_ns, artist, title, duration_ms).  Only successful
 # probes are cached: a failure must be retried, never remembered.
+#
+# Guarded by _probe_cache_lock because scan_local_library has two independent
+# callers on worker threads — the 60s scanner (serialized by
+# local_library_scan_lock) and producer._recover_local_rotation via
+# load_operator_local_tracks, which is not. Without the lock, pruning iterates
+# the dict while the other thread inserts and raises "dictionary changed size
+# during iteration" straight into the generation cycle.
 _probe_cache: dict[str, tuple[int, int, str, str, int | None]] = {}
+_probe_cache_lock = threading.Lock()
 
 
 @dataclass
@@ -60,6 +69,12 @@ class LocalLibraryScanResult:
     probe_ok_paths: set[str] = field(default_factory=set)
     # Subset of the above whose probe also yielded a real duration.
     measured_duration_paths: set[str] = field(default_factory=set)
+    # Files this pass saw but ran out of probe budget before reading. They are
+    # deliberately absent from ``tracks``: the station has not looked at them
+    # yet, so it must neither admit them under a filename guess nor treat them
+    # as gone. Reconcile keeps an existing track for such a path and adds
+    # nothing new; the next pass reads them for real.
+    deferred_paths: set[str] = field(default_factory=set)
 
     def status_payload(self) -> dict[str, Any]:
         return {
@@ -164,33 +179,42 @@ def _probe_with_cache(
     size: int,
     mtime_ns: int,
     deadline: float | None,
-) -> tuple[str, str, int | None, bool]:
+) -> tuple[str, str, int | None, bool, bool]:
     """``_probe_local_metadata`` memoized on (size, mtime_ns), budget-aware.
 
-    An unchanged file is probed exactly once across restarts of the 60s scan
-    loop; only successful probes are remembered, so a transient ffprobe failure
-    is retried on the next pass instead of being cached as truth. Past
-    ``deadline`` nothing new is probed and the caller degrades the scan to
-    incomplete.
+    Returns the probe tuple plus ``budget_spent``. An unchanged file is probed
+    once per process and reused by every later pass; only successful probes are
+    remembered, so a transient ffprobe failure is retried rather than cached as
+    truth. A cache hit is served even past ``deadline`` — a warm library never
+    trips the budget. Past ``deadline`` nothing new is probed and the caller
+    defers the file to the next pass.
+
+    The memo is process-local, so the first pass after a restart re-reads the
+    whole library. That is the pass the budget exists to bound.
     """
-    cached = _probe_cache.get(path_key)
+    with _probe_cache_lock:
+        cached = _probe_cache.get(path_key)
     if cached is not None and cached[0] == size and cached[1] == mtime_ns:
-        return cached[2], cached[3], cached[4], True
+        return cached[2], cached[3], cached[4], True, False
     if deadline is not None and time.monotonic() >= deadline:
         artist, title = _filename_artist_title(path)
-        return artist, title, None, False
+        return artist, title, None, False, True
     artist, title, duration_ms, ok = _probe_local_metadata(path)
     if ok:
-        if len(_probe_cache) >= _PROBE_CACHE_MAX_ENTRIES:
-            _probe_cache.clear()
-        _probe_cache[path_key] = (size, mtime_ns, artist, title, duration_ms)
-    return artist, title, duration_ms, ok
+        with _probe_cache_lock:
+            # At the cap, stop memoizing rather than dropping every warm entry:
+            # a clear() here would re-probe the whole library on the next pass
+            # and thrash forever on a library this size.
+            if len(_probe_cache) < _PROBE_CACHE_MAX_ENTRIES:
+                _probe_cache[path_key] = (size, mtime_ns, artist, title, duration_ms)
+    return artist, title, duration_ms, ok, False
 
 
 def _prune_probe_cache(live_path_keys: set[str]) -> None:
     """Drop cache entries for files this scan no longer saw, bounding growth."""
-    for stale in [key for key in _probe_cache if key not in live_path_keys]:
-        del _probe_cache[stale]
+    with _probe_cache_lock:
+        for stale in [key for key in _probe_cache if key not in live_path_keys]:
+            del _probe_cache[stale]
 
 
 def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
@@ -268,19 +292,21 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                 result.supported_files += 1
                 path_key = _path_key(path)
                 seen_path_keys.add(path_key)
-                artist, title, probed_duration_ms, probe_ok = _probe_with_cache(
+                artist, title, probed_duration_ms, probe_ok, budget_spent = _probe_with_cache(
                     path, path_key, stat_result.st_size, stat_result.st_mtime_ns, probe_deadline
                 )
                 if probe_ok:
                     result.probe_ok_paths.add(path_key)
                     if probed_duration_ms is not None:
                         result.measured_duration_paths.add(path_key)
-                elif time.monotonic() >= probe_deadline and result.complete:
-                    # Out of probe budget: the rest of this pass carries filename
-                    # guesses only. Degrade to an incomplete scan so reconcile
-                    # keeps what it already knows and the next pass resumes.
-                    result.complete = False
-                    result.warnings.append("Still reading song tags. Existing tracks were kept; the scan continues.")
+                elif budget_spent:
+                    # Out of probe budget. Defer rather than degrade: the
+                    # enumeration itself is complete, so a file the operator
+                    # actually deleted must still leave rotation. Admitting this
+                    # one under a filename guess would put a fabricated 3:30 in
+                    # Up Next and hand a banned song a fresh identity.
+                    result.deferred_paths.add(path_key)
+                    continue
                 duration_ms = probed_duration_ms if probed_duration_ms is not None else DEFAULT_LOCAL_DURATION_MS
                 digest = hashlib.sha256(str(path).encode("utf-8", errors="surrogatepass")).hexdigest()[:20]
                 track = Track(
@@ -302,7 +328,12 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
             if entry_limit_reached:
                 return _finish_scan(result, f"More than {MAX_LOCAL_LIBRARY_ENTRIES} entries found; scan stopped.")
 
-    _prune_probe_cache(seen_path_keys)
+    if result.has_available_root:
+        # A missing or briefly unmounted music folder must not evict the memo:
+        # pruning against an empty set would throw away every warm entry and
+        # make the remount re-probe the entire library — the storm the memo
+        # exists to prevent, triggered by the transient it should ride out.
+        _prune_probe_cache(seen_path_keys)
     return _finish_scan(result)
 
 
@@ -315,11 +346,29 @@ def _path_is_in_root_keys(path: Path | None, root_keys: tuple[str, ...]) -> bool
 
 def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -> dict[str, int]:
     root_keys = scan.root_keys or tuple(_path_key(root) for root in scan.roots)
-    candidates = [
-        track
-        for track in scan.tracks
-        if not song_identity_key_is_blocklisted(normalized_track_key(track), state.blocklist)
-    ]
+
+    known_identity_by_path = {
+        _path_key(track.local_path): normalized_track_key(track)
+        for track in state.playlist
+        if track.local_path is not None
+    }
+
+    def _is_banned(track: Track) -> bool:
+        """Ban checks need an identity; a failed probe only has a filename guess.
+
+        When the probe failed and the station already knows this file from an
+        earlier successful read, judge the ban on that known identity. A file
+        named after a banned song but tagged as something else would otherwise
+        be dropped from the scan on any ffprobe hiccup, leaving ``replacement
+        is None`` and deleting a live, legitimate track. With no prior reading
+        the guess is all there is, and a ban still applies to it.
+        """
+        identity = normalized_track_key(track)
+        if track.local_path is not None and _path_key(track.local_path) not in scan.probe_ok_paths:
+            identity = known_identity_by_path.get(_path_key(track.local_path), identity)
+        return song_identity_key_is_blocklisted(identity, state.blocklist)
+
+    candidates = [track for track in scan.tracks if not _is_banned(track)]
     banned = len(scan.tracks) - len(candidates)
     scanned_by_path = {_path_key(track.local_path): track for track in candidates if track.local_path is not None}
     removed_tracks: list[Track] = []
@@ -337,6 +386,10 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
             continue
         assert existing_path is not None
         path_key = _path_key(existing_path)
+        if path_key in scan.deferred_paths:
+            # Seen on disk but not read yet: not gone, and nothing new to learn.
+            reconciled.append(existing)
+            continue
         replacement = scanned_by_path.pop(path_key, None)
         if replacement is None:
             if scan.complete:
@@ -386,8 +439,9 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
     readiness.configured = scan.has_available_root
     readiness.attempted = True
     readiness.candidates = len(local_tracks)
-    readiness.exhausted = not local_tracks and scan.complete
-    if not local_tracks and scan.complete:
+    still_reading = bool(scan.deferred_paths)
+    readiness.exhausted = not local_tracks and scan.complete and not still_reading
+    if not local_tracks and scan.complete and not still_reading:
         readiness.playable = 0
         readiness.failure = "Add supported songs to the local music library, then select Scan now."
     elif not local_tracks and scan.warnings:
@@ -398,15 +452,13 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
         state.source_readiness.reconcile_active_tracks(state.playlist, removed_tracks=removed_tracks)
     if state.playlist_source is not None:
         state.playlist_source.track_count = len(state.playlist)
-        state.playlist_source.local_overlay = bool(local_tracks)
     # kind is composition, but only across the bag kinds that carry no loader or
     # refresh semantics of their own. charts/url/jamendo/classic also name a
     # backing provider — the producer's mid-session chart refresh, the
     # _load_source dispatch, the persisted-source restore all branch on it — so
     # overlaying local files onto one of those must not rewrite it. Doing so
     # disabled chart refresh permanently, with no path back to "charts".
-    # Rotation reads composition from track.source, so it needs no help here;
-    # local_overlay above carries the mixed-crate fact for anything that does.
+    # Rotation reads composition from track.source, so it needs no help here.
     if state.playlist_source is not None and state.playlist_source.kind in _COMPOSITION_PROMOTABLE_KINDS:
         if local_tracks:
             state.playlist_source.kind = "local"

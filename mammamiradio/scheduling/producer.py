@@ -1462,8 +1462,8 @@ async def _queue_starter_catalog_bridge_segment(
     """Queue one verified starter song when a drain cannot see cache music."""
     source = state.playlist_source
     # Gate on crate composition, not load provenance: a mixed local+starter
-    # rotation still carries starter media the bridge may use. Kind names what
-    # is in the crate (often ``local`` once the scanner overlays operator files).
+    # rotation still carries starter media the bridge may use. Kind names the
+    # crate only for the provider-free bag kinds, so read ``track.source`` here.
     has_starter = any(track.source == "starter" for track in state.playlist)
     if source is None or not has_starter or not state.playlist or state.listener_request_handoff is not None:
         return False
