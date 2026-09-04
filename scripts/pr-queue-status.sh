@@ -205,6 +205,8 @@ recommendation() {
 if [ "$EMIT_JSON" = "1" ]; then
   queue_json="$("$root/scripts/land-queue-plan.sh" --json)" \
     || die "could not compute queue state (scripts/land-queue-plan.sh failed)."
+  printf '%s' "$queue_json" | jq -e 'type == "object" and has("prs")' >/dev/null 2>&1 \
+    || die "the shadow land queue returned no queue to read. It is switched off (.github/land-queue.enabled absent, or LAND_QUEUE=0) — restore it, or use this dashboard without --json."
   # The planner already emits each PR's branch, so there is no second `gh pr list`
   # here — one listing, one instant, no PR that appears in one set and not the
   # other. worktree_for_branch is pure shell against the index built above.

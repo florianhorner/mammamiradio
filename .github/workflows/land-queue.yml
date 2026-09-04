@@ -34,6 +34,11 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # The edge lane asks `gh run list` which addon-build runs went green. An
+  # explicit permissions block sets every unnamed scope to none, so without
+  # this the query 403s and the lane reports "no eligible built commit"
+  # forever — a lane that never ran, reported as a lane with nothing to do.
+  actions: read
 
 concurrency:
   group: land-queue
@@ -68,6 +73,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          # The job-level `if:` already skips on LAND_QUEUE=0; passing it in as
+          # well means the script enforces the same switch it documents, rather
+          # than the runbook claiming a reach the variable does not have.
+          LAND_QUEUE: ${{ vars.LAND_QUEUE }}
         run: |
           set -euo pipefail
           {

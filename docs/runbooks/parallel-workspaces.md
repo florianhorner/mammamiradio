@@ -171,7 +171,7 @@ workspace:
 
 - `.github/workflows/**`
 - `scripts/conductor-*.sh`
-- `scripts/land-pr.sh`, `scripts/pr-queue-status.sh`, `scripts/check-merge-gate.sh`
+- `scripts/land-pr.sh`, `scripts/land-gates.sh`, `scripts/edge-select.sh`, `scripts/land-queue-plan.sh`, `scripts/pr-queue-status.sh`, `scripts/check-merge-gate.sh`
 - `.conductor/settings.toml`
 
 For Path A, a dedicated workspace may own these files when its objective and
@@ -266,8 +266,9 @@ order.
 minutes and writes to the job summary the one thing an auto-land controller
 would do next: which PR it would integrate or arm, and why every other open PR
 is not that PR. **It changes nothing.** No push, no comment, no arm, no merge,
-no edge move. The workflow requests `contents: read` and `pull-requests: read`
-and holds no write permission at all.
+no edge move. The workflow requests `contents: read` The workflow requests `contents: read`, `pull-requests: read` and
+`actions: read` — the last one because the edge lane asks `gh run list` which
+add-on builds went green. It holds no write permission at all.
 
 It exists to be compared. Before any of this is automated, its choices need to
 sit next to the landing seat's actual `scripts/land-pr.sh` choices for long
@@ -277,9 +278,10 @@ pre-ship evidence check was allowed to matter.
 Read it yourself any time:
 
 ```bash
-bash scripts/land-queue-plan.sh          # human summary
-bash scripts/land-queue-plan.sh --json   # machine-readable states
-bash scripts/pr-queue-status.sh --json   # the same states, plus local worktrees
+bash scripts/land-queue-plan.sh                # human summary
+bash scripts/land-queue-plan.sh --json         # machine-readable states
+bash scripts/land-queue-plan.sh --json-out F   # both, from one query (what CI runs)
+bash scripts/pr-queue-status.sh --json         # the same states, plus local worktrees
 ```
 
 It reaches its verdict through the same predicates the landing seat arms on
@@ -290,9 +292,9 @@ thing it shadows, so a test asserts the queue evaluates every gate `land-pr`
 arms on.
 
 Lanes are keyed on what the automation itself emits — the bot flag, and the
-`edge-release/*` branch `cut-edge-release.sh` pushes — never on the PR title. A
-lane assignment is a total exemption from every gate, and a title is free text a
-human can retype.
+`edge-release/*` branch `cut-edge-release.sh` pushes, and the Dependabot author
+login — never on the PR title. A lane assignment is a total exemption from every
+gate, and a title is free text a human can retype.
 
 **How it orders PRs.** Oldest first, by creation time. That is a stand-in: the
 design orders by when a PR first became `READY`, which needs a persisted ledger
@@ -305,21 +307,23 @@ A blocked head *stalls* the queue rather than being reordered around — that is
 what keeps the ordering fair to whoever has been waiting longest. When a head is blocked on something
 only its owner can fix (a conflict, usually), the `skip-queue` label drops it
 out of head contention so one stuck PR cannot hold every other fix hostage.
+`hold` or `manual-land` is the other direction: it takes a PR out of the queue's
+hands entirely and stalls the head, for when you mean to land that one by seat.
 
 **What each state means:**
 
 | State | Meaning |
 |---|---|
-| `READY` | Gates pass; would be armed if it reaches the head |
+| `READY` | Gates pass and no required check is red. Also covers `UNSTABLE` (only non-required checks red) and `HAS_HOOKS` |
 | `READY_BEHIND` | Gates pass but the base moved; needs integrate + reattest |
-| `CI_PENDING` | Waiting on required checks or thread resolution |
+| `CI_PENDING` | A merge state GitHub has not settled: required checks, thread resolution, or mergeability not yet computed |
 | `BLOCKED_BOT` | Unresolved Major/Critical/P0/P1 bot thread |
 | `BLOCKED_EVIDENCE` | No committed v2 receipt covers this head |
 | `BLOCKED_CONFLICT` | Merge conflict — the owning workspace resolves it |
 | `BLOCKED_YOU` | `hold` or `manual-land` label |
 | `BLOCKED_HEAD` | Head object could not be fetched; gates cannot be evaluated |
 | `SKIPPED` | `skip-queue` label — out of head contention |
-| `EXEMPT` | Bot or edge lane; keeps its own merge path |
+| `EXEMPT` | Bot, Dependabot or edge lane; keeps its own merge path |
 | `OPEN` | Draft |
 
 **Turning it off.** Delete `.github/land-queue.enabled` (a one-line PR, with an
@@ -327,7 +331,12 @@ audit trail), or set the repository variable `LAND_QUEUE=0`. Either one stops
 it. Two switches because the file works from any seat that can open a PR and
 the variable works without one. Both are enforced inside
 `scripts/land-queue-plan.sh`, not only in the workflow, so "off" means off from
-a local run too — the switch belongs to the controller, not to one caller.
+a local run too — the switch belongs to the controller, not to one caller. The
+workflow passes the repository variable into the script as well, so both halves
+reach a local run and a scheduled one alike. Only the literal `0` switches off:
+`LAND_QUEUE=false` reads as on. `scripts/pr-queue-status.sh --json` derives from
+the planner, so it reports the switch rather than working while the queue is
+off; the human dashboard is unaffected.
 
 **It is not live, and cannot be flipped live from a feature seat.** Doing that
 needs a GitHub App installed on the repo with `contents:write` +

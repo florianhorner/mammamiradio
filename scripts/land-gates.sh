@@ -43,9 +43,23 @@ _gate_cont() { say "$(printf '%*s' $(( ${#LAND_GATES_LABEL} + 2 )) '')$*"; }
 # network round trip each time, and in CI `gh` already exports GH_REPO.
 _LAND_GATES_SLUG=""
 _repo_slug() {
+  local candidate
   if [ -z "$_LAND_GATES_SLUG" ]; then
-    if [ -n "${GH_REPO:-}" ]; then
-      _LAND_GATES_SLUG="$GH_REPO"
+    # gh accepts a host-qualified GH_REPO ([HOST/]OWNER/REPO); `gh repo view`
+    # normalized that away. Strip the host and accept only OWNER/REPO, so a
+    # documented env form cannot turn into owner="github.com" and a GraphQL
+    # null that surfaces as a misleading "check gh auth" refusal.
+    candidate="${GH_REPO:-}"
+    case "$candidate" in
+      */*/*) candidate="${candidate#*/}" ;;
+    esac
+    case "$candidate" in
+      */*/*|*" "*|"") candidate="" ;;
+      */*) ;;
+      *) candidate="" ;;
+    esac
+    if [ -n "$candidate" ]; then
+      _LAND_GATES_SLUG="$candidate"
     else
       _LAND_GATES_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" \
         || return 1
@@ -54,10 +68,15 @@ _repo_slug() {
   printf '%s' "$_LAND_GATES_SLUG"
 }
 
-if [ -r "$LAND_GATES_DIR/review-threads.sh" ]; then
-  # shellcheck source=scripts/review-threads.sh
-  . "$LAND_GATES_DIR/review-threads.sh"
+# Hard precondition, as it was before the extraction: without the reader the
+# bot-thread gate cannot run, and a soft skip surfaces later as a misleading
+# "could not query review threads — check gh auth".
+if [ ! -r "$LAND_GATES_DIR/review-threads.sh" ]; then
+  say "$LAND_GATES_LABEL: review-thread reader not found at $LAND_GATES_DIR/review-threads.sh."
+  exit 1
 fi
+# shellcheck source=scripts/review-threads.sh
+. "$LAND_GATES_DIR/review-threads.sh"
 
 # iso_to_epoch <iso8601> -> epoch seconds, or empty on failure.
 # Handles both Z-suffixed UTC (BSD and GNU date) like the squad hook does.

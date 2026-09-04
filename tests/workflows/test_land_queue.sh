@@ -48,8 +48,16 @@ else
   MAIN_REF="HEAD"
 fi
 
+# review_threads_json is a TWO-phase reader: a thread list (which requires an
+# `id` per node) and then a per-thread comments query. A fixture without `id`
+# makes the reader bail, and thread_check then reports BLOCKED_BOT from its
+# fail-closed branch -- so the severity filter is never reached and deleting
+# REVIEW_THREADS_BLOCKING_JQ entirely would keep the test green.
 EMPTY_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
-MAJOR_THREAD='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"isOutdated":false,"comments":{"nodes":[{"author":{"login":"coderabbitai"},"body":"Major: this drops the queue","url":"https://example.test/thread/1"}]}}]}}}}}'
+EMPTY_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}'
+ONE_THREAD='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"T1","isResolved":false,"isOutdated":false}]}}}}}'
+MAJOR_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"author":{"login":"coderabbitai"},"body":"Major: this drops the queue","url":"https://example.test/comment/1"}]}}}}'
+MINOR_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"author":{"login":"coderabbitai"},"body":"P2: a nit","url":"https://example.test/comment/2"}]}}}}'
 
 # ---- mock gh ----------------------------------------------------------------
 # Env: GH_MOCK_PRS (pr list JSON), GH_MOCK_THREADS (graphql body),
@@ -71,7 +79,11 @@ case "$1 $2" in
     printf '%s' "${GH_MOCK_RUN_SHAS:-}"
     exit 0 ;;
   "api graphql")
-    printf '%s' "${GH_MOCK_THREADS:-}"
+    if [[ "$*" == *"PullRequestReviewThread"* ]]; then
+      printf '%s' "${GH_MOCK_COMMENTS:-}"
+    else
+      printf '%s' "${GH_MOCK_THREADS:-}"
+    fi
     exit 0 ;;
 esac
 echo "gh mock: unhandled invocation: $*" >&2
@@ -122,12 +134,17 @@ pr_row() { # number title head merge draft labels created author is_bot [branch]
       author:{login:$author,is_bot:$is_bot}}'
 }
 
+ALL_GH_LOG="$TMPDIR_T/gh-all.log"
+: > "$ALL_GH_LOG"
+
 run_plan() { # prs-json [extra env assignments handled by caller]
   GH_MOCK_LOG="$TMPDIR_T/gh.log"
+  [ -f "$GH_MOCK_LOG" ] && cat "$GH_MOCK_LOG" >> "$ALL_GH_LOG"
   : > "$GH_MOCK_LOG"
   GH_MOCK_PRS="$1" \
   GH_MOCK_LOG="$GH_MOCK_LOG" \
   GH_MOCK_THREADS="${THREADS:-$EMPTY_THREADS}" \
+  GH_MOCK_COMMENTS="${COMMENTS:-$EMPTY_COMMENTS}" \
   GH_MOCK_RUN_SHAS="${RUN_SHAS:-}" \
   GH_MOCK_RUN_FAIL="${RUN_FAIL:-0}" \
   GH_MOCK_PR_LIST_FAIL="${PR_LIST_FAIL:-0}" \
@@ -212,10 +229,24 @@ pass "skip-queue label releases the stall without reordering the rest"
 # Case 8: an unresolved Major bot thread blocks — never READY (invariant I6).
 # =============================================================================
 PRS="[$(pr_row 60 "fix: bot debt" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
-OUT="$(THREADS="$MAJOR_THREAD" run_plan "$PRS")"
+OUT="$(THREADS="$ONE_THREAD" COMMENTS="$MAJOR_COMMENTS" run_plan "$PRS")"
 [ "$(jq -r '.prs[0].state' <<<"$OUT")" = "BLOCKED_BOT" ] || fail "Major thread must block"
 [ "$(jq -r '.decision.action' <<<"$OUT")" = "none" ] || fail "must not arm over a Major thread"
-pass "unresolved Major bot thread blocks and never reaches READY"
+# Assert the REASON, not just the state: BLOCKED_BOT is reachable from a
+# thread-query failure too, and asserting the enum alone let a fixture that
+# never reached the severity filter pass this case.
+jq -e '.prs[0].reason | test("unresolved Major/Critical")' <<<"$OUT" >/dev/null \
+  || fail "BLOCKED_BOT must come from the severity filter, not the fail-closed branch"
+jq -e '.prs[0].reason | test("example.test/comment/1")' <<<"$OUT" >/dev/null \
+  || fail "the blocking comment URL must reach the operator"
+pass "unresolved Major bot thread blocks via the severity filter (not fail-closed)"
+
+# The negative twin: low-severity debt must NOT block, or the filter is just
+# "any unresolved thread" wearing a severity label.
+OUT="$(THREADS="$ONE_THREAD" COMMENTS="$MINOR_COMMENTS" run_plan "$PRS")"
+[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "READY" ] \
+  || fail "a P2 comment on an unresolved thread must not block landing"
+pass "low-severity bot debt does not block"
 
 # =============================================================================
 # Case 9: missing v2 evidence blocks — never READY (invariant I7).
@@ -375,10 +406,17 @@ pass "shadow workflow is report-only, read-only, killable, and single-pass"
 # Case 21b: the kill switch is a property of the CONTROLLER, not of one caller.
 # Off must mean off from a local run too, or the switch is not a switch.
 # =============================================================================
-OUT="$(LAND_QUEUE=0 run_plan "[]" 2>&1)"
+# Human path: prose that names the switch and how to undo it.
+OUT="$(LAND_QUEUE=0 GH_MOCK_LOG="$TMPDIR_T/gh.log" GH_REPO="florianhorner/mammamiradio" \
+  PATH="$BIN:$PATH" bash "$PLAN" 2>&1)"
 printf '%s' "$OUT" | grep -q "switched off" || fail "LAND_QUEUE=0 must stop the planner itself"
 printf '%s' "$OUT" | grep -q "turn it back on" || fail "a stopped queue must say how to restart it"
-pass "kill switch stops the planner itself, not just the workflow"
+# --json path: the payload, and ONLY the payload. Prose here is a parse error
+# for every consumer, including the documented pr-queue-status.sh --json.
+OFF="$(LAND_QUEUE=0 run_plan "[]" 2>/dev/null)"
+printf '%s' "$OFF" | jq -e '.mode == "off"' >/dev/null \
+  || fail "a switched-off queue must answer --json with valid JSON, not prose"
+pass "kill switch stops the planner itself and answers in the caller's format"
 
 # =============================================================================
 # Case 22: gate-set parity. land-pr.sh arms on verify_head; the queue re-composes
@@ -389,12 +427,144 @@ pass "kill switch stops the planner itself, not just the workflow"
 gates_in() { sed -n "/^$2() {/,/^}/p" "$1" | grep -oE '\b(evidence_check|squad_check|thread_check|ensure_head_local)\b' | sort -u; }
 VERIFY_GATES="$(gates_in "$REPO_ROOT/scripts/land-gates.sh" verify_head)"
 QUEUE_GATES="$(gates_in "$PLAN" classify_pr)"
+# Without this, renaming verify_head (or moving its closing brace off column 0)
+# makes gates_in return nothing, comm finds nothing missing, and this case
+# prints PASS forever while asserting nothing.
+[ -n "$VERIFY_GATES" ] || fail "gate extraction found no gates in verify_head — the parity check would pass vacuously"
+[ -n "$QUEUE_GATES" ] || fail "gate extraction found no gates in classify_pr — the parity check would pass vacuously"
 # squad_check is deliberately absent from the queue: it reads a local gstack
 # ledger that no runner has, and v2 evidence already covers the review gate.
 MISSING="$(comm -23 <(printf '%s\n' "$VERIFY_GATES" | sed '/^$/d' | sort) \
                     <(printf '%s\nsquad_check\n' "$QUEUE_GATES" | sed '/^$/d' | sort))"
 [ -z "$MISSING" ] || fail "verify_head gates the queue does not evaluate: $MISSING"
 pass "queue evaluates every gate land-pr arms on (squad_check exempted by design)"
+
+# =============================================================================
+# Case 23: a PR whose author account was deleted (.author == null) must not
+# shift every field after it. Tab is IFS whitespace, so a tab-separated gather
+# collapsed the empty author field and slid the branch, title and url one place
+# left — putting an edge-release PR into the gated feature lane, where it has no
+# v2 receipt, and stalling the entire queue behind it.
+# =============================================================================
+GHOST="$(jq -cn --arg base "$ANC_FULL" --arg head "$HEAD_FULL" \
+  '{number:130,title:"chore(edge): cut edge release abc1234",headRefOid:$head,
+    baseRefOid:$base,mergeStateStatus:"CLEAN",isDraft:false,labels:[],
+    createdAt:"2026-01-01T00:00:00Z",headRefName:"edge-release/abc1234",
+    url:"https://example.test/pull/130",author:null}')"
+OUT="$(run_plan "[$GHOST]")"
+[ "$(jq -r '.prs[0].lane' <<<"$OUT")" = "edge" ] \
+  || fail "a null author must not shift the branch field and mis-lane the PR"
+[ "$(jq -r '.prs[0].branch' <<<"$OUT")" = "edge-release/abc1234" ] \
+  || fail "branch field must survive an empty author field"
+[ "$(jq -r '.prs[0].fifo_key' <<<"$OUT")" = "2026-01-01T00:00:00Z" ] \
+  || fail "fifo_key must survive an empty author field"
+pass "deleted-author PR keeps every field aligned (empty-field shift guard)"
+
+# =============================================================================
+# Case 24: the generic bot lane. is_bot=true grants a TOTAL gate exemption — no
+# evidence, no thread check, dropped from head contention. Case 10 only ever
+# exercised the dependabot branch, so this one was untested.
+# =============================================================================
+PRS="[$(pr_row 140 "chore: automated" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" "some-app[bot]" true),
+      $(pr_row 141 "fix: real work" "$HEAD_FULL" CLEAN false '[]' "2026-02-01T00:00:00Z" florianhorner false)]"
+OUT="$(run_plan "$PRS")"
+[ "$(jq -r '.prs[0].lane' <<<"$OUT")" = "bot" ] || fail "a non-dependabot bot must land in the bot lane"
+[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "EXEMPT" ] || fail "bot PRs are exempt"
+[ "$(jq -r '.decision.pr' <<<"$OUT")" = "141" ] || fail "a bot PR must not hold the feature queue head"
+pass "generic bot lane is exempt and cannot stall the queue"
+
+# =============================================================================
+# Case 25: BLOCKED_HEAD. An unfetchable head must not silently skip the two
+# network gates — every other fixture uses a local SHA, so this never ran.
+# =============================================================================
+PRS="[$(pr_row 150 "fix: ghost head" "0000000000000000000000000000000000000000" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
+OUT="$(run_plan "$PRS")"
+[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "BLOCKED_HEAD" ] || fail "an unfetchable head must block"
+[ "$(jq -r '.decision.action' <<<"$OUT")" = "none" ] || fail "must not act on a head we cannot verify"
+pass "unfetchable head blocks instead of skipping the gates"
+
+# =============================================================================
+# Case 26: invalid PR JSON fails closed rather than planning against it.
+# =============================================================================
+set +e
+OUT="$(run_plan '{"not":"an array"}' 2>&1)"; rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "non-array PR JSON must fail closed"
+printf '%s' "$OUT" | grep -q "invalid PR JSON" || fail "failure should name the unverifiable state"
+pass "invalid PR JSON fails closed"
+
+# =============================================================================
+# Case 27: --json-out is the ONLY flag production uses (land-queue.yml), and the
+# artifact upload is gated on the file existing — so a silently-empty write
+# would vanish the artifact behind a green workflow.
+# =============================================================================
+PRS="[$(pr_row 160 "fix: a thing" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
+OUTFILE="$TMPDIR_T/decision.json"
+rm -f "$OUTFILE"
+HUMAN="$(GH_MOCK_LOG="$TMPDIR_T/gh.log" GH_MOCK_PRS="$PRS" GH_MOCK_THREADS="$EMPTY_THREADS" \
+  GH_MOCK_COMMENTS="$EMPTY_COMMENTS" GH_MOCK_RUN_SHAS="" \
+  MMR_LAND_EVIDENCE_CHECKER="$TMPDIR_T/evidence-ok.sh" MMR_LAND_REVIEW_READER="/nonexistent" \
+  GH_REPO="florianhorner/mammamiradio" PATH="$BIN:$PATH" \
+  bash "$PLAN" --json-out "$OUTFILE")"
+[ -s "$OUTFILE" ] || fail "--json-out must write the decision file"
+jq -e '.decision.action == "arm"' "$OUTFILE" >/dev/null || fail "--json-out payload must carry the decision"
+printf '%s' "$HUMAN" | grep -q "SHADOW mode" || fail "--json-out must still print the human summary to stdout"
+printf '%s' "$HUMAN" | jq -e . >/dev/null 2>&1 && fail "stdout under --json-out must be prose, not JSON"
+# The human renderer itself is otherwise dead to this suite — every other case
+# runs --json — yet it is the code path the scheduled workflow prints.
+printf '%s' "$HUMAN" | grep -q "Open PRs (FIFO order" || fail "human renderer must list the queue"
+printf '%s' "$HUMAN" | grep -q "#160" || fail "human renderer must name each PR"
+pass "--json-out writes JSON and still renders the human summary"
+
+# =============================================================================
+# Case 28: the FILE half of the kill switch — the half the runbook names first.
+# Only the LAND_QUEUE half was covered, so inverting the -f test passed.
+# =============================================================================
+SWITCH_ROOT="$TMPDIR_T/noswitch"
+mkdir -p "$SWITCH_ROOT/scripts" "$SWITCH_ROOT/.github"
+cp "$PLAN" "$REPO_ROOT/scripts/land-gates.sh" "$REPO_ROOT/scripts/edge-select.sh" \
+   "$REPO_ROOT/scripts/review-threads.sh" "$SWITCH_ROOT/scripts/"
+OUT="$(cd "$SWITCH_ROOT" && GH_REPO="florianhorner/mammamiradio" PATH="$BIN:$PATH" \
+  bash "$SWITCH_ROOT/scripts/land-queue-plan.sh" 2>&1)"
+printf '%s' "$OUT" | grep -q "switched off" \
+  || fail "a missing .github/land-queue.enabled must stop the planner"
+# ...and it must still answer in the caller's format, or pr-queue-status --json
+# gets prose where it expects JSON and dies on a jq parse error.
+OFF_JSON="$(cd "$SWITCH_ROOT" && GH_REPO="florianhorner/mammamiradio" PATH="$BIN:$PATH" \
+  bash "$SWITCH_ROOT/scripts/land-queue-plan.sh" --json 2>/dev/null)"
+printf '%s' "$OFF_JSON" | jq -e '.mode == "off" and (.prs | length) == 0' >/dev/null \
+  || fail "a switched-off queue must still emit valid JSON under --json"
+pass "kill-switch FILE half stops the planner and still answers in JSON"
+
+# =============================================================================
+# Case 29: the planner's edge lane had zero assertions, and it discarded the one
+# distinction edge-select.sh exists to make — rc 2 (could not check) reported
+# identically to rc 1 (checked, nothing eligible).
+# =============================================================================
+PRS="[$(pr_row 170 "fix: a thing" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
+OUT="$(RUN_SHAS="$(git rev-parse "$MAIN_REF")" run_plan "$PRS")"
+jq -e '.edge.state == "advance" or .edge.state == "noop"' <<<"$OUT" >/dev/null \
+  || fail "a green build on the main tip should give the edge lane a verdict"
+[ "$(jq -r '.edge.target' <<<"$OUT")" = "$(git rev-parse --short=7 "$MAIN_REF")" ] \
+  || fail "edge target should be the eligible short sha"
+OUT="$(RUN_FAIL=1 run_plan "$PRS")"
+[ "$(jq -r '.edge.state' <<<"$OUT")" = "blocked" ] || fail "an unverifiable edge query must block"
+jq -e '.edge.why | test("could not check")' <<<"$OUT" >/dev/null \
+  || fail "an unverifiable edge query must not report the calm 'no eligible built commit'"
+OUT="$(RUN_SHAS="" run_plan "$PRS")"
+jq -e '.edge.why | test("no eligible built commit")' <<<"$OUT" >/dev/null \
+  || fail "a genuinely empty build history should report no eligible commit"
+pass "edge lane distinguishes unverifiable from genuinely idle"
+
+# =============================================================================
+# Case 30: shadow mode wrote nothing across EVERY run in this file, not just
+# the first (run_plan truncates the per-run log).
+# =============================================================================
+cat "$TMPDIR_T/gh.log" >> "$ALL_GH_LOG"
+grep -Eq 'pr (merge|comment|edit|review|close)|api -X|--method (POST|PUT|PATCH|DELETE)' "$ALL_GH_LOG" \
+  && fail "shadow planner issued a mutating gh call in at least one run"
+[ -s "$ALL_GH_LOG" ] || fail "cumulative gh log is empty — the assertion would be vacuous"
+pass "no mutating gh call across every planner run in this suite"
 
 echo
 echo "All $PASS_COUNT land-queue cases passed."

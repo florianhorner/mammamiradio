@@ -53,8 +53,18 @@ done
 # off from every invocation path — a local run, a second workflow, or the live
 # controller this becomes. Absent file or LAND_QUEUE=0 stops it.
 if [ ! -f "$ROOT/.github/land-queue.enabled" ] || [ "${LAND_QUEUE:-1}" = "0" ]; then
+  # Answer in the format the caller asked for. Printing prose on the --json path
+  # hands a jq parse error to every consumer, including the documented
+  # `scripts/pr-queue-status.sh --json`.
+  OFF_JSON='{"mode":"off","reason":"kill switch engaged: .github/land-queue.enabled absent or LAND_QUEUE=0","decision":{"action":"none","pr":null,"why":"the shadow queue is switched off"},"edge":{"state":"off","target":null,"why":"the shadow queue is switched off"},"prs":[]}'
+  [ -n "$JSON_OUT" ] && printf '%s\n' "$OFF_JSON" > "$JSON_OUT"
+  if [ "$JSON_ONLY" = "1" ]; then
+    # stdout is the payload on this path; prose here is a parse error downstream.
+    printf '%s\n' "$OFF_JSON"
+    exit 0
+  fi
   say "land-queue: the shadow queue is switched off — nothing computed."
-  say "            Restore .github/land-queue.enabled, or unset LAND_QUEUE=0, to turn it back on."
+  say "            Restore .github/land-queue.enabled, or export LAND_QUEUE=1, to turn it back on."
   exit 0
 fi
 
@@ -110,6 +120,13 @@ classify_pr() {
   if ! evidence_check "$head" "$base" >/dev/null 2>&1; then
     printf 'BLOCKED_EVIDENCE\tno committed v2 receipt covers this head\n'; return
   fi
+  # verify_head refuses when the evidence check was skipped AND no local ledger
+  # entry covers the head. Without this the shadow reports "would arm" for a PR
+  # land-pr.sh would refuse — divergence exactly where the escape hatch is in use.
+  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ] \
+     && ! squad_check "$head" "$(date -u +%s)" >/dev/null 2>&1; then
+    printf 'BLOCKED_EVIDENCE\tevidence check skipped and no ledger entry covers this head\n'; return
+  fi
 
   # Plan Q7: UNSTABLE means only non-required checks are failing and is landable.
   case "$merge_state" in
@@ -139,14 +156,24 @@ FIFO_KEY_SOURCE="createdAt (proxy for ready_at; shadow mode has no write path)"
 # One jq pass for the whole queue. Label membership is resolved to booleans here
 # rather than by string-matching a joined list in shell, so a label whose name
 # contains the separator cannot be misread.
+#
+# The separator is US (0x1f), NOT tab. Tab is an IFS *whitespace* character, so
+# `IFS=$'\t' read` collapses a run of tabs into one delimiter and an EMPTY field
+# silently shifts every field after it. That is reachable in production: a PR
+# opened by a since-deleted account has `.author == null`, the `// ""` guard
+# emits an empty field, and an edge-release PR would land in the gated feature
+# lane and stall the whole queue. US is not IFS whitespace, so empty fields
+# survive; newlines are scrubbed because `read` would end the record on one.
+GATHER_SEP=$'\037'
 GATHER="$(printf '%s' "$PR_JSON" | jq -r 'sort_by(.createdAt)[]
   | (.labels | map(.name)) as $l
   | [ .number, .headRefOid, .baseRefOid, .mergeStateStatus, .isDraft,
       (($l | index("hold")) != null or ($l | index("manual-land")) != null),
       (($l | index("skip-queue")) != null),
       (.author.login // ""), (.author.is_bot // false),
-      .headRefName, .createdAt, .url, .title
-    ] | @tsv')"
+      (.headRefName // ""), .createdAt, .url, (.title // "")
+    ]
+  | map(tostring | gsub("[\n\r\u001f]"; " ")) | join("\u001f")')"
 
 # --- decide (single-flight, plan section 6.4) ---------------------------------
 # At most ONE feature PR may be acted on per tick (invariant I8). The queue head
@@ -161,7 +188,7 @@ DECISION_WHY="no feature PR is actionable"
 HEAD_DECIDED=0
 RESULTS=""
 
-while IFS=$'\t' read -r number head base merge_state is_draft held skipped \
+while IFS="$GATHER_SEP" read -r number head base merge_state is_draft held skipped \
                         author is_bot branch created url title; do
   [ -n "$number" ] || continue
 
@@ -215,20 +242,35 @@ done <<<"$GATHER"
 # Independent of the feature queue by design (Q4/C): edge cuts are mechanical
 # one-liners and must not sit behind feature FIFO.
 EDGE_TARGET=""
+EDGE_RC=0
 if ! git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
   EDGE_STATE="blocked"
   EDGE_WHY="origin/main is not resolvable locally — refusing to name an edge target"
-elif ! EDGE_TARGET="$(eligible_edge_sha origin/main 2>/dev/null)"; then
-  EDGE_STATE="blocked"
-  EDGE_WHY="no eligible built commit right now — edge stays where it is"
 else
-  EDGE_CURRENT="$(edge_pinned_version origin/main)"
-  if [ "$EDGE_CURRENT" = "$EDGE_TARGET" ]; then
-    EDGE_STATE="noop"
-    EDGE_WHY="edge already pinned to $EDGE_TARGET — the newest eligible built commit"
+  # Capture the status directly, NOT via `elif ! cmd`: inside a negated
+  # condition `$?` is the status of the negation, which is always 0 on the
+  # branch taken, so rc 2 would be read as rc 0.
+  EDGE_TARGET="$(eligible_edge_sha origin/main 2>/dev/null)" || EDGE_RC=$?
+  if [ "$EDGE_RC" -eq 2 ]; then
+    # rc 2 (the build query itself failed) must not read as rc 1 (queried fine,
+    # nothing eligible). Collapsing them reports a calm "nothing to do" for a
+    # lane that never ran — the soft-pass this file's header refuses.
+    EDGE_STATE="blocked"
+    EDGE_TARGET=""
+    EDGE_WHY="could not check the add-on build history — edge state is unverified, not idle"
+  elif [ "$EDGE_RC" -ne 0 ]; then
+    EDGE_STATE="blocked"
+    EDGE_TARGET=""
+    EDGE_WHY="no eligible built commit right now — edge stays where it is"
   else
-    EDGE_STATE="advance"
-    EDGE_WHY="would pin edge $EDGE_CURRENT -> $EDGE_TARGET (green build, no image drift vs main)"
+    EDGE_CURRENT="$(edge_pinned_version origin/main)"
+    if [ "$EDGE_CURRENT" = "$EDGE_TARGET" ]; then
+      EDGE_STATE="noop"
+      EDGE_WHY="edge already pinned to $EDGE_TARGET — the newest eligible built commit"
+    else
+      EDGE_STATE="advance"
+      EDGE_WHY="would pin edge $EDGE_CURRENT -> $EDGE_TARGET (green build, no image drift vs main)"
+    fi
   fi
 fi
 
