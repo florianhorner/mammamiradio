@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import io
+import contextlib
 import json
-from contextlib import nullcontext
+import os
+import threading
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,16 +33,37 @@ def _track(title: str, *, source="starter", path: Path | None = None) -> Track:
 
 
 class _FakeProbeProcess:
-    """Stand-in for subprocess.Popen used as a context manager by the probe."""
+    """Stand-in for subprocess.Popen used as a context manager by the probe.
+
+    Backed by a real OS pipe rather than BytesIO so the double behaves like a
+    child process: read() returns EOF only once the write end is closed. See
+    test_probe_gives_up_when_the_child_stalls_mid_stream for the double that
+    deliberately never closes it.
+    """
 
     def __init__(self, stdout: str, returncode: int = 0):
-        self.stdout = io.BytesIO(stdout.encode("utf-8"))
+        read_fd, write_fd = os.pipe()
+        payload = stdout.encode("utf-8")
+
+        def _feed():
+            # A payload larger than the pipe buffer (64 KiB) blocks the writer
+            # until the reader drains it, exactly as a real child would, so this
+            # has to run off the test thread.
+            with contextlib.suppress(OSError, BrokenPipeError):
+                os.write(write_fd, payload)
+            with contextlib.suppress(OSError):
+                os.close(write_fd)
+
+        writer = threading.Thread(target=_feed, daemon=True)
+        writer.start()
+        self.stdout = os.fdopen(read_fd, "rb")
         self._returncode = returncode
 
     def __enter__(self):
         return self
 
     def __exit__(self, *_exc):
+        self.stdout.close()
         return False
 
     def wait(self, timeout=None):  # mirrors the Popen signature
@@ -256,7 +278,7 @@ def test_entry_cap_bounds_iterator_and_unreadable_entries(tmp_path, fail_on_stat
 
     with (
         patch("mammamiradio.playlist.local_library.MAX_LOCAL_LIBRARY_ENTRIES", 2),
-        patch("mammamiradio.playlist.local_library.os.scandir", return_value=nullcontext(entries())),
+        patch("mammamiradio.playlist.local_library.os.scandir", return_value=contextlib.nullcontext(entries())),
     ):
         result = scan_local_library(_config(tmp_path))
 
@@ -660,3 +682,55 @@ def test_a_real_duplicate_is_still_ignored(tmp_path):
 
     assert len(result.tracks) == 1
     assert result.ignored["duplicate"] == 1
+
+
+def test_probe_gives_up_when_the_child_stalls_mid_stream(monkeypatch):
+    """A child that emits a prefix then stalls must not pin the scanner.
+
+    The probe deadline used to apply only to Popen.wait(), which bounds the
+    child's EXIT, not the read before it. A stalled child with an open stdout
+    blocked an uncancellable to_thread worker and held the shared background
+    ffmpeg slot for the process lifetime; the scan budget cannot recover that,
+    because it is only evaluated between files.
+    """
+    import threading
+    import time as _time
+
+    monkeypatch.setattr(local_library_module, "LOCAL_METADATA_PROBE_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    released = threading.Event()
+
+    class _StallingProcess:
+        """read() blocks until kill() releases it, exactly like a wedged child."""
+
+        def __init__(self):
+            self.stdout = self
+            self.killed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def read(self, _size):
+            released.wait(timeout=10)
+            return b'{"format":'
+
+        def wait(self, timeout=None):  # mirrors the Popen signature
+            return -9 if self.killed else 0
+
+        def kill(self):
+            self.killed = True
+            released.set()
+
+    process = _StallingProcess()
+    with patch.object(local_library_module.subprocess, "Popen", lambda *a, **k: process):
+        started = _time.monotonic()
+        result = _probe_local_audio_metadata(Path("stalled.mp3"))
+        elapsed = _time.monotonic() - started
+
+    assert result is None, "a stalled probe is unknown, not 'no tags'"
+    assert process.killed is True, "the watchdog must kill the stalled child"
+    assert elapsed < 5, f"probe should give up near its 1s deadline, took {elapsed:.1f}s"
+    assert local_library_module._local_metadata_cache == {}, "a stall must not be cached"

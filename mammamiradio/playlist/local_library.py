@@ -150,29 +150,39 @@ def _probe_local_audio_metadata(path: Path) -> _LocalMetadata | None:
     # buffers the child's whole stdout first, so a file with a multi-megabyte tag
     # frame is fully in memory before any cap can apply. ID3v2 permits far more
     # than this station has room for on a Pi.
+    # One deadline across the WHOLE child interaction. Popen.wait(timeout=) bounds
+    # only the exit; the bounded read that runs first was unbounded in time, so a
+    # child that emitted a prefix and then stalled without closing stdout blocked
+    # an uncancellable to_thread worker and held the shared background ffmpeg slot
+    # for the life of the process. The scan budget cannot recover that: it is only
+    # evaluated between files. A killed child exits non-zero, which maps to None
+    # below, so a stall stays "unknown" and is retried rather than cached.
     try:
         with (
             ffmpeg_slot(background=True),
             subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process,
         ):
             assert process.stdout is not None
+            watchdog = threading.Timer(LOCAL_METADATA_PROBE_TIMEOUT_SECONDS, process.kill)
+            watchdog.daemon = True
+            watchdog.start()
             try:
                 raw_bytes = process.stdout.read(LOCAL_METADATA_MAX_PROBE_BYTES + 1)
                 if len(raw_bytes) > LOCAL_METADATA_MAX_PROBE_BYTES:
-                    # Past the cap we stop reading, so the child blocks on a full
-                    # pipe and wait() times out — which would report a perfectly
-                    # readable file as a probe FAILURE and re-probe it on every
-                    # scan forever. Kill it and answer "no usable tags", which is
-                    # durable and cacheable.
+                    # Past the cap we stop reading, so the child would block on a
+                    # full pipe. Kill it and answer "no usable tags", which is a
+                    # durable, cacheable answer rather than a failure.
                     process.kill()
-                    process.wait(timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS)
+                    process.wait()
                     logger.debug("Ignoring oversized metadata for %s", path.name)
                     return "", ""
-                returncode = process.wait(timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS)
+                returncode = process.wait()
             except BaseException:
                 process.kill()
-                process.wait(timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS)
+                process.wait()
                 raise
+            finally:
+                watchdog.cancel()
     except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired, UnicodeError, ValueError):
         return None
 

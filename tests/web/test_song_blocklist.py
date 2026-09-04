@@ -958,3 +958,44 @@ def test_banning_a_local_song_quarantines_its_stale_norm_cache_artifact(tmp_path
     state.blocklist = dict(state.blocklist)
     assert select_norm_cache_rescue(cache_dir, state, allow_recent_repeat=True) is None
     clear_rejected_cache_keys()
+
+
+def test_title_only_rescue_segment_carries_a_bare_title_for_ban_and_display(tmp_path):
+    """A rescue whose sidecar title contains " - " must not be split into an artist.
+
+    _norm_cache_bridge_payload stamps `title` but used to omit `title_only`, so
+    every consumer that splits a label (Ban/Like, the listener strip, the admin
+    card) invented an artist out of a real title. The fix is at the source, so
+    all three are covered by one stamp.
+    """
+    from mammamiradio.audio.normalizer import save_track_metadata
+    from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
+
+    cache_dir = Path(tmp_path)
+    norm_file = cache_dir / "norm_stopstart_128k.mp3"
+    norm_file.write_bytes(b"cached audio")
+    save_track_metadata(norm_file, title="Stop - Start", artist="", source_kind="local")
+
+    metadata, _detail = _norm_cache_bridge_payload(norm_file, "resume_bridge", "Mamma Mi Radio")
+
+    assert metadata["title"] == "Stop - Start"
+    assert metadata["title_only"] == "Stop - Start"
+    assert metadata["artist"] == ""
+
+    # The on-air identity resolver reads title_only first, so the ban key is the
+    # whole title rather than an invented ("stop", "start") pair.
+    track = streamer._now_playing_music_track({"type": "music", "label": "Stop - Start", "metadata": metadata})
+    assert track is not None
+    assert track.normalized_key == ("", "stop - start")
+
+
+def test_rescue_without_a_sidecar_still_withholds_title_only(tmp_path):
+    """A humanized filename is not a trustworthy bare title, so it earns no stamp."""
+    from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
+
+    norm_file = Path(tmp_path) / "norm_unknown_128k.mp3"
+    norm_file.write_bytes(b"cached audio")
+
+    metadata, _detail = _norm_cache_bridge_payload(norm_file, "resume_bridge", "Mamma Mi Radio")
+
+    assert "title_only" not in metadata

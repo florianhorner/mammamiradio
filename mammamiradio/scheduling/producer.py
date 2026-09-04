@@ -946,7 +946,8 @@ def _norm_cache_bridge_payload(
     bitrate_kbps: int | float | None = None,
 ) -> tuple[dict, str]:
     _meta = load_track_metadata(norm_path) or {}
-    raw_title = str(_meta.get("title") or humanize_norm_filename(norm_path.name))
+    sidecar_title = str(_meta.get("title") or "")
+    raw_title = sidecar_title or humanize_norm_filename(norm_path.name)
     # Illusion guard: a poisoned sidecar (a foreign "Radio X" station name) must
     # never surface as the now-playing artist/title on the listener UI / Music
     # Assistant provider. Strip the artist (drop to title-only) and prefix-strip
@@ -965,10 +966,18 @@ def _norm_cache_bridge_payload(
     source_kind = str(_meta.get("source_kind") or "").strip()
     origin_fields = {"source_kind": source_kind} if source_kind else {}
     detail = f"{artist} - {title}" if artist else title
+    # Stamp the bare title whenever the SIDECAR supplied it. Without it an
+    # artist-less rescue is keyed off `title` alone, and every consumer that
+    # splits a label (Ban/Like, the listener strip, the admin card) invents an
+    # artist out of a real title containing " - ". Only a sidecar title earns
+    # this: a humanized filename is not a trustworthy bare title, which is why
+    # the sibling rescue path in web/streamer.py leaves it unset without one.
+    title_only_fields = {"title_only": title} if sidecar_title else {}
     return (
         {
             "title": title,
             "artist": artist,
+            **title_only_fields,
             **duration_fields,
             **origin_fields,
             bridge_flag: True,
