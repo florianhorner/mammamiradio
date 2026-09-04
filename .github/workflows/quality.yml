@@ -70,6 +70,9 @@ jobs:
       - name: Documentation safety lint
         run: bash scripts/check-docs-safety.sh
 
+      - name: UI copy lint
+        run: bash scripts/check-ui-copy-lint.sh
+
       - name: Backlog-file guard
         run: bash scripts/check-no-backlog-files.sh
 

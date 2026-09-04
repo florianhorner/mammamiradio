@@ -5,12 +5,10 @@
 # option descriptions, and streamer setup errors. Fails on NEW violations outside
 # .config/ui-copy-baseline.json until the backlog is cleared.
 #
-# Run locally:
-#   bash scripts/check-ui-copy-lint.sh          # CI mode (baseline-aware)
-#   bash scripts/check-ui-copy-lint.sh --audit  # full report
-#
-# Refresh baseline after fixing violations:
-#   python3 scripts/ui_copy_lint.py --write-baseline
+# Run locally (every ui_copy_lint.py flag is forwarded):
+#   bash scripts/check-ui-copy-lint.sh                   # CI mode (baseline-aware)
+#   bash scripts/check-ui-copy-lint.sh --audit           # full report
+#   bash scripts/check-ui-copy-lint.sh --write-baseline  # refresh baseline after fixes
 
 set -euo pipefail
 
@@ -24,8 +22,9 @@ if [ -z "$PYTHON_BIN" ]; then
   fi
 fi
 
-if [ "${1:-}" = "--audit" ]; then
-  exec "$PYTHON_BIN" "$SCRIPT_DIR/ui_copy_lint.py" --audit
+if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+  echo "check-ui-copy-lint: needs Python 3.11+ (set MAMMAMIRADIO_PYTHON)" >&2
+  exit 1
 fi
 
-exec "$PYTHON_BIN" "$SCRIPT_DIR/ui_copy_lint.py"
+exec "$PYTHON_BIN" "$SCRIPT_DIR/ui_copy_lint.py" "$@"

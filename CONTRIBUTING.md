@@ -373,6 +373,13 @@ When behavior changes, update the matching docs in the same change:
 
 If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.
 
+When changing anything a listener or operator reads — template copy, `ui_copy.py`,
+toast text, add-on option descriptions — run `bash scripts/check-ui-copy-lint.sh`. It
+holds human-facing strings to leadership principle #5: no machine words on screen, and
+every failure names a way out. Known violations are grandfathered in
+`.config/ui-copy-baseline.json`; if you fix one, refresh it with
+`bash scripts/check-ui-copy-lint.sh --write-baseline` and check the `+` lines it prints.
+
 When changing the public install or add-on guides, run `bash scripts/check-docs-safety.sh`. It catches retired Home Assistant navigation, unsafe live-recovery instructions, and broken relative Markdown links before CI does.
 
 

@@ -1,36 +1,6 @@
 {
   "description": "Known UI copy violations baselined until fixed. CI fails on new fingerprints only.",
-  "fingerprints": [
-    "27c86ba6d95036e0",
-    "2a351c49546a599a",
-    "70847545d7e2ad57",
-    "ab757c2cf80ba108",
-    "adf3ddcd1cf123b5",
-    "c7ba57e9f0539750",
-    "cf268763b1343d3b"
-  ],
   "violations": [
-    {
-      "rule": "stale_speaker_copy",
-      "file": "mammamiradio/web/templates/admin.html",
-      "line": 2802,
-      "text": "No ready speaker was found No other media player currently reports that it can play media. Bring a speaker online in Home Assistant, then try again.",
-      "detail": "pattern=\\bno ready speaker\\b"
-    },
-    {
-      "rule": "stale_speaker_copy",
-      "file": "mammamiradio/web/templates/admin.html",
-      "line": 2803,
-      "text": "That speaker is not available now The selected player changed or went offline. Choose an available target, then try again.",
-      "detail": "pattern=\\bthat speaker is not available\\b"
-    },
-    {
-      "rule": "no_way_out",
-      "file": "mammamiradio/web/templates/admin.html",
-      "line": 6333,
-      "text": "Clipboard unavailable",
-      "detail": "dead-end toast"
-    },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
@@ -58,6 +28,27 @@
       "line": 426,
       "text": "That unsaved listening check is no longer available. Nothing was replayed. Refresh Setup, then explicitly start the selected speaker once more. Start once more",
       "detail": "pattern=\\bstart the selected speaker\\b"
+    },
+    {
+      "rule": "stale_speaker_copy",
+      "file": "mammamiradio/web/templates/admin.html",
+      "line": 2802,
+      "text": "No ready speaker was found No other media player currently reports that it can play media. Bring a speaker online in Home Assistant, then try again.",
+      "detail": "pattern=\\bno ready speaker\\b"
+    },
+    {
+      "rule": "stale_speaker_copy",
+      "file": "mammamiradio/web/templates/admin.html",
+      "line": 2803,
+      "text": "That speaker is not available now The selected player changed or went offline. Choose an available target, then try again.",
+      "detail": "pattern=\\bthat speaker is not available\\b"
+    },
+    {
+      "rule": "no_way_out",
+      "file": "mammamiradio/web/templates/admin.html",
+      "line": 6333,
+      "text": "Clipboard unavailable",
+      "detail": "dead-end toast"
     }
   ]
 }

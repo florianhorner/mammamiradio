@@ -411,30 +411,34 @@ def test_listener_moment_receipts_stay_private_and_readable():
     assert "casa_moment_stale" in html
 
 
+# Also consumed by scripts/ui_copy_lint.py, which applies a stricter matcher to the
+# same terms. test_ui_copy_lint.py holds the two lists to this one definition.
+TECH_LINGO_LISTENER = (
+    "rate limit",
+    "429",
+    "503",
+    "500",
+    "buffer",
+    "timeout",
+    "rejected",
+    "degraded",
+    "null",
+    "undefined",
+    "traceback",
+    "exception",
+)
+
+
 def test_no_tech_lingo_reaches_the_listener():
     """Leadership principle #5: no machine words in listener-facing copy.
 
     Guards every swappable string in both languages against the dev-lingo that
     has leaked to the UI before ("rate limit", "buffer", HTTP codes, etc.).
     """
-    banned = (
-        "rate limit",
-        "429",
-        "503",
-        "500",
-        "buffer",
-        "timeout",
-        "rejected",
-        "degraded",
-        "null",
-        "undefined",
-        "traceback",
-        "exception",
-    )
     for lang in ("en", "it"):
         for key, value in COPY[lang].items():
             low = value.lower()
-            for term in banned:
+            for term in TECH_LINGO_LISTENER:
                 assert term not in low, f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
 
 

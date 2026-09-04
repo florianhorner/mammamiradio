@@ -426,6 +426,24 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on PRs that touch workflow/script paths, and on every push to `main`). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
+- **UI copy lint** (`scripts/check-ui-copy-lint.sh`): Principle #5 guard over human-facing
+  strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,
+  HA add-on option descriptions, and the streamer setup errors. Four rules: machine words on
+  a human screen (`tech_lingo`), a stated failure with no next step (`no_way_out`), copy still
+  phrased around picking a speaker or room (`stale_speaker_copy`), and brand misspelling.
+  Admin/addon/server copy is held to the same banned-word list as the listener — a warmer
+  register, not a shorter list.
+  - Known violations are grandfathered by fingerprint in `.config/ui-copy-baseline.json`;
+    CI fails on NEW ones. Refresh with `bash scripts/check-ui-copy-lint.sh --write-baseline`,
+    which prints every violation it newly accepts so a refresh cannot silently absorb a
+    regression. A baselined violation that no longer reproduces is also a failure — the
+    baseline may only shrink, and `MAX_BASELINED_VIOLATIONS` in the test pins the ceiling.
+  - `MIN_STRINGS_PER_GROUP` is a per-extractor coverage floor. The lint scrapes copy out of
+    templates, so an extractor that stops matching after a reformat would otherwise collect
+    nothing, find no violations, and report "clean" — the floors make that a failure instead.
+  - Runs in `quality.yml` (`lint` job) beside the changelog and docs-safety lints.
+    Local: `bash scripts/check-ui-copy-lint.sh` (add `--audit` for the full report; every
+    flag is forwarded to `scripts/ui_copy_lint.py`).
 - **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) either required recovery asset (`continuity_1.mp3`, `emergency_tone.mp3`) missing, ≤1 KiB, or not recognized as audio by `ffprobe` — each checked independently, so validation never stops at the first playable asset — or any `generate_silence` reference in `producer.py`, (3) missing `_pick_canned_clip=None` test mock (empty-container / missing packaged recovery untested), (4) missing `session_stopped` test (post-restart silence untested). The manifest/hash boundary for those assets is no longer a per-asset call in this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py` run covers the whole packaged demo inventory (and, with `--browser-assets-root`, the browser narration pack) before the per-asset reachability check. Local: `bash scripts/check-release-invariants.sh`.
 - **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
 - **Advertised-version guard** (`scripts/check-advertised-version.sh`): asks GHCR whether the version `main` advertises to the HA Supervisor exists, for both arches, over the anonymous token endpoint (no scope needed). Home Assistant requires a prebuilt `image:` add-on's `version:` to name a real tag; when it does not, fresh installs fail and updates roll back.
