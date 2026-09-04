@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -10,11 +12,20 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.core.models import PlaylistSource, StationState, Track
+from mammamiradio.playlist import local_library
 from mammamiradio.playlist.local_library import (
     reconcile_local_library,
     scan_and_reconcile_local_library,
     scan_local_library,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_probe_cache():
+    """The probe memo is a module global; keep it from leaking between tests."""
+    local_library._probe_cache.clear()
+    yield
+    local_library._probe_cache.clear()
 
 
 def _config(root: Path):
@@ -392,3 +403,181 @@ def test_same_identity_refresh_updates_duration(tmp_path):
     reconcile_local_library(state, scan)
     assert state.playlist[0] is existing
     assert existing.duration_ms == 201_000
+
+
+def _ffprobe_ok(*, artist: str, title: str, seconds: str):
+    def _run(cmd, **_kwargs):
+        assert cmd[0] == "ffprobe"
+        payload = {"format": {"duration": seconds, "tags": {"artist": artist, "title": title}}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    return _run
+
+
+def test_transient_probe_failure_keeps_a_measured_duration(tmp_path):
+    """A timeout is not evidence that a 4:05 song became a 3:30 one.
+
+    Reachable whenever the filename already encodes the tags — the common case
+    for a tidy library. The identity then still matches on a failed probe, so
+    the refresh branch fires and the nonzero 3:30 fallback overwrites the real
+    duration. Up Next and every runway estimate read that number.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Marco Buono - A Love Like This.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Marco Buono", title="A Love Like This", seconds="245.0"),
+    ):
+        first = scan_local_library(_config(root))
+    state = StationState(playlist=[], playlist_source=PlaylistSource(kind="starter", label="Starter"))
+    reconcile_local_library(state, first)
+
+    tagged = state.playlist[0]
+    assert (tagged.artist, tagged.title, tagged.duration_ms) == ("Marco Buono", "A Love Like This", 245_000)
+
+    # Rewrite the file so the memo misses, then time the probe out.
+    path.write_bytes(b"audio-changed")
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("ffprobe", 5.0),
+    ):
+        second = scan_local_library(_config(root))
+    assert second.probe_ok_paths == set()
+    reconcile_local_library(state, second)
+
+    assert state.playlist[0] is tagged
+    assert tagged.duration_ms == 245_000
+
+
+def test_transient_probe_failure_does_not_report_a_tagged_track_as_removed(tmp_path):
+    """The other half: a failed probe must not flip the track's identity.
+
+    With tags the filename does not encode, a failed probe reads back as
+    ``Unknown``. That is a different identity, so reconcile treated the file as
+    a swap and reported the tagged track removed — feeding a still-present
+    track to the readiness ledger's removal path.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "25-track.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Marco Buono", title="A Love Like This", seconds="245.0"),
+    ):
+        first = scan_local_library(_config(root))
+    state = StationState(playlist=[], playlist_source=PlaylistSource(kind="starter", label="Starter"))
+    reconcile_local_library(state, first)
+    tagged = state.playlist[0]
+
+    path.write_bytes(b"audio-changed")
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("ffprobe", 5.0),
+    ):
+        second = scan_local_library(_config(root))
+    outcome = reconcile_local_library(state, second)
+
+    assert outcome["removed"] == 0
+    assert outcome["added"] == 0
+    assert state.playlist == [tagged]
+    assert (tagged.artist, tagged.title) == ("Marco Buono", "A Love Like This")
+
+
+def test_probe_is_memoized_for_unchanged_files_across_scans(tmp_path):
+    """The scanner wakes every 60s; re-probing every unchanged file is a CPU storm."""
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "Artist - Song.mp3").write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Artist", title="Song", seconds="120.0"),
+    ) as run:
+        first = scan_local_library(_config(root))
+        second = scan_local_library(_config(root))
+
+    assert run.call_count == 1
+    assert first.tracks[0].duration_ms == second.tracks[0].duration_ms == 120_000
+    assert second.probe_ok_paths == first.probe_ok_paths
+
+
+def test_exhausted_probe_budget_degrades_to_an_incomplete_scan(tmp_path):
+    """Out of budget, the pass stops probing and keeps what reconcile already knows."""
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "Artist - Song.mp3").write_bytes(b"audio")
+
+    with (
+        patch.object(local_library, "_SCAN_PROBE_BUDGET_SEC", 0.0),
+        patch("mammamiradio.playlist.local_library.subprocess.run") as run,
+    ):
+        result = scan_local_library(_config(root))
+
+    run.assert_not_called()
+    assert result.complete is False
+    assert result.probe_ok_paths == set()
+    assert result.tracks[0].duration_ms == 210_000
+    assert any("reading song tags" in warning for warning in result.warnings)
+
+    # complete=False is what makes the degradation safe: reconcile keeps tracks
+    # a truncated pass could not confirm instead of pruning them.
+    state = StationState(
+        playlist=[_track("Known", source="local", path=root / "gone.mp3")],
+        playlist_source=PlaylistSource(kind="starter", label="Starter"),
+    )
+    assert reconcile_local_library(state, result)["removed"] == 0
+
+
+def test_local_overlay_never_rewrites_a_charts_kind(tmp_path):
+    """charts also selects a provider: rewriting it disabled chart refresh forever.
+
+    ``producer`` refreshes the chart playlist only while kind is ``charts``, and
+    the demotion path can only ever restore ``starter`` — so the flip was
+    one-way. Composition rides on ``local_overlay`` and ``Track.source``.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "Operator - Local.mp3").write_bytes(b"audio")
+    state = StationState(
+        playlist=[_track("Chart One", source="charts")],
+        playlist_source=PlaylistSource(kind="charts", label="Top 50", track_count=1),
+    )
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Operator", title="Local", seconds="200.0"),
+    ):
+        scan = scan_local_library(_config(root))
+    reconcile_local_library(state, scan)
+
+    assert state.playlist_source.kind == "charts"
+    assert state.playlist_source.label == "Top 50"
+    assert state.playlist_source.local_overlay is True
+    assert any(track.source == "local" for track in state.playlist)
+
+
+def test_local_overlay_still_promotes_a_starter_bag(tmp_path):
+    """The bag kinds carry no provider, so composition promotion stays intact."""
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "Operator - Local.mp3").write_bytes(b"audio")
+    state = StationState(
+        playlist=[_track("Starter One", source="starter")],
+        playlist_source=PlaylistSource(kind="starter", label="Starter", track_count=1),
+    )
+
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        side_effect=_ffprobe_ok(artist="Operator", title="Local", seconds="200.0"),
+    ):
+        scan = scan_local_library(_config(root))
+    reconcile_local_library(state, scan)
+
+    assert state.playlist_source.kind == "local"
+    assert state.playlist_source.label == "Local music"
+    assert state.playlist_source.local_overlay is True

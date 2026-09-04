@@ -745,11 +745,14 @@ class RuntimeProviderObservation:
 class PlaylistSource:
     """The user-visible source backing the currently loaded playlist.
 
-    ``kind`` names what is in the crate right now (starter-only, local base,
-    charts, …), not merely how the crate was first loaded at boot. When the
-    local library scanner overlays operator files onto a starter bag, kind
-    becomes ``local`` so every consumer — selection, setup copy, provenance —
-    reads the same composition fact.
+    ``kind`` names the crate over the bag kinds that carry no provider of their
+    own: overlaying operator files onto a starter or demo bag promotes it to
+    ``local``. It is *not* rewritten for a kind that also selects a backing
+    provider (``charts``, ``url``, ``jamendo``, ``classic``) — those drive the
+    mid-session chart refresh, the source loader and the persisted-source
+    restore, and rewriting one strands the station on a provider it can no
+    longer refresh. ``local_overlay`` carries the mixed-crate fact instead, and
+    rotation reads composition from ``Track.source`` rather than from either.
     """
 
     kind: str
@@ -758,6 +761,9 @@ class PlaylistSource:
     label: str = ""
     track_count: int = 0
     selected_at: float = 0.0
+    # True while the local-library scanner has operator files in the live crate,
+    # whatever the backing kind. Composition fact, not a provider selector.
+    local_overlay: bool = False
     # Transient load evidence. StationState adopts a revision-scoped clone;
     # persistence and public source serialization deliberately omit it.
     readiness_evidence: SourceReadinessEvidence | None = field(default=None, repr=False, compare=False)
