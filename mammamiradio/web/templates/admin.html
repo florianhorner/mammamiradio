@@ -3960,12 +3960,14 @@ function updateNow(ns){
   const titleEl=document.getElementById('nowTitle');
   const artistEl=document.getElementById('nowArtist');
   let title=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
-  if(typeKey==='music'&&ns.metadata?.artist){
-    artistEl.textContent=ns.metadata.artist;
-  }else if(typeKey==='music'&&ns.label){
-    const parts=ns.label.split(/\s[—–-]\s/);
-    if(parts.length>1){title=parts[0];artistEl.textContent=parts[1];}
-    else{artistEl.textContent='';}
+  if(typeKey==='music'){
+    if(ns.label && ns.label !== ns.type){
+      const parts=splitTrackLabel({...ns,type:'music'});
+      title=parts.title||'Preparing...';
+      artistEl.textContent=parts.artist||'';
+    }else{
+      artistEl.textContent='';
+    }
   }else{
     artistEl.textContent='';
   }
@@ -4026,15 +4028,36 @@ function setProgrammeFilter(filter, btn){
 // ── Scaletta (forward-only live queue) ──
 let _lastLogHash='';
 // Music segments carry labels as "Artist \u2014 Title" AND metadata.artist.
-// Rendering both doubles the artist on screen. Split for music, keep raw otherwise.
+// Rendering both doubles the artist on screen. Split all supported dash forms
+// for music, keep raw otherwise.
+// `source_kind` sits at the top level on queue rows but under `metadata` on
+// now_streaming. Read both, or the legacy-`Unknown` suppression silently does
+// nothing for the song actually on air.
+function segmentSourceKind(seg){
+  const metadata=seg&&seg.metadata&&typeof seg.metadata==='object'?seg.metadata:{};
+  return String(metadata.source_kind||(seg&&seg.source_kind)||'').trim().toLowerCase();
+}
 function splitTrackLabel(seg){
   const label=(seg&&seg.label)||'';
+  const sourceKind=segmentSourceKind(seg);
   if(seg&&seg.type==='music'){
-    const sep=' \u2014 ';
-    const idx=label.indexOf(sep);
-    if(idx>0) return {title:label.slice(idx+sep.length),artist:label.slice(0,idx)};
+    const metadata=seg.metadata&&typeof seg.metadata==='object'?seg.metadata:{};
+    const metadataTitle=String(metadata.title_only||'').trim();
+    const metadataArtist=String(metadata.artist||'').trim();
+    const cleanArtist=sourceKind==='local'&&metadataArtist.toLowerCase()==='unknown'?'':metadataArtist;
+    if(metadataTitle)return {title:metadataTitle,artist:cleanArtist};
+    for(const sep of [' \u2014 ',' \u2013 ',' - ']){
+      const idx=label.indexOf(sep);
+      if(idx<0)continue;
+      const artist=label.slice(0,idx).trim();
+      return {title:label.slice(idx+sep.length).trim(),artist:sourceKind==='local'&&artist.toLowerCase()==='unknown'?'':artist};
+    }
   }
-  return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
+  const metadataArtist=String(seg&&seg.metadata&&seg.metadata.artist||'').trim();
+  return {title:label,artist:sourceKind==='local'&&metadataArtist.toLowerCase()==='unknown'?'':metadataArtist};
+}
+function normaliseSegmentLabel(value){
+  return String(value||'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');
 }
 // Subtitle line shown under the NEXT row's title: artist·source / hosts / brand / category.
 // Surfaces the "what is it" detail even on narrow viewports where the Fonte column hides.
@@ -4248,7 +4271,9 @@ function renderProgramme(st){
     const parts=splitTrackLabel(it);
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
-    const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
+    const bareSegmentLabel=normaliseSegmentLabel(segmentText(typeKey));
+    const titleIsBareSegment=typeKey!=='music'&&normaliseSegmentLabel(parts.title)===bareSegmentLabel;
+    const titleText=parts.title&&!titleIsBareSegment?parts.title:'';
     const source=it.source||'rendered_queue';
     const actionable=source==='rendered_queue';
     const rowClass=[it._queueIndex===0?'next':'', actionable?'rendered-queue':'predicted'].filter(Boolean).join(' ');
@@ -4258,8 +4283,8 @@ function renderProgramme(st){
     const action=actionable
       ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" data-queue-remove-id="${esc(it.id||'')}"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
-    const subtitle=it._queueIndex===0?buildSubtitle(it,typeKey,parts):'';
-    const titleCell=`${esc(titleText||segmentText(typeKey))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
+    const subtitle=it._queueIndex===0&&!titleIsBareSegment?buildSubtitle(it,typeKey,parts):'';
+    const titleCell=`${esc(titleText||(typeKey==='music'?segmentText(typeKey):''))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
     rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${titleCell}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });
 
@@ -7085,6 +7110,13 @@ function sourceChip(source){
   const chip=SOURCE_CHIPS[source]||SOURCE_CHIPS.local;
   return `<span class="pl-src ${chip.cls}">${esc(chip.label)}</span>`;
 }
+function trackDisplayLabel(track){
+  const rawArtist=String(track&&track.artist||'').trim();
+  const artist=track&&track.source==='local'&&rawArtist.toLowerCase()==='unknown'?'':rawArtist;
+  const title=String(track&&track.title||'').trim();
+  if(artist&&title)return `${artist} – ${title}`;
+  return title||String(track&&track.display||'').trim()||'?';
+}
 // Selection survives the 3s poll re-render: track chosen songs by a stable key
 // (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
 let _plSelected=new Set();
@@ -7142,7 +7174,7 @@ function updatePl(tracks,page,force){
     const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
     const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
     const rowTitle=huntMatch?` title="${huntTitle}"`:'';
-    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(trackDisplayLabel(t))}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll

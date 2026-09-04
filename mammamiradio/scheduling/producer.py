@@ -81,7 +81,7 @@ from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DI
 from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.core.path_safety import safe_path_within
 from mammamiradio.core.segment_status import is_fallback_active
-from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
+from mammamiradio.core.song_identity import normalize_song_identity_key, song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import (
     PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
     SpokenAssetEntry,
@@ -941,7 +941,8 @@ def _norm_cache_bridge_payload(
     bitrate_kbps: int | float | None = None,
 ) -> tuple[dict, str]:
     _meta = load_track_metadata(norm_path) or {}
-    raw_title = str(_meta.get("title") or humanize_norm_filename(norm_path.name))
+    sidecar_title = str(_meta.get("title") or "")
+    raw_title = sidecar_title or humanize_norm_filename(norm_path.name)
     # Illusion guard: a poisoned sidecar (a foreign "Radio X" station name) must
     # never surface as the now-playing artist/title on the listener UI / Music
     # Assistant provider. Strip the artist (drop to title-only) and prefix-strip
@@ -960,10 +961,18 @@ def _norm_cache_bridge_payload(
     source_kind = str(_meta.get("source_kind") or "").strip()
     origin_fields = {"source_kind": source_kind} if source_kind else {}
     detail = f"{artist} - {title}" if artist else title
+    # Stamp the bare title whenever the SIDECAR supplied it. Without it an
+    # artist-less rescue is keyed off `title` alone, and every consumer that
+    # splits a label (Ban/Like, the listener strip, the admin card) invents an
+    # artist out of a real title containing " - ". Only a sidecar title earns
+    # this: a humanized filename is not a trustworthy bare title, which is why
+    # the sibling rescue path in web/streamer.py leaves it unset without one.
+    title_only_fields = {"title_only": title} if sidecar_title else {}
     return (
         {
             "title": title,
             "artist": artist,
+            **title_only_fields,
             **duration_fields,
             **origin_fields,
             bridge_flag: True,
@@ -2437,12 +2446,21 @@ def _blocklist_safe_last_music(
 
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
-    # load_track_metadata only returns a dict when BOTH title and artist are
-    # present, so an incomplete sidecar arrives here as empty metadata. Fail
-    # closed: without a full durable identity we cannot prove the song is not
+    # Fail closed: without a durable identity we cannot prove the song is not
     # banned. (Degrades a metadata-poor bed to dry voice while any ban is active
-    # — safe and rare; loosening it would mean bypassing that identity contract.)
-    if not title or not artist:
+    # — loosening it would mean bypassing that identity contract.)
+    #
+    # An empty artist alone is NOT missing identity: an untagged local file is
+    # legitimately ("", title). Refusing on that alone made every banter and ad
+    # air dry for an operator whose library is untagged MP3s the moment they
+    # banned one song — permanent, not "safe and rare".
+    #
+    # This gate stays stricter than `norm_cache._is_blocklisted` in the one case
+    # that matters: a title that collides with a banned title while the artist is
+    # missing is plausibly the banned recording wearing a stripped sidecar, and
+    # this decides whether audio is reused as a bed UNDER speech. Refuse that;
+    # allow the rest. Dead air is never a risk here either way.
+    if not title:
         logger.warning(
             "%s: skipping unidentified last-known-good music while an identity gate is active: %s",
             purpose.capitalize(),
@@ -2451,6 +2469,16 @@ def _blocklist_safe_last_music(
         return None
 
     identity = normalized_track_key(Track(title=title, artist=artist, duration_ms=0))
+    if not artist and any(
+        normalize_song_identity_key(blocked)[1] == normalize_song_identity_key(identity)[1]
+        for blocked in state.blocklist
+    ):
+        logger.warning(
+            "%s: skipping artist-less last-known-good music whose title collides with a ban: %s",
+            purpose.capitalize(),
+            title,
+        )
+        return None
     if song_identity_key_is_blocklisted(identity, state.blocklist):
         logger.warning(
             "%s: skipping blocklisted last-known-good music: %s - %s",

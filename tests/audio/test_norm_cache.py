@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from mammamiradio.audio.norm_cache import (
     RESCUE_COOLDOWN_SECONDS,
+    is_listener_reserved_cache_file,
     is_recent_music,
     recent_music_identity_keys,
     record_rescue_airplay,
@@ -12,7 +13,15 @@ from mammamiradio.audio.norm_cache import (
     select_norm_cache_rescue,
 )
 from mammamiradio.audio.normalizer import save_track_metadata
-from mammamiradio.core.models import Segment, SegmentLogEntry, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    ListenerTrackReservations,
+    Segment,
+    SegmentLogEntry,
+    SegmentType,
+    StationState,
+    Track,
+)
+from mammamiradio.core.song_identity import normalize_song_identity_key
 from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
 
 
@@ -655,3 +664,71 @@ def test_operations_doc_repeat_policy_table_matches_the_code():
         f"docs/operations.md documents buckets {sorted(set(documented.values()))} but the code "
         f"has call sites for {sorted(found)}; a rung was added or removed without updating the table"
     )
+
+
+def test_select_norm_cache_rescue_skips_a_banned_title_only_cache_file(tmp_path):
+    """An untagged local song is identified by ("", title), not unidentified.
+
+    Its sidecar carries an empty artist. Treating that as "no usable metadata"
+    made the rescue ban gate fail open, so a song the operator had permanently
+    banned could still come back through the dead-air rescue path.
+    """
+    state = StationState(blocklist={("", "salvatore on everything"): {"display": "Salvatore On Everything"}})
+
+    _write_norm(tmp_path, "norm_aaa_salvatore.mp3", title="Salvatore On Everything", artist="")
+    allowed = _write_norm(tmp_path, "norm_zzz_alternative.mp3", title="Musica Leggera", artist="Colapesce")
+
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=_choose_first) as choice:
+        rescue = select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True)
+
+    assert rescue == allowed
+    choice.assert_called_once_with([allowed])
+
+
+def test_title_only_cache_file_stays_selectable_when_it_is_not_banned(tmp_path):
+    """The fix must close the fail-open hole without banning every untagged file."""
+    state = StationState(blocklist={("someone else", "another song"): {"display": "Someone Else - Another Song"}})
+    only = _write_norm(tmp_path, "norm_aaa_salvatore.mp3", title="Salvatore On Everything", artist="")
+
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=_choose_first):
+        assert select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True) == only
+
+
+def test_select_norm_cache_rescue_returns_none_when_only_file_is_a_banned_title_only(tmp_path):
+    """Scenario 2 — empty fallback, for the gate this change touched.
+
+    The other title-only ban test always leaves a good alternative on disk, so
+    the "everything filtered out" branch is never taken. Rescue must return None
+    and let the ladder below it run, rather than airing the banned song.
+    """
+    state = StationState(blocklist={("", "salvatore on everything"): {"display": "Salvatore On Everything"}})
+    _write_norm(tmp_path, "norm_aaa_salvatore.mp3", title="Salvatore On Everything", artist="")
+
+    assert select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True) is None
+
+
+def test_title_only_cache_file_is_still_held_by_an_exact_cache_key_reservation(tmp_path):
+    """The exact-recording reservation still holds a title-only file.
+
+    A track-key reservation cannot: reserves_track_key requires both halves to be
+    non-empty. That is correct rather than a gap — a listener request is resolved
+    through search and always carries an artist, so ("", title) is only ever an
+    operator's own untagged file, which is never the subject of a dedication.
+    """
+    only = _write_norm(tmp_path, "norm_salvatore_192k.mp3", title="Salvatore On Everything", artist="")
+    reservations = ListenerTrackReservations(cache_keys=frozenset({"salvatore"}), track_keys=frozenset())
+
+    assert is_listener_reserved_cache_file(only, reservations) is True
+
+
+def test_title_only_cache_file_airs_when_a_dedication_reserves_a_different_song(tmp_path):
+    """Before this change it resolved to "unidentified" and was held off air for
+    ANY pending dedication. It is identified now, so an unrelated reservation
+    must not silently withhold it (leadership #2 — never starve the ladder)."""
+    only = _write_norm(tmp_path, "norm_aaa_salvatore.mp3", title="Salvatore On Everything", artist="")
+    reservations = ListenerTrackReservations(
+        cache_keys=frozenset(),
+        track_keys=frozenset({normalize_song_identity_key(("someone else", "another song"))}),
+    )
+
+    assert is_listener_reserved_cache_file(only, reservations) is False
