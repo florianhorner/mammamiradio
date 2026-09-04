@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from contextlib import nullcontext
 from dataclasses import replace
@@ -28,6 +29,35 @@ def _config(root: Path):
 
 def _track(title: str, *, source="starter", path: Path | None = None) -> Track:
     return Track(title=title, artist="Artist", duration_ms=180_000, source=source, local_path=path)
+
+
+class _FakeProbeProcess:
+    """Stand-in for subprocess.Popen used as a context manager by the probe."""
+
+    def __init__(self, stdout: str, returncode: int = 0):
+        self.stdout = io.BytesIO(stdout.encode("utf-8"))
+        self._returncode = returncode
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def wait(self, timeout=None):  # mirrors the Popen signature
+        return self._returncode
+
+    def kill(self):
+        return None
+
+
+def _probe_popen(payload: dict | str, *, returncode: int = 0):
+    stdout = payload if isinstance(payload, str) else json.dumps(payload)
+    return lambda *_args, **_kwargs: _FakeProbeProcess(stdout, returncode)
+
+
+def _probe_response(payload: dict, *, returncode: int = 0):
+    return _probe_popen(payload, returncode=returncode)
 
 
 def test_scan_is_recursive_case_insensitive_and_supports_common_audio(tmp_path):
@@ -103,21 +133,14 @@ def test_scan_humanizes_untagged_slug_without_inventing_artist(tmp_path):
 
 def test_probe_reads_format_tags_before_stream_tags(tmp_path):
     path = tmp_path / "tagged.mp3"
-    response = type(
-        "ProbeResponse",
-        (),
+    response = _probe_popen(
         {
-            "returncode": 0,
-            "stdout": json.dumps(
-                {
-                    "format": {"tags": {"TITLE": "Format Title"}},
-                    "streams": [{"codec_type": "audio", "tags": {"artist": "Stream Artist", "title": "Stream Title"}}],
-                }
-            ),
-        },
-    )()
+            "format": {"tags": {"TITLE": "Format Title"}},
+            "streams": [{"codec_type": "audio", "tags": {"artist": "Stream Artist", "title": "Stream Title"}}],
+        }
+    )
 
-    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+    with patch("mammamiradio.playlist.local_library.subprocess.Popen", side_effect=response):
         metadata = _probe_local_audio_metadata(path)
 
     assert metadata == ("Stream Artist", "Format Title")
@@ -129,7 +152,7 @@ def test_scan_keeps_file_when_ffprobe_is_unavailable(tmp_path):
     path = root / "No Tags Here.mp3"
     path.write_bytes(b"audio")
 
-    with patch("mammamiradio.playlist.local_library.subprocess.run", side_effect=FileNotFoundError):
+    with patch("mammamiradio.playlist.local_library.subprocess.Popen", side_effect=FileNotFoundError):
         result = scan_local_library(_config(root))
 
     assert result.complete is True
@@ -140,8 +163,8 @@ def test_scan_keeps_file_when_ffprobe_is_unavailable(tmp_path):
 @pytest.mark.parametrize(
     "response",
     [
-        type("ProbeResponse", (), {"returncode": 1, "stdout": ""})(),
-        type("ProbeResponse", (), {"returncode": 0, "stdout": "not json"})(),
+        _probe_popen("", returncode=1),
+        _probe_popen("not json"),
     ],
 )
 def test_scan_keeps_file_when_metadata_probe_fails(tmp_path, response):
@@ -150,7 +173,7 @@ def test_scan_keeps_file_when_metadata_probe_fails(tmp_path, response):
     path = root / "Probe Failure.mp3"
     path.write_bytes(b"audio")
 
-    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+    with patch("mammamiradio.playlist.local_library.subprocess.Popen", side_effect=response):
         result = scan_local_library(_config(root))
 
     assert result.complete is True
@@ -307,10 +330,6 @@ async def test_scan_wrapper_coalesces_and_hides_failures(tmp_path):
     assert failed["error"] == "Check the local music folders, then select Scan now."
 
 
-def _probe_response(payload: dict, *, returncode: int = 0):
-    return type("ProbeResponse", (), {"returncode": returncode, "stdout": json.dumps(payload)})()
-
-
 def test_probe_ignores_tags_on_non_audio_streams():
     """Cover art must never name the song.
 
@@ -328,7 +347,7 @@ def test_probe_ignores_tags_on_non_audio_streams():
         }
     )
 
-    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+    with patch("mammamiradio.playlist.local_library.subprocess.Popen", side_effect=response):
         assert _probe_local_audio_metadata(Path("song.mp3")) == ("", "")
 
 
@@ -337,7 +356,7 @@ def test_probe_rejects_oversized_tag_values():
     huge = "A" * (local_library_module.LOCAL_METADATA_MAX_TAG_CHARS + 1)
     response = _probe_response({"format": {"tags": {"title": huge, "artist": "Real Artist"}}, "streams": []})
 
-    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+    with patch("mammamiradio.playlist.local_library.subprocess.Popen", side_effect=response):
         artist, title = _probe_local_audio_metadata(Path("song.mp3"))
 
     assert title == ""
@@ -348,7 +367,7 @@ def test_probe_refuses_to_parse_oversized_output():
     padding = "B" * local_library_module.LOCAL_METADATA_MAX_PROBE_BYTES
     response = _probe_response({"format": {"tags": {"title": "Real", "comment": padding}}, "streams": []})
 
-    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+    with patch("mammamiradio.playlist.local_library.subprocess.Popen", side_effect=response):
         assert _probe_local_audio_metadata(Path("song.mp3")) == ("", "")
 
 
@@ -605,3 +624,39 @@ def test_clearing_a_migrated_preference_is_not_resurrected_by_the_next_scan(tmp_
         reconcile_local_library(state, scan_local_library(_config(root)))
 
     assert state.song_preferences == {}
+
+
+def test_humanizing_filenames_does_not_silently_drop_a_track(tmp_path):
+    """ "01 - Intro" and "02 - Intro" are two songs, not one.
+
+    Stripping the track number merges their identities. Under the old filename
+    rule they were ("01","Intro") and ("02","Intro") and both played, so treating
+    the second as a duplicate is silent track loss, not a label change.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "01 - Intro.mp3").write_bytes(b"audio")
+    (root / "02 - Intro.mp3").write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library._probe_local_audio_metadata", return_value=("", "")):
+        result = scan_local_library(_config(root))
+
+    assert len(result.tracks) == 2
+    assert result.ignored["duplicate"] == 0
+    assert {track.title for track in result.tracks} == {"Intro", "02 - Intro"}
+
+
+def test_a_real_duplicate_is_still_ignored(tmp_path):
+    """The collision fallback must not turn genuine duplicates into rotation filler."""
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "a").mkdir()
+    (root / "b").mkdir()
+    (root / "a" / "Artista - Canzone.mp3").write_bytes(b"audio")
+    (root / "b" / "Artista - Canzone.mp3").write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library._probe_local_audio_metadata", return_value=("", "")):
+        result = scan_local_library(_config(root))
+
+    assert len(result.tracks) == 1
+    assert result.ignored["duplicate"] == 1

@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -136,36 +136,52 @@ def _probe_local_audio_metadata(path: Path) -> _LocalMetadata | None:
     file to its filename identity for the life of the process and flips it back
     on the next restart, which would silently lift a ban placed in between.
     """
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_entries",
+        "format_tags=title,artist:stream=codec_type:stream_tags=title,artist",
+        str(path),
+    ]
+    # Read a BOUNDED prefix rather than subprocess.run(capture_output=True): that
+    # buffers the child's whole stdout first, so a file with a multi-megabyte tag
+    # frame is fully in memory before any cap can apply. ID3v2 permits far more
+    # than this station has room for on a Pi.
     try:
-        with ffmpeg_slot(background=True):
-            result = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-print_format",
-                    "json",
-                    "-show_entries",
-                    "format_tags=title,artist:stream=codec_type:stream_tags=title,artist",
-                    str(path),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS,
-            )
+        with (
+            ffmpeg_slot(background=True),
+            subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process,
+        ):
+            assert process.stdout is not None
+            try:
+                raw_bytes = process.stdout.read(LOCAL_METADATA_MAX_PROBE_BYTES + 1)
+                if len(raw_bytes) > LOCAL_METADATA_MAX_PROBE_BYTES:
+                    # Past the cap we stop reading, so the child blocks on a full
+                    # pipe and wait() times out — which would report a perfectly
+                    # readable file as a probe FAILURE and re-probe it on every
+                    # scan forever. Kill it and answer "no usable tags", which is
+                    # durable and cacheable.
+                    process.kill()
+                    process.wait(timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS)
+                    logger.debug("Ignoring oversized metadata for %s", path.name)
+                    return "", ""
+                returncode = process.wait(timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS)
+            except BaseException:
+                process.kill()
+                process.wait(timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS)
+                raise
     except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired, UnicodeError, ValueError):
         return None
 
-    if result.returncode != 0:
+    if returncode != 0:
         return None
-    raw_stdout = result.stdout or ""
-    # Bound what we are willing to parse at all. Tag values are capped per field
-    # below, but a file with hundreds of oversized tags would still make us build
-    # a huge dict before any of those caps applied.
-    if len(raw_stdout) > LOCAL_METADATA_MAX_PROBE_BYTES:
-        logger.debug("Ignoring oversized metadata for %s (%d chars)", path.name, len(raw_stdout))
-        return "", ""
+    try:
+        raw_stdout = raw_bytes.decode("utf-8", errors="replace")
+    except (UnicodeError, ValueError):
+        return None
     try:
         payload = json.loads(raw_stdout)
     except (TypeError, json.JSONDecodeError):
@@ -449,8 +465,22 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                 )
                 identity = normalized_track_key(track)
                 if identity in seen_identities:
-                    result.ignored["duplicate"] += 1
-                    continue
+                    # Humanizing a filename can merge two DIFFERENT songs: "01 -
+                    # Intro" and "02 - Intro" both reduce to ("", "Intro"). Under
+                    # the old rule they were ("01","Intro") / ("02","Intro") and
+                    # both played, so dropping the second is silent track loss.
+                    # Only rescue that case: no artist anywhere, and a raw stem
+                    # that the humanizer actually changed. Two copies of the same
+                    # song are still a real duplicate and stay ignored.
+                    raw_stem = path.stem.strip()
+                    humanized_collision = not track.artist and raw_stem and raw_stem != track.title
+                    fallback_identity = (
+                        normalized_track_key(replace(track, title=raw_stem)) if humanized_collision else identity
+                    )
+                    if not humanized_collision or fallback_identity in seen_identities:
+                        result.ignored["duplicate"] += 1
+                        continue
+                    track, identity = replace(track, title=raw_stem), fallback_identity
                 seen_identities.add(identity)
                 result.tracks.append(track)
             if entry_limit_reached:
