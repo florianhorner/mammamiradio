@@ -21,9 +21,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/cut-edge-release.sh"
+# Selection, IMAGE_PATHS and the drift check moved into a library shared with the
+# shadow land queue. The release contract assertions below follow the code there;
+# the behavioural cases still drive cut-edge-release.sh end to end.
+SELECT_LIB="$REPO_ROOT/scripts/edge-select.sh"
 cd "$REPO_ROOT"
 
 [[ -x "$SCRIPT" ]] || chmod +x "$SCRIPT"
+[[ -r "$SELECT_LIB" ]] || { echo "FAIL: edge selection library missing at $SELECT_LIB" >&2; exit 1; }
 BASH_BIN="$(command -v bash)"   # absolute, so the restricted-PATH cases still find bash
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
@@ -38,7 +43,7 @@ WORKFLOW_IMAGE_PATHS="$(
     | sort
 )"
 SCRIPT_IMAGE_PATHS="$(
-  sed -n 's/^IMAGE_PATHS="\([^"]*\)"$/\1/p' "$SCRIPT" \
+  sed -n 's/^IMAGE_PATHS="\([^"]*\)"$/\1/p' "$SELECT_LIB" \
     | tr ' ' '\n' \
     | sort
 )"
@@ -56,12 +61,24 @@ pass "cut-edge IMAGE_PATHS matches the add-on build trigger paths"
 # failed reruns on the same commit would push the successful run out of the page.
 # Strip comments first: the rationale comment above the command names these same
 # flags, so a whole-file grep would pass even after the real invocation lost them.
-SCRIPT_CODE="$(grep -v '^[[:space:]]*#' "$SCRIPT")"
+SCRIPT_CODE="$(grep -v '^[[:space:]]*#' "$SELECT_LIB")"
 printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--status success' \
   || fail "--target-sha lookup must pass --status success so the result cannot be windowed out"
-printf '%s\n' "$SCRIPT_CODE" | grep -q -- "--commit \"\$TARGET_FULL\"" \
+printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--commit "\$target"' \
   || fail "--target-sha lookup must query the target commit directly, not the recent-runs list"
 pass "exact-target lookup filters server-side (no run-history cutoff)"
+
+# One implementation, not two: a re-inlined IMAGE_PATHS or gh run query in the cut
+# script is how the two consumers drift apart and how a soft-pass comes back.
+grep -q '^IMAGE_PATHS=' "$SCRIPT" \
+  && fail "cut-edge-release.sh must source IMAGE_PATHS from scripts/edge-select.sh, not redefine it"
+grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'gh run list --workflow' \
+  && fail "cut-edge-release.sh must query green builds through scripts/edge-select.sh"
+grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'rev-list --topo-order' \
+  && fail "cut-edge-release.sh must select through edge_newest_built_sha, not its own topology walk"
+grep -q '^# shellcheck source=scripts/edge-select.sh$' "$SCRIPT" \
+  || fail "cut-edge-release.sh must source scripts/edge-select.sh"
+pass "edge selection has exactly one implementation"
 
 TMPDIR_T="$(mktemp -d)"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
