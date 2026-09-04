@@ -20,13 +20,10 @@ Click Start. Watch the log for:
 
 The add-on starts from its attributed 12-track starter catalog: no music
 provider key, download, or outbound network is required. Without an AI key, the
-hosts use stock copy and fallback voices. Operator-supplied MP3s can also live
-in persistent `/data/music`, and packaged recovery audio can prove the speaker
-transport while a damaged music source is repaired without reporting that
-source as healthy. A successful process start shows `Producer started` in the
-log. `/readyz` remains HTTP `503` with `status: "starting"` until a listener
-actually accepts audio; queued work and elapsed startup time do not make the
-station ready by themselves.
+hosts use stock copy and fallback voices. Operator-supplied audio in
+`/data/music` is discovered without a restart. Packaged recovery audio can
+prove transport without reporting a damaged source healthy. A successful start
+logs `Producer started`; `/readyz` stays `503 starting` until a listener connects.
 
 ### 3. Install the HACS integration
 
@@ -162,12 +159,17 @@ copy the address from the station's own port instead.
 
 ### Optional Jamendo music
 
-Open **Motore → Setup → Music sources** to configure Jamendo. It is off by
-default and is not required for a complete rotation. Enabling it requires a
-client ID and the current non-commercial-use acknowledgement. A legacy client
-ID is migrated into the private settings file once, but remains disabled until
-the acknowledgement is made in the app; the client ID is absent from both
-add-on Configuration schemas.
+Open **Motore**, then **Setup**, then **Music sources** to turn Jamendo on. It is off by
+default and is not required for a complete rotation. Enable it and confirm the
+current non-commercial-use acknowledgement. No signup is needed; the add-on
+includes Jamendo access.
+
+Your own client ID is optional. It takes precedence over shared access and uses
+independently authorized access; the panel shows which one is active. Clearing
+it returns the add-on to shared access. A legacy client ID is
+migrated into the private settings file once, but remains disabled until the
+acknowledgement is made in the app. The client ID is absent from both add-on
+Configuration schemas.
 
 Jamendo preparation is deliberately transient: the add-on holds at most one
 lease and one audio artifact, inserts at most one prepared track after two
@@ -195,10 +197,10 @@ HA Supervisor
   |           +-- playback task (streams segments to listeners)
   |           +-- packaged starter catalog (read-only, attributed music)
   |
-  +-- /data/ (persistent across restarts)
+  +-- /data/ (persistent app data across restarts)
         +-- cache/   (eligible local/generated audio — survives restarts)
         |     +-- keepsakes/ (moments kept with "Keep this" — never expire)
-        +-- music/   (operator-supplied MP3s)
+        +-- music/   (operator-supplied local songs; scanned in place)
         +-- tmp/     (rendered segments — ephemeral)
 ```
 
@@ -219,15 +221,14 @@ playing.
 
 - **Keeps playing:** the app does not stop for a backup.
 - **Stays with you:** app settings, provider keys, station memory and state,
-  retained history, moments you kept with **Keep this**, and files stored in
+  retained history, moments you kept with **Keep this**, and files in
   `/data/music`.
 - **Builds again:** temporary renders, downloaded and normalized cache audio,
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.
 
-Files in `/data/music` are your local music library: the station reads MP3s
-from that folder as a music source, and a restore brings the library back
-ready to play.
+The station scans `/data/music` every minute; use **Rotazione → Local music →
+Scan now** to refresh immediately. Files are read in place and never moved.
 
 A hot backup copies retained files while the station is active, so it is not a
 copy taken from one single exact moment. After a restore, confirm
@@ -246,9 +247,11 @@ its files by hand.
    enablement settings are ignored.
 4. `mammamiradio/main.py` loads `radio.toml`, validates the packaged starter
    manifest, and makes its direct pre-normalized files available.
-5. Producer and playback tasks start from starter/local music. All twelve
+5. The local-library worker scans `/data/music` at startup and every minute. A
+   manual scan refreshes it without restarting audio.
+6. Producer and playback tasks start from starter/local music. All twelve
    starter tracks complete before any starter track repeats.
-6. If Jamendo was explicitly enabled and acknowledged, its bounded preparation
+7. If Jamendo was explicitly enabled and acknowledged, its bounded preparation
    may run in the background without delaying base music.
 
 **Startup timeout**: `config.yaml` sets `timeout: 240`. Starter playback does

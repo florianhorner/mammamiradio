@@ -67,7 +67,7 @@ def test_load_explicit_source_sets_chart_and_local_track_sources(
     config.playlist.shuffle = False
     music_dir = tmp_path / "music"
     music_dir.mkdir()
-    (music_dir / "Local Artist - Local Song.mp3").touch()
+    (music_dir / "Local Artist - Local Song.mp3").write_bytes(b"id3")
     chart_tracks = [Track(title="Chart Song", artist="Chart Artist", duration_ms=180000, spotify_id="chart_1")]
 
     monkeypatch.chdir(tmp_path)

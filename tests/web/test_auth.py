@@ -190,7 +190,7 @@ def test_is_private_network_rfc1918():
 
 def test_is_private_network_tailscale_cgnat():
     req = MagicMock()
-    req.client.host = "100.98.177.107"
+    req.client.host = "100.64.0.1"
     assert _is_private_network(req) is True
 
 

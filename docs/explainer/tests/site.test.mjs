@@ -10,6 +10,7 @@ const [html, css, js, scenariosSource] = await Promise.all([
 ]);
 const addonUrl = "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio";
 const sourceUrl = "https://github.com/florianhorner/mammamiradio";
+const pilotUrl = "https://github.com/florianhorner/mammamiradio/discussions/831";
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test("the signature promise is in the first viewport", () => {
@@ -91,7 +92,10 @@ test("the page offers the install and source exits without a dead live link", ()
   assert.match(html, /window\.mammamiSiteLinks\s*=\s*{/);
   assert.match(html, new RegExp(escapeRegExp(addonUrl)));
   assert.match(html, new RegExp(escapeRegExp(sourceUrl)));
+  assert.match(html, new RegExp(escapeRegExp(pilotUrl)));
   assert.ok(html.indexOf(addonUrl) < html.indexOf(sourceUrl));
+  assert.ok(html.indexOf(sourceUrl) < html.indexOf(pilotUrl));
+  assert.match(html, /Pilot feedback/);
   assert.match(html, /\/\/ listen:/);
   assert.doesNotMatch(html, /<a[^>]*>Listen live<\/a>/i);
   assert.match(js, /renderSiteLinks/);

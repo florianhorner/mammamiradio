@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 import httpx
 
 from mammamiradio.audio.admission import ffmpeg_slot
+from mammamiradio.core.config import JAMENDO_CLIENT_ID_RE
 from mammamiradio.core.models import MediaAttribution, Segment, SegmentType, safe_media_attribution_dict
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ JAMENDO_FAILURE_CODES = frozenset(
         "metadata_invalid",
         "metadata_oversize",
         "network_timeout",
+        "rate_limited",
         "source_revision_invalid",
         "temp_root_invalid",
     }
@@ -80,8 +82,14 @@ JAMENDO_FAILURE_CODES = frozenset(
 _NON_CANDIDATE_REASONS = frozenset({"empty_results"})
 _BLOCKED_PROVIDER_CONTRACT_CODES = frozenset({2, 3, 4, 7, 8, 9, 10, 12, 13})
 _BLOCKED_PROVIDER_AUTH_CODES = frozenset({5, 11})
+# Jamendo provider code 6 means rate limit exceeded. Keep it separate from
+# generic API failures so the UI can report its automatic retry truthfully.
+_RATE_LIMIT_PROVIDER_CODE = 6
+# The same condition arrives two ways: an in-body provider code on a 200, or
+# an ordinary HTTP 429. Only the first was mapped, so the copy written for a
+# throttle never reached an operator who was actually throttled.
+_RATE_LIMIT_STATUS_CODE = 429
 _TRACK_ID_RE = re.compile(r"[1-9][0-9]{0,19}")
-_CLIENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,128}")
 _OPERATION_ID_RE = re.compile(r"[0-9a-f]{32}")
 _ALLOWED_LICENSES = {
     "https://creativecommons.org/licenses/by/3.0/": "CC-BY-3.0",
@@ -92,6 +100,7 @@ _DISCOVERY_DEADLINE_SEC = 30.0
 _ACTIVE_TRANSFER_HEADROOM_SEC = 60.0
 _MIN_ACTIVE_TRANSFER_TIMEOUT_SEC = 120.0
 _MAX_ACTIVE_TRANSFER_TIMEOUT_SEC = 780.0
+_MAX_FFMPEG_PROCESSING_TIMEOUT_SEC = 300.0
 _PIPE_PROGRESS_TIMEOUT_SEC = 10.0
 _PIPE_POLL_INTERVAL_SEC = 0.25
 _FFMPEG_FINALIZE_TIMEOUT_SEC = 30.0
@@ -372,6 +381,8 @@ def _coarse_provider_code(value: object) -> int | None:
 def _validated_api_results(status_code: int, body: bytes) -> list[object]:
     if status_code in (401, 403):
         raise _BlockedError("api_auth_failed")
+    if status_code == _RATE_LIMIT_STATUS_CODE:
+        raise _TransientError("rate_limited")
     if status_code != 200:
         raise _TransientError("api_failed")
     try:
@@ -385,6 +396,9 @@ def _validated_api_results(status_code: int, body: bytes) -> list[object]:
         raise _TransientError("api_failed")
     if headers.get("status") != "success" or headers.get("code") not in (0, "0"):
         provider_code = _coarse_provider_code(headers.get("code"))
+        if provider_code == _RATE_LIMIT_PROVIDER_CODE:
+            # Keep the existing retry behavior and expose a distinct UI message.
+            raise _TransientError("rate_limited", provider_code=provider_code)
         if provider_code in _BLOCKED_PROVIDER_AUTH_CODES:
             raise _BlockedError("api_auth_failed", provider_code=provider_code)
         if provider_code in _BLOCKED_PROVIDER_CONTRACT_CODES:
@@ -407,6 +421,8 @@ async def _bounded_api_results(client: httpx.AsyncClient, params: Mapping[str, s
     ) as response:
         if response.status_code in (401, 403):
             raise _BlockedError("api_auth_failed")
+        if response.status_code == _RATE_LIMIT_STATUS_CODE:
+            raise _TransientError("rate_limited")
         if response.status_code != 200:
             raise _TransientError("api_failed")
         declared_length = response.headers.get("content-length")
@@ -443,6 +459,18 @@ def _active_transfer_timeout_sec(duration_sec: float) -> float:
     )
 
 
+def _ffmpeg_processing_timeout_sec(duration_sec: float) -> float:
+    """Bound how long FFmpeg may hold a shared slot while it consumes input.
+
+    The transfer budget is a network allowance; this is a local-CPU allowance,
+    and they are capped differently on purpose. A background render holds one of
+    only two encode slots on a Pi, on a thread that cannot be cancelled, so a
+    long track must not be able to hold half the station's encode capacity for
+    the whole of its own duration.
+    """
+    return min(_active_transfer_timeout_sec(duration_sec), _MAX_FFMPEG_PROCESSING_TIMEOUT_SEC)
+
+
 def _monotonic() -> float:
     """Provide a clock seam for deterministic deadline tests."""
     return time.monotonic()
@@ -464,7 +492,7 @@ def _raise_if_write_expired(
     active_deadline: float,
     pipe_deadline: float,
     *,
-    deadline_code: str = "network_timeout",
+    deadline_code: str,
 ) -> None:
     """Raise for the first expired deadline; transfer wins ties."""
     if now >= active_deadline and active_deadline <= pipe_deadline:
@@ -481,7 +509,7 @@ def _write_all_nonblocking(
     chunk: bytes,
     active_deadline: float,
     *,
-    deadline_code: str = "network_timeout",
+    deadline_code: str,
 ) -> None:
     """Write a chunk while enforcing transfer and pipe-progress deadlines."""
     view = memoryview(chunk)
@@ -700,7 +728,12 @@ def _stream_and_normalize(
         try:
             with ffmpeg_slot(background=True):
                 try:
-                    _raise_if_active_transfer_expired(active_deadline)
+                    # No transfer-deadline check here on purpose. The bytes are
+                    # already in hand (checked at the end of the download), and
+                    # acquiring the encode slot is an unbounded LOCAL wait. Failing
+                    # here raised "network_timeout" for a track that downloaded
+                    # perfectly, blaming the provider for the station's own queue.
+                    # The encode budget below is the correct bound for local work.
                     process = subprocess.Popen(
                         command,
                         stdin=subprocess.PIPE,
@@ -713,16 +746,14 @@ def _stream_and_normalize(
                     stdin_open = True
                     file_descriptor = process.stdin.fileno()
                     os.set_blocking(file_descriptor, False)
-                    ffmpeg_deadline = _monotonic() + _FFMPEG_FINALIZE_TIMEOUT_SEC
-                    write_deadline = min(active_deadline, ffmpeg_deadline)
-                    write_deadline_code = "network_timeout" if active_deadline <= ffmpeg_deadline else "ffmpeg_timeout"
+                    ffmpeg_deadline = _monotonic() + _ffmpeg_processing_timeout_sec(candidate["duration_sec"])
                     while chunk := audio_buffer.read(64 * 1024):
                         _write_all_nonblocking(
                             process,
                             file_descriptor,
                             chunk,
-                            write_deadline,
-                            deadline_code=write_deadline_code,
+                            ffmpeg_deadline,
+                            deadline_code="ffmpeg_timeout",
                         )
                     process.stdin.close()
                     stdin_open = False
@@ -981,7 +1012,7 @@ class JamendoStreamProvider:
             if not self._enabled and not playing:
                 self._state = JamendoProviderState.DISABLED
             elif not playing and (
-                not self._client_id or _CLIENT_ID_RE.fullmatch(self._client_id) is None or not self._acknowledged
+                not self._client_id or JAMENDO_CLIENT_ID_RE.match(self._client_id) is None or not self._acknowledged
             ):
                 self._state = JamendoProviderState.NEEDS_CONFIG
             elif not playing and self._lease is None:
@@ -1189,7 +1220,7 @@ class JamendoStreamProvider:
             and self._enabled
             and self._acknowledged
             and self._client_id
-            and _CLIENT_ID_RE.fullmatch(self._client_id)
+            and JAMENDO_CLIENT_ID_RE.match(self._client_id)
         )
 
     def _snapshot_current_unlocked(self) -> tuple[int, str, int]:

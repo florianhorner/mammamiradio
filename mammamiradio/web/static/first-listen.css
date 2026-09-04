@@ -598,21 +598,6 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   border-top: 1px solid var(--line);
 }
 
-.first-listen-panel .first-listen-current-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3125rem 0.625rem;
-  margin-bottom: var(--space-3);
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.first-listen-panel .first-listen-current-meta strong {
-  color: var(--cream-dk);
-}
-
 .first-listen-panel .benefit-heading {
   margin: 0 0 0.4375rem;
   color: var(--cream);
@@ -892,14 +877,14 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   transform: translateY(1px);
 }
 
-.first-listen-panel .first-listen-body .btn-trigger {
+.first-listen-panel :is(.first-listen-body, .success-actions) .btn-trigger {
   border-color: var(--sun2);
   color: var(--bg);
   background: var(--sun2);
   box-shadow: 0 2px 12px color-mix(in srgb, var(--sun2) 22%, transparent);
 }
 
-.first-listen-panel .first-listen-body .btn-trigger:not(:disabled):hover {
+.first-listen-panel :is(.first-listen-body, .success-actions) .btn-trigger:not(:disabled):hover {
   background: var(--sun);
 }
 
@@ -1450,6 +1435,36 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   overflow-wrap: anywhere;
 }
 
+.first-listen-panel .first-listen-source-preview {
+  margin: var(--space-3) 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.first-listen-panel .first-listen-source-preview > summary {
+  min-height: 44px;
+  padding: 0.625rem 0.75rem;
+  color: var(--cream-dk);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+  list-style-position: outside;
+}
+
+.first-listen-panel .first-listen-source-preview > summary::-webkit-details-marker {
+  color: var(--sun2);
+}
+
+.first-listen-panel .first-listen-source-preview .first-listen-source-list {
+  padding: 0 0.75rem 0.625rem;
+}
+
+.first-listen-panel .first-listen-source-preview .first-listen-source-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
 /* ── Full completion reward ─────────────────────────────────────────────── */
 
 .first-listen-panel :is(.first-listen-success, .success-surface) {
@@ -1958,10 +1973,6 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
     padding-top: 0.375rem;
   }
 
-  .first-listen-panel .first-listen-current-meta {
-    display: none;
-  }
-
   .first-listen-panel :is(.first-listen-actions, .setup-actions) {
     flex-direction: column;
     align-items: stretch;
@@ -2165,7 +2176,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   }
 
   .first-listen-panel .first-listen-step[data-state="current"] .first-listen-number,
-  .first-listen-panel .first-listen-body .btn-trigger {
+  .first-listen-panel :is(.first-listen-body, .success-actions) .btn-trigger {
     color: HighlightText;
     background: Highlight;
   }

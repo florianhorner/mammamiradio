@@ -105,6 +105,24 @@ def _reset_broadcast_chain():
 
 
 @pytest.fixture(autouse=True)
+def _restore_station_env():
+    """Restore station-owned env namespaces after each test.
+
+    Production paths can write these settings after a test has deleted an absent
+    key through ``monkeypatch``. Pytest did not perform that later write, so its
+    undo stack cannot restore the pre-test state. Snapshot before the test and
+    restore at teardown to keep each worker isolated.
+    """
+    prefixes = ("MAMMAMIRADIO_", "JAMENDO_")
+    saved = {k: v for k, v in os.environ.items() if k.startswith(prefixes)}
+    yield
+    for key in [k for k in os.environ if k.startswith(prefixes)]:
+        if key not in saved:
+            del os.environ[key]
+    os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
 def _reset_ha_projection_executor():
     """Keep the HA projection worker pool out of cross-test state.
 

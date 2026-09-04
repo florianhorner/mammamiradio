@@ -10,7 +10,7 @@ certification that a particular broadcast is cleared in every jurisdiction.
 | Source | Default | Persistence | What the project asserts |
 | --- | --- | --- | --- |
 | Bundled starter collection | On | Packaged with the app | Exact files and attribution are hash-pinned in the release manifest. Every derivative is attribution-only — CC BY 4.0 from Incompetech, CC BY 3.0 from Jamendo — and carries a modification notice. |
-| Operator `music/` files | Available when mounted | Operator-managed | Mamma Mi Radio makes no rights claim. The operator is responsible for the files and their use. |
+| Operator local music | Available when mounted | Operator-managed | Mamma Mi Radio makes no rights claim. The operator is responsible for the files and their use. |
 | Jamendo transient expansion | Off | No audio or lease persistence | Jamendo reports the accepted track's source and CC BY 3.0/4.0 license. That report is attribution data, not a clearance verdict. |
 | External extraction | Off; standalone extra only | Normal standalone cache rules | Technical access is not permission. Both current Home Assistant add-ons omit yt-dlp entirely. |
 
@@ -45,25 +45,40 @@ musical edits. A release must prove all of the following:
 - at least 45 minutes total and no more than 75 MiB;
 - 48 kHz, stereo, 192 kbps MP3 at the station loudness target;
 - matching hashes, complete source evidence, and a full human audition record;
-- 20 cold Home Assistant Green runs with the first accepted non-silent starter
-  byte reaching a connected listener at p95 no slower than two seconds;
 - every track plays once before the starter cycle repeats.
+
+Physical Home Assistant Green cold-start evidence is a **separate, opt-in**
+gate, not part of the above. It is described under "Physical device evidence"
+below and is armed with `MMR_REQUIRE_HA_RECEIPTS=1`. A release cut without it
+ships without that evidence, and the pre-release summary says so.
 
 Until the exact derivatives, hashes, acquisition evidence, and complete
 audition records are present, the strict release gate remains red. Tooling does
 not fabricate or infer those human decisions.
 
+## Physical device evidence (opt-in)
+
+This gate is **off by default**. It has never been recorded, and 3.0.0 ships
+without it by an explicit decision. Arm it with `MMR_REQUIRE_HA_RECEIPTS=1` on
+`scripts/pre-release-check.sh` and on the tag workflows; unset, each reports the
+waiver rather than a pass.
+
+Armed, it requires 20 cold Home Assistant Green runs with the first accepted
+non-silent starter byte reaching a connected listener at p95 no slower than two
+seconds. That measurement is unchanged; only whether a release must produce it
+before tagging has moved.
+
 The ordinary pull-request gate runs one cold aarch64 launch in
 `.github/workflows/pi-smoke.yml`; it does not require physical-device receipts.
+Finalize version, changelogs, and the V2 preship receipt before recording.
 For a stable release, start from the exact clean commit running on Home
 Assistant Green and record twenty cold runs locally on that device:
 
 ```bash
 for run in $(seq 1 20); do
-  python3.11 scripts/ha-green-launch-smoke.py \
+  python3.11 -P scripts/ha-green-launch-smoke.py \
     --record-release-receipt proof/media/ha-green-release-evidence
 done
-make ha-green-release-proof
 ```
 
 Receipt mode detects Home Assistant Green through the aarch64 device tree,
@@ -75,8 +90,7 @@ nearest-rank p95 instead of silently dropping outliers.
 
 Commit only `proof/media/ha-green-release-evidence/run-*.json` after the
 measurements, then rerun `make ha-green-release-proof` and `make pre-release`.
-Every receipt names the tested source commit; the final evidence commit may
-differ from it only by those receipt JSON files. This prevents both stale
+The hardware-neutral `mammamiradio-release-content-v1` profile covers sorted paths, Git modes, and blob bytes, excluding only HA receipt JSON. This prevents both stale
 evidence and the impossible self-reference of asking a committed receipt to
 name the commit that contains itself. The tracked
 `proof/media/ha-green-release-receipt.example.json` is explicitly marked as an
@@ -84,32 +98,56 @@ example and never counts toward a release.
 
 ## Operator-supplied local music
 
-Files mounted in `music/` remain available as local music. They are labelled
-"Provided by the station operator" in listener credits and do not receive a
-project-clearance badge, receipt, or implied license. Upgrades and source
-migrations never delete `music/`.
+Files in the configured local directory are labelled "Provided by the station
+operator" in listener credits. They receive no clearance badge or implied
+license, and upgrades never delete them.
 
-The stock Home Assistant add-on does not provide a general local-media upload
-workflow. A standalone operator who mounts local files is responsible for
-their provenance, licenses, and permitted use.
+The supplied Home Assistant and Docker containers use `/data/music`; source
+checkouts use `./music`. The scanner runs every minute; use **Rotazione → Local
+music → Scan now** for an immediate refresh.
+
+Discovery recursively accepts MP3, M4A, MP4 audio, AAC, FLAC, OGG, Opus, and WAV.
+`Artist - Title.ext` produces the best label; other filenames use `Unknown` as
+artist. Operators remain responsible for provenance, licenses, and permitted use.
 
 ## Optional transient Jamendo expansion
 
 Jamendo is an explicit, default-off option while written provider confirmation
-for this station model is pending. It may be enabled only with the operator's
-own client ID and a current acknowledgement that the API use is
-non-commercial. Commercial, sponsored, affiliate, or monetized operation needs
-separate authorization from Jamendo. Read the
+for this station model is pending. To enable it, acknowledge that the API use
+is non-commercial. This acknowledgement describes the operator's station, so
+the checkbox is never preselected.
+
+The station includes a Jamendo application ID. Jamendo issues one ID per
+application, not per listener, and its terms reserve the right to delete
+duplicate applications. Operators can provide their own ID for independently
+authorized access; it overrides the bundled ID, and the admin panel shows which
+one is active. Clearing it returns to shared access. A malformed environment or
+startup-config override falls back with a warning; the admin rejects an invalid
+new ID and keeps the current settings.
+
+Jamendo counts requests per application or per requesting IP, and its reply
+does not say which ceiling was reached. When the station is asked to slow down,
+it reports that plainly and keeps retrying without presenting a credential
+change as a fix.
+
+Commercial, sponsored, affiliate, or monetized operation needs separate
+authorization from Jamendo. Their radio documentation also requires a
+commercial radio licence for direct or indirect commercial activity. Read the
 [Jamendo API terms](https://devportal.jamendo.com/api_terms_of_use) before
 enabling it.
 
 Configure it in **Motore -> Setup -> Music sources**. On a fresh install the
-card appears after the First Listen journey is finished, so the guided setup
-keeps a single obvious action. Saving applies live and
-does not restart or interrupt the station. A client ID saved by an older
-version is imported to owner-only secrets where possible, remains disabled,
-and requires a fresh acknowledgement before use. The admin UI never echoes the
-ID; Replace and Clear are explicit actions.
+card normally appears after the First Listen journey is finished, so the guided
+setup keeps a single obvious action. There is one repair exception: if First
+Listen has no playable music and live-chart tools are unavailable, **Open music
+source setup** temporarily replaces the journey with this card. **Station
+controls** returns to First Listen. A charts-capable standalone install instead
+opens the visible chart controls in **Rotazione**. Saving applies live and does
+not restart or interrupt the station. A client ID saved by an older version is
+imported to owner-only secrets where possible, remains disabled, and requires a
+fresh acknowledgement before use. The admin UI never echoes the ID. Bundled
+users see **Use own ID**; **Replace** and **Clear** appear only after an operator
+ID is saved.
 
 The transient boundary is deliberately narrow:
 
@@ -146,7 +184,7 @@ copyright status.
 | Visible state | Provider detail | Meaning and action |
 | --- | --- | --- |
 | `idle` | disabled | Jamendo is off; starter and local music continue. |
-| `blocked` | needs configuration | Add a client ID and confirm non-commercial use. |
+| `blocked` | needs configuration | Confirm non-commercial use; if included access is unavailable, add an operator client ID. |
 | `working` | idle, discovering, fetching, normalizing, queued, playing, or consumed | One single-use track is being prepared; base music continues. |
 | `ready` | ready | One track is prepared for one play, then deleted. |
 | `degraded` | transient provider failure | Base music continues; use **Check again** when useful. |
@@ -169,8 +207,14 @@ POST /api/media-sources/jamendo/retry
 
 `PUT` accepts `enabled`, `noncommercial_acknowledged`, optional `client_id`, and
 optional `clear_client_id`. Omitting `client_id` retains it; a non-empty value
-replaces it; `clear_client_id=true` removes it. Replace and clear cannot be
-requested together. Durable intent is saved before the live provider changes.
+replaces it; `clear_client_id=true` removes the operator ID and returns the
+station to bundled access when one exists. Clear is credential-only: inside the
+serialized write it preserves the latest saved enablement and acknowledgement
+instead of trusting possibly stale request values. Without bundled access,
+clearing the last ID turns the source off. `jamendo_client_id_required` (409) is reachable only when no
+bundled ID exists and the operator has not supplied their own ID. Replace and
+clear cannot be requested together. Durable intent is saved before the live
+provider changes.
 
 `retry` returns `202` when enabled and coalesces concurrent attempts. When
 disabled it returns `409 jamendo_retry_disabled`.

@@ -56,8 +56,10 @@ function renderSiteLinks() {
     if (!link?.href || !link.label) return;
     const anchor = document.createElement("a");
     anchor.href = link.href;
-    anchor.target = "_blank";
-    anchor.rel = "noreferrer noopener";
+    if (/^https:\/\//.test(link.href)) {
+      anchor.target = "_blank";
+      anchor.rel = "noreferrer noopener";
+    }
     anchor.textContent = link.label;
     siteLinksNav.append(anchor);
   });

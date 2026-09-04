@@ -1,0 +1,8 @@
+Application and test sources were verified on 2026-08-26 before this receipt was committed.
+
+$ PATH="$PWD/.venv/bin:$PWD/.venv/lib/python3.11/site-packages/static_ffmpeg/bin/linux:$PATH" .venv/bin/python -m pytest tests/ -q
+8490 passed, 4 skipped, 48 deselected in 539.16s (0:08:59)
+
+$ .venv/bin/ruff check .             -> All checks passed!
+$ .venv/bin/ruff format --check .    -> 416 files already formatted
+$ .venv/bin/mypy mammamiradio/ tests/ -> Success: no issues found in 365 source files

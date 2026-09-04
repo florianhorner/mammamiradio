@@ -105,7 +105,11 @@ def test_admin_has_persistent_source_rows_and_acknowledged_setup() -> None:
     assert 'target="_blank" rel="noopener noreferrer"' in html
     assert 'id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"' in html
     assert 'id="jamendoSaveBtn"' in html and "Save and check" in html
+    assert "Mamma Mi Radio supplies the access automatically" in html
+    assert "no Jamendo account or client ID needed" in html
+    assert 'id="jamendoOwnClientIdAction"' in html
     assert "replaceJamendoClientId()" in html
+    assert 'id="jamendoClearClientId"' in html
     assert "clearJamendoClientId(this)" in html
 
 
@@ -169,5 +173,21 @@ def test_admin_uses_redacted_status_and_locked_configuration_routes() -> None:
     assert "clear_client_id:true" in clear
     assert "'POST','/api/media-sources/jamendo/retry'" in retry
     assert "client_id_configured" in html
-    assert not re.search(r"status\.client_id(?!_configured)", html)
+    # The UI may read derived status fields, never the raw client ID.
+    assert not re.search(r"status\.client_id(?!_configured|_source)", html)
     assert "_lastJamendoAnnouncementKey&&announcementKey!==_lastJamendoAnnouncementKey" in html
+
+
+def test_admin_leads_with_included_access_and_only_clears_operator_owned_ids() -> None:
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    clear = _function_block(html, "clearJamendoClientId")
+
+    assert re.search(r'id="jamendoClearClientId"[^>]*\bhidden\b', html)
+    assert re.search(r'id="jamendoClientField"[^>]*\bhidden\b', html)
+    assert "There is no client ID of yours to clear." in clear
+    assert "Clear anyway?" not in clear
+    assert "Your client ID was cleared" not in clear
+    guard = clear.index("if(!ownsId){")
+    assert guard < clear.index("confirm(prompt)")
+    assert guard < clear.index("mediaSourceRequest(")
+    assert "clear_client_id:true" in clear

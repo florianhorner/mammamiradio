@@ -37,9 +37,9 @@ from mammamiradio.core.listener_truth import (
         "Happy you're back.",
         "You have rejoined us.",
         "The listener returned.",
-        "Florian is back.",
-        "Great to have Florian back.",
-        "Sabrina is here again.",
+        "Residente uno is back.",
+        "Great to have Residente uno back.",
+        "Residente due is here again.",
         "Qualcuno si è appena sintonizzato.",
         "Qualcuno si è unito a noi.",
         "Ci ha appena raggiunto qualcuno.",
@@ -58,13 +58,13 @@ from mammamiradio.core.listener_truth import (
         "Eccoti qui di nuovo.",
         "Rieccoti con noi!",
         "Qualcuno è tornato.",
-        "Sabrina è tornata.",
+        "Residente due è tornato.",
         "Grazie per essere tornati.",
         "Che bello riaverti qui.",
         "Felici di riavervi con noi.",
         "Siete qui di nuovo.",
-        "Che bello rivedere Sabrina qui.",
-        "Florian è di nuovo qui.",
+        "Che bello rivedere Residente due qui.",
+        "Residente uno è di nuovo qui.",
     ],
 )
 def test_arrival_and_return_claims_are_rejected(text: str):
@@ -90,32 +90,46 @@ def test_aggregate_or_unrelated_copy_remains_allowed(text: str):
 def test_named_resident_return_requires_curated_fact_and_same_line_name():
     authority = home_return_authority_for_directive(
         "ha:person.florian_horner",
-        "Florian è appena tornato a casa. Un caloroso bentornato.",
+        "Residente uno è appena tornato a casa. Un caloroso bentornato.",
     )
     assert authority is not None
-    assert contains_unsafe_listener_claims("Bentornato Florian.", return_authority=authority) is False
-    assert contains_unsafe_listener_claims("Welcome back, Florian.", return_authority=authority) is False
-    assert contains_unsafe_listener_claims("Great to have Florian back.", return_authority=authority) is False
-    assert contains_unsafe_listener_claims("Florian is back.", return_authority=authority) is False
+    assert contains_unsafe_listener_claims("Bentornato Residente uno.", return_authority=authority) is False
+    assert contains_unsafe_listener_claims("Welcome back, Residente uno.", return_authority=authority) is False
+    assert contains_unsafe_listener_claims("Great to have Residente uno back.", return_authority=authority) is False
+    assert contains_unsafe_listener_claims("Residente uno is back.", return_authority=authority) is False
     assert contains_unsafe_listener_claims("Bentornato.", return_authority=authority) is True
-    assert contains_unsafe_listener_claims("Welcome back, you two — Florian.", return_authority=authority) is True
-    assert contains_unsafe_listener_claims("Welcome back, friends — Florian.", return_authority=authority) is True
-    assert contains_unsafe_listener_claims("Bentornati, amici — Florian.", return_authority=authority) is True
+    assert contains_unsafe_listener_claims("Welcome back, you two — Residente uno.", return_authority=authority) is True
+    assert contains_unsafe_listener_claims("Welcome back, friends — Residente uno.", return_authority=authority) is True
+    assert contains_unsafe_listener_claims("Bentornati, amici — Residente uno.", return_authority=authority) is True
     assert (
-        contains_unsafe_listener_claims("Welcome back — Florian has the next record.", return_authority=authority)
+        contains_unsafe_listener_claims("Welcome back — Residente uno has the next record.", return_authority=authority)
         is True
     )
     assert (
-        contains_unsafe_listener_claims("Welcome back, Florian. Sabrina is back.", return_authority=authority) is True
+        contains_unsafe_listener_claims(
+            "Welcome back, Residente uno. Residente due is back.", return_authority=authority
+        )
+        is True
     )
-    assert contains_unsafe_listener_claims("Florian is back with Sabrina.", return_authority=authority) is True
-    assert contains_unsafe_listener_claims("Florian is back alongside Sabrina.", return_authority=authority) is True
-    assert contains_unsafe_listener_claims("Florian is back, and Sabrina is home.", return_authority=authority) is True
-    assert contains_unsafe_listener_claims("Florian is back with someone.", return_authority=authority) is True
-    assert contains_unsafe_listener_claims("Bentornato Florian con qualcun altro.", return_authority=authority) is True
+    assert (
+        contains_unsafe_listener_claims("Residente uno is back with Residente due.", return_authority=authority) is True
+    )
+    assert (
+        contains_unsafe_listener_claims("Residente uno is back alongside Residente due.", return_authority=authority)
+        is True
+    )
+    assert (
+        contains_unsafe_listener_claims("Residente uno is back, and Residente due is home.", return_authority=authority)
+        is True
+    )
+    assert contains_unsafe_listener_claims("Residente uno is back with someone.", return_authority=authority) is True
+    assert (
+        contains_unsafe_listener_claims("Bentornato Residente uno con qualcun altro.", return_authority=authority)
+        is True
+    )
     assert (
         contains_unsafe_listener_claims(
-            "Welcome back, Florian. Somebody just returned.",
+            "Welcome back, Residente uno. Somebody just returned.",
             return_authority=authority,
         )
         is True
@@ -125,12 +139,12 @@ def test_named_resident_return_requires_curated_fact_and_same_line_name():
 def test_named_resident_authority_can_be_spent_on_only_one_line():
     authority = home_return_authority_for_directive(
         "ha:person.sabrina",
-        "Sabrina è appena tornata a casa. Un caloroso bentornata Sabrina.",
+        "Residente due è appena tornato a casa. Un caloroso bentornato.",
     )
     assert authority is not None
     assert (
         contains_unsafe_listener_claims(
-            ["Bentornata Sabrina.", "Welcome back, Sabrina."],
+            ["Bentornato Residente due.", "Welcome back, Residente due."],
             return_authority=authority,
         )
         is True
@@ -145,14 +159,14 @@ def test_door_unlock_and_non_curated_sources_never_authorize_return_copy():
         )
         is None
     )
-    assert contains_unsafe_listener_claims("Bentornato Florian.") is True
+    assert contains_unsafe_listener_claims("Bentornato Residente uno.") is True
 
 
 def test_curated_resident_source_without_return_semantics_never_authorizes_return_copy():
     assert (
         home_return_authority_for_directive(
             "ha:person.florian_horner",
-            "Florian ha scelto il prossimo disco.",
+            "Residente uno ha scelto il prossimo disco.",
         )
         is None
     )

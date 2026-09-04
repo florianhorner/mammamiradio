@@ -1993,7 +1993,7 @@ async def test_startup_reads_persisted_source_before_fetching():
         order.append("read")
         return persisted
 
-    def _fetch(_config, received):
+    def _fetch(_config, received, **_):
         order.append("fetch")
         assert received is persisted
         return [Track(title="S", artist="A", duration_ms=1, spotify_id="x")], persisted, ""
@@ -2226,7 +2226,9 @@ async def test_shutdown_cancels_tasks():
     producer_task = AsyncMock()
     playback_task = AsyncMock()
     listener_session_task = AsyncMock()
-    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
+    local_library_task = MagicMock()
+    local_library_task.done.return_value = False
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task, local_library_task):
         task.cancel = MagicMock()
 
     main_mod._prewarm_task = prewarm_task
@@ -2235,6 +2237,7 @@ async def test_shutdown_cancels_tasks():
     main_mod.app.state.prewarm_task = prewarm_task
     main_mod.app.state.producer_task = producer_task
     main_mod.app.state.playback_task = playback_task
+    main_mod.app.state.local_library_task = local_library_task
     main_mod.app.state.stream_hub = MagicMock()
     main_mod.app.state.station_state = SimpleNamespace(
         listener_session_tasks={listener_session_task},
@@ -2251,18 +2254,20 @@ async def test_shutdown_cancels_tasks():
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
 
-    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task, local_library_task):
         task.cancel.assert_called_once()
     mock_gather.assert_called_once_with(
         prewarm_task,
         producer_task,
         playback_task,
+        local_library_task,
         listener_session_task,
         return_exceptions=True,
     )
     assert main_mod.app.state.prewarm_task is None
     assert main_mod.app.state.producer_task is None
     assert main_mod.app.state.playback_task is None
+    assert main_mod.app.state.local_library_task is None
     main_mod.app.state.stream_hub.close.assert_called_once()
 
     # Cleanup
@@ -2291,6 +2296,8 @@ async def test_shutdown_cancels_background_tasks():
     main_mod.app.state.provider_verdict_task = verdict_task
     main_mod.app.state.background_tasks = {bg_task}
     main_mod.app.state.stream_hub = MagicMock()
+    if hasattr(main_mod.app.state, "local_library_task"):
+        delattr(main_mod.app.state, "local_library_task")
 
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()

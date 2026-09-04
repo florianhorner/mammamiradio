@@ -430,11 +430,13 @@ async def test_provider_code_three_failure_log_omits_credentials_and_provider_er
             "Jamendo provider blocked failure_code=api_auth_failed provider_code=5",
             [],
         ),
+        # Provider code 6 is rate limited. Keep retry behavior but expose a
+        # distinct failure code for the private-lane hint.
         (
             6,
             "degraded",
-            "api_failed",
-            "Jamendo provider attempt failed failure_code=api_failed provider_code=6 retry_in_seconds=60",
+            "rate_limited",
+            "Jamendo provider attempt failed failure_code=rate_limited provider_code=6 retry_in_seconds=60",
             [60.0],
         ),
         (
@@ -1275,6 +1277,17 @@ def test_active_transfer_timeout_scales_with_validated_duration(duration_sec, ex
     assert jt._active_transfer_timeout_sec(duration_sec) == expected
 
 
+@pytest.mark.parametrize(
+    ("duration_sec", "expected"),
+    [(60.0, 120.0), (180.0, 240.0), (720.0, 300.0)],
+)
+def test_ffmpeg_processing_budget_is_capped_below_the_transfer_budget(duration_sec, expected):
+    """A long track must not hold one of two encode slots for its own duration."""
+    assert jt._ffmpeg_processing_timeout_sec(duration_sec) == expected
+    assert jt._ffmpeg_processing_timeout_sec(duration_sec) <= jt._MAX_FFMPEG_PROCESSING_TIMEOUT_SEC
+    assert jt._ffmpeg_processing_timeout_sec(duration_sec) <= jt._active_transfer_timeout_sec(duration_sec)
+
+
 def test_nonblocking_writer_retries_and_completes_partial_writes(tmp_path):
     process = _FakeProcess(["ffmpeg", str(tmp_path / "normalized.part")])
     accepted = bytearray()
@@ -1294,7 +1307,9 @@ def test_nonblocking_writer_retries_and_completes_partial_writes(tmp_path):
         patch.object(jt, "_wait_for_pipe_writable", return_value=True),
         patch.object(jt.os, "write", side_effect=write),
     ):
-        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline=100.0)
+        jt._write_all_nonblocking(
+            process, process.stdin.fileno(), b"audio", active_deadline=100.0, deadline_code="ffmpeg_timeout"
+        )
 
     assert accepted == b"audio"
     assert actions == []
@@ -1313,7 +1328,9 @@ def test_nonblocking_writer_maps_broken_pipe_to_ffmpeg_failed(tmp_path, write_er
         patch.object(jt.os, "write", side_effect=write_error),
         pytest.raises(jt._TransientError, match="ffmpeg_failed"),
     ):
-        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline=100.0)
+        jt._write_all_nonblocking(
+            process, process.stdin.fileno(), b"audio", active_deadline=100.0, deadline_code="ffmpeg_timeout"
+        )
 
 
 def test_nonblocking_writer_detects_early_child_exit_before_write(tmp_path):
@@ -1324,7 +1341,9 @@ def test_nonblocking_writer_detects_early_child_exit_before_write(tmp_path):
         patch.object(jt.os, "write") as write,
         pytest.raises(jt._TransientError, match="ffmpeg_failed"),
     ):
-        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline=100.0)
+        jt._write_all_nonblocking(
+            process, process.stdin.fileno(), b"audio", active_deadline=100.0, deadline_code="ffmpeg_timeout"
+        )
 
     write.assert_not_called()
 
@@ -1351,7 +1370,9 @@ def test_nonblocking_writer_uses_earliest_deadline_with_transfer_winning_ties(
         patch.object(jt, "_wait_for_pipe_writable", side_effect=wait_for_writable),
         pytest.raises(jt._TransientError, match=expected_code),
     ):
-        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline)
+        jt._write_all_nonblocking(
+            process, process.stdin.fileno(), b"audio", active_deadline, deadline_code="network_timeout"
+        )
 
 
 def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
@@ -1361,6 +1382,7 @@ def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
     now = [0.0]
     events: list[str] = []
     processes: list[_FakeProcess] = []
+    write_deadlines: list[tuple[float, str]] = []
 
     class PacedResponse(_StreamResponse):
         def iter_bytes(self, chunk_size: int):
@@ -1403,6 +1425,18 @@ def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
         events.append("hash")
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
+    original_write_all_nonblocking = jt._write_all_nonblocking
+
+    def write_all_nonblocking(process, file_descriptor, chunk, deadline, *, deadline_code):
+        write_deadlines.append((deadline, deadline_code))
+        original_write_all_nonblocking(
+            process,
+            file_descriptor,
+            chunk,
+            deadline,
+            deadline_code=deadline_code,
+        )
+
     with (
         patch.object(jt, "ffmpeg_slot", new=delayed_slot),
         patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
@@ -1412,6 +1446,7 @@ def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
         patch.object(jt.os, "set_blocking"),
         patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
         patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+        patch.object(jt, "_write_all_nonblocking", side_effect=write_all_nonblocking),
         patch.object(jt, "_hash_file", side_effect=hash_file),
         patch.object(jt.os, "replace", side_effect=replace),
     ):
@@ -1419,6 +1454,7 @@ def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
 
     assert artifact.path == operation_dir / "normalized.mp3"
     assert bytes(processes[0].stdin.data) == b"audio-bytes"
+    assert write_deadlines == [(441.0, "ffmpeg_timeout")]
     assert events.index("client.build_request") < events.index("slot.enter")
     assert events.index("response.close") < events.index("slot.enter")
     assert events.index("response.close") < events.index("stdin.close")
@@ -1426,6 +1462,98 @@ def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
     assert events.index("process.wait") < events.index("probe")
     assert events.index("probe") < events.index("slot.exit", events.index("probe"))
     assert events.index("slot.exit") < events.index("hash") < events.index("publish")
+
+
+def test_worker_survives_an_encode_slot_wait_longer_than_the_transfer_budget(tmp_path):
+    """A downloaded track must not fail as a provider timeout while queueing locally.
+
+    The encode slot is an unbounded local wait. Before this guard, the transfer
+    deadline was re-checked after acquiring it, so a track whose download had
+    already finished was reported as `network_timeout` because the station's own
+    encode queue was busy. Duration is 180s, so the transfer budget is 240s; the
+    slot is not granted until 300s.
+    """
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    now = [0.0]
+    processes: list[_FakeProcess] = []
+
+    class PromptResponse(_StreamResponse):
+        def iter_bytes(self, chunk_size: int):
+            assert chunk_size == 64 * 1024
+            now[0] = 5.0
+            yield b"audio-bytes"
+
+    response = PromptResponse()
+    client = _SyncClient(response)
+
+    @contextmanager
+    def congested_slot(*, background: bool):
+        assert background is True
+        now[0] = 300.0  # past the 240s transfer budget, purely local queueing
+        yield
+
+    def popen(command, **_kwargs):
+        process = _FakeProcess(command)
+        processes.append(process)
+        return process
+
+    with (
+        patch.object(jt, "ffmpeg_slot", new=congested_slot),
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt.httpx, "Client", return_value=client),
+        patch.object(jt.subprocess, "Popen", side_effect=popen),
+        patch.object(jt.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="180.0\n")),
+        patch.object(jt.os, "set_blocking"),
+        patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+    ):
+        artifact = jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert artifact.path == operation_dir / "normalized.mp3"
+    assert bytes(processes[0].stdin.data) == b"audio-bytes"
+    assert now[0] >= jt._active_transfer_timeout_sec(180.0)
+
+
+def test_worker_allows_progressing_ffmpeg_pipe_past_finalize_window(tmp_path):
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    now = [0.0]
+    audio_chunks = (b"a" * (64 * 1024), b"b" * (64 * 1024), b"c" * (64 * 1024))
+
+    class MultiChunkResponse(_StreamResponse):
+        def iter_bytes(self, chunk_size: int):
+            assert chunk_size == 64 * 1024
+            yield from audio_chunks
+
+    response = MultiChunkResponse()
+    response.headers = {"content-length": str(sum(len(chunk) for chunk in audio_chunks))}
+    client = _SyncClient(response)
+    process = _FakeProcess(["ffmpeg", str(operation_dir / "normalized.part")])
+
+    def progressing_write(file_descriptor: int, data: bytes | memoryview) -> int:
+        assert file_descriptor == process.stdin.fileno()
+        written = process.stdin.accept(bytes(data))
+        now[0] += 16.0
+        return written
+
+    with (
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt.httpx, "Client", return_value=client),
+        patch.object(jt.subprocess, "Popen", return_value=process),
+        patch.object(jt.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="180.0\n")),
+        patch.object(jt.os, "set_blocking"),
+        patch.object(jt.os, "write", side_effect=progressing_write),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+    ):
+        artifact = jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert now[0] == 48.0
+    assert bytes(process.stdin.data) == b"".join(audio_chunks)
+    assert process.wait_calls == [jt._FFMPEG_FINALIZE_TIMEOUT_SEC]
+    assert artifact.path == operation_dir / "normalized.mp3"
 
 
 def test_worker_pipe_stall_is_bounded_and_cleans_every_resource(tmp_path):
@@ -2644,3 +2772,43 @@ async def test_timeout_that_ends_the_attempt_is_the_reason_shown(tmp_path, monke
         release.set()
         await provider.stop()
         await client.aclose()
+
+
+def test_http_429_reports_rate_limited_not_a_generic_failure() -> None:
+    """429 is the ordinary HTTP shape of the condition ``rate_limited`` names.
+
+    Non-200 short-circuited to ``api_failed`` before the body was parsed, so the
+    code added for a throttle could only ever fire on the in-body provider code
+    and the operator advice written for it never reached anyone throttled.
+    """
+    with pytest.raises(jt._TransientError) as excinfo:
+        jt._validated_api_results(jt._RATE_LIMIT_STATUS_CODE, b"")
+    assert excinfo.value.code == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_bounded_api_results_reports_http_429_as_rate_limited() -> None:
+    """Production metadata requests hit ``_bounded_api_results`` before validation."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(jt._RATE_LIMIT_STATUS_CODE, request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(jt._TransientError) as excinfo:
+            await jt._bounded_api_results(client, {"client_id": "test-client"})
+        assert excinfo.value.code == "rate_limited"
+    finally:
+        await client.aclose()
+
+
+def test_other_non_200_statuses_still_report_a_generic_failure() -> None:
+    with pytest.raises(jt._TransientError) as excinfo:
+        jt._validated_api_results(503, b"")
+    assert excinfo.value.code == "api_failed"
+
+
+def test_auth_statuses_are_still_blocking_not_rate_limited() -> None:
+    with pytest.raises(jt._BlockedError) as excinfo:
+        jt._validated_api_results(403, b"")
+    assert excinfo.value.code == "api_auth_failed"

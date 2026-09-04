@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
+from mammamiradio.core.config import jamendo_source_configured
 from mammamiradio.core.models import (
     LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
@@ -27,6 +28,7 @@ from mammamiradio.core.models import (
     Track,
     safe_media_attribution_dict,
 )
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
 
@@ -128,11 +130,13 @@ def _source_readiness_status(config, state: StationState) -> dict:
     # Configuration flags can be projected without touching the filesystem.
     # Load-time evidence remains the authority for local/bundled availability.
     entries["charts"].configured = entries["charts"].configured or bool(getattr(config, "allow_ytdlp", False))
-    playlist_config = getattr(config, "playlist", None)
-    jamendo_client_id = getattr(playlist_config, "jamendo_client_id", "")
-    entries["jamendo"].configured = entries["jamendo"].configured or bool(
-        jamendo_client_id.strip() if isinstance(jamendo_client_id, str) else ""
-    )
+    jamendo_enabled = jamendo_source_configured(config)
+    entries["jamendo"].configured = jamendo_enabled
+    if not jamendo_enabled:
+        # Keep only an actually finishing segment visible after live disable.
+        fields = (("attempted", False), ("candidates", 0), ("playable", 0), ("exhausted", False), ("failure", ""))
+        for field, value in fields:
+            setattr(entries["jamendo"], field, value)
 
     sources: dict[str, dict] = {}
     for kind in SOURCE_READINESS_KINDS:
@@ -323,11 +327,11 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         "detail": (
             "Backup audio is ready to keep the route audible, but primary music still needs attention."
             if readiness["recovery_cover_available"]
-            else "Enable live charts, configure Jamendo, or add local MP3 files."
+            else "Enable live charts, configure Jamendo, or add local audio files."
         ),
         "steps": [
             "Enable live charts or configure Jamendo, or",
-            "Place MP3 files in the configured local music directory.",
+            "Add supported audio files to the local music library.",
         ],
         **shared,
     }
@@ -737,6 +741,7 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
         "clip_audio_class",
         # Render-scoped playlist identity keeps provider truth stable across a
         # metadata-only source swap. It is operational bookkeeping, not part of

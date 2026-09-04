@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+if [ "${CONDUCTOR_IS_LOCAL:-1}" = "0" ]; then
+  exec bash "$ROOT/scripts/conductor-cloud-bootstrap.sh"
+fi
+
 # Source credentials from ~/.config/mammamiradio/.env (safe, outside any repo).
 # Falls back to CONDUCTOR_ROOT_PATH/.env for backwards compat.
 _ENV_SAFE="$HOME/.config/mammamiradio/.env"

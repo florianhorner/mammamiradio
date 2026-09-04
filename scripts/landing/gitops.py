@@ -192,6 +192,53 @@ class GitRepository:
     def head(self) -> str:
         return self.resolve_commit("HEAD")
 
+    def resolve_tree(self, ref: str) -> str:
+        if not ref:
+            raise GitError("empty tree reference")
+        result = self.run_result(("rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{tree}}"))
+        if result.returncode != 0:
+            raise GitError(f"tree {ref!r} does not resolve uniquely in this repository")
+        lines = result.stdout.splitlines()
+        if len(lines) != 1:
+            raise GitError(f"tree {ref!r} did not resolve to exactly one object ID")
+        try:
+            oid = lines[0].decode("ascii").lower()
+        except UnicodeDecodeError as exc:
+            raise GitError(f"tree {ref!r} resolved to a non-ASCII object ID") from exc
+        if len(oid) != self.oid_length or _HEX_RE.fullmatch(oid) is None:
+            raise GitError(f"tree {ref!r} resolved to malformed object ID {oid!r}")
+        return oid
+
+    def merge_tree_commits(self, ours: str, theirs: str) -> str | None:
+        """Return the clean three-way merge tree of two commits, or None on conflict.
+
+        This is a pure object-database operation (git merge-tree --write-tree): it
+        touches neither the index nor the working tree, so callers can use the
+        result as an equality witness without mutating any checkout state.
+        """
+
+        ours_oid = self.resolve_commit(ours)
+        theirs_oid = self.resolve_commit(theirs)
+        result = self.run_result(("merge-tree", "--write-tree", "--no-messages", ours_oid, theirs_oid))
+        if result.returncode not in {0, 1}:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            suffix = f": {detail}" if detail else ""
+            raise GitError(
+                f"git merge-tree --write-tree failed with exit {result.returncode}{suffix} (requires git >= 2.38)"
+            )
+        if result.returncode == 1:
+            return None
+        lines = result.stdout.splitlines()
+        if not lines:
+            raise GitError("git merge-tree returned no tree object ID")
+        try:
+            oid = lines[0].decode("ascii").lower()
+        except UnicodeDecodeError as exc:
+            raise GitError("git merge-tree returned a non-ASCII object ID") from exc
+        if len(oid) != self.oid_length or _HEX_RE.fullmatch(oid) is None:
+            raise GitError(f"git merge-tree returned malformed object ID {oid!r}")
+        return oid
+
     def status_bytes(self) -> bytes:
         return self.run(("status", "--porcelain=v2", "--untracked-files=all", "-z"))
 
@@ -203,9 +250,30 @@ class GitRepository:
     ) -> Iterator[TreeEntry]:
         """Yield recursive tree records using bounded reads and record storage."""
 
+        resolved = self.resolve_commit(commit)
+        yield from self._stream_tree_entries(resolved, max_record_bytes=max_record_bytes)
+
+    def tree_entries_for_tree(
+        self,
+        tree_oid: str,
+        *,
+        max_record_bytes: int,
+    ) -> Iterator[TreeEntry]:
+        """Yield recursive records of a raw tree object (e.g. a merge-tree result)."""
+
+        if len(tree_oid) != self.oid_length or _HEX_RE.fullmatch(tree_oid) is None:
+            raise GitError(f"refusing malformed tree object ID {tree_oid!r}")
+        resolved = self.resolve_tree(tree_oid)
+        yield from self._stream_tree_entries(resolved, max_record_bytes=max_record_bytes)
+
+    def _stream_tree_entries(
+        self,
+        resolved: str,
+        *,
+        max_record_bytes: int,
+    ) -> Iterator[TreeEntry]:
         if max_record_bytes < 1:
             raise GitError("tree record limit must be non-zero")
-        resolved = self.resolve_commit(commit)
         args = ("ls-tree", "-r", "-z", "--full-tree", resolved)
         pending = b""
         with self._streaming_process(args, operation="git ls-tree") as (process, stdout, stderr_file):
@@ -415,6 +483,24 @@ class GitRepository:
         if position != len(output):
             raise GitError("git cat-file returned unexpected trailing output")
         return blobs
+
+    def path_in_commit(self, commit: str, path: bytes) -> bool:
+        """Return True if ``path`` names an entry in ``commit``'s tree.
+
+        Callers only ever pass regex-validated v2 receipt paths, which are pure
+        ASCII by construction; a non-ASCII path can never be one of them, so it
+        is reported absent rather than raising. ``git ls-tree`` with a pathspec
+        exits 0 whether the path is present or not (it prints the entry only
+        when present), so presence is read from the output, not the exit code.
+        """
+
+        try:
+            path_str = path.decode("ascii")
+        except UnicodeDecodeError:
+            return False
+        resolved = self.resolve_commit(commit)
+        output = self.run(("ls-tree", "--name-only", "-z", "--full-tree", resolved, "--", path_str))
+        return bool(output.strip(b"\0"))
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
         ancestor_oid = self.resolve_commit(ancestor)

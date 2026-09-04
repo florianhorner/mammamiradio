@@ -14,8 +14,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 _AUTHORIZED_HOME_RETURN_SOURCES = {
-    "ha:person.florian_horner": "Florian",
-    "ha:person.sabrina": "Sabrina",
+    "ha:person.florian_horner": "Residente uno",
+    "ha:person.sabrina": "Residente due",
 }
 _CURATED_RESIDENT_NAMES_PATTERN = "|".join(
     re.escape(name) for name in sorted(set(_AUTHORIZED_HOME_RETURN_SOURCES.values()))

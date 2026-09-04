@@ -79,10 +79,13 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.core.path_safety import safe_path_within
 from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import (
-    approved_spoken_assets,
+    PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
+    SpokenAssetEntry,
+    declared_spoken_asset_entries,
     is_approved_packaged_audio_asset,
     is_approved_spoken_asset,
 )
@@ -891,10 +894,7 @@ def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
         return False
     if segment.ephemeral:
         return True
-    try:
-        return segment.path.resolve().is_relative_to(tmp_dir.resolve())
-    except OSError:
-        return False
+    return safe_path_within(segment.path, tmp_dir) is not None
 
 
 def _unlink_if_tmp_render(segment: Segment, tmp_dir: Path) -> None:
@@ -926,10 +926,7 @@ def _record_generated_waste(
 
 def _is_under(path: Path, directory: Path) -> bool:
     """True when ``path`` resolves to a location inside ``directory`` (best-effort)."""
-    try:
-        return path.resolve().is_relative_to(directory.resolve())
-    except OSError:
-        return False
+    return safe_path_within(path, directory) is not None
 
 
 def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
@@ -1235,6 +1232,7 @@ async def _queue_continuity_bridge(
     canned_title: str,
     canned_metadata: dict | None = None,
     music_runway: bool = False,
+    starter_catalog_runway: bool = False,
 ) -> bool:
     """Queue the best available producer-side continuity bridge.
 
@@ -1289,6 +1287,18 @@ async def _queue_continuity_bridge(
         _record_bridge_fire(state, bridge_type, "norm_cache")
         return True
 
+    _arm_bridge_rung()
+    if starter_catalog_runway and await _queue_starter_catalog_bridge_segment(
+        queue_segment,
+        state,
+        config,
+        bridge_type=bridge_type,
+        bridge_flag=bridge_flag,
+        stale_check=_bridge_stale_reason,
+    ):
+        _record_bridge_fire(state, bridge_type, "starter_catalog")
+        return True
+
     fallback = _pick_recovery_clip(state)
     if fallback:
         _arm_bridge_rung()
@@ -1327,8 +1337,9 @@ async def _queue_continuity_bridge(
                 # stopped, blocklist gate). Naming one of them here would be a
                 # guess — the clip is queued either way and that is what matters.
                 logger.info(
-                    "%s bridge: no cache music queued behind the canned clip",
+                    "%s bridge: no %s queued behind the canned clip",
                     bridge_type.capitalize(),
+                    "music runway" if starter_catalog_runway else "cache music",
                 )
             return True
         if state.continuity_epoch == bridge_continuity_epoch:
@@ -1430,6 +1441,135 @@ async def _queue_norm_cache_bridge_segment(
         ),
         stale_check=stale_check,
     )
+
+
+async def _queue_starter_catalog_bridge_segment(
+    queue_segment: Callable[..., Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+    *,
+    bridge_type: str,
+    bridge_flag: str,
+    stale_check: Callable[[], bool | str | None] | None = None,
+) -> bool:
+    """Queue one verified starter song when a drain cannot see cache music."""
+    source = state.playlist_source
+    if source is None or source.kind != "starter" or not state.playlist or state.listener_request_handoff is not None:
+        return False
+
+    captured_playlist_revision = state.playlist_revision
+    captured_source_revision = state.source_revision
+    source_readiness = state.source_readiness
+    # Recovery must not consume an operator/listener pin merely by asking the
+    # canonical selector for an automatic starter candidate. This call has no
+    # await, so temporarily hiding and restoring the pin is atomic to the event
+    # loop and preserves both the value and its ownership revision.
+    held_pin = state.pinned_track
+    held_pin_revision = state.pinned_track_revision
+    try:
+        # The drain guard excludes listener handoffs before entering this helper,
+        # which is the only selector branch that mutates the supplied queue. The
+        # remaining acceptance rules live in StationState and its reservation
+        # ledger, so a private empty queue is enough to reuse the canonical
+        # selector without widening every continuity-bridge call signature.
+        if held_pin is not None:
+            state.pinned_track = None
+        try:
+            track = _select_accepted_music_track(state, config, asyncio.Queue())
+        finally:
+            if held_pin is not None:
+                state.pinned_track = held_pin
+                state.pinned_track_revision = held_pin_revision
+    except StarterCycleReservationPendingError:
+        logger.info("%s bridge: starter cycle is waiting for queued reservations", bridge_type.capitalize())
+        return False
+    except RuntimeError:
+        logger.info("%s bridge: no starter-catalog track is currently eligible", bridge_type.capitalize())
+        return False
+    if track is None or track.source != "starter":
+        return False
+
+    try:
+        rendered = await _render_music_track(
+            track,
+            config,
+            temp_prefix="starter_bridge",
+            context=f"{bridge_type} bridge",
+            playlist=state.playlist,
+            source_readiness=source_readiness,
+        )
+    except Exception:
+        source_readiness.mark_failure(track.source, "A starter track could not be verified for recovery")
+        logger.warning(
+            "%s bridge: starter-catalog verification failed for %s",
+            bridge_type.capitalize(),
+            track.display,
+            exc_info=True,
+        )
+        return False
+    if rendered is None:
+        source_readiness.mark_failure(track.source, "A starter track could not be prepared for recovery")
+        return False
+
+    playlist_index = next((index for index, candidate in enumerate(state.playlist) if candidate is track), -1)
+    rationale = generate_track_rationale(track, source=source, listener=state.listener)
+    crate = classify_track_crate(track, source)
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=rendered.path,
+        duration_sec=(track.duration_ms or 0) / 1000.0,
+        metadata={
+            "title": track.display,
+            "artist": track.artist,
+            "title_only": track.title,
+            "youtube_id": track.youtube_id,
+            "spotify_id": track.spotify_id,
+            "album_art": track.album_art,
+            "duration_ms": track.duration_ms,
+            "provider_track_id": track.provider_track_id,
+            "music_attribution": track.attribution.to_dict() if track.attribution else None,
+            "rationale": rationale,
+            "crate": crate,
+            "audio_source": "starter",
+            "clip_audio_class": _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC,
+            "playlist_index": playlist_index,
+            "source_kind": track.source,
+            "heading_id": track.heading_id,
+            bridge_flag: True,
+        },
+        ephemeral=False,
+    )
+
+    def _starter_stale_reason() -> bool | str | None:
+        if stale_check is not None:
+            verdict = stale_check()
+            if verdict:
+                return verdict
+        if captured_source_revision != state.source_revision:
+            return GenerationWasteReason.STALE_SOURCE
+        if captured_playlist_revision != state.playlist_revision and _music_segment_left_rotation(state, segment):
+            return GenerationWasteReason.STALE_PLAYLIST
+        return None
+
+    logger.warning(
+        "%s bridge: inserting verified starter-catalog runway: %s",
+        bridge_type.capitalize(),
+        track.display,
+    )
+    queued = await queue_segment(
+        segment,
+        shadow_entry=_queue_shadow_entry(segment),
+        stale_check=_starter_stale_reason,
+        admission_callback=partial(_reserve_music_segment, state, track),
+    )
+    if not queued:
+        return False
+
+    source_readiness.mark_playable(track.source)
+    _arm_accepted_heading_announcement(state, track)
+    state.after_music(track)
+    _remember_rendered_music(rendered, state)
+    return True
 
 
 async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
@@ -1557,7 +1697,7 @@ async def _queue_drain_recovery_bridge(
     state: StationState,
     config: StationConfig,
 ) -> bool:
-    """Queue a drain bridge and, when available, cached music runway."""
+    """Queue a drain bridge with cache or verified starter music runway."""
     return await _queue_continuity_bridge(
         queue_segment,
         state,
@@ -1566,6 +1706,7 @@ async def _queue_drain_recovery_bridge(
         bridge_flag="queue_drain_recovery",
         canned_title="Station continuity",
         music_runway=True,
+        starter_catalog_runway=True,
     )
 
 
@@ -3142,10 +3283,7 @@ def _discard_owned_render_result(
     if isinstance(result, Path):
         if preserve_paths is not None and result in preserve_paths:
             return
-        try:
-            is_owned = result.resolve().is_relative_to(tmp_dir.resolve())
-        except OSError:
-            is_owned = False
+        is_owned = safe_path_within(result, tmp_dir) is not None
         if is_owned:
             _unlink_path_best_effort(result)
         return
@@ -3295,10 +3433,7 @@ class _ProducerAttemptOwnership:
         for prepared in self.prepared_handoffs:
             _discard_prepared_handoff(prepared)
         for path in self.paths:
-            try:
-                is_owned = path.resolve().is_relative_to(self.tmp_dir.resolve())
-            except OSError:
-                is_owned = False
+            is_owned = safe_path_within(path, self.tmp_dir) is not None
             if is_owned and not _is_packaged_asset(path):
                 _unlink_path_best_effort(path)
         self.paths.clear()
@@ -3701,10 +3836,11 @@ async def _synthesize_impossible_moment(
 
 _recently_played_clips: deque[str] = deque(maxlen=50)
 
-# Cache directory listings for demo asset clips (avoid repeated glob on every call).
-_canned_clip_cache: dict[str, list[Path]] = {}
+# Cache validated manifest entries for demo clips (avoid repeated inventory work).
+_canned_clip_cache: dict[str, list[SpokenAssetEntry]] = {}
 
-SHAREWARE_CANNED_LIMIT = 3
+SHAREWARE_CANNED_LIMIT = 21
+PACKAGED_BANTER_SPECIAL_CHANCE = 0.1
 
 
 def _clip_is_serviceable(path: Path) -> bool:
@@ -3755,7 +3891,14 @@ def _should_defer_for_runway(queue: asyncio.Queue[Segment], lookahead_segments: 
     return True, buffered
 
 
-def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path | None:
+def _pick_canned_clip(
+    subdir: str,
+    *,
+    state: StationState | None = None,
+    mode: Literal["normal", "super_italian"] = "normal",
+    previous_starter_id: str = "",
+    allow_special: bool = True,
+) -> Path | None:
     """Pick reviewed, content-addressed recovery or neutral banter speech."""
 
     # Welcome globs were connection-edge speech sources and remain disabled.
@@ -3766,25 +3909,120 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
     if subdir == "banter" and state is not None and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
         return None
     if subdir not in _canned_clip_cache:
-        _canned_clip_cache[subdir] = approved_spoken_assets(subdir, assets_root=_DEMO_ASSETS_DIR)
-    clips = _canned_clip_cache[subdir]
-    if not clips:
+        _canned_clip_cache[subdir] = declared_spoken_asset_entries(subdir, assets_root=_DEMO_ASSETS_DIR)
+    entries = _canned_clip_cache[subdir]
+    if not entries:
         return None
-    # Avoid recently played clips
-    eligible = [c for c in clips if c.name not in _recently_played_clips]
-    eligible = [
-        c for c in eligible if _clip_is_serviceable(c) and is_approved_spoken_asset(c, assets_root=_DEMO_ASSETS_DIR)
-    ]
-    if not eligible:
-        _recently_played_clips.clear()
-        eligible = [
-            c for c in clips if _clip_is_serviceable(c) and is_approved_spoken_asset(c, assets_root=_DEMO_ASSETS_DIR)
+
+    if subdir == "banter":
+        entries = [entry for entry in entries if entry.mode == mode]
+        exact = [
+            entry
+            for entry in entries
+            if entry.required_previous_starter_id
+            and entry.required_previous_starter_id == previous_starter_id
+            and not entry.special
         ]
+        evergreen = [entry for entry in entries if not entry.required_previous_starter_id and not entry.special]
+        specials = [entry for entry in entries if not entry.required_previous_starter_id and entry.special]
+    else:
+        exact = []
+        evergreen = entries
+        specials = []
+    select_special = allow_special and bool(specials) and random.random() < PACKAGED_BANTER_SPECIAL_CHANCE
+
+    def _fresh(candidates: list[SpokenAssetEntry]) -> list[SpokenAssetEntry]:
+        return [
+            entry
+            for entry in candidates
+            if (subdir != "banter" or Path(entry.relative_path).name not in _recently_played_clips)
+            and _clip_is_serviceable(_DEMO_ASSETS_DIR / entry.relative_path)
+        ]
+
+    def _eligible_pool() -> list[SpokenAssetEntry]:
+        exact_fresh = _fresh(exact)
+        if exact_fresh:
+            # A verified exact predecessor is a one-shot adjacency opportunity.
+            return exact_fresh
+        evergreen_fresh = _fresh(evergreen)
+        special_fresh = _fresh(specials) if allow_special else []
+        if special_fresh and select_special:
+            return special_fresh
+        return evergreen_fresh
+
+    eligible = _eligible_pool()
     if not eligible:
         return None
-    pick = random.choice(eligible)
-    _recently_played_clips.append(pick.name)
+    entry = random.choice(eligible)
+    pick = _DEMO_ASSETS_DIR / entry.relative_path
+    # Hash only the selected declaration after consulting the metadata cache.
+    # A changed packaged byte still fails closed without reading the entire
+    # banter bank on the producer event loop.
+    if not is_approved_spoken_asset(pick, assets_root=_DEMO_ASSETS_DIR):
+        logger.warning("Rejecting packaged %s clip after manifest/hash admission failed: %s", subdir, pick)
+        _canned_clip_cache.pop(subdir, None)
+        return None
+    if subdir == "banter":
+        _recently_played_clips.append(pick.name)
     return pick
+
+
+def _queued_predecessor_starter_id(queue: asyncio.Queue[Segment]) -> str:
+    """Return a proven adjacent starter id, or empty when adjacency is uncertain."""
+
+    # asyncio.Queue has no public snapshot API. This synchronous peek is safe in
+    # the producer's event-loop turn and fails closed to evergreen copy if a
+    # future implementation stops exposing its deque.
+    internal = getattr(queue, "_queue", None)
+    if not internal:
+        return ""
+    predecessor = list(internal)[-1]
+    if predecessor.type != SegmentType.MUSIC:
+        return ""
+    source_kind = str(
+        predecessor.metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY)
+        or predecessor.metadata.get("source_kind")
+        or predecessor.metadata.get("audio_source")
+        or ""
+    )
+    if source_kind != "starter":
+        return ""
+    return str(predecessor.metadata.get("provider_track_id") or "")
+
+
+def _pick_packaged_banter_clip(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    config: StationConfig,
+    *,
+    contextual: bool,
+) -> Path | None:
+    """Pick mode-safe banter; admit track-bound or special copy only naturally."""
+
+    mode: Literal["normal", "super_italian"] = "super_italian" if config.super_italian_mode else "normal"
+    previous_starter_id = _queued_predecessor_starter_id(queue) if contextual else ""
+    return _pick_canned_clip(
+        "banter",
+        state=state,
+        mode=mode,
+        previous_starter_id=previous_starter_id,
+        allow_special=contextual,
+    )
+
+
+def _canned_clip_required_previous_starter_id(path: Path | None) -> str:
+    """Return the exact-track dependency carried by a selected packaged clip."""
+
+    if path is None:
+        return ""
+    try:
+        relative_path = Path(path).resolve().relative_to(_DEMO_ASSETS_DIR.resolve()).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    for entry in _canned_clip_cache.get("banter", ()):
+        if entry.relative_path == relative_path:
+            return entry.required_previous_starter_id
+    return ""
 
 
 def _resolve_sweeper_voice(config: StationConfig) -> tuple[str, str, str, HostPersonality | None]:
@@ -4262,6 +4500,7 @@ async def _fire_interrupt(
         logger.error("Interrupt aborted because %d buffered segment(s) could not be drained", len(residual))
         return False
 
+    state.urgent_interrupt_drained_audio = purged > 0
     if purged:
         logger.info("Interrupt: purged %d buffered segments", purged)
     state.queued_segments.clear()
@@ -5777,9 +6016,11 @@ async def _run_producer_inner(
             _was_idle = False
         _producer_idle_logged = False
 
-        # Mid-playback drain guard: if the queue hits zero during active playback
-        # (after at least one real segment has been produced), insert a canned clip
-        # to bridge the gap while the producer or prefetch task catches up.
+        # Mid-playback drain guard: if the queue hits zero after this producer
+        # admitted audio, or an urgent interrupt actually purged buffered audio,
+        # seed recovery before a slow render. Interrupt discard accounting also
+        # covers startup prewarm and restart-handoff segments purged before this
+        # producer has admitted its first segment.
         # _drain_guard_queued prevents re-firing until a real segment lands.
         # A listener handoff is the one exception: once its dedication has been
         # queued, the promised song owns this producer boundary even if playback
@@ -5787,7 +6028,10 @@ async def _run_producer_inner(
         # recovery ladder still cover a render that cannot finish in time.
         if (
             queue.empty()
-            and _segments_produced > 0
+            and (
+                _segments_produced > 0
+                or (state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT and state.urgent_interrupt_drained_audio)
+            )
             and not _drain_guard_queued
             and state.listener_request_handoff is None
             and await _queue_drain_recovery_bridge(_queue_segment, state, config)
@@ -6615,6 +6859,15 @@ async def _run_producer_inner(
                 banter_audio_class: ClipAudioClass = _CLIP_AUDIO_CLASS_UNKNOWN
                 trans_track_ref: str | None = None
                 loop = asyncio.get_running_loop()
+                packaged_banter_contextual = (
+                    natural_banter_candidate
+                    and chaos_subtype is None
+                    and not is_operator_forced
+                    and not urgent_interrupt_cycle
+                    and not state.pending_requests
+                    and not state.ha_pending_directive
+                    and config.party_mode is None
+                )
                 first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
                 home_context_director = state.home_context_director
                 # A pending reactive/first-moment directive carries its own home
@@ -6654,9 +6907,14 @@ async def _run_producer_inner(
                     and not impossible_tts
                     and not state.pending_requests
                 ):
-                    # Use canned clips for first 2, then impossible TTS as the gold closer
-                    if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT - 1:
-                        canned = _pick_canned_clip("banter", state=state)
+                    # Draw unique mode-safe breaks from the 21-clip reviewed bank.
+                    if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT:
+                        canned = _pick_packaged_banter_clip(
+                            queue,
+                            state,
+                            config,
+                            contextual=packaged_banter_contextual,
+                        )
                     if not canned:
                         line = generate_impossible_line(
                             segments_produced=state.segments_produced,
@@ -6704,12 +6962,12 @@ async def _run_producer_inner(
                             impossible_tts = True
                         except TTSUnavailableError as exc:
                             logger.warning("Impossible TTS unavailable; trying canned fallback: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
                             if canned is None:
                                 raise
                         except Exception as exc:
                             logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
 
                 banter_expected_min_duration_sec: float | None = None
                 banter_expected_line_count: int | None = None
@@ -7013,7 +7271,7 @@ async def _run_producer_inner(
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
                             logger.warning("Chaos speech unavailable; trying canned fallback: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
                             if canned is None:
                                 if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
                                     state.chaos_pending = None
@@ -7049,7 +7307,7 @@ async def _run_producer_inner(
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
                             logger.warning("Chaos audio generation failed; trying canned fallback: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
                             if canned:
                                 banter_expected_min_duration_sec = None
                                 banter_expected_line_count = None
@@ -7135,7 +7393,12 @@ async def _run_producer_inner(
                                 duration_sec=await loop.run_in_executor(None, _probe_segment_duration, audio_path),
                             )
                             audio_path.unlink(missing_ok=True)
-                        fallback_canned = _pick_canned_clip("banter", state=state)
+                        fallback_canned = _pick_packaged_banter_clip(
+                            queue,
+                            state,
+                            config,
+                            contextual=False,
+                        )
                         if fallback_canned:
                             try:
                                 with _timed_render_stage(state, "quality"):
@@ -7314,6 +7577,7 @@ async def _run_producer_inner(
                 home_return_metadata: dict[str, str] = (
                     {"home_return_fact_id": home_return_authority.fact_id} if home_return_authority is not None else {}
                 )
+                required_previous_starter_id = _canned_clip_required_previous_starter_id(canned)
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -7345,6 +7609,11 @@ async def _run_producer_inner(
                         "has_music_tail": False,
                         "clip_audio_class": banter_audio_class,
                         "transition_track_ref": trans_track_ref,
+                        **(
+                            {PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY: required_previous_starter_id}
+                            if required_previous_starter_id
+                            else {}
+                        ),
                         "ledger_segment_id": _banter_ledger_segment_id(
                             _banter_attempt_id,
                             canned=canned,

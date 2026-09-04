@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from mammamiradio.core import config as config_module
 from mammamiradio.core.config import JAMENDO_ACK_REVISION, load_config
 from mammamiradio.core.models import PlaylistSource, SourceReadinessEvidence, Track
 
@@ -414,13 +415,29 @@ def test_load_config_incomplete_acknowledgement_keeps_jamendo_disabled(monkeypat
     assert config.playlist.jamendo_noncommercial_acknowledged is False
 
 
-def test_load_config_missing_client_id_keeps_jamendo_disabled(monkeypatch):
+def test_load_config_with_no_access_at_all_keeps_jamendo_disabled(monkeypatch):
+    """Without operator or bundled access, enablement cannot stick."""
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "")
     monkeypatch.setenv("JAMENDO_CLIENT_ID", "")
     monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ENABLED", "true")
     monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED", "true")
     monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ACK_REVISION", JAMENDO_ACK_REVISION)
 
     assert load_config().playlist.jamendo_enabled is False
+
+
+def test_load_config_without_an_operator_id_uses_the_bundled_station_access(monkeypatch):
+    """Bundled access needs only the operator acknowledgement."""
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "station-bundled-id")
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", "")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ENABLED", "true")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED", "true")
+    monkeypatch.setenv("MAMMAMIRADIO_JAMENDO_ACK_REVISION", JAMENDO_ACK_REVISION)
+
+    playlist = load_config().playlist
+    assert playlist.jamendo_enabled is True
+    assert playlist.jamendo_client_id == "station-bundled-id"
+    assert playlist.jamendo_client_id_source == "bundled"
 
 
 def test_load_config_invalid_jamendo_limit_env_var_raises(monkeypatch):

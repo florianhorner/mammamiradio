@@ -420,14 +420,14 @@ async def test_scene_naming_a_resident_keeps_ladder(config, state, monkeypatch):
         domain="person",
         score=1.9,
         raw_state={"state": "home", "attributes": {}},
-        label_it="Florian",
-        label_en="Florian",
+        label_it="Residente uno",
+        label_en="Resident one",
         label_tier="curated",
-        summary_line="Florian: a casa",
+        summary_line="Residente uno: a casa",
     )
 
     async def _call(_config, _scored, *, local_hour, model):
-        return _response('{"mood_it":"Florian rientra a casa","mood_en":"Florian is back home"}')
+        return _response('{"mood_it":"Residente uno rientra a casa","mood_en":"Resident one is back home"}')
 
     monkeypatch.setattr(scene_namer, "_call_anthropic_scene", _call)
 
@@ -504,10 +504,10 @@ async def test_scene_counting_people_keeps_ladder(config, state, monkeypatch):
         domain="person",
         score=1.9,
         raw_state={"state": "home", "attributes": {}},
-        label_it="Florian",
-        label_en="Florian",
+        label_it="Residente uno",
+        label_en="Resident one",
         label_tier="curated",
-        summary_line="Florian: a casa",
+        summary_line="Residente uno: a casa",
     )
 
     async def _call(_config, _scored, *, local_hour, model):

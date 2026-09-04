@@ -5,13 +5,17 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Keep major upgrades standalone so they receive manual compatibility review.
     groups:
       dev-tools:
         patterns: ["ruff", "mypy", "pytest*"]
+        update-types: ["minor", "patch"]
       core:
         patterns: ["fastapi", "uvicorn", "anthropic", "spotipy"]
+        update-types: ["minor", "patch"]
       pydantic:
         patterns: ["pydantic", "pydantic-core", "pydantic-settings"]
+        update-types: ["minor", "patch"]
     ignore:
       # pydantic pins an exact pydantic-core; bumping pydantic-core on its own makes
       # the hash-locked requirements.txt unsatisfiable (the 2.47.0 vs 2.13.4 incident).

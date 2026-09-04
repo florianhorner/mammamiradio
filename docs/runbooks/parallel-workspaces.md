@@ -259,7 +259,8 @@ order.
 ## Conflict ownership
 
 - Path A: the source workspace resolves conflicts with `main`, reruns its
-  checks, and refreshes its review evidence.
+  checks, and refreshes its review evidence — a conflicted resolution needs a
+  fresh squad run, not a reattestation.
 - Path B: the train owner stops the intake and returns semantic conflicts to
   the source workspace with the current train SHA. The worker resolves against
   that SHA, records it as the new base, reruns checks, and submits a new

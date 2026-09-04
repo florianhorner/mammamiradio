@@ -436,13 +436,13 @@ REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
     (
         "person.florian_horner",
         "home",
-        "Florian è appena tornato a casa. Un caloroso bentornato — come se sapeste esattamente chi è tornato.",
+        "Residente uno è appena tornato a casa. Un caloroso bentornato — come se sapeste esattamente chi è tornato.",
         3600,
     ),
     (
         "person.sabrina",
         "home",
-        "Sabrina è appena tornata a casa. Un caloroso bentornata Sabrina — naturale e familiare.",
+        "Residente due è appena tornato a casa. Un caloroso bentornato — naturale e familiare.",
         3600,
     ),
     (

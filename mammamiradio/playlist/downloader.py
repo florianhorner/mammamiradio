@@ -327,9 +327,24 @@ _LOCAL_FILES_LIMIT = 200
 _LOCAL_DIRECTORY_ENTRY_LIMIT = 10_000
 
 
+def _safe_operator_local_path(path: Path, music_dir: Path) -> Path | None:
+    """Resolve one real file without escaping the configured music root."""
+    try:
+        if music_dir.is_symlink():
+            return None
+        resolved = safe_path_within(path, music_dir, reject_symlinks=True)
+        return resolved if resolved is not None and resolved.is_file() else None
+    except OSError:
+        return None
+
+
+def _is_scanned_library_track(track: Track) -> bool:
+    return track.source == "local" and track.spotify_id.startswith("local_")
+
+
 def _find_local(track: Track, music_dir: Path) -> Path | None:
     """Check if a local MP3 exists in the music/ directory."""
-    if not music_dir.exists():
+    if not music_dir.is_dir() or music_dir.is_symlink():
         return None
     import time as _time
 
@@ -348,7 +363,7 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
                     if not entry.name.endswith(".mp3"):
                         continue
                     try:
-                        if not entry.is_file():
+                        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
                             continue
                     except OSError:
                         continue
@@ -361,7 +376,9 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
     for f in files:
         name = f.stem.lower()
         if track.cache_key in name or track.title.lower() in name:
-            return f
+            admitted = _safe_operator_local_path(f, music_dir)
+            if admitted is not None:
+                return admitted
     return None
 
 
@@ -489,9 +506,17 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
         if legacy_path.exists():
             logger.info("Legacy YouTube cache hit: %s", track.display)
             return legacy_path
-    if track.local_path is not None and track.local_path.exists():
-        logger.info("Track file: %s -> %s", track.display, track.local_path)
-        return track.local_path
+    if track.local_path is not None:
+        attached = (
+            _safe_operator_local_path(track.local_path, music_dir)
+            if _is_scanned_library_track(track)
+            else track.local_path
+            if track.local_path.is_file()
+            else None
+        )
+        if attached is not None:
+            logger.info("Track file: %s -> %s", track.display, attached)
+            return attached
 
     local = _find_local(track, music_dir)
     if local:
@@ -554,9 +579,17 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
 
 def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     """Resolve an explicit external request without a silent fallback."""
-    if track.local_path is not None and track.local_path.exists():
-        logger.info("Track file: %s -> %s", track.display, track.local_path)
-        return track.local_path
+    if track.local_path is not None:
+        attached = (
+            _safe_operator_local_path(track.local_path, music_dir)
+            if _is_scanned_library_track(track)
+            else track.local_path
+            if track.local_path.is_file()
+            else None
+        )
+        if attached is not None:
+            logger.info("Track file: %s -> %s", track.display, attached)
+            return attached
     local = _find_local(track, music_dir)
     if local:
         logger.info("Local file: %s -> %s", track.display, local)

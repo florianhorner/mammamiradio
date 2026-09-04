@@ -1024,7 +1024,7 @@ def test_build_summary_includes_matching_entities():
         },
     }
     result = _build_summary(states)
-    assert "Florian" in result
+    assert "Residente uno" in result
     assert "Meteo" in result
     assert result.count("- ") == 2
 
@@ -1422,7 +1422,7 @@ def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
     tracker = {
         "state": "home",
         "attributes": {
-            "friendly_name": "Florian iPhone",
+            "friendly_name": "Lab phone",
             "latitude": 52.5,
             "longitude": 13.4,
         },
@@ -1445,7 +1445,7 @@ def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
         char_limit=0,
     )
     summary = _build_budgeted_summary(scored)
-    assert "Florian" not in summary
+    assert "Lab phone" not in summary
     assert "device_tracker" not in summary
 
 
@@ -1509,7 +1509,7 @@ def test_filter_state_keeps_person_presence_but_strips_location_and_identity():
         {
             "state": "not_home",
             "attributes": {
-                "friendly_name": "Florian",
+                "friendly_name": "Resident one",
                 "latitude": 52.52,
                 "longitude": 13.4,
                 "gps_accuracy": 5,
@@ -1522,7 +1522,7 @@ def test_filter_state_keeps_person_presence_but_strips_location_and_identity():
     assert filtered is not None
     assert filtered["state"] == "not_home"
     attrs = filtered["attributes"]
-    assert attrs["friendly_name"] == "Florian"
+    assert attrs["friendly_name"] == "Resident one"
     for leaked in ("latitude", "longitude", "gps_accuracy", "user_id", "device_trackers"):
         assert leaked not in attrs
     assert "privacy:person" not in hits

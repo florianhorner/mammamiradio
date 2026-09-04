@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 from dataclasses import dataclass, field, replace
+from functools import cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -41,6 +42,73 @@ _FALSY = {"false", "0", "no"}
 # Bump only when the operator-facing non-commercial acknowledgement changes.
 # A stored acknowledgement from another revision is intentionally inert.
 JAMENDO_ACK_REVISION = "jamendo-api-terms-v1"
+
+# The station's registered Jamendo application ID. Jamendo issues one ID per
+# application, not per listener. An operator may supply an independently
+# authorized override. This value is public in API requests, but remains
+# attributable and rate-limited.
+#
+# Empty disables the bundled fallback and restores operator-only behavior.
+# Malformed values are ignored.
+BUNDLED_JAMENDO_CLIENT_ID = "0908e34e"
+
+# Use one client-ID pattern in config loading, admin writes, and provider calls
+# so all three paths accept the same values.
+# \Z, not $: Python's $ also matches before a trailing newline, so "^...$"
+# with .match() would accept "abcdefgh\n". The pattern this replaced was used
+# with .fullmatch() and did not.
+JAMENDO_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}\Z")
+
+
+@cache
+def _validated_bundled_client_id(raw: str) -> str:
+    """Validate one bundled-id value once. Cached: /status polls this every 3s."""
+    import logging
+
+    candidate = raw.strip()
+    if candidate and not JAMENDO_CLIENT_ID_RE.match(candidate):
+        logging.getLogger(__name__).warning("Bundled Jamendo client id is malformed: treating it as absent")
+        return ""
+    return candidate
+
+
+def bundled_jamendo_client_id() -> str:
+    """Return the station's own Jamendo application id, or empty if unusable."""
+    # Keyed on the value, not cached bare, so a test that monkeypatches the
+    # constant still sees its own value rather than the first one validated.
+    return _validated_bundled_client_id(BUNDLED_JAMENDO_CLIENT_ID)
+
+
+def resolve_jamendo_client_id(operator_value: str) -> tuple[str, str]:
+    """Choose the effective Jamendo ID and record its source.
+
+    The operator ID takes precedence. An invalid value falls back to bundled
+    access with a warning.
+
+    Returns ``(effective_id, source)`` with source ``operator``, ``bundled``, or
+    empty. Config loading and admin writes use this resolver.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    operator_id = (operator_value or "").strip()
+    if operator_id and not JAMENDO_CLIENT_ID_RE.match(operator_id):
+        log.warning("Invalid jamendo_client_id format: falling back to the bundled station access")
+        operator_id = ""
+    if operator_id:
+        return operator_id, "operator"
+    bundled_id = bundled_jamendo_client_id()
+    return (bundled_id, "bundled") if bundled_id else ("", "")
+
+
+def jamendo_source_configured(config: object) -> bool:
+    """Return whether Jamendo is explicitly enabled.
+
+    An ID may exist on every install, so this check must use ``jamendo_enabled``.
+    """
+    playlist = getattr(config, "playlist", None)
+    return bool(getattr(playlist, "jamendo_enabled", False))
+
 
 # Canonical name of the local guest-host test balloon. Single source of truth —
 # scriptwriter imports this so the roster gate and the prompt logic can never
@@ -154,6 +222,8 @@ class PlaylistSection:
     artist_cooldown: int = 3
     max_artist_per_hour: int = 3
     jamendo_client_id: str = ""
+    # Resolved source: "operator", "bundled", or "". Set by _validate.
+    jamendo_client_id_source: str = ""
     jamendo_enabled: bool = False
     jamendo_noncommercial_acknowledged: bool = False
     jamendo_ack_revision: str = ""
@@ -1469,12 +1539,13 @@ def _validate(config: StationConfig) -> None:
         errors.append(_err("persona.anthem_threshold", "must be >= 1"))
     if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
         errors.append(_err("persona.skip_bit_threshold", "must be >= 1"))
-    if config.playlist.jamendo_client_id:
-        config.playlist.jamendo_client_id = config.playlist.jamendo_client_id.strip()
-    if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]{8,128}$", config.playlist.jamendo_client_id):
-        log.warning("Invalid jamendo_client_id format — Jamendo source disabled")
-        config.playlist.jamendo_client_id = ""
-        config.playlist.jamendo_enabled = False
+    # Resolve the application ID. The operator value takes precedence; the
+    # bundled value is the fallback. Invalid operator values fall back with a
+    # warning.
+    (
+        config.playlist.jamendo_client_id,
+        config.playlist.jamendo_client_id_source,
+    ) = resolve_jamendo_client_id(config.playlist.jamendo_client_id)
     if config.playlist.jamendo_ack_revision != JAMENDO_ACK_REVISION:
         config.playlist.jamendo_noncommercial_acknowledged = False
     if config.playlist.jamendo_enabled and (
