@@ -241,6 +241,10 @@ Run at the start of the session and after each confirmed merge:
 bash scripts/pr-queue-status.sh
 ```
 
+The shadow land queue below computes the same ordering automatically and writes
+it to a job summary every 30 minutes. It is advisory in exactly the way this
+dashboard is — you still land.
+
 Then:
 
 1. Pick one ready Path A PR or one train intake.
@@ -255,6 +259,69 @@ Then:
 
 Integrate foundation changes before consumers when a dependency requires that
 order.
+
+## Shadow land queue (report-only)
+
+`.github/workflows/land-queue.yml` runs `scripts/land-queue-plan.sh` every 30
+minutes and writes to the job summary the one thing an auto-land controller
+would do next: which PR it would integrate or arm, and why every other open PR
+is not that PR. **It changes nothing.** No push, no comment, no arm, no merge,
+no edge move. The workflow requests `contents: read` and `pull-requests: read`
+and holds no write permission at all.
+
+It exists to be compared. Before any of this is automated, its choices need to
+sit next to the landing seat's actual `scripts/land-pr.sh` choices for long
+enough to trust them — the same staging `preship-evidence.yml` used before the
+pre-ship evidence check was allowed to matter.
+
+Read it yourself any time:
+
+```bash
+bash scripts/land-queue-plan.sh          # human summary
+bash scripts/land-queue-plan.sh --json   # machine-readable states
+bash scripts/pr-queue-status.sh --json   # the same states, plus local worktrees
+```
+
+It reaches its verdict through the same predicates the landing seat arms on
+(`scripts/land-gates.sh`, shared with `land-pr.sh`) and the same selection the
+edge cut uses (`scripts/edge-select.sh`, shared with `cut-edge-release.sh`). A
+shadow reasoning from its own copy of the gates would prove nothing about the
+thing it shadows.
+
+**How it orders PRs.** Oldest first, by creation time. A blocked head *stalls*
+the queue rather than being reordered around — that is what keeps the ordering
+fair to whoever has been waiting longest. When a head is blocked on something
+only its owner can fix (a conflict, usually), the `skip-queue` label drops it
+out of head contention so one stuck PR cannot hold every other fix hostage.
+
+**What each state means:**
+
+| State | Meaning |
+|---|---|
+| `READY` | Gates pass; would be armed if it reaches the head |
+| `READY_BEHIND` | Gates pass but the base moved; needs integrate + reattest |
+| `CI_PENDING` | Waiting on required checks or thread resolution |
+| `BLOCKED_BOT` | Unresolved Major/Critical/P0/P1 bot thread |
+| `BLOCKED_EVIDENCE` | No committed v2 receipt covers this head |
+| `BLOCKED_CONFLICT` | Merge conflict — the owning workspace resolves it |
+| `BLOCKED_YOU` | `hold` or `manual-land` label |
+| `BLOCKED_HEAD` | Head object could not be fetched; gates cannot be evaluated |
+| `SKIPPED` | `skip-queue` label — out of head contention |
+| `EXEMPT` | Dependabot or `chore(edge):` lane; keeps its own merge path |
+| `OPEN` | Draft |
+
+**Turning it off.** Delete `.github/land-queue.enabled` (a one-line PR, with an
+audit trail), or set the repository variable `LAND_QUEUE=0`. Either one stops
+the run. Two switches because the file works from any seat that can open a PR
+and the variable works without one.
+
+**It is not live, and cannot be flipped live from a feature seat.** Doing that
+needs a GitHub App installed on the repo with `contents:write` +
+`pull-requests:write`. `GITHUB_TOKEN` is specifically not enough: commits it
+pushes do not trigger `push`/`pull_request` workflows, so a reattest commit
+pushed with it would land with no CI and the queue would arm a head that no
+check ever ran against. The header comment in `land-queue.yml` lists the full
+set of preconditions.
 
 ## Conflict ownership
 

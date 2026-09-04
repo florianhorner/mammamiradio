@@ -13,6 +13,20 @@ command -v gh >/dev/null 2>&1 || die "gh CLI not found."
 command -v jq >/dev/null 2>&1 || die "jq not found."
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
 
+EMIT_JSON=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) EMIT_JSON=1; shift ;;
+    -h|--help)
+      say "Usage: $0 [--json]"
+      say "  (no args)  human dashboard: per-PR merge state, evidence, thread debt, worktree"
+      say "  --json     the land queue's machine-readable states, enriched with local worktrees"
+      exit 0
+      ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
 root="$(git rev-parse --show-toplevel)"
 
 # Enumerate every worktree (path, local branch, upstream tracking branch)
@@ -190,6 +204,32 @@ recommendation() {
     say "inspect ($merge_state)"
   fi
 }
+
+# --json is the land queue's state vocabulary (READY / QUEUED / BLOCKED_* / ...),
+# not a second opinion about it: it delegates to scripts/land-queue-plan.sh and
+# only adds what that script cannot know — which local worktree owns each branch.
+# Two implementations of "is this PR landable" is exactly the drift this whole
+# refactor exists to prevent.
+if [ "$EMIT_JSON" = "1" ]; then
+  queue_json="$("$root/scripts/land-queue-plan.sh" --json)" \
+    || die "could not compute queue state (scripts/land-queue-plan.sh failed)."
+  branches="$(gh pr list --state open --limit 50 --json number,headRefName 2>/dev/null)" \
+    || die "could not list open PRs. Check gh auth and repository context."
+  worktrees="$(
+    printf '%s' "$branches" | jq -c '.[]' | while IFS= read -r row; do
+      n="$(printf '%s' "$row" | jq -r '.number')"
+      b="$(printf '%s' "$row" | jq -r '.headRefName')"
+      w="$(worktree_for_branch "$b" || true)"
+      jq -cn --argjson number "$n" --arg branch "$b" --arg worktree "$w" \
+        '{number:$number, branch:$branch, worktree:(if $worktree == "" then null else $worktree end)}'
+    done | jq -s '.'
+  )"
+  printf '%s' "$queue_json" | jq --argjson wt "$worktrees" \
+    '.prs |= map(.number as $n
+                 | . + (($wt | map(select(.number == $n)) | first // {})
+                        | {branch, worktree}))'
+  exit 0
+fi
 
 prs="$(gh pr list --state open --json number,title,headRefName,headRefOid,baseRefOid,mergeStateStatus,isDraft,updatedAt,url 2>/dev/null)" \
   || die "could not list open PRs. Check gh auth and repository context."

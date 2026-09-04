@@ -1,0 +1,12 @@
+# Kill switch for the shadow land queue (.github/workflows/land-queue.yml).
+#
+# The workflow runs only while this file exists AND the repository variable
+# LAND_QUEUE is not "0". Deleting this file is a one-line PR that stops the
+# controller with a reviewable audit trail; the variable is the faster switch
+# once someone with repository-settings access creates it.
+#
+# Two switches on purpose: the file works today from any seat that can open a
+# PR, the variable works without one. Either one being off stops the run.
+#
+# Phase 1 is SHADOW: the workflow computes what an auto-land controller would do
+# and writes it to the job summary. It does not push, comment, arm, or merge.

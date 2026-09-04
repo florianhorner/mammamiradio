@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# land-gates.sh — the landing gate predicates, in ONE implementation.
+#
+# Sourced by scripts/land-pr.sh (which arms merges) and by
+# scripts/land-queue-plan.sh (which only reports what it would arm). Both must
+# reach the same verdict on the same PR head; a second copy of this logic is the
+# likeliest place a soft-pass creeps back in, so there is deliberately only one.
+#
+# Contract for every predicate here:
+#   - returns 0 (gate passes) or non-zero (gate blocks); NEVER exits
+#   - explains a block on stdout, prefixed with "$LAND_GATES_LABEL: "
+#   - fails CLOSED on unverifiable state (gh/API/git error) — never soft-passes
+#
+# Callers that want a hard abort wrap the call: `ensure_head_local ... || die ...`.
+# Set LAND_GATES_LABEL before sourcing to change the message prefix.
+#
+# shellcheck shell=bash
+
+LAND_GATES_LABEL="${LAND_GATES_LABEL:-land-pr}"
+LAND_GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Freshness grace: /ship pushes mechanical commits (version bump, changelog)
+# right after the squad logs its entry; commits within this window after the
+# entry are treated as part of the reviewed push, not new work.
+GRACE_SECONDS="${MMR_LAND_GRACE_SECONDS:-600}"
+# Reader override exists for tests; default is the repo-local ledger dump.
+READER="${MMR_LAND_REVIEW_READER:-$LAND_GATES_DIR/read-preship-ledger.sh}"
+if [ ! -x "$READER" ] && [ -x "$HOME/.claude/skills/gstack/bin/gstack-review-read" ]; then
+  READER="$HOME/.claude/skills/gstack/bin/gstack-review-read"
+fi
+EVIDENCE_CHECKER="${MMR_LAND_EVIDENCE_CHECKER:-$LAND_GATES_DIR/check-preship-evidence.sh}"
+
+if ! declare -F say >/dev/null 2>&1; then
+  say() { printf '%s\n' "$*"; }
+fi
+
+_gate_say() { say "$LAND_GATES_LABEL: $*"; }
+
+if [ -r "$LAND_GATES_DIR/review-threads.sh" ]; then
+  # shellcheck source=scripts/review-threads.sh
+  . "$LAND_GATES_DIR/review-threads.sh"
+fi
+
+# iso_to_epoch <iso8601> -> epoch seconds, or empty on failure.
+# Handles both Z-suffixed UTC (BSD and GNU date) like the squad hook does.
+# Empty input is rejected up front: GNU `date -d ""` silently returns
+# midnight today instead of failing, which would bless missing timestamps.
+iso_to_epoch() {
+  local ts="$1" normalized
+  [ -n "$ts" ] || return 0
+
+  # GitHub committedDate values may include fractional seconds, such as
+  # 2026-08-23T23:14:31.300Z. Strip the fraction before calling date.
+  normalized="$(printf '%s' "$ts" | sed -E 's/\.[0-9]+Z$/Z/')" || return 0
+  date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" +%s 2>/dev/null \
+    || date -u -d "$normalized" +%s 2>/dev/null \
+    || true
+}
+
+# squad_check <pr-head-sha> <last-push-epoch> -> 0 if a qualifying entry
+# exists, else prints the reason and returns 1.
+squad_check() {
+  local pr_head="$1" last_push="$2" line skill rc ts es resolved
+  if [ ! -x "$READER" ]; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    case "$line" in ---CONFIG---*) break ;; esac
+    skill="$(printf '%s' "$line" | jq -r '.skill // ""' 2>/dev/null)" || continue
+    case "$skill" in review | adversarial-review) ;; *) continue ;; esac
+    rc="$(printf '%s' "$line" | jq -r '.commit // ""' 2>/dev/null)"
+    { [ -z "$rc" ] || [ "$rc" = "null" ]; } && continue
+    ts="$(printf '%s' "$line" | jq -r '.timestamp // ""' 2>/dev/null)"
+    es="$(iso_to_epoch "$ts")"
+    [ -n "$es" ] || continue
+    git cat-file -e "${rc}^{commit}" 2>/dev/null || continue
+    resolved="$(git rev-parse "${rc}^{commit}" 2>/dev/null)" || continue
+    { [ "$resolved" = "$pr_head" ] \
+        || git merge-base --is-ancestor "$rc" "$pr_head" 2>/dev/null; } || continue
+    # Nothing was pushed to the PR after the entry (+grace for /ship's own
+    # mechanical commits). A later push means the review saw older code.
+    if [ "$last_push" -gt $((es + GRACE_SECONDS)) ]; then
+      continue
+    fi
+    return 0
+  done < <("$READER" 2>/dev/null)
+  if [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
+    _gate_say "no pre-ship squad entry covers the current PR head."
+    say "         Either commits were pushed after the last review, or no squad ran."
+    say "         Re-run the review squad (/ship or /review) on this branch, then land again."
+  fi
+  return 1
+}
+
+evidence_check() {
+  local target="$1" base="$2" out rc
+  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
+    return 0
+  fi
+  out="$(bash "$EVIDENCE_CHECKER" --v2 --target "$target" --base "$base" --mode pr 2>&1)" || rc=$?
+  if [ "${rc:-0}" -ne 0 ]; then
+    _gate_say "committed v2 pre-ship evidence does not cover PR head ${target:0:12}."
+    say "         Run the review squad, emit v2 evidence, commit it on the branch, then land again."
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out" | sed 's/^/         /'
+    fi
+    return 1
+  fi
+  return 0
+}
+
+thread_check() {
+  local pr="$1" slug owner repo response blocked line
+  if [ "${MMR_LAND_SKIP_THREAD_CHECK:-0}" = "1" ]; then
+    return 0
+  fi
+
+  slug="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" \
+    || {
+      _gate_say "could not resolve repository identity for bot-thread check."
+      say "         Check gh auth, then re-run."
+      return 1
+    }
+  owner="${slug%%/*}"
+  repo="${slug##*/}"
+
+  response="$(review_threads_json "$owner" "$repo" "$pr")" \
+    || {
+      _gate_say "could not query review threads for PR #$pr."
+      say "         Check gh auth, then re-run. Use MMR_LAND_SKIP_THREAD_CHECK=1 only for hotfix escape."
+      return 1
+    }
+
+  blocked=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    blocked=$((blocked + 1))
+    _gate_say "unresolved Major/Critical bot thread: $line"
+  done < <(
+    printf '%s' "$response" | jq -r '
+      .data.repository.pullRequest.reviewThreads.nodes[]
+      | select(.isResolved == false and .isOutdated == false)
+      | ([.comments.nodes[]?
+          | select(.author.login == "coderabbitai"
+              or .author.login == "copilot-pull-request-reviewer"
+              or .author.login == "chatgpt-codex-connector")
+          | select((.body // "") | test("(Major|Critical|P0|P1)"; "i"))
+          | .url
+        ][0] // empty)
+    '
+  )
+
+  if [ "$blocked" -gt 0 ]; then
+    _gate_say "$blocked unresolved Major/Critical bot review thread(s) block landing."
+    say "         Resolve each thread on GitHub or fix and push, re-review, then land again."
+    return 1
+  fi
+  return 0
+}
+
+verify_head() {
+  local pr="$1" head="$2" base="$3" last_push_epoch="$4"
+  evidence_check "$head" "$base" || return 1
+  if squad_check "$head" "$last_push_epoch"; then
+    :
+  elif [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
+    _gate_say "committed evidence was skipped and no qualifying local ledger entry covers ${head:0:12}."
+    say "         Re-run without MMR_LAND_SKIP_EVIDENCE_CHECK=1 or provide current ledger evidence."
+    return 1
+  elif [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
+    return 1
+  else
+    _gate_say "no local ledger squad entry; committed v2 evidence covers PR head ${head:0:12}."
+  fi
+  thread_check "$pr" || return 1
+}
+
+# ensure_head_local <pr> <head-sha> -> 0 when the head object is present locally.
+# Returns 1 SILENTLY instead of exiting: land-pr.sh wraps it in `|| die` (hard
+# abort, stderr), while a reporting caller records BLOCKED and keeps going. The
+# two want different wording and different exit behavior, so the phrasing stays
+# with the caller.
+ensure_head_local() {
+  local pr="$1" head="$2"
+  if ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
+    git fetch -q origin "pull/${pr}/head" 2>/dev/null || true
+  fi
+  git cat-file -e "${head}^{commit}" 2>/dev/null
+}

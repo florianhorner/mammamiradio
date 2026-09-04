@@ -1,0 +1,100 @@
+name: land-queue
+
+# Shadow land queue, phase 1: REPORT-ONLY.
+#
+# Runs scripts/land-queue-plan.sh — the decision engine an auto-land controller
+# would act on — and writes its verdict to the job summary. It pushes nothing,
+# comments nowhere, arms no merge, and never touches the edge channel. The point
+# of this phase is to compare its choices against the human landing seat's
+# actual scripts/land-pr.sh choices for a week before anything is automated.
+#
+# Same staging, and the same reason, as preship-evidence.yml: observe the real
+# behaviour before it blocks or acts.
+#
+# What flipping this to LIVE requires (not a default, an explicit decision):
+#   1. A GitHub App installed on this repo with contents:write +
+#      pull-requests:write, and its credentials in Actions secrets. GITHUB_TOKEN
+#      is NOT sufficient: commits it pushes do not trigger `push`/`pull_request`
+#      workflows, so a reattest commit pushed with it would land with no CI and
+#      the queue would arm a head no check ever ran against.
+#   2. A `v*` tag-protection ruleset, so the App cannot cut a stable release.
+#   3. Settling whether `UNSTABLE` is landable here — that reads "required checks
+#      green", which is only as strong as the required-contexts list on main.
+#      Confirm with scripts/check-merge-gate.sh from a seat that can read branch
+#      protection.
+#
+# Kill switches: delete .github/land-queue.enabled, or set repository variable
+# LAND_QUEUE=0. Either one stops the run.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: land-queue
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: land queue decision (shadow)
+    runs-on: ubuntu-latest
+    if: vars.LAND_QUEUE != '0'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The evidence gate hashes the recursive git tree of the PR head and
+          # compares it against receipts pinned to older commits; a shallow
+          # clone cannot resolve those objects.
+          fetch-depth: 0
+
+      - name: Check the kill switch
+        id: switch
+        run: |
+          if [ ! -f .github/land-queue.enabled ]; then
+            echo "land-queue: .github/land-queue.enabled is absent — the shadow queue is off." >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: steps.switch.outputs.enabled == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Plan the queue
+        if: steps.switch.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          {
+            echo '## Land queue — shadow decision'
+            echo
+            echo 'Report-only. This run changed nothing.'
+            echo
+            echo '```'
+            bash scripts/land-queue-plan.sh
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Machine-readable decision
+        if: steps.switch.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/land-queue-plan.sh --json > land-queue-decision.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        if: steps.switch.outputs.enabled == 'true'
+        with:
+          name: land-queue-decision
+          path: land-queue-decision.json
+          retention-days: 14
