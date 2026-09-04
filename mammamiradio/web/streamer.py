@@ -6723,10 +6723,16 @@ def _resolve_static_file(filename: str) -> Path | None:
     if filename.startswith("/") or ".." in Path(filename).parts:
         return None
 
-    static_root = _STATIC_DIR.resolve()
     try:
+        # Both resolutions sit inside the guard. Leaving the root outside it
+        # meant a broken install answered 500 to every static request.
+        # RuntimeError is a symlink cycle on Python 3.12 and earlier;
+        # ValueError is an embedded null byte, which a request path can carry.
+        # Uncaught, either left this unauthenticated route raising instead of
+        # answering the 404 it already returns for any name it cannot resolve.
+        static_root = _STATIC_DIR.resolve()
         candidate = (static_root / filename).resolve()
-    except OSError:
+    except (OSError, RuntimeError, ValueError):
         return None
 
     if not candidate.is_relative_to(static_root) or not candidate.is_file():
