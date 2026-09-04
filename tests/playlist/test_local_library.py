@@ -515,3 +515,93 @@ def test_reconcile_carries_a_preference_onto_the_new_identity(tmp_path):
     reconcile_local_library(state, scan)
 
     assert state.song_preferences[("", "salvatore on everything")] == {"score": 1}
+
+
+def test_a_ban_holds_when_the_probe_was_failing_at_ban_time(tmp_path, monkeypatch):
+    """A transient ffprobe failure must not become an escape hatch.
+
+    While a probe is failing the file shows its filename identity, and that is
+    the key the operator's ban lands on. When the probe later succeeds the
+    identity moves to the tags. Without the filename alias the ban silently
+    stops matching and the song returns to rotation.
+    """
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    monkeypatch.setattr(local_library_module, "_local_metadata_inflight", {})
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "29-salvatore-on-everything.mp3"
+    path.write_bytes(b"audio")
+
+    # Ban placed while the probe was failing: identity is the humanized filename.
+    with patch.object(local_library_module, "_probe_local_audio_metadata", return_value=None):
+        during_failure = scan_local_library(_config(root)).tracks[0]
+    assert during_failure.normalized_key == ("", "salvatore on everything")
+    ban = {during_failure.normalized_key: {"display": "Salvatore On Everything"}}
+
+    # The probe recovers and the file's identity moves to its tags.
+    with patch.object(
+        local_library_module, "_probe_local_audio_metadata", return_value=("Colapesce", "Musica Leggera")
+    ):
+        after_recovery = scan_local_library(_config(root)).tracks[0]
+    assert after_recovery.normalized_key == ("colapesce", "musica leggera")
+
+    assert local_track_is_blocklisted(after_recovery, ban) is True
+
+
+def test_a_failed_probe_is_not_cached_as_no_tags(tmp_path, monkeypatch):
+    """Caching a failure pins the file to its filename for the whole process."""
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    monkeypatch.setattr(local_library_module, "_local_metadata_inflight", {})
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "song.mp3").write_bytes(b"audio")
+
+    with patch.object(local_library_module, "_probe_local_audio_metadata", return_value=None):
+        scan_local_library(_config(root))
+    assert local_library_module._local_metadata_cache == {}, "a failed probe must not be cached"
+
+    with patch.object(local_library_module, "_probe_local_audio_metadata", return_value=("Tagged", "Title")) as probe:
+        track = scan_local_library(_config(root)).tracks[0]
+    assert probe.call_count == 1, "the failure must be retried on the next pass"
+    assert (track.artist, track.title) == ("Tagged", "Title")
+
+
+def test_a_genuinely_untagged_file_is_cached_and_not_reprobed(tmp_path, monkeypatch):
+    """Only FAILURES are retried; a real "no tags" answer is durable."""
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    monkeypatch.setattr(local_library_module, "_local_metadata_inflight", {})
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "song.mp3").write_bytes(b"audio")
+
+    with patch.object(local_library_module, "_probe_local_audio_metadata", return_value=("", "")) as probe:
+        scan_local_library(_config(root))
+        scan_local_library(_config(root))
+
+    assert probe.call_count == 1
+
+
+def test_clearing_a_migrated_preference_is_not_resurrected_by_the_next_scan(tmp_path):
+    """A vote the operator cannot take off is a trap.
+
+    The migration used to COPY the legacy row. Clearing deleted only the new key,
+    and the next 60-second scan copied the old one straight back.
+    """
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "29-salvatore-on-everything.mp3"
+    path.write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library._probe_local_audio_metadata", return_value=("", "")):
+        scan = scan_local_library(_config(root))
+        state = StationState(playlist=[])
+        state.song_preferences = {("unknown", "29-salvatore-on-everything"): {"score": 1}}
+        reconcile_local_library(state, scan)
+
+        assert state.song_preferences == {("", "salvatore on everything"): {"score": 1}}
+
+        # Operator clears it, then the scanner runs again.
+        state.song_preferences.pop(("", "salvatore on everything"))
+        reconcile_local_library(state, scan_local_library(_config(root)))
+
+    assert state.song_preferences == {}

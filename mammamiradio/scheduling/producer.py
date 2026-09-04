@@ -80,7 +80,7 @@ from mammamiradio.core.models import (
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.core.segment_status import is_fallback_active
-from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
+from mammamiradio.core.song_identity import normalize_song_identity_key, song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import (
     PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
     SpokenAssetEntry,
@@ -2442,19 +2442,21 @@ def _blocklist_safe_last_music(
 
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
-    # Fail closed: without a full durable identity we cannot prove the song is
-    # not banned. (Degrades a metadata-poor bed to dry voice while any ban is
-    # active — safe and rare; loosening it would mean bypassing that identity
-    # contract.)
+    # Fail closed: without a durable identity we cannot prove the song is not
+    # banned. (Degrades a metadata-poor bed to dry voice while any ban is active
+    # — loosening it would mean bypassing that identity contract.)
     #
-    # DELIBERATELY stricter than the rescue-selection gate in
-    # `norm_cache._is_blocklisted`, which now does accept ("", title) as a real
-    # identity. The two ask different questions: that gate asks "may this air",
-    # this one asks "may this be reused as a bed UNDER speech", where a sidecar
-    # whose title collides with a ban but has lost its artist is plausibly the
-    # banned recording. Dry voice is the safe answer; dead air is never a risk
-    # here either way.
-    if not title or not artist:
+    # An empty artist alone is NOT missing identity: an untagged local file is
+    # legitimately ("", title). Refusing on that alone made every banter and ad
+    # air dry for an operator whose library is untagged MP3s the moment they
+    # banned one song — permanent, not "safe and rare".
+    #
+    # This gate stays stricter than `norm_cache._is_blocklisted` in the one case
+    # that matters: a title that collides with a banned title while the artist is
+    # missing is plausibly the banned recording wearing a stripped sidecar, and
+    # this decides whether audio is reused as a bed UNDER speech. Refuse that;
+    # allow the rest. Dead air is never a risk here either way.
+    if not title:
         logger.warning(
             "%s: skipping unidentified last-known-good music while an identity gate is active: %s",
             purpose.capitalize(),
@@ -2463,6 +2465,16 @@ def _blocklist_safe_last_music(
         return None
 
     identity = normalized_track_key(Track(title=title, artist=artist, duration_ms=0))
+    if not artist and any(
+        normalize_song_identity_key(blocked)[1] == normalize_song_identity_key(identity)[1]
+        for blocked in state.blocklist
+    ):
+        logger.warning(
+            "%s: skipping artist-less last-known-good music whose title collides with a ban: %s",
+            purpose.capitalize(),
+            title,
+        )
+        return None
     if song_identity_key_is_blocklisted(identity, state.blocklist):
         logger.warning(
             "%s: skipping blocklisted last-known-good music: %s - %s",

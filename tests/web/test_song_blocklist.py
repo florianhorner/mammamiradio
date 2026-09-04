@@ -845,3 +845,116 @@ async def test_preference_on_an_unidentifiable_song_does_not_claim_nothing_is_pl
     assert body["ok"] is False
     assert "nothing musical is on air" not in body["error"]
     assert "rotation list" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_preference_by_key_accepts_a_title_only_song(tmp_path):
+    """A song with no artist must be markable from the rotation list.
+
+    The new "mark it from the rotation list instead" copy points there, so that
+    route has to actually work — otherwise the message is a dead end, which is
+    worse than no message (leadership #5).
+    """
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+
+    async with _client(app) as c:
+        body = (
+            await c.post(
+                "/api/track/preference",
+                json={"key": ["", "Salvatore On Everything"], "vote": "up"},
+            )
+        ).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") in state.song_preferences
+
+
+@pytest.mark.asyncio
+async def test_preference_on_a_title_only_song_can_be_cleared(tmp_path):
+    """A vote you cannot take back is a trap; the clear press must not 422."""
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+
+    async with _client(app) as c:
+        await c.post("/api/track/preference", json={"key": ["", "Salvatore On Everything"], "vote": "up"})
+        body = (
+            await c.post(
+                "/api/track/preference",
+                json={"key": ["", "Salvatore On Everything"], "vote": "clear"},
+            )
+        ).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") not in state.song_preferences
+
+
+@pytest.mark.asyncio
+async def test_preference_now_playing_marks_a_title_only_song(tmp_path):
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+    _airing_music(state, artist="", title_only="Salvatore On Everything", label="Salvatore On Everything")
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/preference", json={"now_playing": True, "vote": "up"})).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") in state.song_preferences
+
+
+@pytest.mark.asyncio
+async def test_preference_still_rejects_a_key_with_no_title(tmp_path):
+    """Relaxing the artist must not turn an empty key into a real one."""
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+
+    async with _client(app) as c:
+        response = await c.post("/api/track/preference", json={"key": ["Artist", "  "], "vote": "up"})
+
+    assert response.status_code == 422
+    assert state.song_preferences == {}
+
+
+def test_banning_a_local_song_quarantines_its_stale_norm_cache_artifact(tmp_path):
+    """Post-restart / prior-run state: the cache file outlives the label change.
+
+    A local track's cache key is path-derived, so re-labelling a file from its
+    tags does NOT move its norm-cache entry, and the sidecar is only rewritten
+    when the track next plays. Ban a song before it plays again and the sidecar
+    still carries the PRE-upgrade identity while the ban is stored under the new
+    one — and the rescue gate reads the sidecar. Without quarantine the banned
+    song stays airable from cache forever.
+    """
+    from mammamiradio.audio.norm_cache import select_norm_cache_rescue
+    from mammamiradio.audio.normalizer import save_track_metadata
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, is_rejected_cache_key
+
+    clear_rejected_cache_keys()
+    cache_dir = Path(tmp_path)
+    local_path = cache_dir / "music" / "29-salvatore-on-everything.mp3"
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(b"audio")
+
+    # Re-labelled from its tags by the scanner; cache key is unchanged (path-derived).
+    track = Track(
+        title="Musica Leggera",
+        artist="Colapesce",
+        duration_ms=180_000,
+        local_path=local_path,
+        source="local",
+    )
+    norm_file = cache_dir / f"norm_{track.cache_key}_128k.mp3"
+    norm_file.write_bytes(b"cached audio")
+    # The sidecar on disk is from BEFORE the upgrade.
+    save_track_metadata(norm_file, title="29-salvatore-on-everything", artist="Unknown", source_kind="local")
+
+    app = _make_app(tmp_path, [track])
+    state = app.state.station_state
+    config = app.state.config
+
+    _apply_ban(state, config, [track], queue=app.state.queue)
+
+    assert is_rejected_cache_key(track.cache_key) is True
+    state.blocklist = dict(state.blocklist)
+    assert select_norm_cache_rescue(cache_dir, state, allow_recent_repeat=True) is None
+    clear_rejected_cache_keys()

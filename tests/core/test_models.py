@@ -945,14 +945,15 @@ def test_track_display():
     assert t.display == "Artist 1 – Song 1"
 
 
-def test_track_display_is_title_only_without_an_artist():
-    """An untagged local file has no artist, and must not air with a dangling dash.
+def test_track_display_still_carries_the_v1_wire_shape_for_an_artist_less_track():
+    """Pins the CURRENT (wrong) shape so the contract change is deliberate.
 
-    local_library deliberately refuses to invent an artist from a filename slug,
-    so `artist == ""` is a valid state. This label travels to the queue, the
-    stream log, the scriptwriter prompt, and up_next on the v1 integration wire.
+    `Track.display` feeds up_next[].title on the frozen v1 surface. Fixing the
+    dangling separator is queued as contract proposal 003 and lands with a
+    window; until then this test exists so nobody "tidies" it in by accident and
+    changes the wire without the ceremony.
     """
-    assert Track(title="Salvatore On Everything", artist="", duration_ms=0).display == "Salvatore On Everything"
+    assert Track(title="Salvatore On Everything", artist="", duration_ms=0).display == " – Salvatore On Everything"
 
 
 def test_pre_byte_failure_backlogs_retry_behind_existing_handoff():

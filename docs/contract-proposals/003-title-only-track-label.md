@@ -89,14 +89,20 @@ entry documents the intended shape for the provider — it does **not** guard th
 behavior. A `Track.display` regression would still render byte-identical
 fixture output.
 
-The real guard is a unit test on the property itself,
-`tests/core/test_models.py::test_track_display_is_title_only_without_an_artist`,
-which ships with this change and is not part of the frozen surface. Anyone
+The real guard would be a unit test on the property itself, in
+`tests/core/test_models.py`, which is not part of the frozen surface. Anyone
 reviewing this proposal in a window should weigh it on that basis, not on the
 fixture.
 
-Without this proposal being accepted, the fix is confined to `core/models.py`
-and the golden fixture stays untouched; the wire keeps emitting `" – Title"`.
+## Status
+
+**Queued only. Nothing in this proposal has shipped.** `Track.display` still
+emits `" – Title"` on the branch that filed this, and
+`tests/core/test_models.py::test_track_display_still_carries_the_v1_wire_shape_for_an_artist_less_track`
+pins that shape so it cannot change by accident. Every listener- and
+operator-facing surface already renders these tracks title-only by reading
+`metadata.title_only` instead, so the visible bug is fixed without touching the
+wire; only the integration surface still carries the dangling separator.
 
 ## Release ordering
 

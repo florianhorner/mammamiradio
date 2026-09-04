@@ -354,14 +354,17 @@ class Track:
     def display(self) -> str:
         """Human-readable label used in logs and APIs.
 
-        An untagged local file has no artist to show (``local_library`` refuses
-        to invent one from a filename slug), so the label is the bare title.
-        Without this an operator's own MP3 airs with a dangling leading dash
-        everywhere the label travels: the queue, the stream log, the
-        scriptwriter prompt, and ``up_next`` on the v1 integration wire.
+        An artist-less track (an untagged local file — ``local_library`` refuses
+        to invent an artist from a filename slug) renders here with a dangling
+        leading separator. That is WRONG, and deliberately not fixed here: this
+        value reaches ``up_next[].title`` on the frozen v1 integration surface,
+        so changing it is a contract change. See
+        ``docs/contract-proposals/003-title-only-track-label.md``; it lands with
+        a contract window, not in an ordinary fix.
+
+        Every listener- and operator-facing surface already renders these tracks
+        title-only, because they read ``metadata.title_only`` rather than this.
         """
-        if not self.artist:
-            return self.title
         return f"{self.artist} – {self.title}"
 
     @cached_property

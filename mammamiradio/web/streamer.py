@@ -2421,6 +2421,26 @@ def _apply_ban(
     if removed or pin_cleared:
         state.playlist_revision += 1
 
+    # Quarantine the norm-cache artifact of every banned LOCAL file. A local
+    # track's cache key is path-derived, so re-labelling a file does not move its
+    # cache entry, and the sidecar is only rewritten when the track next plays.
+    # A file banned before it plays again therefore keeps a sidecar carrying its
+    # PRE-ban identity, while the ban is stored under the new one — and the
+    # rescue gate reads the sidecar. Without this, banning a song straight after
+    # the metadata upgrade left the old cache file airable forever. Same reason
+    # the external-download path quarantines its artifact on ban.
+    import contextlib
+
+    from mammamiradio.playlist.downloader import reject_cached_download as _reject_cached_download
+
+    for track in tracks:
+        if getattr(track, "local_path", None) is None:
+            continue
+        cache_key = getattr(track, "cache_key", "")
+        if cache_key:
+            with contextlib.suppress(Exception):
+                _reject_cached_download(config.cache_dir, cache_key, "operator_blocklist")
+
     def _matches_blocklist(segment: Segment) -> bool:
         # Use the shared segment identity so missing artist metadata is
         # normalized consistently at mutation and playback gates.
@@ -2484,9 +2504,13 @@ def _normalize_preference_key(raw_key: object) -> tuple[tuple[str, str], str] | 
     title_raw = str(raw_key[1] or "").strip()
     artist = artist_raw.lower()
     title = title_raw.lower()
-    if not (artist and title):
+    # Title-only is a real key, same rule as _now_playing_music_track and the
+    # blocklist. Requiring an artist here made an untagged local song
+    # un-likeable from the rotation list — and un-CLEARABLE, since a preference
+    # migrated onto ("", title) renders as pressed and the clear press 422s.
+    if not title:
         return None
-    display = f"{artist_raw} - {title_raw}"
+    display = f"{artist_raw} - {title_raw}" if artist_raw else title_raw
     return (artist, title), display
 
 
