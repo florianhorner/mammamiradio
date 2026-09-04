@@ -106,6 +106,8 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         # console hidden; the smoke must open the producer desk like an
         # operator before asserting focus or geometry inside it.
         "showAdminTab('scaletta'",
+        "station category labels are not duplicated",
+        "local queue metadata was not rendered title-only",
         "setup status chips lost semantic mapping",
         "forced colors hid setup status glyphs",
         "local library row did not report active tracks",
