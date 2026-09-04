@@ -79,6 +79,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.core.path_safety import safe_path_within
 from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import (
@@ -895,10 +896,7 @@ def _is_tmp_render(segment: Segment, tmp_dir: Path) -> bool:
         return False
     if segment.ephemeral:
         return True
-    try:
-        return segment.path.resolve().is_relative_to(tmp_dir.resolve())
-    except OSError:
-        return False
+    return safe_path_within(segment.path, tmp_dir) is not None
 
 
 def _unlink_if_tmp_render(segment: Segment, tmp_dir: Path) -> None:
@@ -930,10 +928,7 @@ def _record_generated_waste(
 
 def _is_under(path: Path, directory: Path) -> bool:
     """True when ``path`` resolves to a location inside ``directory`` (best-effort)."""
-    try:
-        return path.resolve().is_relative_to(directory.resolve())
-    except OSError:
-        return False
+    return safe_path_within(path, directory) is not None
 
 
 def _normalized_cache_path(track: Track, config: StationConfig) -> Path:
@@ -3296,10 +3291,7 @@ def _discard_owned_render_result(
     if isinstance(result, Path):
         if preserve_paths is not None and result in preserve_paths:
             return
-        try:
-            is_owned = result.resolve().is_relative_to(tmp_dir.resolve())
-        except OSError:
-            is_owned = False
+        is_owned = safe_path_within(result, tmp_dir) is not None
         if is_owned:
             _unlink_path_best_effort(result)
         return
@@ -3449,10 +3441,7 @@ class _ProducerAttemptOwnership:
         for prepared in self.prepared_handoffs:
             _discard_prepared_handoff(prepared)
         for path in self.paths:
-            try:
-                is_owned = path.resolve().is_relative_to(self.tmp_dir.resolve())
-            except OSError:
-                is_owned = False
+            is_owned = safe_path_within(path, self.tmp_dir) is not None
             if is_owned and not _is_packaged_asset(path):
                 _unlink_path_best_effort(path)
         self.paths.clear()

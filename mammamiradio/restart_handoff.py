@@ -750,7 +750,10 @@ def _prune_unreferenced_segments(
     for raw in protected_paths or ():
         try:
             referenced.add(Path(raw).resolve(strict=False))
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
+            # Same family the deletion loop below already handles. This is the
+            # protective half: dropping out early here would leave a queued
+            # segment out of `referenced` and expose it to the prune.
             continue
 
     try:

@@ -529,6 +529,23 @@ needs both a normalize pass and a loudness-reconcile re-encode is the usual
 culprit. A normalization cache hit on an already-reconciled file skips both and
 should log near-instant stages.
 
+## A station page asset returns "not found" instead of loading
+
+A request under `/static/` answers `404` when the station cannot resolve the
+name to a real file inside its own asset directory. That covers a name that
+does not exist, a name that tries to climb out of the directory, a file the
+station is not allowed to follow, and a name carrying characters a path cannot
+hold.
+
+Previously some of those cases produced a server error and a stack trace in
+the add-on log instead of the `404`. If you are reading an older log and see
+one, the request was already being refused; only the way it was reported has
+changed.
+
+Nothing to fix on your side unless a page element is genuinely missing. If one
+is, reinstall or update the add-on so the packaged assets are restored, and
+check the add-on log for the file name the station could not resolve.
+
 ## Tests fail during collection
 
 If you see import errors like `ModuleNotFoundError: No module named 'dotenv'`, you are running tests outside the project env.
