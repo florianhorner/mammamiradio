@@ -6,7 +6,7 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-- **First Listen keeps playing through completion.** Confirming you heard the station, saving a Home context choice, and reaching the achievement screen used to stop and restart the browser's connection to the station at each step. It now stays on one connection from the sound check through the celebration screen, and only lets go when you actually leave First Listen — switching tabs, opening the full listener, or heading into music-source setup.
+- **First Listen keeps playing while you look around the finish screen.** Reviewing your choices or repairing the music source from the achievement screen cut the station off mid-song, even though you had not left First Listen. The station now plays on through both, and only stops when you genuinely leave: switching tabs, opening the full listener, or going into music source setup.
 - Operators now see **Mamma Mi Radio** in the First Listen recovery step when Home Assistant cannot find the Live source.
 - **You can now keep a moment before it disappears.** Everything the station recorded was on a timer. A shared clip was deleted after a day, and the written record of what was said after two weeks, so anything the hosts did that was worth hearing twice was gone before you could come back to it. The control room now has a **Keep this** button. Press it while the hosts are talking, or in the seconds after a break ends and the music comes back, and it is saved for good with a link you can share. A song cannot be kept, and neither can a break that opens over the end of one: those recordings belong to whoever made them. A kept link never expires, and Archivio lists everything you have kept so you can take one back off the shelf.
 
