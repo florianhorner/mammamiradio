@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import scenarios, { transcriptFor } from "../scenarios.mjs";
 
@@ -10,7 +10,11 @@ const siteLinks = runInNewContext(`(${configMatch[1]})`);
 const escapeHtml = (value) => String(value).replace(/[&<>\"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[character]));
 const renderedSiteLinks = Object.values(siteLinks)
   .filter((link) => link?.href && link?.label)
-  .map((link) => `<a href="${escapeHtml(link.href)}" target="_blank" rel="noreferrer noopener">${escapeHtml(link.label)}</a>`)
+  .map((link) => {
+    const external = /^https:\/\//.test(link.href);
+    const externalAttrs = external ? ' target="_blank" rel="noreferrer noopener"' : "";
+    return `<a href="${escapeHtml(link.href)}"${externalAttrs}>${escapeHtml(link.label)}</a>`;
+  })
   .join("");
 const renderedIndex = indexTemplate.replace(
   /<nav id="site-links" class="footer-links" aria-label="Project links"><\/nav>/,
@@ -88,6 +92,9 @@ for (const id of truthIds) {
 await mkdir("dist/public", { recursive: true });
 await mkdir("dist/public/fonts", { recursive: true });
 await mkdir("dist/public/audio", { recursive: true });
+// The shorts are a static sub-site. Clear only their prior build output so a
+// renamed episode cannot survive a later build as a ghost route.
+await rm("dist/shorts", { recursive: true, force: true });
 await Promise.all([
   ...audioIds.map((id) => copyFile(`public/audio/${id}.mp3`, `dist/public/audio/${id}.mp3`)),
   writeFile("dist/index.html", renderedIndex),
@@ -104,6 +111,7 @@ await Promise.all([
   copyFile("public/fonts/playfair-display-italic.woff2", "dist/public/fonts/playfair-display-italic.woff2"),
   copyFile("public/fonts/outfit.woff2", "dist/public/fonts/outfit.woff2"),
   copyFile("public/fonts/jetbrains-mono.woff2", "dist/public/fonts/jetbrains-mono.woff2"),
+  cp("shorts", "dist/shorts", { recursive: true }),
 ]);
 // The copy list above is hand-maintained, so the failure it just fixed —
 // app.js importing a module dist/ never received — can come back the next time

@@ -130,3 +130,80 @@ test("start over returns the page to an honest idle", async () => {
   const waiting = await page.textContent(".reveal-waiting p");
   assert.equal(waiting, "Tune in to hear what they notice.");
 });
+
+test("the local preview serves every Studio B trailing-slash route", async () => {
+  for (const route of ["shorts/", "shorts/archive-receipt/", "shorts/jealous-microphone/", "shorts/third-chair/"]) {
+    const response = await fetch(new URL(route, BASE));
+    assert.equal(response.status, 200, route);
+    assert.match(response.headers.get("content-type") || "", /^text\/html/);
+  }
+  const poster = await fetch(new URL("shorts/posters/archive-receipt.png", BASE));
+  assert.equal(poster.status, 200);
+  assert.equal(poster.headers.get("content-type"), "image/png");
+});
+
+test("runtime footer links keep internal navigation in the same tab", async () => {
+  const shorts = page.getByRole("link", { name: "Watch Studio B Transmissions" });
+  const source = page.getByRole("link", { name: "Browse the source on GitHub" });
+  assert.equal(await shorts.getAttribute("target"), null);
+  assert.equal(await shorts.getAttribute("rel"), null);
+  assert.equal(await source.getAttribute("target"), "_blank");
+  assert.equal(await source.getAttribute("rel"), "noreferrer noopener");
+});
+
+test("desktop Studio B cards keep their copy inside the clickable card", async () => {
+  const hubPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await hubPage.goto(new URL("shorts/", BASE).href);
+  const geometry = await hubPage.locator(".episode-card").evaluateAll((cards) => cards.map((card) => {
+    const cardBox = card.getBoundingClientRect();
+    const copyBox = card.querySelector(".card-copy").getBoundingClientRect();
+    return { cardBottom: cardBox.bottom, copyBottom: copyBox.bottom, copyHeight: copyBox.height };
+  }));
+  assert.equal(geometry.length, 3);
+  for (const item of geometry) {
+    assert.ok(item.copyHeight > 100, "title, premise, and action must occupy real layout space");
+    assert.ok(item.copyBottom <= item.cardBottom + 1, "card copy must not be clipped below its link");
+  }
+  await hubPage.close();
+});
+
+test("responsive Studio B layouts stay bounded and preserve their stack", async () => {
+  const viewports = [
+    { width: 700, height: 900, hubStacks: false },
+    { width: 375, height: 812, hubStacks: true },
+  ];
+  for (const viewport of viewports) {
+    const responsivePage = await browser.newPage({ viewport });
+    const routes = ["shorts/", "shorts/archive-receipt/", "shorts/jealous-microphone/", "shorts/third-chair/"];
+    for (const route of routes) {
+      await responsivePage.goto(new URL(route, BASE).href);
+      const isHub = route === "shorts/";
+      const selector = isHub ? ".episode-card" : ".player-frame, .watch-copy";
+      const layout = await responsivePage.locator(selector).evaluateAll((elements) => ({
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        boxes: elements.map((element) => {
+          const box = element.getBoundingClientRect();
+          return { left: box.left, right: box.right };
+        }),
+      }));
+      assert.ok(layout.documentWidth <= layout.viewportWidth + 1, `${viewport.width}px ${route} must not scroll horizontally`);
+      assert.ok(layout.boxes.length > 0, `${viewport.width}px ${route} must expose guarded content`);
+      for (const box of layout.boxes) {
+        assert.ok(box.left >= -1, `${viewport.width}px ${route} content must not escape the left edge`);
+        assert.ok(box.right <= layout.viewportWidth + 1, `${viewport.width}px ${route} content must not escape the right edge`);
+      }
+      const relation = await responsivePage.evaluate((hub) => {
+        const before = document.querySelector(hub ? ".poster-wrap" : ".player-frame").getBoundingClientRect();
+        const after = document.querySelector(hub ? ".card-copy" : ".watch-copy").getBoundingClientRect();
+        return { beforeRight: before.right, beforeBottom: before.bottom, afterLeft: after.left, afterTop: after.top };
+      }, isHub);
+      if (isHub && !viewport.hubStacks) {
+        assert.ok(relation.afterLeft >= relation.beforeRight - 1, `${viewport.width}px hub copy must sit beside its poster`);
+      } else {
+        assert.ok(relation.afterTop >= relation.beforeBottom - 1, `${viewport.width}px ${route} copy must stack below media`);
+      }
+    }
+    await responsivePage.close();
+  }
+});
