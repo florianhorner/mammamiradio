@@ -1407,6 +1407,36 @@ async (page) => {
     await page.locator('#firstListenRepairMusicBtn').click();
     await assertStationReleasedOnce(musicToolsExit, 'music-source tools exit');
 
+    // The exit above never starts a guide clip, so stationPausedForGuide stays
+    // false and exitFirstListenFlow's `resumeStation:false` is inert there. This
+    // is the case that arms it: the welcome preview lives in the persistent
+    // header, so it is on screen while step 1 offers "Open music source tools".
+    // Without the flag, stopFirstListenGuide() resumes the station one statement
+    // before stopFirstListenStationAudio() tears it down.
+    smokeStage = 'music-source-exit-during-guide';
+    const guideExit = await prepareOwnedStation({
+      sourceOptions: { primary: 'unavailable', recovery: 'unavailable' },
+    });
+    await page.locator('.guide-audio[data-guide="welcome"] .guide-audio-play').click();
+    await page.waitForFunction(() => (
+      document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'playing'
+        && _firstListenUi.stationPausedForGuide === true
+        && !window.__firstListenStationMedia.playing
+    ));
+    const guideParked = await stationMediaSnapshot();
+    assert(guideParked.src === guideExit.src, 'guide narration replaced the station source');
+    assert(guideParked.streamRequests.length === guideExit.requestCount, 'guide narration opened a second station stream');
+    // Re-baseline past the pause the guide itself took, so the assertions below
+    // see the exit teardown alone.
+    const guideExitCheckpoint = { ...guideExit, eventIndex: guideParked.events.length };
+    await page.locator('#firstListenRepairMusicBtn').click();
+    await assertStationReleasedOnce(guideExitCheckpoint, 'music-source exit during guide playback');
+    const guideExitEvents = (await stationMediaSnapshot()).events.slice(guideExitCheckpoint.eventIndex);
+    assert(
+      guideExitEvents.filter((event) => event.type === 'play').length === 0,
+      `music-source exit resumed the station before releasing it: ${JSON.stringify(guideExitEvents)}`,
+    );
+
     smokeStage = 'explicit-listener-exit';
     const listenerExit = await prepareOwnedStation({ showSuccess: true });
     const openedWindowBaseline = await page.evaluate(() => window.__firstListenOpenedWindows.length);
@@ -1823,6 +1853,7 @@ async (page) => {
         'continuous-enabled-achievement',
         'failed-privacy-keeps-stream',
         'explicit-exit-release',
+        'music-source-exit-during-guide',
         'privacy-receipt-repair',
         'ambient-only-preview',
         'resume-unreachable',
