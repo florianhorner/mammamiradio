@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
+import re
+import subprocess
+import threading
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from itertools import islice
 from pathlib import Path
 from typing import Any
 
+from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.core.config import StationConfig
-from mammamiradio.core.models import StationState, Track, normalized_track_key
+from mammamiradio.core.models import StationState, Track, normalized_track_key, song_identity_key
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 
 logger = logging.getLogger(__name__)
@@ -20,6 +26,31 @@ LOCAL_LIBRARY_SCAN_INTERVAL_SECONDS = 60.0
 MAX_LOCAL_LIBRARY_ENTRIES = 20_000
 MAX_LOCAL_LIBRARY_TRACKS = 5_000
 SUPPORTED_LOCAL_AUDIO_SUFFIXES = frozenset({".aac", ".flac", ".m4a", ".mp3", ".mp4", ".ogg", ".opus", ".wav"})
+LOCAL_METADATA_PROBE_TIMEOUT_SECONDS = 5
+# Headroom over MAX_LOCAL_LIBRARY_TRACKS on purpose. Sized equal to it, a
+# library one file over the track cap evicts its own first entry every pass and
+# never registers a single cache hit again (see the cap-before-probe guard in
+# scan_local_library, which stops the overflow probe in the first place).
+LOCAL_METADATA_CACHE_MAX_ENTRIES = 6_000
+# One untrusted file must not be able to hand us an unbounded string: ffprobe
+# emits whatever a tag contains, and the value is kept in memory, cached, put on
+# a Track, and serialized into every status payload downstream.
+LOCAL_METADATA_MAX_TAG_CHARS = 300
+LOCAL_METADATA_MAX_PROBE_BYTES = 64 * 1024
+# Whole-scan probe budget. asyncio.to_thread() cannot be cancelled, so a shutdown
+# or reload only stops awaiting this worker — it keeps running. Without a
+# deadline a large or damaged library can hold the shared background ffmpeg slot
+# long past the point anyone is listening for the answer.
+LOCAL_METADATA_SCAN_BUDGET_SECONDS = 90.0
+
+_LocalMetadata = tuple[str, str]
+_local_metadata_cache: dict[tuple[str, int, int], _LocalMetadata] = {}
+# The periodic scanner holds an asyncio lock, but empty-rotation recovery and
+# source loading call scan_local_library() from their own worker threads. Guard
+# the miss/probe/store sequence so two overlapping scans cannot each probe the
+# whole library, and so dict mutation stays single-threaded.
+_local_metadata_lock = threading.Lock()
+_local_metadata_inflight: dict[tuple[str, int, int], threading.Event] = {}
 
 
 @dataclass
@@ -54,11 +85,235 @@ def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibr
     return result
 
 
+def _clean_tag_value(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = " ".join(value.split()).strip()
+    # A tag longer than any real song credit is malformed input, not metadata.
+    # Drop it rather than truncate: half of a 2 MB string is not a better title
+    # than the filename we already have.
+    if len(cleaned) > LOCAL_METADATA_MAX_TAG_CHARS:
+        return ""
+    return cleaned
+
+
+def _tag_value(tags: object, wanted: str) -> str:
+    if not isinstance(tags, dict):
+        return ""
+    for key, value in tags.items():
+        normalized_key = str(key).strip().casefold().removeprefix("tag:")
+        if normalized_key == wanted:
+            cleaned = _clean_tag_value(value)
+            if cleaned:
+                return cleaned
+    return ""
+
+
+def _is_audio_stream(stream: object) -> bool:
+    """Only an audio stream may name the song.
+
+    An MP3 with embedded cover art carries an attached-picture stream whose
+    title tag is typically ``Cover (front)``; an MP4's video stream can carry
+    its own title. Without this check an untagged file with artwork airs as
+    "Cover (front)" — the exact wrong-title bug this metadata pass exists to fix.
+    """
+    return isinstance(stream, dict) and str(stream.get("codec_type") or "").strip().casefold() == "audio"
+
+
+def _probe_local_audio_metadata(path: Path) -> _LocalMetadata:
+    """Read embedded artist/title tags without making metadata a scan requirement."""
+    try:
+        with ffmpeg_slot(background=True):
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-print_format",
+                    "json",
+                    "-show_entries",
+                    "format_tags=title,artist:stream=codec_type:stream_tags=title,artist",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS,
+            )
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired, UnicodeError, ValueError):
+        return "", ""
+
+    if result.returncode != 0:
+        return "", ""
+    raw_stdout = result.stdout or ""
+    # Bound what we are willing to parse at all. Tag values are capped per field
+    # below, but a file with hundreds of oversized tags would still make us build
+    # a huge dict before any of those caps applied.
+    if len(raw_stdout) > LOCAL_METADATA_MAX_PROBE_BYTES:
+        logger.debug("Ignoring oversized metadata for %s (%d chars)", path.name, len(raw_stdout))
+        return "", ""
+    try:
+        payload = json.loads(raw_stdout)
+    except (TypeError, json.JSONDecodeError):
+        return "", ""
+    if not isinstance(payload, dict):
+        return "", ""
+
+    title = ""
+    artist = ""
+    format_section = payload.get("format")
+    format_tags = format_section.get("tags") if isinstance(format_section, dict) else None
+    for field_name in ("title", "artist"):
+        value = _tag_value(format_tags, field_name)
+        if field_name == "title":
+            title = value
+        else:
+            artist = value
+
+    streams = payload.get("streams")
+    if isinstance(streams, list):
+        for stream in streams:
+            if not _is_audio_stream(stream):
+                continue
+            tags = stream.get("tags") if isinstance(stream, dict) else None
+            if not title:
+                title = _tag_value(tags, "title")
+            if not artist:
+                artist = _tag_value(tags, "artist")
+            if title and artist:
+                break
+    return artist, title
+
+
+def _metadata_cache_key(path: Path, stat_result: object) -> tuple[str, int, int]:
+    return (
+        _path_key(path),
+        int(getattr(stat_result, "st_mtime_ns", 0)),
+        int(getattr(stat_result, "st_size", 0)),
+    )
+
+
+def _store_local_audio_metadata(key: tuple[str, int, int], metadata: _LocalMetadata) -> None:
+    path_key = key[0]
+    for stale_key in tuple(_local_metadata_cache):
+        if stale_key[0] == path_key and stale_key != key:
+            _local_metadata_cache.pop(stale_key, None)
+    _local_metadata_cache[key] = metadata
+    while len(_local_metadata_cache) > LOCAL_METADATA_CACHE_MAX_ENTRIES:
+        _local_metadata_cache.pop(next(iter(_local_metadata_cache)))
+
+
+def _cached_local_audio_metadata(path: Path, stat_result: object) -> _LocalMetadata:
+    """Probe this file at most once across every concurrent scan.
+
+    Overlapping scans (the periodic scanner, empty-rotation recovery, and source
+    loading each run in their own worker thread) would otherwise all miss the
+    same key and each spawn ffprobe for it, multiplying the cost of the one
+    shared background ffmpeg slot by the number of scanners.
+    """
+    key = _metadata_cache_key(path, stat_result)
+    while True:
+        with _local_metadata_lock:
+            cached = _local_metadata_cache.get(key)
+            if cached is not None:
+                return cached
+            inflight = _local_metadata_inflight.get(key)
+            if inflight is None:
+                done = threading.Event()
+                _local_metadata_inflight[key] = done
+                break
+        # Another scan owns this probe. Wait for its result instead of running a
+        # duplicate; a bounded wait keeps a wedged worker from stalling us too.
+        if not inflight.wait(timeout=LOCAL_METADATA_PROBE_TIMEOUT_SECONDS + 1):
+            return "", ""
+
+    try:
+        metadata = _probe_local_audio_metadata(path)
+    except BaseException:
+        with _local_metadata_lock:
+            _local_metadata_inflight.pop(key, None)
+        done.set()
+        raise
+    with _local_metadata_lock:
+        _store_local_audio_metadata(key, metadata)
+        _local_metadata_inflight.pop(key, None)
+    done.set()
+    return metadata
+
+
+def _strip_track_number(stem: str) -> str:
+    return re.sub(r"^\s*\d{1,3}\s*[-_.]\s*", "", stem).strip()
+
+
+def _humanize_filename(stem: str) -> str:
+    cleaned = _strip_track_number(stem)
+    cleaned = re.sub(r"[-_]+", " ", cleaned)
+    cleaned = " ".join(cleaned.split()).strip()
+    if cleaned.islower():
+        cleaned = cleaned.title()
+    return cleaned
+
+
+def _filename_metadata(path: Path) -> _LocalMetadata:
+    stem = path.stem.strip()
+    parsed_stem = _strip_track_number(stem)
+    if " - " in parsed_stem:
+        artist, title = parsed_stem.split(" - ", 1)
+        artist = _clean_tag_value(artist)
+        title = _clean_tag_value(title)
+        if artist and title:
+            return artist, title
+    return "", _humanize_filename(stem) or path.name
+
+
+def _peek_local_audio_metadata(path: Path, stat_result: object) -> _LocalMetadata:
+    """Read an already-probed result without spawning ffprobe."""
+    with _local_metadata_lock:
+        return _local_metadata_cache.get(_metadata_cache_key(path, stat_result), ("", ""))
+
+
+def _local_track_metadata(path: Path, stat_result: object, *, probe: bool = True) -> _LocalMetadata:
+    # Past the scan budget we stop spawning ffprobe, but a value already in the
+    # cache is free — using it keeps a warm library's labels stable instead of
+    # churning every track back to its filename for one slow pass.
+    if probe:
+        tagged_artist, tagged_title = _cached_local_audio_metadata(path, stat_result)
+    else:
+        tagged_artist, tagged_title = _peek_local_audio_metadata(path, stat_result)
+    filename_artist, filename_title = _filename_metadata(path)
+    return tagged_artist or filename_artist, tagged_title or filename_title
+
+
+def legacy_local_identity_key(path: Path) -> tuple[str, str]:
+    """The identity this file had before embedded tags were read.
+
+    Reading tags (and humanizing a slug filename) changes a local file's
+    ``(artist, title)``, and that pair is the key durable operator bans and song
+    preferences are stored under. Nothing on disk records the old key, but it is
+    fully derivable from the path — this reproduces the previous rule verbatim,
+    so a ban placed before the upgrade still matches the same file after it.
+    """
+    stem = path.stem.strip()
+    artist, title = stem.split(" - ", 1) if " - " in stem else ("Unknown", stem)
+    return song_identity_key(artist.strip() or "Unknown", title.strip() or path.name)
+
+
+def local_track_is_blocklisted(track: Track, blocklist: object) -> bool:
+    """Ban check for a local file, honouring its pre-upgrade identity too."""
+    if song_identity_key_is_blocklisted(normalized_track_key(track), blocklist):  # type: ignore[arg-type]
+        return True
+    if track.local_path is None:
+        return False
+    return song_identity_key_is_blocklisted(legacy_local_identity_key(track.local_path), blocklist)  # type: ignore[arg-type]
+
+
 def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
     roots = (source,) if isinstance(source, Path) else (Path(source.music_dir),)
     result = LocalLibraryScanResult(roots=roots)
     seen_identities: set[tuple[str, str]] = set()
     scan_roots: dict[str, tuple[Path, Path]] = {}
+    probe_deadline = time.monotonic() + LOCAL_METADATA_SCAN_BUDGET_SECONDS
+    probe_metadata = True
     for root in roots:
         try:
             if root.is_symlink():
@@ -115,7 +370,8 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                     result.ignored["unsupported_format"] += 1
                     continue
                 try:
-                    if entry.stat(follow_symlinks=False).st_size <= 0:
+                    stat_result = entry.stat(follow_symlinks=False)
+                    if stat_result.st_size <= 0:
                         result.ignored["empty_file"] += 1
                         continue
                 except OSError:
@@ -124,12 +380,23 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                     continue
 
                 result.supported_files += 1
-                stem = path.stem.strip()
-                artist, title = stem.split(" - ", 1) if " - " in stem else ("Unknown", stem)
+                # Cap BEFORE probing. Probing the file that pushes us over the
+                # track limit spends an ffprobe on audio that is then thrown
+                # away, and its cache entry evicts a track we do keep.
+                if len(result.tracks) >= MAX_LOCAL_LIBRARY_TRACKS:
+                    return _finish_scan(result, f"More than {MAX_LOCAL_LIBRARY_TRACKS} songs found; scan stopped.")
+                if probe_metadata and time.monotonic() >= probe_deadline:
+                    probe_metadata = False
+                    result.complete = False
+                    logger.warning(
+                        "Local music metadata scan exceeded %.0fs; labelling the rest from filenames this pass.",
+                        LOCAL_METADATA_SCAN_BUDGET_SECONDS,
+                    )
+                artist, title = _local_track_metadata(path, stat_result, probe=probe_metadata)
                 digest = hashlib.sha256(str(path).encode("utf-8", errors="surrogatepass")).hexdigest()[:20]
                 track = Track(
                     title=title.strip() or path.name,
-                    artist=artist.strip() or "Unknown",
+                    artist=artist.strip(),
                     duration_ms=210_000,
                     spotify_id=f"local_{digest}",
                     local_path=path,
@@ -140,8 +407,6 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                     result.ignored["duplicate"] += 1
                     continue
                 seen_identities.add(identity)
-                if len(result.tracks) >= MAX_LOCAL_LIBRARY_TRACKS:
-                    return _finish_scan(result, f"More than {MAX_LOCAL_LIBRARY_TRACKS} songs found; scan stopped.")
                 result.tracks.append(track)
             if entry_limit_reached:
                 return _finish_scan(result, f"More than {MAX_LOCAL_LIBRARY_ENTRIES} entries found; scan stopped.")
@@ -156,14 +421,42 @@ def _path_is_in_root_keys(path: Path | None, root_keys: tuple[str, ...]) -> bool
     return any(candidate.is_relative_to(Path(root_key)) for root_key in root_keys)
 
 
+def _migrate_local_preferences(state: StationState, tracks: list[Track]) -> None:
+    """Carry a like/dislike across the identity change reading tags caused.
+
+    Bans are checked against both identities (``local_track_is_blocklisted``)
+    because a ban must hold even for a file that is not in rotation. A
+    preference only matters for a track that IS in rotation, so it is cheaper to
+    move it onto the new key once, here, than to alias it on every read.
+    """
+    preferences = getattr(state, "song_preferences", None)
+    if not preferences:
+        return
+    migrated = 0
+    for track in tracks:
+        if track.local_path is None:
+            continue
+        key = normalized_track_key(track)
+        if key in preferences:
+            continue
+        legacy = legacy_local_identity_key(track.local_path)
+        if legacy == key:
+            continue
+        existing = preferences.get(legacy)
+        if existing is None:
+            continue
+        preferences[key] = existing
+        migrated += 1
+    if migrated:
+        state.song_preferences_revision += 1
+        logger.info("Carried %d local song preference(s) onto their new metadata identity", migrated)
+
+
 def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -> dict[str, int]:
     root_keys = scan.root_keys or tuple(_path_key(root) for root in scan.roots)
-    candidates = [
-        track
-        for track in scan.tracks
-        if not song_identity_key_is_blocklisted(normalized_track_key(track), state.blocklist)
-    ]
+    candidates = [track for track in scan.tracks if not local_track_is_blocklisted(track, state.blocklist)]
     banned = len(scan.tracks) - len(candidates)
+    _migrate_local_preferences(state, candidates)
     scanned_by_path = {_path_key(track.local_path): track for track in candidates if track.local_path is not None}
     removed_tracks: list[Track] = []
     reconciled: list[Track] = []

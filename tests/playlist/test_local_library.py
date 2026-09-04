@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -10,7 +11,11 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.core.models import PlaylistSource, StationState, Track
+from mammamiradio.playlist import local_library as local_library_module
 from mammamiradio.playlist.local_library import (
+    _probe_local_audio_metadata,
+    legacy_local_identity_key,
+    local_track_is_blocklisted,
     reconcile_local_library,
     scan_and_reconcile_local_library,
     scan_local_library,
@@ -44,9 +49,134 @@ def test_scan_is_recursive_case_insensitive_and_supports_common_audio(tmp_path):
 
     assert result.complete is True
     assert {track.title for track in result.tracks} == set(titles)
-    assert next(track.local_path for track in result.tracks if track.title == "One") == album / "Artist - One.MP3"
+    one = next(track for track in result.tracks if track.title == "One")
+    assert one.artist == "Artist"
+    assert one.local_path == album / "Artist - One.MP3"
     assert result.ignored == {"duplicate": 1, "empty_file": 1, "symlink": 1, "unsupported_format": 1}
     assert result.warnings == []
+
+
+def test_scan_prefers_embedded_metadata_over_filename(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Filename Artist - Filename Title.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library._probe_local_audio_metadata",
+        return_value=("Tagged Artist", "Tagged Title"),
+    ):
+        track = scan_local_library(_config(root)).tracks[0]
+
+    assert track.artist == "Tagged Artist"
+    assert track.title == "Tagged Title"
+
+
+def test_scan_fills_missing_embedded_field_from_exact_filename(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Filename Artist - Filename Title.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library._probe_local_audio_metadata",
+        return_value=("", "Tagged Title"),
+    ):
+        track = scan_local_library(_config(root)).tracks[0]
+
+    assert track.artist == "Filename Artist"
+    assert track.title == "Tagged Title"
+
+
+def test_scan_humanizes_untagged_slug_without_inventing_artist(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "29-salvatore-on-everything.mp3"
+    path.write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library._probe_local_audio_metadata", return_value=("", "")):
+        track = scan_local_library(_config(root)).tracks[0]
+
+    assert track.artist == ""
+    assert track.title == "Salvatore On Everything"
+
+
+def test_probe_reads_format_tags_before_stream_tags(tmp_path):
+    path = tmp_path / "tagged.mp3"
+    response = type(
+        "ProbeResponse",
+        (),
+        {
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "format": {"tags": {"TITLE": "Format Title"}},
+                    "streams": [{"codec_type": "audio", "tags": {"artist": "Stream Artist", "title": "Stream Title"}}],
+                }
+            ),
+        },
+    )()
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+        metadata = _probe_local_audio_metadata(path)
+
+    assert metadata == ("Stream Artist", "Format Title")
+
+
+def test_scan_keeps_file_when_ffprobe_is_unavailable(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "No Tags Here.mp3"
+    path.write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", side_effect=FileNotFoundError):
+        result = scan_local_library(_config(root))
+
+    assert result.complete is True
+    assert result.tracks[0].artist == ""
+    assert result.tracks[0].title == "No Tags Here"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        type("ProbeResponse", (), {"returncode": 1, "stdout": ""})(),
+        type("ProbeResponse", (), {"returncode": 0, "stdout": "not json"})(),
+    ],
+)
+def test_scan_keeps_file_when_metadata_probe_fails(tmp_path, response):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Probe Failure.mp3"
+    path.write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+        result = scan_local_library(_config(root))
+
+    assert result.complete is True
+    assert len(result.tracks) == 1
+    assert result.tracks[0].title == "Probe Failure"
+
+
+def test_metadata_cache_reprobes_when_file_signature_changes(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "cached.mp3"
+    path.write_bytes(b"audio")
+
+    with patch(
+        "mammamiradio.playlist.local_library._probe_local_audio_metadata",
+        side_effect=[("Artist One", "Title One"), ("Artist Two", "Title Two")],
+    ) as probe:
+        first = scan_local_library(_config(root)).tracks[0]
+        second = scan_local_library(_config(root)).tracks[0]
+        path.write_bytes(b"new audio")
+        third = scan_local_library(_config(root)).tracks[0]
+
+    assert (first.artist, first.title) == ("Artist One", "Title One")
+    assert (second.artist, second.title) == ("Artist One", "Title One")
+    assert (third.artist, third.title) == ("Artist Two", "Title Two")
+    assert probe.call_count == 2
 
 
 def test_scan_rejects_a_symlinked_configured_root(tmp_path):
@@ -175,3 +305,213 @@ async def test_scan_wrapper_coalesces_and_hides_failures(tmp_path):
         failed = await scan_and_reconcile_local_library(app_state)
     assert failed["in_progress"] is False
     assert failed["error"] == "Check the local music folders, then select Scan now."
+
+
+def _probe_response(payload: dict, *, returncode: int = 0):
+    return type("ProbeResponse", (), {"returncode": returncode, "stdout": json.dumps(payload)})()
+
+
+def test_probe_ignores_tags_on_non_audio_streams():
+    """Cover art must never name the song.
+
+    An untagged MP3 with embedded artwork carries an attached-picture stream
+    whose title is typically "Cover (front)". Accepting it reintroduces exactly
+    the wrong-title bug this metadata pass exists to fix.
+    """
+    response = _probe_response(
+        {
+            "format": {"tags": {}},
+            "streams": [
+                {"codec_type": "video", "tags": {"title": "Cover (front)"}},
+                {"codec_type": "audio", "tags": {}},
+            ],
+        }
+    )
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+        assert _probe_local_audio_metadata(Path("song.mp3")) == ("", "")
+
+
+def test_probe_rejects_oversized_tag_values():
+    """One local file must not be able to hand us an unbounded string."""
+    huge = "A" * (local_library_module.LOCAL_METADATA_MAX_TAG_CHARS + 1)
+    response = _probe_response({"format": {"tags": {"title": huge, "artist": "Real Artist"}}, "streams": []})
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+        artist, title = _probe_local_audio_metadata(Path("song.mp3"))
+
+    assert title == ""
+    assert artist == "Real Artist"
+
+
+def test_probe_refuses_to_parse_oversized_output():
+    padding = "B" * local_library_module.LOCAL_METADATA_MAX_PROBE_BYTES
+    response = _probe_response({"format": {"tags": {"title": "Real", "comment": padding}}, "streams": []})
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", return_value=response):
+        assert _probe_local_audio_metadata(Path("song.mp3")) == ("", "")
+
+
+def test_scan_does_not_probe_files_past_the_track_cap(tmp_path, monkeypatch):
+    """A library one file over the cap must not re-probe itself forever.
+
+    Probing the overflow file spends ffprobe on audio that is then discarded,
+    and its cache entry used to evict a track we keep — so every 60-second scan
+    missed on the whole library and probed all of it again.
+    """
+    monkeypatch.setattr(local_library_module, "MAX_LOCAL_LIBRARY_TRACKS", 3)
+    monkeypatch.setattr(local_library_module, "LOCAL_METADATA_CACHE_MAX_ENTRIES", 8)
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    root = tmp_path / "music"
+    root.mkdir()
+    for index in range(4):
+        (root / f"{index} song.mp3").write_bytes(b"audio")
+
+    probed: list[str] = []
+
+    def _record(path: Path):
+        probed.append(path.name)
+        return "", ""
+
+    with patch.object(local_library_module, "_probe_local_audio_metadata", side_effect=_record):
+        first = scan_local_library(_config(root))
+        first_probes = list(probed)
+        probed.clear()
+        scan_local_library(_config(root))
+
+    assert len(first.tracks) == 3
+    assert len(first_probes) == 3, "the file past the cap must never be probed"
+    assert probed == [], "a warm library must not be re-probed on the next scan"
+
+
+def test_scan_stops_probing_once_the_time_budget_is_spent(tmp_path, monkeypatch):
+    """asyncio.to_thread() cannot be cancelled, so the scan needs its own deadline."""
+    monkeypatch.setattr(local_library_module, "LOCAL_METADATA_SCAN_BUDGET_SECONDS", 0.0)
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    root = tmp_path / "music"
+    root.mkdir()
+    (root / "Artista - Canzone.mp3").write_bytes(b"audio")
+
+    with patch.object(local_library_module, "_probe_local_audio_metadata", side_effect=AssertionError("probed")):
+        result = scan_local_library(_config(root))
+
+    assert result.complete is False
+    assert result.tracks[0].artist == "Artista"
+    assert result.tracks[0].title == "Canzone"
+
+
+def test_scan_past_its_budget_still_reuses_already_probed_metadata(tmp_path, monkeypatch):
+    """Stopping new probes must not churn a warm library back to filenames."""
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Filename Artist - Filename Title.mp3"
+    path.write_bytes(b"audio")
+
+    with patch.object(
+        local_library_module, "_probe_local_audio_metadata", return_value=("Tagged Artist", "Tagged Title")
+    ):
+        scan_local_library(_config(root))
+
+    monkeypatch.setattr(local_library_module, "LOCAL_METADATA_SCAN_BUDGET_SECONDS", 0.0)
+    with patch.object(local_library_module, "_probe_local_audio_metadata", side_effect=AssertionError("probed")):
+        result = scan_local_library(_config(root))
+
+    assert result.tracks[0].artist == "Tagged Artist"
+    assert result.tracks[0].title == "Tagged Title"
+
+
+def test_metadata_probe_is_single_flight_across_concurrent_scans(tmp_path, monkeypatch):
+    """Overlapping scans must not each spawn ffprobe for the same file."""
+    import threading
+
+    monkeypatch.setattr(local_library_module, "_local_metadata_cache", {})
+    monkeypatch.setattr(local_library_module, "_local_metadata_inflight", {})
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "shared.mp3"
+    path.write_bytes(b"audio")
+
+    started = threading.Event()
+    release = threading.Event()
+    probes = []
+
+    def _slow_probe(_path: Path):
+        probes.append(_path.name)
+        started.set()
+        release.wait(timeout=5)
+        return "Tagged Artist", "Tagged Title"
+
+    results: list[tuple[str, str]] = []
+
+    def _worker():
+        results.append(local_library_module._cached_local_audio_metadata(path, path.stat()))
+
+    with patch.object(local_library_module, "_probe_local_audio_metadata", side_effect=_slow_probe):
+        first = threading.Thread(target=_worker)
+        first.start()
+        assert started.wait(timeout=5)
+        second = threading.Thread(target=_worker)
+        second.start()
+        release.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+    assert probes == ["shared.mp3"], "the second scan must reuse the in-flight probe"
+    assert results == [("Tagged Artist", "Tagged Title")] * 2
+
+
+def test_legacy_local_identity_key_reproduces_the_pre_upgrade_pair():
+    assert legacy_local_identity_key(Path("/music/29-salvatore-on-everything.mp3")) == (
+        "unknown",
+        "29-salvatore-on-everything",
+    )
+    assert legacy_local_identity_key(Path("/music/Artista - Canzone.mp3")) == ("artista", "canzone")
+
+
+def test_ban_placed_before_the_metadata_upgrade_still_holds():
+    """Reading tags changes the key a durable ban was stored under.
+
+    Without the legacy alias the operator's permanent ban silently stops
+    matching on the first rescan after the upgrade and the song returns.
+    """
+    path = Path("/music/29-salvatore-on-everything.mp3")
+    track = Track(title="Salvatore On Everything", artist="", duration_ms=0, local_path=path, source="local")
+    legacy_ban = {("unknown", "29-salvatore-on-everything"): {"display": "banned"}}
+
+    assert track.normalized_key != legacy_local_identity_key(path)
+    assert local_track_is_blocklisted(track, legacy_ban) is True
+    assert local_track_is_blocklisted(track, {("unknown", "something-else"): {}}) is False
+
+
+def test_reconcile_drops_a_track_banned_under_its_legacy_identity(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "29-salvatore-on-everything.mp3"
+    path.write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library._probe_local_audio_metadata", return_value=("", "")):
+        scan = scan_local_library(_config(root))
+
+    state = StationState(playlist=[])
+    state.blocklist = {("unknown", "29-salvatore-on-everything"): {"display": "banned"}}
+    outcome = reconcile_local_library(state, scan)
+
+    assert outcome["banned"] == 1
+    assert state.playlist == []
+
+
+def test_reconcile_carries_a_preference_onto_the_new_identity(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "29-salvatore-on-everything.mp3"
+    path.write_bytes(b"audio")
+
+    with patch("mammamiradio.playlist.local_library._probe_local_audio_metadata", return_value=("", "")):
+        scan = scan_local_library(_config(root))
+
+    state = StationState(playlist=[])
+    state.song_preferences = {("unknown", "29-salvatore-on-everything"): {"score": 1}}
+    reconcile_local_library(state, scan)
+
+    assert state.song_preferences[("", "salvatore on everything")] == {"score": 1}
