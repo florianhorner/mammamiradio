@@ -2442,11 +2442,18 @@ def _blocklist_safe_last_music(
 
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
-    # load_track_metadata only returns a dict when BOTH title and artist are
-    # present, so an incomplete sidecar arrives here as empty metadata. Fail
-    # closed: without a full durable identity we cannot prove the song is not
-    # banned. (Degrades a metadata-poor bed to dry voice while any ban is active
-    # — safe and rare; loosening it would mean bypassing that identity contract.)
+    # Fail closed: without a full durable identity we cannot prove the song is
+    # not banned. (Degrades a metadata-poor bed to dry voice while any ban is
+    # active — safe and rare; loosening it would mean bypassing that identity
+    # contract.)
+    #
+    # DELIBERATELY stricter than the rescue-selection gate in
+    # `norm_cache._is_blocklisted`, which now does accept ("", title) as a real
+    # identity. The two ask different questions: that gate asks "may this air",
+    # this one asks "may this be reused as a bed UNDER speech", where a sidecar
+    # whose title collides with a ban but has lost its artist is plausibly the
+    # banned recording. Dry voice is the safe answer; dead air is never a risk
+    # here either way.
     if not title or not artist:
         logger.warning(
             "%s: skipping unidentified last-known-good music while an identity gate is active: %s",

@@ -945,6 +945,16 @@ def test_track_display():
     assert t.display == "Artist 1 – Song 1"
 
 
+def test_track_display_is_title_only_without_an_artist():
+    """An untagged local file has no artist, and must not air with a dangling dash.
+
+    local_library deliberately refuses to invent an artist from a filename slug,
+    so `artist == ""` is a valid state. This label travels to the queue, the
+    stream log, the scriptwriter prompt, and up_next on the v1 integration wire.
+    """
+    assert Track(title="Salvatore On Everything", artist="", duration_ms=0).display == "Salvatore On Everything"
+
+
 def test_pre_byte_failure_backlogs_retry_behind_existing_handoff():
     state = StationState()
     failed_track = _track(1)

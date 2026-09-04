@@ -655,3 +655,31 @@ def test_operations_doc_repeat_policy_table_matches_the_code():
         f"docs/operations.md documents buckets {sorted(set(documented.values()))} but the code "
         f"has call sites for {sorted(found)}; a rung was added or removed without updating the table"
     )
+
+
+def test_select_norm_cache_rescue_skips_a_banned_title_only_cache_file(tmp_path):
+    """An untagged local song is identified by ("", title), not unidentified.
+
+    Its sidecar carries an empty artist. Treating that as "no usable metadata"
+    made the rescue ban gate fail open, so a song the operator had permanently
+    banned could still come back through the dead-air rescue path.
+    """
+    state = StationState(blocklist={("", "salvatore on everything"): {"display": "Salvatore On Everything"}})
+
+    _write_norm(tmp_path, "norm_aaa_salvatore.mp3", title="Salvatore On Everything", artist="")
+    allowed = _write_norm(tmp_path, "norm_zzz_alternative.mp3", title="Musica Leggera", artist="Colapesce")
+
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=_choose_first) as choice:
+        rescue = select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True)
+
+    assert rescue == allowed
+    choice.assert_called_once_with([allowed])
+
+
+def test_title_only_cache_file_stays_selectable_when_it_is_not_banned(tmp_path):
+    """The fix must close the fail-open hole without banning every untagged file."""
+    state = StationState(blocklist={("someone else", "another song"): {"display": "Someone Else - Another Song"}})
+    only = _write_norm(tmp_path, "norm_aaa_salvatore.mp3", title="Salvatore On Everything", artist="")
+
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=_choose_first):
+        assert select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True) == only

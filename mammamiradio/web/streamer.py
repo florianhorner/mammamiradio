@@ -2516,11 +2516,20 @@ def _now_playing_music_track(now_seg: object) -> Track | None:
                 title = left
             else:
                 title = raw_title
-    if not (artist and title):
+    if not title:
+        # Only reach for the label when the metadata gave us no title at all.
+        # A title-only song legitimately has artist == "" (an untagged local
+        # file), and splitting its label here would invent an artist out of a
+        # song title that merely contains a dash.
+        #
+        # Deliberately NOT falling back to a bare unsplittable label: the norm-
+        # cache rescue path leaves `title_only` unset precisely because a
+        # humanized filename is not a trustworthy bare title, and a ban is
+        # durable — persisting a junk key is worse than refusing the action.
         parsed_label = _split_artist_title_label(now_seg.get("label"))
         if parsed_label is not None:
             artist, title = parsed_label
-    if not (artist and title):
+    if not title:
         return None
     return Track(title=title, artist=artist, duration_ms=0)
 
@@ -2547,6 +2556,17 @@ def _resolve_preference_target(state: StationState, body: dict) -> tuple[tuple[s
     if body.get("now_playing") is True or legacy_now_playing:
         target = _now_playing_preference_target(state)
         if target is None:
+            # Two different situations, two different ways out. Saying "nothing
+            # musical is on air" while a song is audibly playing is a message
+            # that lies to the operator (leadership #5).
+            now_seg = state.now_streaming or {}
+            if isinstance(now_seg, dict) and now_seg.get("type") == "music":
+                return JSONResponse(
+                    content={
+                        "ok": False,
+                        "error": "I can’t tell which song this is to mark it. Mark it from the rotation list instead.",
+                    }
+                )
             return JSONResponse(
                 content={"ok": False, "error": "Only a song can be marked — nothing musical is on air right now."}
             )

@@ -8220,10 +8220,17 @@ def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
         (("Ordinary", "Alex Warren"), None),
         (None, None),
         (("Safe Song", "Safe Artist"), "song"),
-        # A sidecar missing the artist yields no durable identity (load_track_metadata
-        # requires both fields), so the bed fails closed while a ban is active —
-        # whether or not the title collides with a ban. This is a deliberate, safe
-        # conservatism; loosening it would mean bypassing the identity contract.
+        # A sidecar missing the artist does not give THIS path a durable enough
+        # identity, so the bed fails closed while a ban is active — whether or not
+        # the title collides with a ban. This is a deliberate, safe conservatism;
+        # loosening it would mean bypassing the identity contract.
+        #
+        # `norm_cache._is_blocklisted` deliberately does NOT share this rule: it
+        # accepts ("", title) as a real identity so a banned untagged local song
+        # cannot slip through rescue selection by looking unidentifiable. The two
+        # gates ask different questions — that one is "may this air", this one is
+        # "may this be reused as a bed under speech", where a lost artist next to
+        # a banned title is worth refusing. Keep them different on purpose.
         (("Ordinary", ""), None),
         (("Safe Song", ""), None),
     ],

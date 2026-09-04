@@ -352,7 +352,16 @@ class Track:
 
     @property
     def display(self) -> str:
-        """Human-readable label used in logs and APIs."""
+        """Human-readable label used in logs and APIs.
+
+        An untagged local file has no artist to show (``local_library`` refuses
+        to invent one from a filename slug), so the label is the bare title.
+        Without this an operator's own MP3 airs with a dangling leading dash
+        everywhere the label travels: the queue, the stream log, the
+        scriptwriter prompt, and ``up_next`` on the v1 integration wire.
+        """
+        if not self.artist:
+            return self.title
         return f"{self.artist} – {self.title}"
 
     @cached_property

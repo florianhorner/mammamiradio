@@ -789,3 +789,59 @@ async def test_ban_now_playing_honest_when_disk_write_fails(tmp_path):
     assert body["ok"] is True and body["persisted"] is False
     assert ("modugno", "volare") in state.blocklist
     assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_works_for_a_title_only_local_song(tmp_path):
+    """An untagged operator MP3 has no artist, and the Ban button must still work.
+
+    The on-air identity resolver used to require BOTH artist and title, so the
+    exact songs the local-metadata pass exists to label correctly were the ones
+    the console refused to ban.
+    """
+    app = _make_app(tmp_path, [_track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    _airing_music(state, artist="", title_only="Salvatore On Everything", label="Salvatore On Everything")
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") in state.blocklist
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_title_only_song_title_containing_a_dash_is_not_split_into_an_artist(tmp_path):
+    """The label fallback must not invent an artist out of a dash inside a title."""
+    app = _make_app(tmp_path, [_track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    _airing_music(state, artist="", title_only="Stop - Start", label="Stop - Start")
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True
+    assert ("", "stop - start") in state.blocklist
+    assert ("stop", "start") not in state.blocklist
+
+
+@pytest.mark.asyncio
+async def test_preference_on_an_unidentifiable_song_does_not_claim_nothing_is_playing(tmp_path):
+    """A message that denies the song on air is a lie, not an error (leadership #5)."""
+    app = _make_app(tmp_path, [_track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    state.current_stream_audible = True
+    state.now_streaming = {
+        "type": "music",
+        "label": "Some Unsplittable Rescue Label",
+        "started": time.time(),
+        "metadata": {},
+    }
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/preference", json={"now_playing": True, "score": 1})).json()
+
+    assert body["ok"] is False
+    assert "nothing musical is on air" not in body["error"]
+    assert "rotation list" in body["error"]

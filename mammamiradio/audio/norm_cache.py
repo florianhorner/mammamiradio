@@ -188,6 +188,11 @@ def _is_blocklisted(path: Path, blocklist: object, *, sidecar: dict | None = Non
     A file with no sidecar cannot be identified and remains selectable (best-effort —
     banned songs almost always carry one).
 
+    An untagged local file carries a sidecar with an EMPTY artist. That is a
+    real identity (``("", title)``), not a missing one, and is checked here like
+    any other — ``load_track_metadata`` returns it rather than ``None`` so this
+    gate cannot mistake it for the unidentifiable case above and fail open.
+
     Pass ``sidecar`` when the caller already read it, like the other cache-file
     predicates here, so one selection sweep reads each sidecar once.
     """
