@@ -43,57 +43,45 @@ jobs:
   plan:
     name: land queue decision (shadow)
     runs-on: ubuntu-latest
+    # Cheap half of the kill switch: no checkout, no runner time. The other half
+    # (.github/land-queue.enabled) is enforced inside land-queue-plan.sh, so
+    # "off" means off from every invocation path, not just this workflow.
     if: vars.LAND_QUEUE != '0'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # The evidence gate hashes the recursive git tree of the PR head and
           # compares it against receipts pinned to older commits; a shallow
-          # clone cannot resolve those objects.
+          # clone cannot resolve those objects. This also fetches origin/main,
+          # so the edge lane needs no separate fetch.
           fetch-depth: 0
 
-      - name: Check the kill switch
-        id: switch
-        run: |
-          if [ ! -f .github/land-queue.enabled ]; then
-            echo "land-queue: .github/land-queue.enabled is absent — the shadow queue is off." >> "$GITHUB_STEP_SUMMARY"
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        if: steps.switch.outputs.enabled == 'true'
         with:
           python-version: "3.11"
 
+      # ONE pass. The planner queries GitHub once and emits both renderings:
+      # the human summary on stdout and the machine-readable decision to the
+      # file. Running it twice doubled every round trip and let the two outputs
+      # disagree, since they sampled GitHub seconds apart.
       - name: Plan the queue
-        if: steps.switch.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          git fetch --quiet origin main
           {
             echo '## Land queue — shadow decision'
             echo
             echo 'Report-only. This run changed nothing.'
             echo
             echo '```'
-            bash scripts/land-queue-plan.sh
+            bash scripts/land-queue-plan.sh --json-out land-queue-decision.json
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Machine-readable decision
-        if: steps.switch.outputs.enabled == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: bash scripts/land-queue-plan.sh --json > land-queue-decision.json
-
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
-        if: steps.switch.outputs.enabled == 'true'
+        if: hashFiles('land-queue-decision.json') != ''
         with:
           name: land-queue-decision
           path: land-queue-decision.json

@@ -108,13 +108,16 @@ exit 1
 EOF
 chmod +x "$TMPDIR_T/evidence-ok.sh" "$TMPDIR_T/evidence-missing.sh"
 
-pr_row() { # number state-json-fragments...
+pr_row() { # number title head merge draft labels created author is_bot [branch]
   local number="$1" title="$2" head="$3" merge="$4" draft="$5" labels="$6" created="$7" author="$8" is_bot="$9"
+  local branch="${10:-feature/pr-$1}"
   jq -cn --argjson number "$number" --arg title "$title" --arg head "$head" \
     --arg merge "$merge" --argjson draft "$draft" --argjson labels "$labels" \
     --arg created "$created" --arg author "$author" --argjson is_bot "$is_bot" \
+    --arg branch "$branch" \
     '{number:$number,title:$title,headRefOid:$head,baseRefOid:"'"$ANC_FULL"'",
       mergeStateStatus:$merge,isDraft:$draft,labels:$labels,createdAt:$created,
+      headRefName:$branch,
       url:("https://example.test/pull/" + ($number|tostring)),
       author:{login:$author,is_bot:$is_bot}}'
 }
@@ -130,6 +133,7 @@ run_plan() { # prs-json [extra env assignments handled by caller]
   GH_MOCK_PR_LIST_FAIL="${PR_LIST_FAIL:-0}" \
   MMR_LAND_EVIDENCE_CHECKER="${EVIDENCE:-$TMPDIR_T/evidence-ok.sh}" \
   MMR_LAND_REVIEW_READER="/nonexistent" \
+  GH_REPO="florianhorner/mammamiradio" \
   PATH="$BIN:$PATH" \
     bash "$PLAN" --json
 }
@@ -238,12 +242,19 @@ pass "dependabot lane is exempt and cannot stall the feature queue"
 # =============================================================================
 # Case 11: edge PRs never enter the feature FIFO (plan Q4/C).
 # =============================================================================
-PRS="[$(pr_row 90 "chore(edge): cut edge release abc1234" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false),
+PRS="[$(pr_row 90 "chore(edge): cut edge release abc1234" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false "edge-release/abc1234"),
       $(pr_row 91 "fix: real work" "$HEAD_FULL" CLEAN false '[]' "2026-02-01T00:00:00Z" florianhorner false)]"
 OUT="$(run_plan "$PRS")"
-[ "$(jq -r '.prs[0].lane' <<<"$OUT")" = "edge" ] || fail "chore(edge) PRs belong to the edge lane"
+[ "$(jq -r '.prs[0].lane' <<<"$OUT")" = "edge" ] || fail "edge-release/* branches belong to the edge lane"
 [ "$(jq -r '.decision.pr' <<<"$OUT")" = "91" ] || fail "edge PR must not occupy the feature queue head"
 pass "edge PRs stay out of the feature FIFO"
+
+# The lane must key on what the automation emits, not on free text a human can
+# retype: an edited title must not drop an edge PR into the gated feature lane.
+PRS="[$(pr_row 92 "cut edge (retitled by hand)" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false "edge-release/abc1234")]"
+OUT="$(run_plan "$PRS")"
+[ "$(jq -r '.prs[0].lane' <<<"$OUT")" = "edge" ] || fail "lane must follow the branch, not the PR title"
+pass "edge lane survives a retitled PR (keyed on branch, not title)"
 
 # =============================================================================
 # Case 12: hold / manual-land is the operator's stop, and it stalls the head.
@@ -343,16 +354,6 @@ IFS=$'\t' read -r rc out <<<"$(edge_probe "$DRIFTED")"
 [ -z "$out" ] || fail "a drift refusal must not print a sha"
 pass "edge: image-path drift since the built commit refuses the pin"
 
-# 20: IMAGE_PATHS parity with the build trigger is a release contract, and it now
-# lives in the library both consumers read.
-WORKFLOW_PATHS="$(
-  sed -n '/^    paths:/,/^  workflow_dispatch:/p' .github/workflows/addon-build.yml \
-    | sed -n 's/^      - "\(.*\)"$/\1/p' | sed 's#/\*\*$##' | sort
-)"
-LIB_PATHS="$(sed -n 's/^IMAGE_PATHS="\([^"]*\)"$/\1/p' "$EDGE_LIB" | tr ' ' '\n' | sort)"
-[ "$LIB_PATHS" = "$WORKFLOW_PATHS" ] || fail "edge-select IMAGE_PATHS must mirror addon-build.yml trigger paths"
-pass "edge: IMAGE_PATHS parity with the add-on build trigger"
-
 # =============================================================================
 # Case 21: the shadow workflow must stay report-only and keep its kill switch.
 # =============================================================================
@@ -363,9 +364,37 @@ grep -q "pull-requests: read" "$WF" || fail "shadow workflow must request read-o
 grep -q "pull-requests: write" "$WF" && fail "shadow workflow must not request write access"
 grep -q "contents: write" "$WF" && fail "shadow workflow must not request write access"
 grep -Eq 'gh pr (merge|comment|edit)' "$WF" && fail "shadow workflow must not mutate PRs"
-grep -q "land-queue.enabled" "$WF" || fail "shadow workflow must honour the kill-switch file"
 grep -q "vars.LAND_QUEUE" "$WF" || fail "shadow workflow must honour the LAND_QUEUE variable"
-pass "shadow workflow is report-only, read-only, and killable"
+# One pass, not two: running the planner twice doubled every round trip and let
+# the summary and the artifact disagree about the same queue.
+[ "$(grep -c 'bash scripts/land-queue-plan.sh' "$WF")" = "1" ] \
+  || fail "the planner must be invoked exactly once per run"
+pass "shadow workflow is report-only, read-only, killable, and single-pass"
+
+# =============================================================================
+# Case 21b: the kill switch is a property of the CONTROLLER, not of one caller.
+# Off must mean off from a local run too, or the switch is not a switch.
+# =============================================================================
+OUT="$(LAND_QUEUE=0 run_plan "[]" 2>&1)"
+printf '%s' "$OUT" | grep -q "switched off" || fail "LAND_QUEUE=0 must stop the planner itself"
+printf '%s' "$OUT" | grep -q "turn it back on" || fail "a stopped queue must say how to restart it"
+pass "kill switch stops the planner itself, not just the workflow"
+
+# =============================================================================
+# Case 22: gate-set parity. land-pr.sh arms on verify_head; the queue re-composes
+# the same gates to report WHICH one failed. Adding a gate to verify_head without
+# teaching the queue would leave the shadow reporting READY without it — the
+# exact drift the shared library exists to prevent, one level up.
+# =============================================================================
+gates_in() { sed -n "/^$2() {/,/^}/p" "$1" | grep -oE '\b(evidence_check|squad_check|thread_check|ensure_head_local)\b' | sort -u; }
+VERIFY_GATES="$(gates_in "$REPO_ROOT/scripts/land-gates.sh" verify_head)"
+QUEUE_GATES="$(gates_in "$PLAN" classify_pr)"
+# squad_check is deliberately absent from the queue: it reads a local gstack
+# ledger that no runner has, and v2 evidence already covers the review gate.
+MISSING="$(comm -23 <(printf '%s\n' "$VERIFY_GATES" | sed '/^$/d' | sort) \
+                    <(printf '%s\nsquad_check\n' "$QUEUE_GATES" | sed '/^$/d' | sort))"
+[ -z "$MISSING" ] || fail "verify_head gates the queue does not evaluate: $MISSING"
+pass "queue evaluates every gate land-pr arms on (squad_check exempted by design)"
 
 echo
 echo "All $PASS_COUNT land-queue cases passed."

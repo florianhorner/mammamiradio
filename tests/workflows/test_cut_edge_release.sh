@@ -74,6 +74,8 @@ grep -q '^IMAGE_PATHS=' "$SCRIPT" \
   && fail "cut-edge-release.sh must source IMAGE_PATHS from scripts/edge-select.sh, not redefine it"
 grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'gh run list --workflow' \
   && fail "cut-edge-release.sh must query green builds through scripts/edge-select.sh"
+grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'rev-list --topo-order' \
+  && fail "cut-edge-release.sh must select through edge_newest_built_sha, not its own topology walk"
 grep -q '^# shellcheck source=scripts/edge-select.sh$' "$SCRIPT" \
   || fail "cut-edge-release.sh must source scripts/edge-select.sh"
 pass "edge selection has exactly one implementation"

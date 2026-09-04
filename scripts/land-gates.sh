@@ -16,7 +16,7 @@
 #
 # shellcheck shell=bash
 
-LAND_GATES_LABEL="${LAND_GATES_LABEL:-land-pr}"
+LAND_GATES_LABEL="${LAND_GATES_LABEL:-land-gates}"
 LAND_GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Freshness grace: /ship pushes mechanical commits (version bump, changelog)
@@ -34,7 +34,25 @@ if ! declare -F say >/dev/null 2>&1; then
   say() { printf '%s\n' "$*"; }
 fi
 
-_gate_say() { say "$LAND_GATES_LABEL: $*"; }
+_gate_say()  { say "$LAND_GATES_LABEL: $*"; }
+# Continuation lines align under the message, so the indent has to follow the
+# label width rather than assume one caller's prefix.
+_gate_cont() { say "$(printf '%*s' $(( ${#LAND_GATES_LABEL} + 2 )) '')$*"; }
+
+# The repository slug is constant for the process. Resolving it per PR cost a
+# network round trip each time, and in CI `gh` already exports GH_REPO.
+_LAND_GATES_SLUG=""
+_repo_slug() {
+  if [ -z "$_LAND_GATES_SLUG" ]; then
+    if [ -n "${GH_REPO:-}" ]; then
+      _LAND_GATES_SLUG="$GH_REPO"
+    else
+      _LAND_GATES_SLUG="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" \
+        || return 1
+    fi
+  fi
+  printf '%s' "$_LAND_GATES_SLUG"
+}
 
 if [ -r "$LAND_GATES_DIR/review-threads.sh" ]; then
   # shellcheck source=scripts/review-threads.sh
@@ -86,8 +104,8 @@ squad_check() {
   done < <("$READER" 2>/dev/null)
   if [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
     _gate_say "no pre-ship squad entry covers the current PR head."
-    say "         Either commits were pushed after the last review, or no squad ran."
-    say "         Re-run the review squad (/ship or /review) on this branch, then land again."
+    _gate_cont "Either commits were pushed after the last review, or no squad ran."
+    _gate_cont "Re-run the review squad (/ship or /review) on this branch, then land again."
   fi
   return 1
 }
@@ -100,9 +118,9 @@ evidence_check() {
   out="$(bash "$EVIDENCE_CHECKER" --v2 --target "$target" --base "$base" --mode pr 2>&1)" || rc=$?
   if [ "${rc:-0}" -ne 0 ]; then
     _gate_say "committed v2 pre-ship evidence does not cover PR head ${target:0:12}."
-    say "         Run the review squad, emit v2 evidence, commit it on the branch, then land again."
+    _gate_cont "Run the review squad, emit v2 evidence, commit it on the branch, then land again."
     if [ -n "$out" ]; then
-      printf '%s\n' "$out" | sed 's/^/         /'
+      printf '%s\n' "$out" | sed "s/^/$(printf '%*s' $(( ${#LAND_GATES_LABEL} + 2 )) '')/"
     fi
     return 1
   fi
@@ -115,10 +133,10 @@ thread_check() {
     return 0
   fi
 
-  slug="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" \
+  slug="$(_repo_slug)" \
     || {
       _gate_say "could not resolve repository identity for bot-thread check."
-      say "         Check gh auth, then re-run."
+      _gate_cont "Check gh auth, then re-run."
       return 1
     }
   owner="${slug%%/*}"
@@ -127,7 +145,7 @@ thread_check() {
   response="$(review_threads_json "$owner" "$repo" "$pr")" \
     || {
       _gate_say "could not query review threads for PR #$pr."
-      say "         Check gh auth, then re-run. Use MMR_LAND_SKIP_THREAD_CHECK=1 only for hotfix escape."
+      _gate_cont "Check gh auth, then re-run. Use MMR_LAND_SKIP_THREAD_CHECK=1 only for hotfix escape."
       return 1
     }
 
@@ -137,22 +155,12 @@ thread_check() {
     blocked=$((blocked + 1))
     _gate_say "unresolved Major/Critical bot thread: $line"
   done < <(
-    printf '%s' "$response" | jq -r '
-      .data.repository.pullRequest.reviewThreads.nodes[]
-      | select(.isResolved == false and .isOutdated == false)
-      | ([.comments.nodes[]?
-          | select(.author.login == "coderabbitai"
-              or .author.login == "copilot-pull-request-reviewer"
-              or .author.login == "chatgpt-codex-connector")
-          | select((.body // "") | test("(Major|Critical|P0|P1)"; "i"))
-          | .url
-        ][0] // empty)
-    '
+    printf '%s' "$response" | jq -r "$REVIEW_THREADS_BLOCKING_JQ | .url"
   )
 
   if [ "$blocked" -gt 0 ]; then
     _gate_say "$blocked unresolved Major/Critical bot review thread(s) block landing."
-    say "         Resolve each thread on GitHub or fix and push, re-review, then land again."
+    _gate_cont "Resolve each thread on GitHub or fix and push, re-review, then land again."
     return 1
   fi
   return 0
@@ -165,7 +173,7 @@ verify_head() {
     :
   elif [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
     _gate_say "committed evidence was skipped and no qualifying local ledger entry covers ${head:0:12}."
-    say "         Re-run without MMR_LAND_SKIP_EVIDENCE_CHECK=1 or provide current ledger evidence."
+    _gate_cont "Re-run without MMR_LAND_SKIP_EVIDENCE_CHECK=1 or provide current ledger evidence."
     return 1
   elif [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
     return 1

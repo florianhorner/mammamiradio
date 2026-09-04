@@ -26,6 +26,25 @@ _review_thread_comments_json() {
   printf '%s\n' "$comments"
 }
 
+# Which review comments count as blocking landing debt. Kept here, next to the
+# reader, because every consumer of these threads asks the same question and a
+# second copy is how a newly-added review bot gets silently ignored by one of
+# them. Consumers select the field they need (.url, a count) around this filter.
+# shellcheck disable=SC2034  # consumed by sourcing scripts (land-gates.sh, pr-queue-status.sh)
+# shellcheck disable=SC2016  # a jq program, deliberately unexpanded by the shell
+REVIEW_THREADS_BLOCKING_JQ='
+  .data.repository.pullRequest.reviewThreads.nodes[]
+  | select(.isResolved == false and .isOutdated == false)
+  | [.comments.nodes[]?
+      | select(.author.login == "coderabbitai"
+          or .author.login == "copilot-pull-request-reviewer"
+          or .author.login == "chatgpt-codex-connector")
+      | select((.body // "") | test("(Major|Critical|P0|P1)"; "i"))
+    ] as $blocking
+  | select(($blocking | length) > 0)
+  | $blocking[0]
+'
+
 # review_threads_json <owner> <repo> <pr> -> unresolved/current threads with complete comments.
 review_threads_json() {
   local owner="$1" repo="$2" pr="$3" cursor="" response threads='[]' normalized='[]'

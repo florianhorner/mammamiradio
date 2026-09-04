@@ -286,11 +286,23 @@ It reaches its verdict through the same predicates the landing seat arms on
 (`scripts/land-gates.sh`, shared with `land-pr.sh`) and the same selection the
 edge cut uses (`scripts/edge-select.sh`, shared with `cut-edge-release.sh`). A
 shadow reasoning from its own copy of the gates would prove nothing about the
-thing it shadows.
+thing it shadows, so a test asserts the queue evaluates every gate `land-pr`
+arms on.
 
-**How it orders PRs.** Oldest first, by creation time. A blocked head *stalls*
-the queue rather than being reordered around — that is what keeps the ordering
-fair to whoever has been waiting longest. When a head is blocked on something
+Lanes are keyed on what the automation itself emits — the bot flag, and the
+`edge-release/*` branch `cut-edge-release.sh` pushes — never on the PR title. A
+lane assignment is a total exemption from every gate, and a title is free text a
+human can retype.
+
+**How it orders PRs.** Oldest first, by creation time. That is a stand-in: the
+design orders by when a PR first became `READY`, which needs a persisted ledger
+the shadow has no write path for. Creation time is the honest read-only proxy
+and carries the property that actually matters — a PR that bounces and comes
+back keeps its place — because it never changes. The JSON labels it
+`fifo_key_source` so a month of shadow data stays interpretable after the swap.
+
+A blocked head *stalls* the queue rather than being reordered around — that is
+what keeps the ordering fair to whoever has been waiting longest. When a head is blocked on something
 only its owner can fix (a conflict, usually), the `skip-queue` label drops it
 out of head contention so one stuck PR cannot hold every other fix hostage.
 
@@ -307,13 +319,15 @@ out of head contention so one stuck PR cannot hold every other fix hostage.
 | `BLOCKED_YOU` | `hold` or `manual-land` label |
 | `BLOCKED_HEAD` | Head object could not be fetched; gates cannot be evaluated |
 | `SKIPPED` | `skip-queue` label — out of head contention |
-| `EXEMPT` | Dependabot or `chore(edge):` lane; keeps its own merge path |
+| `EXEMPT` | Bot or edge lane; keeps its own merge path |
 | `OPEN` | Draft |
 
 **Turning it off.** Delete `.github/land-queue.enabled` (a one-line PR, with an
 audit trail), or set the repository variable `LAND_QUEUE=0`. Either one stops
-the run. Two switches because the file works from any seat that can open a PR
-and the variable works without one.
+it. Two switches because the file works from any seat that can open a PR and
+the variable works without one. Both are enforced inside
+`scripts/land-queue-plan.sh`, not only in the workflow, so "off" means off from
+a local run too — the switch belongs to the controller, not to one caller.
 
 **It is not live, and cannot be flipped live from a feature seat.** Doing that
 needs a GitHub App installed on the repo with `contents:write` +

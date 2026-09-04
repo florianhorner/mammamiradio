@@ -24,6 +24,11 @@
 # tests/workflows/test_cut_edge_release.sh asserts this parity on every run.
 IMAGE_PATHS="ha-addon mammamiradio proof/media pyproject.toml requirements.txt requirements-dev.txt radio.toml model_registry.toml scripts/media-proof.py scripts/starter-catalog.py scripts/validate-addon.sh scripts/validate-starter-media.py scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py tests/media tests/playlist/test_jamendo_transient.py tests/playlist/test_legacy_media.py tests/scheduling/test_queue_mutations.py tests/web/test_streamer_routes_extended.py .github/workflows/addon-build.yml"
 
+# The edge add-on config whose `version:` field IS the image tag the Supervisor
+# pulls. cut-edge-release.sh sets this before sourcing; the default serves every
+# other caller.
+EDGE_CONFIG="${EDGE_CONFIG:-ha-addon/mammamiradio-edge/config.yaml}"
+
 # How far back to look for green builds. `gh run list` orders by run-creation
 # time, not commit topology, so this is a candidate window, not a ranking.
 EDGE_RUN_LOOKBACK="${EDGE_RUN_LOOKBACK:-40}"
@@ -63,16 +68,21 @@ edge_commit_has_green_build() {
 # merged branch carries stale commit dates or an older commit was re-run after a
 # newer one.
 edge_newest_built_sha() {
-  local ref="${1:-origin/main}" green commit
+  local ref="${1:-origin/main}" green match
   green="$(edge_green_shas)" || return 2
-  while IFS= read -r commit; do
-    [ -n "$commit" ] || continue
-    if printf '%s\n' "$green" | grep -qxF "$commit"; then
-      printf '%s\n' "$commit"
-      return 0
-    fi
-  done < <(git rev-list --topo-order "$ref")
-  return 1
+  [ -n "$green" ] || return 1
+  # One grep over the whole walk rather than a fork per commit: when no candidate
+  # is in the lookback window this walks the entire history, and a fork per commit
+  # made the failure path the most expensive one.
+  #
+  # Both inputs are process substitutions rather than a pipe: `grep -m1` exits at
+  # the first match, which would SIGPIPE a piped `git rev-list`, and `pipefail`
+  # would then report the successful lookup as a failure.
+  local commits
+  commits="$(git rev-list --topo-order "$ref")" || return 2
+  match="$(grep -m1 -xF -f <(printf '%s\n' "$green") <(printf '%s\n' "$commits"))" \
+    || return 1
+  printf '%s\n' "$match"
 }
 
 # edge_image_drift <sha> [<ref>] -> prints IMAGE_PATHS files that changed between
@@ -88,6 +98,15 @@ edge_image_drift() {
   changed="$(git diff --name-only "$target" "$ref" -- $IMAGE_PATHS 2>/dev/null)" || return 2
   printf '%s' "$changed"
   [ -z "$changed" ]
+}
+
+# edge_pinned_version [<ref>] -> the short SHA edge currently advertises on <ref>
+# (default origin/main), or empty when the config cannot be read. Reads the ref,
+# never the working tree: a stale local branch that already carries the new
+# version must not read as "already released".
+edge_pinned_version() {
+  { git show "${1:-origin/main}:$EDGE_CONFIG" 2>/dev/null || true; } \
+    | awk '/^version:/ { print $2; exit }' | tr -d '"'
 }
 
 # eligible_edge_sha [<ref>] -> short SHA edge may be pinned to, or non-zero with

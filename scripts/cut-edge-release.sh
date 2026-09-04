@@ -94,21 +94,6 @@ fi
 
 git fetch origin main --quiet
 
-# Candidate set: recent origin/main commits whose `Build HA Addon` run SUCCEEDED
-# (see edge_green_shas in scripts/edge-select.sh for what that success proves and
-# for the lookback window). The result is ordered by run-creation time, not commit
-# topology, so it is only a candidate set; the topologically-newest one is picked
-# below. Hard-fail (never soft-pass) if the query fails.
-OK_SHAS="$(edge_green_shas)" || {
-  echo "ERROR: could not query 'Build HA Addon' runs (gh run list failed)." >&2
-  echo "       Refusing to cut an edge release without a verified built commit." >&2
-  exit 1
-}
-
-# Walk origin/main newest-first and take the first commit that has a green build.
-# Selecting from `git rev-list --topo-order origin/main` makes the result inherently
-# an ancestor of main and topology-correct (children before parents) even when a merged
-# branch carries stale commit dates or an older commit was re-run after a newer one.
 TARGET_FULL=""
 if [ -n "$REQUESTED_SHA" ]; then
   # Exact-commit mode: resolve, then refuse anything that is not that commit.
@@ -121,14 +106,15 @@ if [ -n "$REQUESTED_SHA" ]; then
     echo "       Edge may only point at a commit that is actually on main." >&2
     exit 1
   fi
-  # Query the runs for THIS commit rather than reusing OK_SHAS. OK_SHAS is the 40
-  # most recent runs on main, so a target older than that window would be rejected
-  # as "no green build" even though its image exists.
+  # Query the runs for THIS commit rather than reusing the newest-built selection.
+  # That selection reads a capped window of recent runs, so a target older than the
+  # window would be rejected as "no green build" even though its image exists.
   #
   # edge_commit_has_green_build filters server-side (see the rationale there), and
   # returns 2 for a failed query so an unverifiable answer is distinguishable from
   # a genuine "no build". Hard-fail on both — never soft-pass.
-  edge_commit_has_green_build "$TARGET_FULL" && TARGET_BUILD_RC=0 || TARGET_BUILD_RC=$?
+  TARGET_BUILD_RC=0
+  edge_commit_has_green_build "$TARGET_FULL" || TARGET_BUILD_RC=$?
   if [ "$TARGET_BUILD_RC" -eq 2 ]; then
     echo "ERROR: could not query 'Build HA Addon' runs for $REQUESTED_SHA." >&2
     echo "       Refusing to pin an unverified commit." >&2
@@ -141,13 +127,17 @@ if [ -n "$REQUESTED_SHA" ]; then
     exit 1
   fi
 else
-  while IFS= read -r _commit; do
-    [ -n "$_commit" ] || continue
-    if printf '%s\n' "$OK_SHAS" | grep -qxF "$_commit"; then
-      TARGET_FULL="$_commit"
-      break
-    fi
-  done < <(git rev-list --topo-order origin/main)
+  # Newest origin/main commit with a green build, chosen topologically (see
+  # edge_newest_built_sha in scripts/edge-select.sh). rc 2 means the query itself
+  # failed — hard-fail on that; rc 1 leaves TARGET_FULL empty for the shared
+  # "no green build" message below.
+  SELECT_RC=0
+  TARGET_FULL="$(edge_newest_built_sha origin/main)" || SELECT_RC=$?
+  if [ "$SELECT_RC" -eq 2 ]; then
+    echo "ERROR: could not query 'Build HA Addon' runs (gh run list failed)." >&2
+    echo "       Refusing to cut an edge release without a verified built commit." >&2
+    exit 1
+  fi
 fi
 
 if [ -z "$TARGET_FULL" ]; then
@@ -167,7 +157,8 @@ HEAD_SHORT="$(git rev-parse --short=7 origin/main)"
 # does not implement.
 # edge_image_drift returns 2 when the diff itself could not be computed — an
 # unverifiable drift check is a refusal, never an assumed-clean pass.
-CHANGED="$(edge_image_drift "$TARGET_FULL" origin/main)" && DRIFT_RC=0 || DRIFT_RC=$?
+DRIFT_RC=0
+CHANGED="$(edge_image_drift "$TARGET_FULL" origin/main)" || DRIFT_RC=$?
 if [ "$DRIFT_RC" -eq 2 ]; then
   echo "ERROR: could not verify whether add-on image files changed since $SHA." >&2
   echo "       Refusing to cut an edge release without a verified drift check." >&2
@@ -199,7 +190,7 @@ fi
 # NOT the caller's checked-out tree — running from a stale local branch that already
 # carries `version: $SHA` must not falsely report "already released" while origin/main
 # still needs the bump. An unreadable config -> empty -> proceed to cut (the safe way).
-CURRENT="$(git show "origin/main:$EDGE_CONFIG" 2>/dev/null | awk '/^version:/ { print $2; exit }' | tr -d '"')" || CURRENT=""
+CURRENT="$(edge_pinned_version origin/main)"
 if [ "$CURRENT" = "$SHA" ]; then
   echo "Edge add-on already at $SHA (latest built main commit) — nothing to release."
   exit 0

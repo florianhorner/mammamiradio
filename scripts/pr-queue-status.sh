@@ -165,17 +165,9 @@ thread_debt_count() {
     return 0
   }
 
-  printf '%s' "$response" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-    | select(.isResolved == false and .isOutdated == false)
-    | select(
-        [.comments.nodes[]?
-          | select(.author.login == "coderabbitai"
-              or .author.login == "copilot-pull-request-reviewer"
-              or .author.login == "chatgpt-codex-connector")
-          | .body // ""
-        ] | any(test("(Major|Critical|P0|P1)"; "i"))
-      )
-  ] | length'
+  # Same blocking-debt definition scripts/land-gates.sh gates on (it lives in
+  # review-threads.sh); this dashboard only counts them instead of refusing.
+  printf '%s' "$response" | jq -s "[ .[] | $REVIEW_THREADS_BLOCKING_JQ ] | length"
 }
 
 recommendation() {
@@ -213,21 +205,18 @@ recommendation() {
 if [ "$EMIT_JSON" = "1" ]; then
   queue_json="$("$root/scripts/land-queue-plan.sh" --json)" \
     || die "could not compute queue state (scripts/land-queue-plan.sh failed)."
-  branches="$(gh pr list --state open --limit 50 --json number,headRefName 2>/dev/null)" \
-    || die "could not list open PRs. Check gh auth and repository context."
+  # The planner already emits each PR's branch, so there is no second `gh pr list`
+  # here — one listing, one instant, no PR that appears in one set and not the
+  # other. worktree_for_branch is pure shell against the index built above.
   worktrees="$(
-    printf '%s' "$branches" | jq -c '.[]' | while IFS= read -r row; do
-      n="$(printf '%s' "$row" | jq -r '.number')"
-      b="$(printf '%s' "$row" | jq -r '.headRefName')"
-      w="$(worktree_for_branch "$b" || true)"
-      jq -cn --argjson number "$n" --arg branch "$b" --arg worktree "$w" \
-        '{number:$number, branch:$branch, worktree:(if $worktree == "" then null else $worktree end)}'
-    done | jq -s '.'
+    printf '%s' "$queue_json" | jq -r '.prs[] | [(.number|tostring), .branch] | @tsv' \
+      | while IFS=$'\t' read -r number branch; do
+          jq -cn --arg k "$number" --arg w "$(worktree_for_branch "$branch" || true)" \
+            '{key:$k, value:(if $w == "" then null else $w end)}'
+        done | jq -s 'from_entries'
   )"
   printf '%s' "$queue_json" | jq --argjson wt "$worktrees" \
-    '.prs |= map(.number as $n
-                 | . + (($wt | map(select(.number == $n)) | first // {})
-                        | {branch, worktree}))'
+    '.prs |= map(. + {worktree: ($wt[.number|tostring] // null)})'
   exit 0
 fi
 
