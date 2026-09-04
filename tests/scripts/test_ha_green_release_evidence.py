@@ -227,8 +227,14 @@ def test_validator_rejects_malformed_receipt_json(mutation: str) -> None:
         section[field] = 10**400 if mutation == "overflow" else 1
         raw = json.dumps(payload).encode()
     expected = {"overflow": "timing.boot_to_tcp_ms", "bool": "assertions"}.get(mutation, "duplicate JSON key")
-    if mutation in {"syntax", "recursion"}:
+    if mutation == "syntax":
         expected = "cannot read JSON object"
+    elif mutation == "recursion":
+        # Deeply nested input is refused either way, but not always at the same
+        # gate: through 3.13 the parser gave up and the receipt was unreadable,
+        # while 3.14 parses it and the receipt is refused for not being a JSON
+        # object at the top level. Assert it is refused, not where.
+        expected = "cannot read JSON object|top level must be a JSON object"
     with pytest.raises(ValueError, match=expected):
         VALIDATOR._validate_receipt(path, raw=raw)
 

@@ -1260,12 +1260,27 @@ async def test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next(tmp_pat
             await asyncio.gather(task, return_exceptions=True)
 
     queued_at_boundary = observed["queue"]
-    assert observed == {
-        "active": None,
-        "accepted": True,
-        "queue": [successor, forced],
-    }
-    assert queued_at_boundary == [successor, forced]
+    assert isinstance(queued_at_boundary, list)
+    assert observed["active"] is None
+    assert observed["accepted"] is True
+
+    # The guarantee is ordering, not queue contents at one exact tick. The
+    # snapshot is taken from a call_soon callback racing the playback loop's
+    # own queue.get(), so whether the successor is still queued depends on
+    # event-loop dispatch order:
+    #
+    #   3.13 and earlier   queue == [successor, forced]   successor not yet taken
+    #   3.14               queue == [forced]              successor already taken
+    #
+    # Both satisfy "successor ahead of air-next" -- already dequeued is further
+    # ahead, not behind. Pin the invariant, and let the listener assertions
+    # below prove the order actually reached air.
+    assert forced in queued_at_boundary
+    if successor in queued_at_boundary:
+        assert queued_at_boundary.index(successor) < queued_at_boundary.index(forced), (
+            "air-next must never be inserted ahead of the committed successor"
+        )
+
     assert listener_queue.get_nowait() == b"head-audio"
     assert listener_queue.get_nowait() == b"speech-audio"
     assert sum(segment is music for segment in emitted) == 1
