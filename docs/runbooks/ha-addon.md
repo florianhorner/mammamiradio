@@ -706,9 +706,11 @@ Before merging ANY change that touches addon files:
    missing-content notice, exit 0); the stable promotion media-proof job in
    `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
    hard gate on the release path. Stable remains blocked until exactly 12
-   approved derivatives total at least 45 minutes and no more than 75 MiB, every
-   full audition receipt is complete, and 20 cold HA Green runs show p95 first
-   accepted non-silent starter byte at or below two seconds.
+   approved derivatives total at least 45 minutes and no more than 75 MiB and
+   every full audition receipt is complete. The 20 cold HA Green runs at p95
+   first accepted non-silent starter byte within two seconds are a separate
+   opt-in gate, armed with `MMR_REQUIRE_HA_RECEIPTS=1`; unset, the cut reports
+   the waiver instead of a pass.
 7. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.

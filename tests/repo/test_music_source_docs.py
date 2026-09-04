@@ -76,6 +76,9 @@ def test_canonical_music_source_guide_records_the_rights_boundaries() -> None:
         "75 MiB",
         "20 cold Home Assistant Green runs",
         "p95 no slower than two seconds",
+        # The gate is opt-in; the guide must name the switch, not just the
+        # measurement, or a reader cannot tell whether a release produced it.
+        "MMR_REQUIRE_HA_RECEIPTS",
     ):
         assert boundary in flat_guide
 

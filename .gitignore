@@ -38,6 +38,10 @@ htmlcov/
 # Playwright QA scratch — ad-hoc visual-capture scripts + screenshots, regenerable, never committed.
 output/
 
+# Public Pages source may link to approved release assets, but video masters
+# never belong in the product repository or its Git history.
+/docs/explainer/**/*.mp4
+
 # Contract-window marker — created only by Florian to open a contract
 # maintenance window (see CONTRACT.md). Never committed.
 .contract-window

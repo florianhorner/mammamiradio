@@ -395,7 +395,11 @@ async def test_unavailable_music_render_closes_its_timing(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_path):
-    """The blocklist fence cannot let a retired render undo source readiness."""
+    """A mid-render last-track ban must discard the retired music and leave local unreadiness.
+
+    Empty-crate recovery speech may still enqueue after the discard — that is the
+    producer's continuity path, not a restore of playable readiness.
+    """
     track = Track(
         title="Canzone Uno",
         artist="Artista",
@@ -447,7 +451,13 @@ async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_p
             await _cancel(task)
 
     readiness = _source_readiness_status(config, state)
-    assert queue.empty()
+    queued = list(queue._queue)
+    assert not any(seg.type is SegmentType.MUSIC for seg in queued)
+    assert all(
+        (seg.metadata or {}).get("title_only") != track.title
+        and (seg.metadata or {}).get("spotify_id") != track.spotify_id
+        for seg in queued
+    )
     assert state.playlist == []
     assert readiness["sources"]["local"]["status"] == "unavailable"
     assert readiness["sources"]["local"]["playable"] == 0
