@@ -24,12 +24,16 @@ def safe_path_within(path: Path, root: Path, *, reject_symlinks: bool = False) -
                                              failure; left to the
                                              caller's own checks
 
-    The cycle probe is load-bearing, not defensive padding. Through Python
-    3.13 ``Path.resolve(strict=False)`` raised ``RuntimeError`` on a symlink
-    cycle and the ``except`` below caught it for free. Python 3.14 returns the
-    unresolved path and raises nothing, so a cycle satisfies
-    ``is_relative_to`` and this function hands back a path it should have
-    refused. ``stat()`` reports ``ELOOP`` on every supported interpreter.
+    The cycle probe is load-bearing, not defensive padding. On Python 3.12
+    and earlier ``Path.resolve(strict=False)`` raised ``RuntimeError`` on a
+    symlink cycle and the ``except`` below caught it for free. Python 3.13
+    and later return the unresolved path and raise nothing, so a cycle
+    satisfies ``is_relative_to`` and this function hands back a path it
+    should have refused. ``stat()`` reports ``ELOOP`` on every supported
+    interpreter, which is why the probe does not depend on the version.
+
+    That split is not hypothetical here: the add-on image runs 3.12, and the
+    standalone image runs 3.14, so both sides of it ship today.
 
     It runs unconditionally, including for ``reject_symlinks=True``. That flag
     does NOT make it redundant: ``Path.is_symlink()`` calls ``lstat()`` and

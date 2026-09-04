@@ -261,8 +261,9 @@ def test_symlink_loop_fails_closed_instead_of_raising(tmp_path):
 def test_symlink_loop_is_rejected_without_relying_on_resolve_raising(tmp_path):
     """Containment must not depend on Path.resolve() raising on a cycle.
 
-    Through 3.13 a loop raised RuntimeError from resolve() and the containment
-    check caught it incidentally. On 3.14 resolve() returns the unresolved path
+    On 3.12 and earlier a loop raised RuntimeError from resolve() and the
+    containment check caught it incidentally. On 3.13 and later resolve()
+    returns the unresolved path
     and raises nothing. Pin the behaviour rather than the mechanism, so the
     guard cannot silently stop firing on a future interpreter.
     """

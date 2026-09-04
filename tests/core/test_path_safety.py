@@ -96,8 +96,8 @@ def test_real_symlink_cycle_is_refused_even_when_resolve_does_not_raise(tmp_path
 
     The sibling test above monkeypatches ``Path.resolve`` to raise, which pins
     the handling of an exception rather than the handling of a cycle. Python
-    3.13 and earlier raised ``RuntimeError`` here, so the two looked identical;
-    3.14 returns the unresolved path and raises nothing, and only a real cycle
+    3.12 and earlier raised ``RuntimeError`` here, so the two looked identical;
+    3.13 and later return the unresolved path and raise nothing, and only a real cycle
     tells the two apart.
     """
 
@@ -181,7 +181,7 @@ def test_producer_ownership_helpers_refuse_a_cycle_without_raising(tmp_path):
 
     `_is_tmp_render` and `_is_under` decide whether the producer owns a file
     and may delete it. They previously caught only OSError, so the
-    RuntimeError that Python 3.13 and earlier raised on a symlink cycle
+    RuntimeError that Python 3.12 and earlier raised on a symlink cycle
     escaped into the audio path instead of returning a verdict. An exception
     there risks the stream; a False does not.
     """

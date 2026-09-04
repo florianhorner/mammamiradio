@@ -1089,8 +1089,8 @@ def test_malformed_or_noncanonical_receipts_fail(repo: GitRepository, mutation: 
         ("invalid-utf8", "UTF-8"),
         ("non-object", "one JSON object"),
         # Rejection point moved between interpreters, rejection did not.
-        # Through 3.13 the parser hit its recursion limit and the receipt died
-        # as unparseable; 3.14 parses 1200-deep nesting happily and the receipt
+        # On 3.11 the parser hit its recursion limit and the receipt died as
+        # unparseable; 3.12 and later parse 1200-deep nesting and the receipt
         # dies one step later on its top-level keys. Both fail closed, so the
         # assertion pins the outcome and accepts either gate. huge-integer-json
         # still raises at parse time everywhere and keeps that branch covered.

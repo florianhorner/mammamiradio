@@ -16,7 +16,7 @@ def is_packaged_asset(path: Path, assets_dir: Path | None = None) -> bool:
     handoff, and manifest paths asking the same question.
 
     The previous inline version caught ``OSError`` but not ``RuntimeError``,
-    which is what Python 3.13 and earlier raised on a symlink cycle. Callers in
+    which is what Python 3.12 and earlier raised on a symlink cycle. Callers in
     ``producer`` use this to decide whether an ephemeral segment may be
     deleted after air, so the raise escaped into the audio path rather than
     returning a verdict. On 3.14 the same cycle raised nothing and reported as

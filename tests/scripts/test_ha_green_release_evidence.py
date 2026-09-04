@@ -231,8 +231,8 @@ def test_validator_rejects_malformed_receipt_json(mutation: str) -> None:
         expected = "cannot read JSON object"
     elif mutation == "recursion":
         # Deeply nested input is refused either way, but not always at the same
-        # gate: through 3.13 the parser gave up and the receipt was unreadable,
-        # while 3.14 parses it and the receipt is refused for not being a JSON
+        # gate: on 3.11 the parser gave up and the receipt was unreadable,
+        # while 3.12 and later parse it and the receipt is refused for not being a JSON
         # object at the top level. Assert it is refused, not where.
         expected = "cannot read JSON object|top level must be a JSON object"
     with pytest.raises(ValueError, match=expected):

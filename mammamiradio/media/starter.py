@@ -161,9 +161,11 @@ def _safe_asset_path(root: Path, relative: str) -> Path:
         resolved_root = root.resolve(strict=True)
         resolved = candidate.resolve(strict=True)
     except (OSError, RuntimeError, ValueError) as exc:
-        # resolve(strict=True) raises RuntimeError, not OSError, on a symlink
-        # cycle in the root's own ancestry, and ValueError on a null byte.
-        # Either way the asset is unusable, which is what this error says.
+        # A symlink cycle in the root's own ancestry is reported differently
+        # by version: RuntimeError on Python 3.12 and earlier, OSError(ELOOP)
+        # on 3.13 and later. ValueError is a null byte. Both interpreter
+        # families ship here, and either way the asset is unusable, which is
+        # what this error says.
         raise StarterCatalogError(f"starter asset is missing: {relative}") from exc
     if resolved_root not in resolved.parents:
         raise StarterCatalogError(f"starter asset escapes the catalog root: {relative}")

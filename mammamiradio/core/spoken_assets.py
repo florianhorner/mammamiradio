@@ -145,7 +145,7 @@ def _stays_inside_root(candidate: Path, root: Path) -> bool:
 
     Thin wrapper over the shared containment helper so this module cannot drift
     from the cache and handoff paths that ask the same question. The symlink
-    cycle handling that Python 3.14 made necessary lives there, in one place.
+    cycle handling that Python 3.13 made necessary lives there, in one place.
     """
 
     return safe_path_within(candidate, root) is not None

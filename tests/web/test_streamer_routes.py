@@ -1269,8 +1269,11 @@ async def test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next(tmp_pat
     # own queue.get(), so whether the successor is still queued depends on
     # event-loop dispatch order:
     #
-    #   3.13 and earlier   queue == [successor, forced]   successor not yet taken
-    #   3.14               queue == [forced]              successor already taken
+    #   3.11   queue == [successor, forced]   successor not yet taken
+    #   3.14   queue == [forced]              successor already taken
+    # (measured at those two points; the exact interpreter where dispatch
+    #  order changes was not pinned down, which is why neither shape is
+    #  asserted as the expected one.)
     #
     # Both satisfy "successor ahead of air-next" -- already dequeued is further
     # ahead, not behind. Pin the invariant, and let the listener assertions

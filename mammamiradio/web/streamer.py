@@ -6682,7 +6682,7 @@ def _resolve_static_file(filename: str) -> Path | None:
     try:
         # Both resolutions sit inside the guard. Leaving the root outside it
         # meant a broken install answered 500 to every static request.
-        # RuntimeError is a symlink cycle on Python 3.13 and earlier;
+        # RuntimeError is a symlink cycle on Python 3.12 and earlier;
         # ValueError is an embedded null byte, which a request path can carry.
         # Uncaught, either left this unauthenticated route raising instead of
         # answering the 404 it already returns for any name it cannot resolve.
