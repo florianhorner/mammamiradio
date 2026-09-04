@@ -1098,6 +1098,11 @@
 
   /* ── Toast helper (used by clip sharing) ── */
   let _toastTimer = null;
+  // 2.4s suits a short confirmation. A recovery message that tells the listener
+  // what to do next needs longer, so those call sites pass TOAST_MS_LONG
+  // explicitly (leadership principle #5: a way out you cannot finish reading
+  // is not a way out).
+  const TOAST_MS_LONG = 6000;
   function _showToast(msg, durationMs = 2400) {
     let el = document.getElementById('mmr-toast');
     if (!el) {
@@ -1143,13 +1148,13 @@
           msg = _t('clip_rate_limited', 'The tape decks need a moment — give them {s}s and tap again.')
             .replace('{s}', data.retry_after);
         } else if (data && data.error_code === 'music_share_unavailable') {
-          msg = _t('music_share_unavailable', 'A complete included track has to finish before it can be shared.');
+          msg = _t('music_share_unavailable', 'Only included tracks can be shared. Keep the radio playing, and tap Share right after the next included track ends.');
         } else if (data && data.reason === 'no_audio') {
           msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
         } else {
           msg = _t('clip_error', "That clip didn't take — give it a moment and tap Share again.");
         }
-        _showToast(msg);
+        _showToast(msg, TOAST_MS_LONG);
         return;
       }
       const shareUrl = window.location.origin + _base + (data.share_url || data.url);

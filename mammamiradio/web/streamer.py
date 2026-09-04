@@ -864,6 +864,13 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 # After an ad/banter ends we keep its snapshot briefly, so a listener who taps
 # Share a moment too late (music already playing again) still gets the whole bit.
 CLIP_LOOKBACK_SECONDS = 15
+# Upper bound on a duration we are willing to print on the public share page.
+# Nothing shareable comes close: voice segments are capped at
+# CLIP_MAX_SEGMENT_SECONDS and the longest bundled starter track is under ten
+# minutes. Finiteness alone is not proof — 1e308 and a 300-digit integer are
+# both finite and both nonsense — so a value past this ceiling is treated as
+# corrupt metadata and no duration is claimed at all.
+CLIP_MAX_PROVABLE_DURATION_SECONDS = 3600
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 STREAM_MAX_PACKET_SECONDS = 0.125
@@ -1103,6 +1110,7 @@ def _validated_starter_share_snapshot(segment: Segment) -> dict[str, Any] | None
         "type": "starter",
         "title": entry.title,
         "artist": entry.artist,
+        "duration_seconds": entry.duration_seconds,
         "provider_track_id": entry.isrc,
         "attribution": safe_attribution,
     }
@@ -11217,6 +11225,18 @@ async def create_clip(request: Request):
         "track_artist": track_artist,
         "created_at": int(time.time()),
     }
+    # The starter catalog guarantees a positive duration_seconds for every
+    # entry, but this only claims one if the snapshot actually proves it —
+    # never guess from clip_data's byte length, which is the raw starter
+    # file at its own encode rate, not config.audio.bitrate.
+    snap_duration = snap.get("duration_seconds")
+    if (
+        isinstance(snap_duration, int | float)
+        and not isinstance(snap_duration, bool)
+        and math.isfinite(snap_duration)
+        and snap_duration > 0
+    ):
+        sidecar["duration_seconds"] = round(float(snap_duration), 3)
     if clip_attribution_override is not None:
         sidecar["music_attribution"] = clip_attribution_override
     try:
@@ -11410,6 +11430,7 @@ async def keep_this(request: Request, _: None = Depends(require_admin_access)):
         "station_name": config.display_station_name,
         "track_title": kept_title,
         "track_artist": "",
+        "duration_seconds": round(len(clip_data) / bytes_per_sec, 3),
         "segment_type": kept_type,
         "source": source,
         "created_at": int(now),
@@ -11677,6 +11698,16 @@ async def clip_landing(clip_id: str, request: Request):
     station_name = sidecar.get("station_name") or config.display_station_name
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
+    clip_duration_seconds = None
+    raw_duration = sidecar.get("duration_seconds")
+    if raw_duration is not None and not isinstance(raw_duration, bool):
+        try:
+            parsed_duration = float(raw_duration)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        else:
+            if math.isfinite(parsed_duration) and 0 < parsed_duration <= CLIP_MAX_PROVABLE_DURATION_SECONDS:
+                clip_duration_seconds = max(1, round(parsed_duration))
 
     return _TEMPLATES.TemplateResponse(
         request,
@@ -11687,6 +11718,7 @@ async def clip_landing(clip_id: str, request: Request):
             "station_name": station_name,
             "track_title": track_title,
             "track_artist": track_artist,
+            "clip_duration_seconds": clip_duration_seconds,
             "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
             "og_image_url": f"{public_base_url}/og-card.png",
             "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",

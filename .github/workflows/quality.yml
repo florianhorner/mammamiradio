@@ -156,6 +156,10 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_issue_body_lint.sh
 
+      - name: Receipt-gate opt-in self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_receipt_gate_optin.sh
+
       - name: Cut-edge-release self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_cut_edge_release.sh
