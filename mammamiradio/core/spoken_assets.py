@@ -9,6 +9,7 @@ from pathlib import Path
 
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
+from mammamiradio.core.path_safety import safe_path_within
 
 MANIFEST_FILENAME = "spoken_assets.json"
 DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter", "first_listen")
@@ -139,6 +140,17 @@ def is_approved_spoken_asset(path: Path, *, assets_root: Path = DEMO_ASSETS_DIR)
     return entry is not None and entry.kind == "speech"
 
 
+def _stays_inside_root(candidate: Path, root: Path) -> bool:
+    """Whether ``candidate`` is still inside ``root`` once symlinks are followed.
+
+    Thin wrapper over the shared containment helper so this module cannot drift
+    from the cache and handoff paths that ask the same question. The symlink
+    cycle handling that Python 3.14 made necessary lives there, in one place.
+    """
+
+    return safe_path_within(candidate, root) is not None
+
+
 def is_approved_packaged_audio_asset(path: Path, *, assets_root: Path = DEMO_ASSETS_DIR) -> bool:
     """Return whether a speech or tone asset is declared, intact, and safe."""
 
@@ -150,6 +162,8 @@ def _approved_manifest_entry(path: Path, *, assets_root: Path) -> SpokenAssetEnt
 
     candidate = Path(path)
     root = Path(assets_root)
+    if not _stays_inside_root(candidate, root):
+        return None
     try:
         relative = candidate.resolve().relative_to(root.resolve())
     except (OSError, RuntimeError, ValueError):
@@ -246,9 +260,7 @@ def _parse_entry(raw: object, *, root: Path, prefix: str) -> tuple[SpokenAssetEn
     digest = str(values["sha256"]).lower()
     if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
         return None, [f"{prefix}.sha256 must be 64 lowercase hex characters"]
-    try:
-        (root / relative).resolve().relative_to(root.resolve())
-    except (OSError, RuntimeError, ValueError):
+    if not _stays_inside_root(root / relative, root):
         return None, [f"{prefix}.path escapes the asset root"]
     return (
         SpokenAssetEntry(

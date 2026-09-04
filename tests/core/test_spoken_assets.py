@@ -252,6 +252,51 @@ def test_symlink_loop_fails_closed_instead_of_raising(tmp_path):
 
     assert any("escapes the asset root" in error for error in errors)
     assert is_approved_spoken_asset(loop, assets_root=tmp_path) is False
+    # Second containment site: the per-entry lookup resolved the candidate
+    # independently and had the same raise-dependent hole. Manifest validation
+    # passing is not proof this path is guarded.
+    assert is_approved_packaged_audio_asset(loop, assets_root=tmp_path) is False
+
+
+def test_symlink_loop_is_rejected_without_relying_on_resolve_raising(tmp_path):
+    """Containment must not depend on Path.resolve() raising on a cycle.
+
+    Through 3.13 a loop raised RuntimeError from resolve() and the containment
+    check caught it incidentally. On 3.14 resolve() returns the unresolved path
+    and raises nothing. Pin the behaviour rather than the mechanism, so the
+    guard cannot silently stop firing on a future interpreter.
+    """
+
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    loop = recovery / "loop.mp3"
+    loop.symlink_to(loop.name)
+
+    # The precondition the old guard leaned on may or may not hold.
+    try:
+        loop.resolve()
+        resolve_raised = False
+    except (OSError, RuntimeError, ValueError):
+        resolve_raised = True
+
+    assert spoken_assets._stays_inside_root(loop, tmp_path) is False, (
+        f"symlink cycle must be refused whether or not resolve() raised (resolve raised: {resolve_raised})"
+    )
+
+
+def test_dangling_symlink_is_not_reported_as_escaping_the_root(tmp_path):
+    """Only a cycle is a containment failure; a missing target is not.
+
+    Reporting a dangling link as an escape would replace the accurate
+    downstream digest error with a misleading one.
+    """
+
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    dangling = recovery / "gone.mp3"
+    dangling.symlink_to("also-gone.mp3")
+
+    assert spoken_assets._stays_inside_root(dangling, tmp_path) is True
 
 
 def test_unreadable_manifested_asset_fails_closed_instead_of_raising(tmp_path, monkeypatch):

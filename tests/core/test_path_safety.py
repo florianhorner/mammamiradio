@@ -6,6 +6,7 @@ directly instead of relying on caller behavior to keep exercising it.
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from mammamiradio.core.path_safety import safe_path_within
 
@@ -88,3 +89,89 @@ def test_resolve_failure_returns_none_without_raising(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "resolve", boom)
     assert safe_path_within(target, root) is None
+
+
+def test_real_symlink_cycle_is_refused_even_when_resolve_does_not_raise(tmp_path):
+    """A cycle must be refused on its own merits, not via a resolve() exception.
+
+    The sibling test above monkeypatches ``Path.resolve`` to raise, which pins
+    the handling of an exception rather than the handling of a cycle. Python
+    3.13 and earlier raised ``RuntimeError`` here, so the two looked identical;
+    3.14 returns the unresolved path and raises nothing, and only a real cycle
+    tells the two apart.
+    """
+
+    root = tmp_path / "root"
+    root.mkdir()
+    loop = root / "loop.mp3"
+    loop.symlink_to(loop.name)
+
+    try:
+        loop.resolve(strict=False)
+        resolve_raised = False
+    except (OSError, RuntimeError):
+        resolve_raised = True
+
+    assert safe_path_within(loop, root) is None, (
+        f"symlink cycle must be refused whether or not resolve() raised (resolve raised: {resolve_raised})"
+    )
+    assert safe_path_within(loop, root, reject_symlinks=True) is None
+
+
+def test_missing_file_is_not_treated_as_a_containment_failure(tmp_path):
+    """Only a cycle is an escape. A missing path is the caller's business.
+
+    Cleanup and admission callers hand in paths that legitimately may not
+    exist; refusing them here would turn an ordinary absent candidate into a
+    containment error and change behaviour far beyond the cycle fix.
+    """
+
+    root = tmp_path / "root"
+    root.mkdir()
+    absent = root / "not-created-yet.mp3"
+
+    assert safe_path_within(absent, root) == absent.resolve()
+
+    dangling = root / "dangling.mp3"
+    dangling.symlink_to("missing-target.mp3")
+    assert safe_path_within(dangling, root) == (root / "missing-target.mp3").resolve()
+
+
+def test_path_like_whose_resolve_returns_a_non_path_is_refused(tmp_path):
+    """A resolution result that is not a Path is not containment.
+
+    Cleanup callers are exercised with ``MagicMock(spec=Path)`` doubles. A
+    spec'd mock passes ``isinstance(path, Path)`` but answers ``resolve()``
+    with a plain mock, and that mock answers ``is_relative_to()`` truthily.
+    Without this guard the helper reports containment for an object that was
+    never a path, and callers that protect contained files stop acting.
+    """
+
+    root = tmp_path / "root"
+    root.mkdir()
+    double = MagicMock(spec=Path)
+
+    assert isinstance(double, Path), "precondition: a spec'd mock passes isinstance"
+    assert safe_path_within(double, root) is None
+
+
+def test_producer_ownership_helpers_refuse_a_cycle_without_raising(tmp_path):
+    """Producer ownership checks must answer, never raise, on malformed state.
+
+    `_is_tmp_render` and `_is_under` decide whether the producer owns a file
+    and may delete it. They previously caught only OSError, so the
+    RuntimeError that Python 3.13 and earlier raised on a symlink cycle
+    escaped into the audio path instead of returning a verdict. An exception
+    there risks the stream; a False does not.
+    """
+
+    from mammamiradio.scheduling.producer import _is_under
+
+    tmp_dir = tmp_path / "tmp"
+    tmp_dir.mkdir()
+    loop = tmp_dir / "loop.mp3"
+    loop.symlink_to(loop.name)
+
+    assert _is_under(loop, tmp_dir) is False
+    assert _is_under(tmp_dir / "plain.mp3", tmp_dir) is True
+    assert _is_under(tmp_path / "elsewhere.mp3", tmp_dir) is False

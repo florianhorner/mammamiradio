@@ -6674,7 +6674,9 @@ def _resolve_static_file(filename: str) -> Path | None:
     static_root = _STATIC_DIR.resolve()
     try:
         candidate = (static_root / filename).resolve()
-    except OSError:
+    except (OSError, RuntimeError):
+        # RuntimeError is what Python 3.13 and earlier raise on a symlink
+        # cycle. Uncaught, it left this route answering 500 instead of 404.
         return None
 
     if not candidate.is_relative_to(static_root) or not candidate.is_file():
