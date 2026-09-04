@@ -352,7 +352,19 @@ class Track:
 
     @property
     def display(self) -> str:
-        """Human-readable label used in logs and APIs."""
+        """Human-readable label used in logs and APIs.
+
+        An artist-less track (an untagged local file — ``local_library`` refuses
+        to invent an artist from a filename slug) renders here with a dangling
+        leading separator. That is WRONG, and deliberately not fixed here: this
+        value reaches ``up_next[].title`` on the frozen v1 integration surface,
+        so changing it is a contract change. See
+        ``docs/contract-proposals/003-title-only-track-label.md``; it lands with
+        a contract window, not in an ordinary fix.
+
+        Every listener- and operator-facing surface already renders these tracks
+        title-only, because they read ``metadata.title_only`` rather than this.
+        """
         return f"{self.artist} – {self.title}"
 
     @cached_property

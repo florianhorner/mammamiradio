@@ -1056,6 +1056,39 @@ def test_programme_table_desktop_colgroup_has_all_columns() -> None:
         assert f'class="{col}"' in text, f'renderProgramme() must emit <col class="{col}"> inside the colgroup.'
 
 
+def test_scaletta_category_only_labels_are_not_repeated() -> None:
+    """A category badge must not be followed by the same category as its title."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+
+    assert "function normaliseSegmentLabel(value)" in text
+    assert "const titleIsBareSegment=typeKey!=='music'" in render_block
+    assert "typeKey==='music'?segmentText(typeKey):''" in render_block
+    assert "replace(/[_-]+/g,' ')" in text
+
+
+def test_now_playing_reads_source_kind_from_metadata_too() -> None:
+    """`source_kind` is top-level on queue rows but nested on now_streaming.
+
+    Reading only the top level silently disabled the legacy-`Unknown`
+    suppression for the one segment the operator is actually listening to.
+    """
+    text = _read_admin_html()
+    assert "function segmentSourceKind(seg)" in text
+    assert "metadata.source_kind||(seg&&seg.source_kind)" in text
+    assert "const sourceKind=segmentSourceKind(seg);" in text
+    assert "seg.source_kind==='local'" not in text, (
+        "splitTrackLabel() must resolve source_kind through segmentSourceKind(), not the bare segment field."
+    )
+
+
+def test_playlist_rows_format_title_only_tracks_without_leading_dash() -> None:
+    text = _read_admin_html()
+    assert "function trackDisplayLabel(track)" in text
+    assert "if(artist&&title)return `${artist} – ${title}`" in text
+    assert "return title||String(track&&track.display||'').trim()||'?';" in text
+
+
 def test_scaletta_actions_only_apply_to_rendered_queue_rows() -> None:
     """Predicted rows are read-only; only rendered queue rows call /api/queue/remove."""
     text = _read_admin_html()
