@@ -175,3 +175,19 @@ def test_producer_ownership_helpers_refuse_a_cycle_without_raising(tmp_path):
     assert _is_under(loop, tmp_dir) is False
     assert _is_under(tmp_dir / "plain.mp3", tmp_dir) is True
     assert _is_under(tmp_path / "elsewhere.mp3", tmp_dir) is False
+
+
+def test_malformed_path_degrades_to_none_instead_of_raising(tmp_path):
+    """Malformed input is a skipped candidate, never an exception.
+
+    Callers run this during cleanup and startup admission, where an escaping
+    exception is worse than a refused path. A null byte makes resolve() raise
+    ValueError, which sits outside the OSError/RuntimeError family the rest of
+    the function handles.
+    """
+
+    root = tmp_path / "root"
+    root.mkdir()
+
+    assert safe_path_within(Path("/tmp/a\x00b"), root) is None
+    assert safe_path_within(root / "ok.mp3", Path("/tmp/a\x00b")) is None

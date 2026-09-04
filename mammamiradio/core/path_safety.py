@@ -40,7 +40,10 @@ def safe_path_within(path: Path, root: Path, *, reject_symlinks: bool = False) -
             return None
         resolved_root = root.resolve(strict=False)
         resolved_path = path.resolve(strict=False)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
+        # ValueError is an embedded null byte. Like the others it is malformed
+        # input, not containment, and this function promises to skip a bad
+        # candidate rather than interrupt the caller.
         return None
     # This function promises a Path or None. A caller may hand in a test double
     # or other path-like whose resolve() answers with something else, and an
