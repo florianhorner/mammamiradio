@@ -529,7 +529,7 @@ def test_load_local_music_tracks_parses_names_and_paths(tmp_path):
     assert tracks["Emozioni"].artist == "Lucio Battisti"
     assert tracks["Emozioni"].local_path == named
     assert tracks["Emozioni"].source == "local"
-    assert tracks["NoHyphen"].artist == "Unknown"
+    assert tracks["NoHyphen"].artist == ""
     assert tracks["NoHyphen"].local_path == unnamed
 
 

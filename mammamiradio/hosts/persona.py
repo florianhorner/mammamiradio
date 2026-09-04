@@ -291,8 +291,14 @@ class PersonaStore:
             logger.exception("Failed to update persona")
 
     async def record_motif(self, artist: str, title: str) -> None:
-        """Append a played track to the motif history, keeping the last 20."""
-        motif = _sanitize(f"{artist} – {title}")
+        """Append a played track to the motif history, keeping the last 20.
+
+        An untagged local song has no artist, and the motif history feeds host
+        prompts — writing a dangling leading separator into it puts that straight
+        in front of the model. (``Track.display`` has the same flaw but cannot be
+        fixed here: it is on the frozen v1 wire. See contract proposal 003.)
+        """
+        motif = _sanitize(f"{artist} – {title}" if artist.strip() else title)
         try:
             persona = await self.get_persona()
             persona.motifs = [*persona.motifs, motif][-20:]

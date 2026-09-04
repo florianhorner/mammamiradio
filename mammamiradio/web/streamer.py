@@ -2421,6 +2421,26 @@ def _apply_ban(
     if removed or pin_cleared:
         state.playlist_revision += 1
 
+    # Quarantine the norm-cache artifact of every banned LOCAL file. A local
+    # track's cache key is path-derived, so re-labelling a file does not move its
+    # cache entry, and the sidecar is only rewritten when the track next plays.
+    # A file banned before it plays again therefore keeps a sidecar carrying its
+    # PRE-ban identity, while the ban is stored under the new one — and the
+    # rescue gate reads the sidecar. Without this, banning a song straight after
+    # the metadata upgrade left the old cache file airable forever. Same reason
+    # the external-download path quarantines its artifact on ban.
+    import contextlib
+
+    from mammamiradio.playlist.downloader import reject_cached_download as _reject_cached_download
+
+    for track in tracks:
+        if getattr(track, "local_path", None) is None:
+            continue
+        cache_key = getattr(track, "cache_key", "")
+        if cache_key:
+            with contextlib.suppress(Exception):
+                _reject_cached_download(config.cache_dir, cache_key, "operator_blocklist")
+
     def _matches_blocklist(segment: Segment) -> bool:
         # Use the shared segment identity so missing artist metadata is
         # normalized consistently at mutation and playback gates.
@@ -2484,9 +2504,13 @@ def _normalize_preference_key(raw_key: object) -> tuple[tuple[str, str], str] | 
     title_raw = str(raw_key[1] or "").strip()
     artist = artist_raw.lower()
     title = title_raw.lower()
-    if not (artist and title):
+    # Title-only is a real key, same rule as _now_playing_music_track and the
+    # blocklist. Requiring an artist here made an untagged local song
+    # un-likeable from the rotation list — and un-CLEARABLE, since a preference
+    # migrated onto ("", title) renders as pressed and the clear press 422s.
+    if not title:
         return None
-    display = f"{artist_raw} - {title_raw}"
+    display = f"{artist_raw} - {title_raw}" if artist_raw else title_raw
     return (artist, title), display
 
 
@@ -2524,11 +2548,20 @@ def _now_playing_music_track(now_seg: object) -> Track | None:
                 title = left
             else:
                 title = raw_title
-    if not (artist and title):
+    if not title:
+        # Only reach for the label when the metadata gave us no title at all.
+        # A title-only song legitimately has artist == "" (an untagged local
+        # file), and splitting its label here would invent an artist out of a
+        # song title that merely contains a dash.
+        #
+        # Deliberately NOT falling back to a bare unsplittable label: the norm-
+        # cache rescue path leaves `title_only` unset precisely because a
+        # humanized filename is not a trustworthy bare title, and a ban is
+        # durable — persisting a junk key is worse than refusing the action.
         parsed_label = _split_artist_title_label(now_seg.get("label"))
         if parsed_label is not None:
             artist, title = parsed_label
-    if not (artist and title):
+    if not title:
         return None
     return Track(title=title, artist=artist, duration_ms=0)
 
@@ -2555,6 +2588,17 @@ def _resolve_preference_target(state: StationState, body: dict) -> tuple[tuple[s
     if body.get("now_playing") is True or legacy_now_playing:
         target = _now_playing_preference_target(state)
         if target is None:
+            # Two different situations, two different ways out. Saying "nothing
+            # musical is on air" while a song is audibly playing is a message
+            # that lies to the operator (leadership #5).
+            now_seg = state.now_streaming or {}
+            if isinstance(now_seg, dict) and now_seg.get("type") == "music":
+                return JSONResponse(
+                    content={
+                        "ok": False,
+                        "error": "I can’t tell which song this is to mark it. Mark it from the rotation list instead.",
+                    }
+                )
             return JSONResponse(
                 content={"ok": False, "error": "Only a song can be marked — nothing musical is on air right now."}
             )
