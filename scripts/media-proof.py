@@ -1081,6 +1081,7 @@ def run_full(
     images: Mapping[str, str | None],
     image_arches: Iterable[str] = IMAGE_ARCHES,
 ) -> dict[str, Any]:
+    image_arches = tuple(image_arches)
     catalog = _read_catalog()
     report = _new_report(mode="full", catalog=catalog)
     report["image_arches"] = list(image_arches)
