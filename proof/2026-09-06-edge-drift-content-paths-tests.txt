@@ -1,0 +1,17 @@
+# Test evidence — edge drift by content paths (commit 0b00c135)
+# Recorded 2026-09-05T22:46:03Z on tree 1d298427410be500606de106f085da35ab84b280
+
+$ .venv/bin/python -m pytest tests/ -q -n auto --no-cov -p no:cacheprovider
+8702 passed, 4 skipped, 18 warnings in 143.22s (0:02:23)
+
+$ bash tests/workflows/test_cut_edge_release.sh
+30 PASS lines, 0 FAIL
+
+$ bash tests/workflows/test_land_queue.sh
+36 PASS lines, 0 FAIL
+
+$ shellcheck scripts/edge-select.sh scripts/cut-edge-release.sh
+clean
+
+$ real history: edge_image_drift f4ebb43 f653a237 (pinned SHA vs its own edge-cut commit)
+no content drift (previously a false refusal)
