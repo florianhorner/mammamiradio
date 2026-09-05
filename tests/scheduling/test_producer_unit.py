@@ -9432,6 +9432,65 @@ async def test_starter_bridge_preserves_pin_and_uses_starter_from_mixed_pool(tmp
 
 
 @pytest.mark.asyncio
+async def test_starter_bridge_asks_the_selector_for_starter_media():
+    """Deterministic guard for the restrict_to_source wiring.
+
+    The mixed-pool test above cannot do this job: without the restriction the
+    weighted selector still returns a starter most of the time, so deleting the
+    argument leaves it green in the large majority of runs.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    state.playlist.append(Track(title="Operator Local", artist="Operator", duration_ms=180_000, source="local"))
+    state.playlist_revision += 1
+    captured: dict = {}
+
+    def _select(*_args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    with patch(f"{PRODUCER_MODULE}._select_accepted_music_track", side_effect=_select):
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            AsyncMock(return_value=True),
+            state,
+            _make_config(),
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert ok is False
+    assert captured.get("restrict_to_source") == "starter"
+
+
+@pytest.mark.asyncio
+async def test_starter_bridge_declines_when_the_crate_holds_no_starter_media():
+    """The restriction emptying the pool must fall through, not raise.
+
+    Reachable on a starter crate the scanner overlaid with locals once the
+    operator has per-row-banned every starter. Unlike the parametrized test
+    below, this runs the real selector rather than injecting the error.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    state.playlist[:] = [Track(title="Operator Local", artist="Operator", duration_ms=180_000, source="local")]
+    state.playlist_revision += 1
+
+    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock) as render_music:
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            AsyncMock(return_value=True),
+            state,
+            _make_config(),
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert ok is False
+    render_music.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "selection_case",
     ["reservation_pending", "runtime_error", "none", "nonstarter"],

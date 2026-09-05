@@ -1420,6 +1420,71 @@ def test_restrict_to_source_limits_mixed_pool_to_starters() -> None:
     assert picked is starter
 
 
+def test_restrict_to_source_narrows_the_weighted_pool_not_just_the_bag() -> None:
+    """The sibling test restricts to a single starter, which is bag order either way.
+
+    Restricting to a source with several members must reach the weighted
+    selector and offer only that source.
+    """
+    starter = _starter_track(0)
+    locals_ = [
+        Track(
+            title=f"Operator {index}",
+            artist="Operator",
+            duration_ms=180_000,
+            source="local",
+            local_path=Path(f"/music/local-{index}.mp3"),
+        )
+        for index in range(2)
+    ]
+    state = StationState(playlist=[starter, *locals_], playlist_source=PlaylistSource(kind="starter"))
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=lambda c, **k: [c[0]]) as choices:
+        picked = state.select_next_track(restrict_to_source="local")
+
+    choices.assert_called_once()
+    assert all(track.source == "local" for track in choices.call_args.args[0])
+    assert picked.source == "local"
+
+
+def test_restrict_to_source_with_no_matching_track_raises() -> None:
+    """A starter-free crate must fail loudly so the bridge falls to the next rung.
+
+    Reachable: a starter crate the scanner overlays with locals, after the
+    operator per-row-bans every starter (single removals are starvation-exempt).
+    """
+    local = Track(
+        title="Only Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/only.mp3"),
+    )
+    state = StationState(playlist=[local], playlist_source=PlaylistSource(kind="starter"))
+
+    with pytest.raises(RuntimeError):
+        state.select_next_track(restrict_to_source="starter")
+
+
+def test_restrict_to_source_leaves_a_pin_from_another_source_untouched() -> None:
+    """Consuming the pin here would advance the revision and lose it silently."""
+    starter = _starter_track(0)
+    local = Track(
+        title="Pinned Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/pinned.mp3"),
+    )
+    state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="starter"))
+    state.pinned_track = local
+    revision = state.pinned_track_revision
+
+    assert state.select_next_track(restrict_to_source="starter") is starter
+    assert state.pinned_track is local
+    assert state.pinned_track_revision == revision
+
+
 def test_exhausted_starter_cycle_without_available_reservation_fails_closed() -> None:
     starter = _starter_track(0)
     state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))
@@ -1993,6 +2058,37 @@ def test_select_next_track_heading_lift_caps_in_lopsided_pool():
     tagged_w = weights[candidates.index(tagged)]
     normal_w = weights[candidates.index(rest[0])]
     assert tagged_w == pytest.approx(normal_w * HEADING_MAX_LIFT)
+
+
+def test_local_lift_composes_with_the_heading_cap_rather_than_being_bounded_by_it():
+    """HEADING_MAX_LIFT bounds the hunt lift, not a track's total weight.
+
+    The x2 for operator files is an ordinary base-weight factor, so a local hunt
+    match out-weighs a starter non-match by 2 x HEADING_MAX_LIFT. Pinned here
+    because the sibling cap test uses the default ``youtube`` source and so
+    cannot see the interaction at all.
+    """
+    heading = _heading()
+    tagged = Track(
+        title="Hunt Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/hunt.mp3"),
+    )
+    tagged.heading_id = heading.id
+    rest = [_starter_track(index) for index in range(400)]
+    state = StationState(
+        playlist=[tagged, *rest],
+        playlist_source=PlaylistSource(kind="starter"),
+        heading=heading,
+    )
+
+    candidates, weights = _capture_selection_weights(state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    tagged_w = weights[candidates.index(tagged)]
+    normal_w = weights[candidates.index(rest[0])]
+    assert tagged_w == pytest.approx(normal_w * HEADING_MAX_LIFT * 2.0)
 
 
 def test_select_next_track_all_hunt_pool_does_not_zero_weights():

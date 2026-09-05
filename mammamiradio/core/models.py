@@ -3212,7 +3212,7 @@ class StationState:
                 raise RuntimeError("Playlist has no eligible tracks in the current starter cycle")
             # Strict bag order applies only to a genuinely starter-only pool.
             # A mixed local+starter rotation must reach the weighted selector
-            # below so local files can receive their configured lift.
+            # below so local files can receive their x2 base-weight lift.
             starter_only_pool = all(track.source == "starter" for track in pool)
             if starter_only_pool:
                 # Startup supplied one manifest-digest-pinned bag cycle in
@@ -3327,10 +3327,6 @@ class StationState:
         # the heading-match flag and the split base-weight sums the adaptive lift needs.
         heading = active_heading
         preference_scores = preference_score_map(self.song_preferences)
-        # Local files are the base whenever any are in the live pool. A x2 lift
-        # over starters keeps operator music as the majority share without
-        # silencing the starter bag (see starter no-repeat reservation above).
-        local_is_base = any(track.source == "local" for track in pool)
         base_weights: list[float] = []
         heading_flags: list[bool] = []
         sum_heading_base = 0.0
@@ -3345,7 +3341,15 @@ class StationState:
             else:
                 w *= 1.2  # Never-played bonus
 
-            if local_is_base and track.source == "local":
+            # Operator files are the base of a mixed crate. This is an ordinary
+            # base-weight factor, so it composes with every other one — including
+            # the Record Hunt lift, which means a local hunt match can out-weigh a
+            # starter non-match by 2 x HEADING_MAX_LIFT. That is intended:
+            # HEADING_MAX_LIFT bounds the hunt lift, not a track's total weight,
+            # exactly as the never-played and popularity factors already stack.
+            # How much of the show your own music takes therefore grows with how
+            # many files you have; it is not a fixed share.
+            if track.source == "local":
                 w *= 2.0
 
             # Artist diversity: penalize over-represented artists in recent history
