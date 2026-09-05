@@ -9407,9 +9407,7 @@ async def test_starter_bridge_preserves_pin_and_uses_starter_from_mixed_pool(tmp
         queued.append(segment)
         return True
 
-    with patch(
-        f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered
-    ) as render_music:
+    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered) as render_music:
         ok = await producer._queue_starter_catalog_bridge_segment(
             _accept,
             state,
