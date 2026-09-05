@@ -34,7 +34,7 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). Recovery is under "Cutting a stable release" below: land `git revert <cut-sha>`, the whole cut commit rather than the version files alone, then debug.
 
-To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily and raises a flag if it never closed.
+To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily and raises a flag if it never closed. `dependabot-automerge.yml` reads the same verdict on every Dependabot PR event, on the cut commit's push to `main`, and hourly: while the window is open it disarms auto-merge on Dependabot PRs and labels them `cut-window-hold`, so no dependency bump moves `main` off the cut with no build behind it; once the window closes, the sweep re-arms only the held patch and minor updates and drops the label. A held major update, or a PR a maintainer disarmed by hand, is left for a human.
 
 ## First-listen operator check
 

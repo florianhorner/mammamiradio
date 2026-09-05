@@ -103,7 +103,7 @@ Hard rules agents must not invent around:
   next PR only when it is actually ready to land.
 - Let pure patch/minor Python Dependabot PRs with auto-merge armed land through
   Dependabot when they remain current and fresh required checks pass. A stale
-  PR parks until an authenticated maintainer updates it; this is deliberate. If
+  PR parks until an authenticated maintainer updates it; this is deliberate. If A current PR may also be disarmed and labelled `cut-window-hold` while the cut window is open; leave it, the sweep re-arms it when the window closes.
   quality fails on an unrelated one-test timeout, verify the focused test
   locally before treating it as a rerunnable flake; stop on any deterministic
   dependency break.
