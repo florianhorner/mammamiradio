@@ -109,14 +109,15 @@ edge_newest_built_sha() {
 # Returns 2 when the diff itself could not be computed — an unverifiable drift
 # check is a refusal, never an assumed-clean pass.
 edge_image_drift() {
-  local target="$1" ref="${2:-origin/main}" changed
-  # shellcheck disable=SC2086  # IMAGE_CONTENT_PATHS intentionally word-splits into pathspecs
+  local target="$1" ref="${2:-origin/main}" changed top
   # No `|| true`: `git diff --name-only` already exits 0 for both changed and
   # unchanged, so a non-zero here is a real verification failure (bad object,
   # git error). Treat it like every other unverifiable state — hard-fail.
   # Pathspecs are relative to the cwd; anchor at the repository root so a caller in
   # a subdirectory cannot get an empty diff and accept a stale image.
-  changed="$(cd "$(git rev-parse --show-toplevel)" && git diff --name-only "$target" "$ref" -- $IMAGE_CONTENT_PATHS 2>/dev/null)" || return 2
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 2
+  # shellcheck disable=SC2086  # IMAGE_CONTENT_PATHS intentionally word-splits into pathspecs
+  changed="$(cd "$top" && git diff --name-only "$target" "$ref" -- $IMAGE_CONTENT_PATHS 2>/dev/null)" || return 2
   printf '%s' "$changed"
   [ -z "$changed" ]
 }

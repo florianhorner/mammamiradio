@@ -200,7 +200,8 @@ fi
 
 if [ "$SHA" != "$HEAD_SHORT" ]; then
   echo "Note: pinning to the latest BUILT main commit $SHA (origin/main HEAD is $HEAD_SHORT;" >&2
-  echo "      the commits in between touch no add-on image files)." >&2
+  echo "      the commits in between change nothing that enters the image or its" >&2
+  echo "      add-on metadata; some may be trigger-only commits with no or a failed build)." >&2
 fi
 
 # OWNER feeds the PR body and image-path string below. Derive it AFTER target
@@ -243,9 +244,10 @@ shows an in-place Update.
 
 \`$SHA\` is the newest \`main\` commit with a green \`Build HA Addon\` image (that run is the
 proof both per-arch images were pushed). It may trail \`origin/main\` HEAD ($HEAD_SHORT) when
-the tip commits touch only files that do not rebuild the image (tests/docs/CI); no \`:<sha>\`
-image exists for those, so pinning to the newest *built* commit is what guarantees the Update
-can actually pull. Manual edge release; stable is untouched.
+the tip commits change nothing that enters the image or its add-on metadata (tests, docs,
+CI, dev lockfiles). Some of those commits may have no \`:<sha>\` image at all, so pinning to
+the newest *built* commit is what guarantees the Update can actually pull. Manual edge
+release; stable is untouched.
 
 ## Proof
 

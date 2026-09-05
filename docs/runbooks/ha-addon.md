@@ -12,7 +12,7 @@ Code change
   → push/merge to main                                        [cut window opens]
   → addon-build.yml CI validates + builds :sha and :<short-sha> without publishing, proves both images, then publishes and smokes them (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, 20-run HA Green evidence, and prebuilt :sha checks
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, the opt-in 20-run HA Green evidence (MMR_REQUIRE_HA_RECEIPTS=1), and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs both per-arch :sha images and proves their host-published ports before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
                                                               [cut window closes]
@@ -685,7 +685,8 @@ Before merging ANY change that touches addon files:
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)
 - [ ] `make media-check` passes; a release also has complete `make media-proof`
-      output and the 20-run Home Assistant Green cold-listen receipt
+      output, and the 20-run Home Assistant Green cold-listen receipt when the
+      opt-in gate is armed (`MMR_REQUIRE_HA_RECEIPTS=1`)
 - [ ] If new config option: added to config.yaml + run.sh + translations
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
