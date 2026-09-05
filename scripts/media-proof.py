@@ -1082,6 +1082,8 @@ def run_full(
     image_arches: Iterable[str] = IMAGE_ARCHES,
 ) -> dict[str, Any]:
     image_arches = tuple(image_arches)
+    if not image_arches:
+        raise ProofToolError("at least one image architecture must be selected")
     catalog = _read_catalog()
     report = _new_report(mode="full", catalog=catalog)
     report["image_arches"] = list(image_arches)

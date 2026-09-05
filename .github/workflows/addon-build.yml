@@ -175,6 +175,7 @@ jobs:
 
   media-proof:
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     needs: [validate, build]
     permissions:
       contents: read
