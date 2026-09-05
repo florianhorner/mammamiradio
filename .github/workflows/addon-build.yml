@@ -58,11 +58,11 @@ jobs:
       - name: Install FFmpeg for strict media validation
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
-      # Report-only while the twelve starter tracks are absent by design: the
-      # proof still runs and uploads its report, but validate does not fail on
-      # the missing content. The stable promotion media-proof job in
-      # addon-release.yml and the hard gate in scripts/pre-release-check.sh
-      # (section 10) keep the release path blocked until the content lands.
+      # The quick proof here stays report-only so the validate lane keeps its
+      # fast feedback. The hard media gates are the full per-architecture
+      # media-proof job below (blocking, native runners), the same job before
+      # stable promotion in addon-release.yml, and scripts/pre-release-check.sh
+      # section 10.
       - name: Media-rights report (report-only)
         run: |
           if python scripts/media-proof.py --quick --output media-proof.json; then

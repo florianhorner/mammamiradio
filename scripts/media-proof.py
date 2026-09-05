@@ -4,9 +4,10 @@
 ``--quick`` is the offline source-tree gate behind ``make media-check``.  The
 default full proof also builds a wheel and sdist in an isolated temporary
 source copy, validates two already-built add-on images, and runs the focused
-Jamendo transience tests.  CI may select one image architecture so each probe
-runs on its native runner.  This command never builds, pulls, pushes, or
-publishes a container image.
+Jamendo transience tests.  ``--image-arch`` restricts only the image checks to
+one architecture so CI can run each probe on its native runner; the source,
+package, and transient checks still run on every leg.  This command never
+builds, pulls, pushes, or publishes a container image.
 """
 
 from __future__ import annotations
@@ -1082,6 +1083,7 @@ def run_full(
 ) -> dict[str, Any]:
     catalog = _read_catalog()
     report = _new_report(mode="full", catalog=catalog)
+    report["image_arches"] = list(image_arches)
     _starter_groups(report, catalog)
 
     if shutil.which("ffprobe") is None:
@@ -1426,7 +1428,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image-arch",
         choices=IMAGE_ARCHES,
-        help="validate only this image architecture (CI uses this on native per-arch runners)",
+        help=(
+            "restrict the image checks to this architecture; source, package, and transient "
+            "checks still run and the other --*-image value is ignored (CI uses this on "
+            "native per-arch runners)"
+        ),
     )
     return parser
 
