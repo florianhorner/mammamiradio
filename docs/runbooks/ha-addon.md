@@ -32,7 +32,7 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **The cut window.** Between the cut merge and the second `promote` job, `main` advertises a version whose image is not published yet. A fresh install of the stable add-on fails and rolls back, and an update fails to download. A station already playing keeps playing, because the Supervisor pulls the new image before it stops the old container.
 
-The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). Recovery is under "Cutting a stable release" below: land `git revert <cut-sha>`, the whole cut commit rather than the version files alone, then debug.
+The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). Recovery is under "Cutting a stable release" below: land `git revert <cut-sha>`, the whole cut commit rather than the version files alone, with the cut's review receipt directory restored, then debug.
 
 To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily and raises a flag if it never closed.
 
@@ -140,7 +140,11 @@ worked, and the watchdog was satisfied. Nothing in the log grep would have shown
 Prolonged-silence detection cannot catch this either, because listeners fail before
 they are ever counted as listeners.
 
-**The cut — 4 steps, when the edge line feels good:**
+**The cut — 4 steps, when the edge line feels good.** Land the cut PR only when you can
+finish the tag and the QA in the same sitting: the window opens at the merge, and every
+hour it stays open is a failed install for someone. The 3.0.0 cut of 2026-09-02 merged in
+the evening with QA deferred to "the stable image", which cannot exist before the tag; it
+had to be reverted the same night.
 
 1. **Land one `chore(release): cut X.Y.Z` PR** via `/ship`:
    - `pyproject.toml`, `ha-addon/mammamiradio/config.yaml`,
@@ -164,9 +168,11 @@ they are ever counted as listeners.
    git fetch origin main --tags
    CUT_SHA="$(git rev-parse origin/main)"
    ```
-   The cut must already contain the physical 20-run HA Green receipt set for its complete release content, recorded with the commands in
-   [`docs/music-sources.md`](../music-sources.md). Pre-flight fails loud if the
-   evidence is missing, stale, or over its two-second p95, or if the tag/version,
+   The physical 20-run HA Green receipt gate is opt-in (`MMR_REQUIRE_HA_RECEIPTS=1`);
+   unset, pre-flight prints a waiver and continues. When armed, the cut must already
+   contain the receipt set for its complete release content, recorded with the commands in
+   [`docs/music-sources.md`](../music-sources.md), and pre-flight fails loud if the
+   evidence is missing, stale, or over its two-second p95. Pre-flight always fails loud if the tag/version,
    release metadata, changelog head, or either per-arch `:sha` image disagrees.
 
 2. **Wait for `addon-build.yml` green** on `$CUT_SHA` (~15-25 min; the PR touches
@@ -224,7 +230,9 @@ they are ever counted as listeners.
 
    **The window closes only when both arch `promote` jobs finish** — not at tag push.
    Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`, or just
-   `bash scripts/check-advertised-version.sh`.
+   `bash scripts/check-advertised-version.sh --version X.Y.Z`. Pass the version: the bare
+   form reads `config.yaml` from your current checkout, which on a stale branch still
+   says the previous version and reports a false pass.
 
 4. **Write the GitHub Release.** Nothing in CI creates it, and HACS keys the integration
    update off it. There is **no** "open the next RC" step — you are back at steady state.
@@ -236,7 +244,11 @@ window is a broken install for everyone.
 Revert the whole cut commit, not just the version files. The cut also folded both
 changelogs, so a version-only revert leaves the ha-addon CHANGELOG head at the unreleased
 number: `check-changelog-sync.sh` then refuses the commit locally, and `pre-release-check.sh`
-fails the PR in CI. Reverting the commit is atomic across both and passes each gate.
+fails the PR in CI. One file must survive the revert: the cut committed a review receipt
+under `proof/preship-reviews/v2/<hash>/`, and the evidence checker refuses a PR that deletes
+a base receipt. After `git revert --no-commit <cut-sha>`, run
+`git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit. The 3.0.0 revert
+(#1088) is the worked example.
 
 **Never tag the `chore(edge)` metadata commit** — `addon-build.yml` skips those, so it has
 no `:sha` image and pre-flight will reject the tag.
@@ -474,7 +486,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
-`addon-release.yml` does not rebuild the add-on. It first validates at least 20
+`addon-release.yml` does not rebuild the add-on. The physical HA Green receipt gate is opt-in (`MMR_REQUIRE_HA_RECEIPTS=1`; unset, pre-flight prints a waiver). When armed, it first validates at least 20
 physical HA Green cold-launch receipts with one release version and hardware-neutral content digest, requires p95 at or below two seconds, and proves the tagged tree matches after excluding only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag. Recording assumes a trusted single-writer checkout; pre/post snapshots do not attest against concurrent change-and-restore during a run.
 It then verifies that both per-arch `:${git_sha}` images exist, runs the
 launch and host-published-port proofs for each native architecture before stable
@@ -679,7 +691,7 @@ Before merging ANY change that touches addon files:
 - [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —
       `scripts/check-merge-gate.sh` passes if anything about merging looks off
 
-**After merging a cut commit**, follow "Cutting a stable release" above. Do not tag `HEAD`: tag the cut commit itself, and if the release workflow fails, land `git revert <cut-sha>` — the whole cut commit, not the version files alone.
+**After merging a cut commit**, follow "Cutting a stable release" above. Do not tag `HEAD`: tag the cut commit itself, and if the release workflow fails, land `git revert <cut-sha>` — the whole cut commit, not the version files alone, with the cut's review receipt directory restored.
 
 ## Release invariants gate (2026-04-27 onward)
 
@@ -835,6 +847,8 @@ rolls back; an update fails to download but leaves a playing station alone.
 - **Release failed or abandoned?** Land `git revert <cut-sha>` immediately, then debug.
   Revert the commit rather than the version files alone: the cut folded both changelogs
   too, and a partial revert is refused by `check-changelog-sync.sh` and `pre-release-check.sh`.
+  Keep the cut's review receipt directory in the revert; the evidence gate refuses a PR
+  that deletes a base receipt.
 - `advertised-version.yml` raises a flag daily if this state persists.
 
 ## Hardcoded values that must stay in sync

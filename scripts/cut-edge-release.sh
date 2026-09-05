@@ -167,9 +167,9 @@ fi
 if [ -n "$CHANGED" ]; then
   echo "ERROR: add-on image files changed between $SHA and origin/main:" >&2
   printf '%s\n' "$CHANGED" | sed 's/^/         /' >&2
-  echo "       The edge branch takes its metadata (options/schema, run.sh) from" >&2
-  echo "       origin/main, so pinning $SHA would advertise metadata that image does" >&2
-  echo "       not implement." >&2
+  echo "       These files enter the image or its add-on metadata. The edge branch" >&2
+  echo "       takes its metadata (options/schema, run.sh) from origin/main, so pinning" >&2
+  echo "       $SHA would advertise metadata that image does not implement." >&2
   if [ -n "$REQUESTED_SHA" ]; then
     # Mode-aware: with an explicit target the problem is never "wait for a build".
     # A newer image-affecting commit has landed, so this commit can no longer be

@@ -56,6 +56,17 @@ SCRIPT_IMAGE_PATHS="$(
 }
 pass "cut-edge IMAGE_PATHS matches the add-on build trigger paths"
 
+# The drift check reads IMAGE_CONTENT_PATHS (files that enter the image or its
+# metadata). Every entry must also be a build trigger, or a content change could
+# land without an image being built for it.
+CONTENT_PATHS="$(sed -n 's/^IMAGE_CONTENT_PATHS="\([^"]*\)"$/\1/p' "$SELECT_LIB")"
+[ -n "$CONTENT_PATHS" ] || fail "scripts/edge-select.sh must declare IMAGE_CONTENT_PATHS"
+for _p in $CONTENT_PATHS; do
+  printf '%s\n' "$SCRIPT_IMAGE_PATHS" | grep -qxF "$_p" \
+    || fail "IMAGE_CONTENT_PATHS entry '$_p' is not a build trigger in IMAGE_PATHS"
+done
+pass "IMAGE_CONTENT_PATHS is a subset of the build trigger paths"
+
 # The exact-target lookup must filter server-side. Counting successes client-side
 # over a capped page reintroduces the window bug one level down: enough newer
 # failed reruns on the same commit would push the successful run out of the page.
@@ -182,7 +193,22 @@ case "$1" in
   fetch)    : ;;
   rev-list) printf '%s\n' "${GIT_MOCK_REVLIST:-}" ;;
   show)     echo "version: ${GIT_MOCK_SHOW_VERSION:-aeafa99}" ;;   # origin/main:edge-config
-  diff)     [ -n "${GIT_MOCK_DIFF_FAIL:-}" ] && exit 1; printf '%s\n' "${GIT_MOCK_DIFF:-}" ;;
+  # Pathspec-aware: only GIT_MOCK_DIFF entries under one of the pathspecs after
+  # `--` are reported, the way real `git diff -- <paths>` behaves, so a test can
+  # tell a trigger-only change from one that enters the image.
+  diff)
+    [ -n "${GIT_MOCK_DIFF_FAIL:-}" ] && exit 1
+    _specs=""; _seen=""
+    for _a in "$@"; do
+      if [ -n "$_seen" ]; then _specs="$_specs $_a"; elif [ "$_a" = "--" ]; then _seen=1; fi
+    done
+    [ -z "$_specs" ] && { printf '%s\n' "${GIT_MOCK_DIFF:-}"; exit 0; }
+    printf '%s\n' "${GIT_MOCK_DIFF:-}" | while IFS= read -r _f; do
+      [ -n "$_f" ] || continue
+      for _s in $_specs; do
+        case "$_f" in "$_s"|"$_s"/*) echo "$_f"; break ;; esac
+      done
+    done ;;
   remote)   echo "https://github.com/florianhorner/mammamiradio.git" ;;
   checkout|add|commit|push) echo "$*" >> "$GIT_MOCK_LOG" ;;
   *) echo "MOCK git: unexpected verb '$1' (args: $*) — would have run real git" >&2; exit 99 ;;
@@ -266,6 +292,17 @@ never_committed      || fail "image-drift must not commit"
 never_pushed         || fail "image-drift must not push"
 printf '%s' "$RUN_OUT" | grep -q "image files changed" || fail "image-drift message should name the drift"
 pass "image-affecting drift since built commit hard-fails (no stale-image pin)"
+
+# Case 4b: a build TRIGGER changed since the built commit but nothing that enters
+# the image (a dev lockfile bump) => the pin proceeds. This is the Dependabot
+# deadlock of 2026-09-02: requirements-dev.txt moved on main with no build for the
+# new commit, and both selection modes refused every candidate.
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_DIFF="requirements-dev.txt"
+[ "$RUN_RC" -eq 0 ]  || fail "trigger-only drift must not block the pin (got $RUN_RC: $RUN_OUT)"
+created_pr           || fail "trigger-only drift should still open the edge PR"
+[ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "trigger-only drift should pin the built SHA (got $WROTE_VERSION)"
+printf '%s' "$RUN_OUT" | grep -q "image files changed" && fail "trigger-only drift must not be reported as image drift"
+pass "trigger-only drift (dev lockfile) does not block the edge pin"
 
 # Case 5: no successful build run anywhere => HARD-fail, no PR.
 run_cut GH_MOCK_RUN_SHAS=""

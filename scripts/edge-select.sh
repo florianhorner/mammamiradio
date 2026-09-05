@@ -11,9 +11,12 @@
 #   I2  edge `version:` is always a short SHA with a SUCCESSFUL `Build HA Addon`
 #       run for that exact commit — the version string IS the image tag the
 #       Supervisor pulls, so an unbuilt SHA is an uninstallable add-on.
-#   I3  edge never pins a built SHA when any IMAGE_PATHS file differs between
-#       that SHA and origin/main — the edge branch takes its metadata from main,
-#       so the pinned image would not implement the metadata being advertised.
+#   I3  edge never pins a built SHA when any IMAGE_CONTENT_PATHS file differs
+#       between that SHA and origin/main — the edge branch takes its metadata from
+#       main, so the pinned image would not implement the metadata being advertised.
+#       Files that only re-trigger the build (a dev lockfile, a validator script, a
+#       test) are in IMAGE_PATHS but not in IMAGE_CONTENT_PATHS: they never enter
+#       the image, so they never make an older image stale.
 #
 # Every function fails CLOSED: an unverifiable state (gh error, git error) is a
 # refusal, never a soft pass.
@@ -22,7 +25,16 @@
 
 # Paths that trigger Build HA Addon — must mirror addon-build.yml `on.push.paths`.
 # tests/workflows/test_cut_edge_release.sh asserts this parity on every run.
+# Consumed by scripts/cut-edge-release.sh (sourced) and the parity tests, not here.
+# shellcheck disable=SC2034
 IMAGE_PATHS="ha-addon mammamiradio proof/media pyproject.toml requirements.txt requirements-dev.txt radio.toml model_registry.toml scripts/media-proof.py scripts/starter-catalog.py scripts/validate-addon.sh scripts/validate-starter-media.py scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py tests/media tests/playlist/test_jamendo_transient.py tests/playlist/test_legacy_media.py tests/scheduling/test_queue_mutations.py tests/web/test_streamer_routes_extended.py .github/workflows/addon-build.yml"
+
+# Paths whose content enters the add-on image or its metadata: the Dockerfile
+# COPY set (mammamiradio/, pyproject.toml, radio.toml, model_registry.toml), the
+# add-on directory (Dockerfile, rootfs, config.yaml) and the workflow that picks
+# the base image and build args. The drift check (I3) uses THIS set. It must stay
+# a subset of IMAGE_PATHS; tests/workflows/test_cut_edge_release.sh asserts both.
+IMAGE_CONTENT_PATHS="ha-addon mammamiradio pyproject.toml radio.toml model_registry.toml .github/workflows/addon-build.yml"
 
 # The edge add-on config whose `version:` field IS the image tag the Supervisor
 # pulls. cut-edge-release.sh sets this before sourcing; the default serves every
@@ -85,17 +97,17 @@ edge_newest_built_sha() {
   printf '%s\n' "$match"
 }
 
-# edge_image_drift <sha> [<ref>] -> prints IMAGE_PATHS files that changed between
+# edge_image_drift <sha> [<ref>] -> prints IMAGE_CONTENT_PATHS files that changed between
 # <sha> and <ref> (default origin/main). Empty output + 0 means no drift.
 # Returns 2 when the diff itself could not be computed — an unverifiable drift
 # check is a refusal, never an assumed-clean pass.
 edge_image_drift() {
   local target="$1" ref="${2:-origin/main}" changed
-  # shellcheck disable=SC2086  # IMAGE_PATHS intentionally word-splits into pathspecs
+  # shellcheck disable=SC2086  # IMAGE_CONTENT_PATHS intentionally word-splits into pathspecs
   # No `|| true`: `git diff --name-only` already exits 0 for both changed and
   # unchanged, so a non-zero here is a real verification failure (bad object,
   # git error). Treat it like every other unverifiable state — hard-fail.
-  changed="$(git diff --name-only "$target" "$ref" -- $IMAGE_PATHS 2>/dev/null)" || return 2
+  changed="$(git diff --name-only "$target" "$ref" -- $IMAGE_CONTENT_PATHS 2>/dev/null)" || return 2
   printf '%s' "$changed"
   [ -z "$changed" ]
 }

@@ -374,13 +374,13 @@ IFS=$'\t' read -r rc out <<<"$(edge_probe "" 1)"
 [ -z "$out" ] || fail "a failed query must not print a sha"
 pass "edge: unverifiable build query refuses (soft-pass guard)"
 
-# 19: a built commit with IMAGE_PATHS drift since main is refused (invariant I3).
-# Walk back to a commit that actually differs from main under IMAGE_PATHS, so the
+# 19: a built commit with IMAGE_CONTENT_PATHS drift since main is refused (invariant I3).
+# Walk back to a commit that actually differs from main under IMAGE_CONTENT_PATHS, so the
 # fixture is real repo history rather than an asserted assumption.
 DRIFTED=""
 while IFS= read -r c; do
   # shellcheck disable=SC2086
-  if [ -n "$(git diff --name-only "$c" "$MAIN_REF" -- $(bash -c '. "'"$EDGE_LIB"'"; echo $IMAGE_PATHS'))" ]; then
+  if [ -n "$(git diff --name-only "$c" "$MAIN_REF" -- $(bash -c '. "'"$EDGE_LIB"'"; echo $IMAGE_CONTENT_PATHS'))" ]; then
     DRIFTED="$c"; break
   fi
 done < <(git rev-list --topo-order -n 40 "$MAIN_REF")

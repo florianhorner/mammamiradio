@@ -35,7 +35,10 @@ fix is one shared model, stated below.
    architecture `promote` jobs finish. If any stage of `addon-release.yml` fails, land
    `git revert <cut-sha>` first. Revert the commit rather than hand-editing the version
    files back: the cut also folded both changelogs, and a version-only revert is refused
-   by `check-changelog-sync.sh` locally and by `pre-release-check.sh` in CI.
+   by `check-changelog-sync.sh` locally and by `pre-release-check.sh` in CI. Before
+   committing the revert, restore the cut's review receipt directory
+   (`git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`): the evidence
+   checker treats a deleted base receipt as tampering and refuses the PR.
 6. **Physical proof binds complete cut content.** Finalize version, changelogs, and the V2 preship receipt before HA runs; its hardware-neutral digest survives squash and rejects all other drift, while `source_commit` remains provenance.
 
 ```
@@ -95,11 +98,14 @@ there is a real discipline on top of it:
   drift to a newer commit.
 
   Note what `--target-sha` can and cannot do: it refuses to pin *anything but* that
-  commit, but it cannot rescue a cut once an image-affecting commit has already landed
-  on top. The edge branch takes its metadata from `origin/main`, so pinning an older
-  image would advertise options the image does not implement — `cut-edge-release.sh`
-  correctly refuses. If that happens, cut a fresh release from current `main`. The flag
-  prevents drift; it does not undo it.
+  commit, but it cannot rescue a cut once a commit that changes image content
+  (`ha-addon/`, `mammamiradio/`, `pyproject.toml`, `radio.toml`, `model_registry.toml`,
+  the build workflow) has already landed on top. The edge branch takes its metadata
+  from `origin/main`, so pinning an older image would advertise options the image does
+  not implement — `cut-edge-release.sh` correctly refuses. A commit that only
+  re-triggers the build (a dev-dependency bump, a validator script, a test) does not
+  block the pin. If real content landed, cut a fresh release from current `main`. The
+  flag prevents drift; it does not undo it.
 - **Don't merge a large off-theme PR into a cut you're about to make.** It joins that
   version's changelog whether or not it soaked. Cut first, then merge the big work so it
   soaks as the *next* version's content.
