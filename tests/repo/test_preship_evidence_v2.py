@@ -2369,7 +2369,7 @@ def test_pr_rejects_self_consistent_historical_receipt_added_beside_final_receip
         source_digest=hashlib.sha256(b"historical import").hexdigest(),
     )
 
-    with pytest.raises(EvidenceError, match="vacuous|does not match the target content"):
+    with pytest.raises(EvidenceError, match=r"vacuous|does not match the target content"):
         verify_v2(repo, target="HEAD", base=base, mode="pr")
 
 
@@ -2705,14 +2705,18 @@ def test_pr_accepts_receipt_when_base_advance_is_content_profile_noop(
     pre_digest = snapshot_tree(repo, "HEAD").content_sha256
     _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
     # Empty commit: history advances, content-profile digest does not.
-    base = _git(
-        repo.root,
-        "commit-tree",
-        f"{fork_point}^{{tree}}",
-        "-p",
-        fork_point,
-        input_bytes=b"empty base advance\n",
-    ).stdout.decode().strip()
+    base = (
+        _git(
+            repo.root,
+            "commit-tree",
+            f"{fork_point}^{{tree}}",
+            "-p",
+            fork_point,
+            input_bytes=b"empty base advance\n",
+        )
+        .stdout.decode()
+        .strip()
+    )
     _git(repo.root, "update-ref", "refs/heads/base-branch", base)
     _set_origin_main(repo, base)  # the base is landed content
     _git(repo.root, "checkout", "-q", "main")
@@ -2839,9 +2843,7 @@ def test_pr_bounds_receipt_flood_on_an_off_base_reviewed_commit(
     assert not repo.is_ancestor(base, reviewed)
 
     with pytest.raises(EvidenceError, match="reserved v2 namespace"):
-        evidence_module._assert_reviewed_receipt_namespace_vs_base(
-            repo, base_commit=base, reviewed_commit=reviewed
-        )
+        evidence_module._assert_reviewed_receipt_namespace_vs_base(repo, base_commit=base, reviewed_commit=reviewed)
 
 
 def test_pr_merge_witness_refuses_post_review_feature_drift(

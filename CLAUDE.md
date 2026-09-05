@@ -359,16 +359,20 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   it writes under `proof/preship-reviews/v2/`. V2 hashes the raw recursive Git
   tree while excluding valid v2 receipts and validated HA Green receipts, so
   the receipt-only commit and the eventual squash preserve the reviewed content
-  identity. After integrating the base locally (`git merge origin/main` — a
-  `gh pr update-branch` at landing has no reattest window; integrate and
-  reattest before the landing signal), run
-  `scripts/emit-review-evidence.sh --reattest`: when git's own three-way
-  merge proves HEAD is exactly the reviewed content merged with the base and
-  nothing else, it derives a receipt for the integrated content with no
-  re-review and retires the branch's superseded receipts in the same step —
-  commit the new receipt and the removals together; a conflicted merge, a
-  hand-edited merge commit, or any post-review content change fails closed
-  into a fresh squad run. Receipts are
+  identity. A clean base integration (`git merge origin/main`) does NOT
+  burn the receipt: PR verification accepts the existing receipt when git's own
+  three-way merge proves the pushed head is exactly the reviewed content merged
+  with the base and nothing else — so integrate, push, and land, with no
+  reattest and no receipt-swap commit. That witness reads the base as content,
+  so it requires the base to be landed in `origin/main`; an unmerged branch
+  named as the base is refused. Integrating is still required (branch
+  protection is strict), and do it locally rather than via
+  `gh pr update-branch` at landing, which changes the head and cancels an armed
+  `--match-head-commit`. `scripts/emit-review-evidence.sh --reattest` remains
+  available and applies the same witness — use it when you want the branch's
+  evidence to name the integrated content and retire superseded receipts.
+  Either way, a conflicted merge, a hand-edited merge commit, or any
+  post-review content change fails closed into a fresh squad run. Receipts are
   content-addressed additions, so concurrent PRs never conflict on evidence.
   (The legacy fixed-name `proof/preship-review.json` is retired — 43 commits
   touched it, a guaranteed merge conflict between any two open PRs.)
@@ -398,8 +402,8 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
   `.github/land-queue.enabled`, or set repository variable `LAND_QUEUE=0` (only
   the literal `0` switches off) — both are enforced inside the script, so "off"
   means off from a local run too. Going live needs a GitHub App: commits pushed
-  with `GITHUB_TOKEN` do not trigger `push`/`pull_request` workflows, so a
-  reattest commit pushed with it would land with no CI. Self-test:
+  with `GITHUB_TOKEN` do not trigger `push`/`pull_request` workflows, so an
+  integrate commit pushed with it would land with no CI. Self-test:
   `bash tests/workflows/test_land_queue.sh`. See
   `docs/runbooks/parallel-workspaces.md` → "Shadow land queue".
 - **QA gates (mandatory, risk-scoped)**: Manual `/qa` is required for the surfaces a PR can affect, and every release candidate must pass both surfaces before user-facing release.

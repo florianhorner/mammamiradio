@@ -205,9 +205,9 @@ pass "FIFO key is the immutable creation time, not updatedAt"
 PRS="[$(pr_row 30 "fix: behind" "$HEAD_FULL" BEHIND false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
 OUT="$(run_plan "$PRS")"
 [ "$(jq -r '.decision.action' <<<"$OUT")" = "integrate" ] || fail "BEHIND head must integrate, not arm"
-jq -e '.decision.why | test("reattest")' <<<"$OUT" >/dev/null \
-  || fail "integrate decision must name the reattest step"
-pass "BEHIND head routes to integrate + reattest"
+jq -e '.decision.why | test("merge origin/main")' <<<"$OUT" >/dev/null \
+  || fail "integrate decision must name the integrate step"
+pass "BEHIND head routes to integrate + push"
 
 # =============================================================================
 # Case 6: DIRTY is BLOCKED_CONFLICT and the queue STALLS (does not reorder).

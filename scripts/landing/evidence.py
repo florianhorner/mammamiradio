@@ -889,9 +889,7 @@ def _assert_landed_base(
     try:
         landed_commit = repo.resolve_commit(landed_ref)
     except GitError as exc:
-        raise EvidenceError(
-            f"cannot verify the base: {landed_ref!r} does not resolve — fetch it and retry"
-        ) from exc
+        raise EvidenceError(f"cannot verify the base: {landed_ref!r} does not resolve — fetch it and retry") from exc
     if not repo.is_ancestor(base_commit, landed_commit):
         raise EvidenceError(
             f"base {base_commit} is not landed content in {landed_ref!r}; verify against the "
@@ -917,8 +915,7 @@ def _assert_reviewed_receipt_namespace_vs_base(
     )
     if len(reviewed_added_paths) > MAX_NEW_RECEIPTS:
         raise EvidenceError(
-            f"reviewed commit {reviewed_commit} adds more than {MAX_NEW_RECEIPTS} entries "
-            "in the reserved v2 namespace"
+            f"reviewed commit {reviewed_commit} adds more than {MAX_NEW_RECEIPTS} entries in the reserved v2 namespace"
         )
     reviewed_changed_paths = repo.diff_paths(
         base_commit,
@@ -1335,10 +1332,7 @@ def verify_v2(
                     f"new v2 receipt {_display_path(receipt.path)} does not match its reviewed commit's content"
                 )
 
-            if (
-                receipt.reviewed_content_sha256 == target_snapshot.content_sha256
-                and on_base_path
-            ):
+            if receipt.reviewed_content_sha256 == target_snapshot.content_sha256 and on_base_path:
                 # Classic exact bind: reviewed tip sits on base→target and digests
                 # match the target content profile.
                 continue
@@ -1384,13 +1378,10 @@ def verify_v2(
             )
             if witness == "conflicts":
                 raise EvidenceError(
-                    f"new v2 receipt {_display_path(receipt.path)}: "
-                    "merging its reviewed commit with the base conflicts"
+                    f"new v2 receipt {_display_path(receipt.path)}: merging its reviewed commit with the base conflicts"
                 )
             if witness is not None:
-                raise EvidenceError(
-                    f"new v2 receipt {_display_path(receipt.path)} does not match the target content"
-                )
+                raise EvidenceError(f"new v2 receipt {_display_path(receipt.path)} does not match the target content")
 
         matching = new_receipts
     else:

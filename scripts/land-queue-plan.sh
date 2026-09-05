@@ -143,7 +143,7 @@ classify_pr() {
 
   # Plan Q7: UNSTABLE means only non-required checks are failing and is landable.
   case "$merge_state" in
-    BEHIND)    printf 'READY_BEHIND\tgates pass; base moved — needs integrate + reattest\n' ;;
+    BEHIND)    printf 'READY_BEHIND\tgates pass; base moved — needs integrate + push\n' ;;
     CLEAN)     printf 'READY\tgates pass and required checks are green\n' ;;
     UNSTABLE)  printf 'READY\tgates pass; only non-required checks are red\n' ;;
     HAS_HOOKS) printf 'READY\tgates pass; merge would fire repository hooks\n' ;;
@@ -236,7 +236,7 @@ while IFS="$GATHER_SEP" read -r number head base merge_state is_draft held skipp
         DECISION_WHY="queue head, gates pass — would arm --squash --auto --match-head-commit ${head:0:12}" ;;
       READY_BEHIND)
         HEAD_DECIDED=1; DECISION_ACTION="integrate"; DECISION_PR="$number"
-        DECISION_WHY="queue head, gates pass but base moved — would merge origin/main, reattest, push" ;;
+        DECISION_WHY="queue head, gates pass but base moved — would merge origin/main and push" ;;
       *)
         HEAD_DECIDED=1; DECISION_PR="$number"
         DECISION_WHY="queue head is $state — the queue stalls here rather than reordering around it" ;;

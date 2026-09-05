@@ -179,7 +179,8 @@ run_land "$(empty_reader)" GH_MOCK_MERGE_STATE=BEHIND \
 never_merged || fail "behind PR must never merge"
 ! grep -q "pr update-branch" "$GH_MOCK_LOG" || fail "landing seat must not update a behind branch"
 printf '%s' "$RUN_OUT" | grep -q "feature workspace" || fail "deny message should name the owning workspace"
-printf '%s' "$RUN_OUT" | grep -q -- "--reattest" || fail "deny message should give the reattest command"
+printf '%s' "$RUN_OUT" | grep -q "git merge origin/main" || fail "deny message should give the integrate command"
+printf '%s' "$RUN_OUT" | grep -q "no reattest needed" || fail "deny message should say a clean integrate keeps the receipt"
 ! printf '%s' "$RUN_OUT" | grep -q "committed v2 pre-ship evidence does not cover" || fail "behind handling must run before evidence verification"
 pass "real divergent BEHIND graph parks before evidence or mutation"
 
