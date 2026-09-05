@@ -392,10 +392,11 @@ def test_release_workflow_proves_both_sha_images_before_promotion():
 
     assert "needs: pre-flight" in proof_block
     assert "runs-on: ${{ matrix.runner }}" in proof_block
-    assert "- arch: amd64\n            runner: ubuntu-latest" in proof_block
-    assert "- arch: aarch64\n            runner: ubuntu-24.04-arm" in proof_block
-    assert "image_option: --amd64-image" in proof_block
-    assert "image_option: --aarch64-image" in proof_block
+    assert "fail-fast: false" in proof_block
+    assert "- arch: amd64\n            runner: ubuntu-latest\n            image_option: --amd64-image" in proof_block
+    assert (
+        "- arch: aarch64\n            runner: ubuntu-24.04-arm\n            image_option: --aarch64-image"
+    ) in proof_block
     assert "docker/setup-qemu-action@" not in proof_block
     assert 'run: docker pull "$IMAGE_REF"' in proof_block
     assert '--image-arch "$IMAGE_ARCH"' in proof_block

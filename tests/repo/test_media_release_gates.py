@@ -21,7 +21,7 @@ def _job(text: str, name: str) -> str:
 
 def test_release_path_keeps_strict_media_gate() -> None:
     """scripts/pre-release-check.sh section 10 is the hard media gate on the
-    release path. Every per-PR/build/local lane asserted report-only below
+    release path. Every per-PR/local lane asserted report-only below
     depends on this gate staying hard; a media-proof failure here fails the
     script, never a notice."""
 
@@ -102,10 +102,11 @@ def test_addon_publish_and_stable_promotion_require_native_per_arch_image_proof(
     assert "push: true" not in build_image
     for proof in (build_proof, release_proof):
         assert "runs-on: ${{ matrix.runner }}" in proof
-        assert "- arch: amd64\n            runner: ubuntu-latest" in proof
-        assert "- arch: aarch64\n            runner: ubuntu-24.04-arm" in proof
-        assert "image_option: --amd64-image" in proof
-        assert "image_option: --aarch64-image" in proof
+        assert "fail-fast: false" in proof
+        assert "- arch: amd64\n            runner: ubuntu-latest\n            image_option: --amd64-image" in proof
+        assert (
+            "- arch: aarch64\n            runner: ubuntu-24.04-arm\n            image_option: --aarch64-image"
+        ) in proof
         assert "docker/setup-qemu-action@" not in proof
         assert '--image-arch "$IMAGE_ARCH"' in proof
         assert '"$IMAGE_OPTION" "$IMAGE_REF"' in proof

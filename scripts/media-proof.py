@@ -400,8 +400,12 @@ def _sdist_starter_files(path: Path) -> dict[str, bytes]:
             normalized = PurePosixPath(*parts[package_index:]).as_posix()
             if not normalized.startswith(STARTER_PREFIX):
                 continue
-            if member.isdir() or not member.isfile():
+            if member.isdir():
                 continue
+            if member.issym() or member.islnk():
+                raise RuntimeError(f"sdist starter member is a symlink: {member.name}")
+            if not member.isfile():
+                raise RuntimeError(f"sdist starter member is not a regular file: {member.name}")
             handle = archive.extractfile(member)
             if handle is None:
                 raise RuntimeError(f"sdist starter member is unreadable: {member.name}")
