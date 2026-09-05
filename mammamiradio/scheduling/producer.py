@@ -632,6 +632,7 @@ def _select_accepted_music_track(
     queue: asyncio.Queue[Segment],
     *,
     consumed_force_clear_revision: int | None = None,
+    restrict_to_source: str | None = None,
 ) -> Track | None:
     handoff = state.listener_request_handoff
     if handoff is not None and _is_session_rejected_without_concrete_source(handoff.track, config):
@@ -767,6 +768,7 @@ def _select_accepted_music_track(
                 repeat_cooldown=config.playlist.repeat_cooldown,
                 artist_cooldown=config.playlist.artist_cooldown,
                 excluded_cache_keys=excluded_keys,
+                restrict_to_source=restrict_to_source,
             )
         finally:
             if held_listener_pin is not None:
@@ -1481,10 +1483,12 @@ async def _queue_starter_catalog_bridge_segment(
         # remaining acceptance rules live in StationState and its reservation
         # ledger, so a private empty queue is enough to reuse the canonical
         # selector without widening every continuity-bridge call signature.
+        # Restrict this rung to starter media even when the
+        # global weighted selector would prefer the operator's local base.
         if held_pin is not None:
             state.pinned_track = None
         try:
-            track = _select_accepted_music_track(state, config, asyncio.Queue())
+            track = _select_accepted_music_track(state, config, asyncio.Queue(), restrict_to_source="starter")
         finally:
             if held_pin is not None:
                 state.pinned_track = held_pin
