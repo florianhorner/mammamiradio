@@ -390,6 +390,13 @@ IFS=$'\t' read -r rc out <<<"$(edge_probe "$DRIFTED")"
 [ -z "$out" ] || fail "a drift refusal must not print a sha"
 pass "edge: image-path drift since the built commit refuses the pin"
 
+# 19b: the same refusal must hold from a subdirectory. Git pathspecs are cwd-relative;
+# the library anchors them at the repository root so a caller in scripts/ cannot read
+# an empty diff as "no drift" (a soft pass this library promises never to produce).
+IFS=$'\t' read -r rc out <<<"$(cd scripts && edge_probe "$DRIFTED")"
+[ "$rc" != "0" ] || fail "drift refusal must not depend on the caller's cwd"
+pass "edge: drift refusal holds from a subdirectory (root-anchored pathspecs)"
+
 # =============================================================================
 # Case 21: the shadow workflow must stay report-only and keep its kill switch.
 # =============================================================================

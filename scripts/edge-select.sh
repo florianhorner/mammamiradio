@@ -16,7 +16,8 @@
 #       main, so the pinned image would not implement the metadata being advertised.
 #       Files that only re-trigger the build (a dev lockfile, a validator script, a
 #       test) are in IMAGE_PATHS but not in IMAGE_CONTENT_PATHS: they never enter
-#       the image, so they never make an older image stale.
+#       the image, so they never make an older image stale. The edge add-on's own
+#       metadata is excluded too; its version line is the thing being cut.
 #
 # Every function fails CLOSED: an unverifiable state (gh error, git error) is a
 # refusal, never a soft pass.
@@ -29,12 +30,18 @@
 # shellcheck disable=SC2034
 IMAGE_PATHS="ha-addon mammamiradio proof/media pyproject.toml requirements.txt requirements-dev.txt radio.toml model_registry.toml scripts/media-proof.py scripts/starter-catalog.py scripts/validate-addon.sh scripts/validate-starter-media.py scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py tests/media tests/playlist/test_jamendo_transient.py tests/playlist/test_legacy_media.py tests/scheduling/test_queue_mutations.py tests/web/test_streamer_routes_extended.py .github/workflows/addon-build.yml"
 
-# Paths whose content enters the add-on image or its metadata: the Dockerfile
-# COPY set (mammamiradio/, pyproject.toml, radio.toml, model_registry.toml), the
-# add-on directory (Dockerfile, rootfs, config.yaml) and the workflow that picks
-# the base image and build args. The drift check (I3) uses THIS set. It must stay
-# a subset of IMAGE_PATHS; tests/workflows/test_cut_edge_release.sh asserts both.
-IMAGE_CONTENT_PATHS="ha-addon mammamiradio pyproject.toml radio.toml model_registry.toml .github/workflows/addon-build.yml"
+# Paths whose content enters the add-on image or its Supervisor-facing metadata:
+# the sources addon-build.yml stages into the build context ("Copy source into
+# addon build context": mammamiradio/, pyproject.toml, model_registry.toml) plus
+# the COPY lines in ha-addon/mammamiradio/Dockerfile (radio.toml, rootfs/), the
+# stable add-on directory itself (Dockerfile, config.yaml options/schema,
+# translations) and the workflow that picks the base image and build args. The
+# drift check (I3) uses THIS set. ha-addon/mammamiradio-edge/ is deliberately NOT
+# in it: its config.yaml version line moves on every edge cut, and its options
+# mirror the stable add-on, so including it refused the pin right after each cut.
+# It must stay a subset of IMAGE_PATHS and cover every staged source;
+# tests/workflows/test_cut_edge_release.sh asserts both directions.
+IMAGE_CONTENT_PATHS="ha-addon/mammamiradio mammamiradio pyproject.toml radio.toml model_registry.toml .github/workflows/addon-build.yml"
 
 # The edge add-on config whose `version:` field IS the image tag the Supervisor
 # pulls. cut-edge-release.sh sets this before sourcing; the default serves every
@@ -107,7 +114,9 @@ edge_image_drift() {
   # No `|| true`: `git diff --name-only` already exits 0 for both changed and
   # unchanged, so a non-zero here is a real verification failure (bad object,
   # git error). Treat it like every other unverifiable state — hard-fail.
-  changed="$(git diff --name-only "$target" "$ref" -- $IMAGE_CONTENT_PATHS 2>/dev/null)" || return 2
+  # Pathspecs are relative to the cwd; anchor at the repository root so a caller in
+  # a subdirectory cannot get an empty diff and accept a stale image.
+  changed="$(cd "$(git rev-parse --show-toplevel)" && git diff --name-only "$target" "$ref" -- $IMAGE_CONTENT_PATHS 2>/dev/null)" || return 2
   printf '%s' "$changed"
   [ -z "$changed" ]
 }

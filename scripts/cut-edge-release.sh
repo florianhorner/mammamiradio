@@ -9,15 +9,17 @@
 # a version-string compare — so changing it surfaces an in-place Update on the Pi.
 #
 # Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` only
-# builds an image when a commit touches the IMAGE_PATHS below: add-on or application
-# source, canonical project/model config, media-proof inputs, image validation/smoke
-# scripts, or the build workflow itself. When the tip commits are outside that trigger
-# set, no :<sha> image exists for them, so pinning HEAD would make the Supervisor pull
-# a missing tag. This script picks the newest main commit with a successful build run
-# (that success is the proof both per-arch images were pushed, proven, and smoked) and
-# HARD-FAILS rather than advertise an unverified tag. It also refuses if any trigger
-# path changed between that built commit and HEAD — the pinned image would not implement
-# the newer edge metadata.
+# builds an image when a commit touches IMAGE_PATHS (scripts/edge-select.sh): add-on or
+# application source, canonical project/model config, media-proof inputs, image
+# validation/smoke scripts, or the build workflow itself. When the tip commits are
+# outside that trigger set, no :<sha> image exists for them, so pinning HEAD would make
+# the Supervisor pull a missing tag. This script picks the newest main commit with a
+# successful build run (that success is the proof both per-arch images were pushed,
+# proven, and smoked) and HARD-FAILS rather than advertise an unverified tag. It also
+# refuses if any IMAGE_CONTENT_PATHS file — content that enters the image or its add-on
+# metadata — changed between that built commit and HEAD, because the pinned image would
+# not implement the newer metadata. A file that only re-triggers the build (a dev
+# lockfile, a test) does not block the pin.
 #
 # Selection uses `gh run list` (needs only actions:read). The old GHCR packages-API
 # check is gone: it needed the read:packages scope the maintainer token lacks and

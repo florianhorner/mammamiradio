@@ -33,12 +33,12 @@ fix is one shared model, stated below.
 5. **A failed release gets reverted before it gets debugged.** The window where `main`
    names an unpublished version opens when the cut commit merges and closes when both
    architecture `promote` jobs finish. If any stage of `addon-release.yml` fails, land
-   `git revert <cut-sha>` first. Revert the commit rather than hand-editing the version
-   files back: the cut also folded both changelogs, and a version-only revert is refused
-   by `check-changelog-sync.sh` locally and by `pre-release-check.sh` in CI. Before
-   committing the revert, restore the cut's review receipt directory
-   (`git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`): the evidence
-   checker treats a deleted base receipt as tampering and refuses the PR.
+   the revert first: `git revert --no-commit <cut-sha>`, then
+   `git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit. Revert the
+   commit rather than hand-editing the version files back: the cut also folded both
+   changelogs, and a version-only revert is refused by `check-changelog-sync.sh` locally
+   and by `pre-release-check.sh` in CI. Keep the receipt directory because the evidence
+   checker refuses a PR whose base receipt was deleted or modified.
 6. **Physical proof binds complete cut content.** Finalize version, changelogs, and the V2 preship receipt before HA runs; its hardware-neutral digest survives squash and rejects all other drift, while `source_commit` remains provenance.
 
 ```

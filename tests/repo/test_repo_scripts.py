@@ -1366,8 +1366,12 @@ def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
 
     # One declaration, not two: a re-inlined copy in the cut script is how the
     # two consumers drift apart while this test keeps passing.
-    assert not re.search(r'^IMAGE_PATHS="', script, re.MULTILINE), (
-        "scripts/cut-edge-release.sh must source IMAGE_PATHS from scripts/edge-select.sh"
+    assert not re.search(r'^IMAGE(_CONTENT)?_PATHS="', script, re.MULTILINE), (
+        "scripts/cut-edge-release.sh must source IMAGE_PATHS and IMAGE_CONTENT_PATHS from scripts/edge-select.sh"
+    )
+    planner = (ROOT / "scripts" / "land-queue-plan.sh").read_text()
+    assert not re.search(r'^IMAGE(_CONTENT)?_PATHS="', planner, re.MULTILINE), (
+        "scripts/land-queue-plan.sh must source IMAGE_PATHS and IMAGE_CONTENT_PATHS from scripts/edge-select.sh"
     )
 
 

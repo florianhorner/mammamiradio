@@ -172,8 +172,9 @@ had to be reverted the same night.
    unset, pre-flight prints a waiver and continues. When armed, the cut must already
    contain the receipt set for its complete release content, recorded with the commands in
    [`docs/music-sources.md`](../music-sources.md), and pre-flight fails loud if the
-   evidence is missing, stale, or over its two-second p95. Pre-flight always fails loud if the tag/version,
-   release metadata, changelog head, or either per-arch `:sha` image disagrees.
+   evidence is missing, stale, or over its two-second p95. Pre-flight always fails
+   loud if the tag/version, release metadata, changelog head, or either per-arch
+   `:sha` image disagrees.
 
 2. **Wait for `addon-build.yml` green** on `$CUT_SHA` (~15-25 min; the PR touches
    `pyproject.toml` and `ha-addon/**`, both in the build's path filter).
@@ -244,7 +245,7 @@ window is a broken install for everyone.
 Revert the whole cut commit, not just the version files. The cut also folded both
 changelogs, so a version-only revert leaves the ha-addon CHANGELOG head at the unreleased
 number: `check-changelog-sync.sh` then refuses the commit locally, and `pre-release-check.sh`
-fails the PR in CI. One file must survive the revert: the cut committed a review receipt
+fails the PR in CI. The cut's receipt directory must survive the revert: the cut committed a review receipt
 under `proof/preship-reviews/v2/<hash>/`, and the evidence checker refuses a PR that deletes
 a base receipt. After `git revert --no-commit <cut-sha>`, run
 `git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit. The 3.0.0 revert
@@ -519,7 +520,7 @@ Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-a
 
 1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
 
-The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the image trigger set (`IMAGE_PATHS` in `scripts/edge-select.sh` is the full list — `ha-addon/**`, `mammamiradio/**`, `proof/media/**`, `pyproject.toml`, `requirements*.txt`, `radio.toml`, `model_registry.toml`, several `scripts/` and `tests/` entries, and `.github/workflows/addon-build.yml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). The trigger set, the green-build queries and the drift check now live in `scripts/edge-select.sh`, which `cut-edge-release.sh` sources — so the manual cut and the shadow land queue (`scripts/land-queue-plan.sh`, which reports the edge target it *would* pin) select from one implementation. Two hermetic tests fail on drift: `tests/workflows/test_cut_edge_release.sh` (shell) and `tests/repo/test_repo_scripts.py` (Python), both asserting against that one declaration site. It uses `gh run list` (needs only `actions:read` — which is why `.github/workflows/land-queue.yml` grants that scope; the lookback window is `EDGE_RUN_LOOKBACK`, default 40 runs); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
+The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the image trigger set (`IMAGE_PATHS` in `scripts/edge-select.sh` is the full list — `ha-addon/**`, `mammamiradio/**`, `proof/media/**`, `pyproject.toml`, `requirements*.txt`, `radio.toml`, `model_registry.toml`, several `scripts/` and `tests/` entries, and `.github/workflows/addon-build.yml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). "Image file" here means `IMAGE_CONTENT_PATHS`: the Dockerfile COPY set, `ha-addon/mammamiradio/`, the build workflow. A change to a trigger-only path such as `requirements-dev.txt` since the built commit does not block the pin. Both path sets, the green-build queries and the drift check live in `scripts/edge-select.sh`, which `cut-edge-release.sh` sources — so the manual cut and the shadow land queue (`scripts/land-queue-plan.sh`, which reports the edge target it *would* pin) select from one implementation. Two hermetic tests fail on drift: `tests/workflows/test_cut_edge_release.sh` (shell) and `tests/repo/test_repo_scripts.py` (Python), both asserting against that one declaration site. It uses `gh run list` (needs only `actions:read` — which is why `.github/workflows/land-queue.yml` grants that scope; the lookback window is `EDGE_RUN_LOOKBACK`, default 40 runs); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
 
 Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
 
@@ -847,8 +848,9 @@ rolls back; an update fails to download but leaves a playing station alone.
 - **Release failed or abandoned?** Land `git revert <cut-sha>` immediately, then debug.
   Revert the commit rather than the version files alone: the cut folded both changelogs
   too, and a partial revert is refused by `check-changelog-sync.sh` and `pre-release-check.sh`.
-  Keep the cut's review receipt directory in the revert; the evidence gate refuses a PR
-  that deletes a base receipt.
+  Keep the cut's review receipt directory in the revert (`git revert --no-commit <cut-sha>`,
+  then `git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit; see
+  "If the release fails" above); the evidence checker refuses a PR that deletes a base receipt.
 - `advertised-version.yml` raises a flag daily if this state persists.
 
 ## Hardcoded values that must stay in sync

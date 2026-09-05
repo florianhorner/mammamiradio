@@ -62,10 +62,28 @@ pass "cut-edge IMAGE_PATHS matches the add-on build trigger paths"
 CONTENT_PATHS="$(sed -n 's/^IMAGE_CONTENT_PATHS="\([^"]*\)"$/\1/p' "$SELECT_LIB")"
 [ -n "$CONTENT_PATHS" ] || fail "scripts/edge-select.sh must declare IMAGE_CONTENT_PATHS"
 for _p in $CONTENT_PATHS; do
-  printf '%s\n' "$SCRIPT_IMAGE_PATHS" | grep -qxF "$_p" \
-    || fail "IMAGE_CONTENT_PATHS entry '$_p' is not a build trigger in IMAGE_PATHS"
+  _covered=""
+  for _t in $SCRIPT_IMAGE_PATHS; do
+    case "$_p" in "$_t"|"$_t"/*) _covered=1; break ;; esac
+  done
+  [ -n "$_covered" ] || fail "IMAGE_CONTENT_PATHS entry '$_p' is not under a build trigger in IMAGE_PATHS"
 done
 pass "IMAGE_CONTENT_PATHS is a subset of the build trigger paths"
+
+# Reverse direction: every source addon-build.yml stages into the build context must
+# be a content path, or a change to it could pin a stale image without the drift
+# check noticing.
+STAGED_SOURCES="$(sed -n 's/^ *cp \(-r \)\{0,1\}\([^ ]*\) ha-addon\/mammamiradio\/.*/\2/p' .github/workflows/addon-build.yml | sed 's:/$::' | sort -u)"
+[ -n "$STAGED_SOURCES" ] || fail "could not read the staged sources from addon-build.yml"
+for _src in $STAGED_SOURCES; do
+  # shellcheck disable=SC2086  # CONTENT_PATHS intentionally word-splits into one path per line
+  printf '%s\n' $CONTENT_PATHS | grep -qxF "$_src" \
+    || fail "addon-build.yml stages '$_src' into the image but IMAGE_CONTENT_PATHS does not list it"
+done
+# shellcheck disable=SC2086  # same intentional word-split
+printf '%s\n' $CONTENT_PATHS | grep -qxF "ha-addon/mammamiradio" \
+  || fail "IMAGE_CONTENT_PATHS must cover the stable add-on directory (Dockerfile, rootfs, config.yaml)"
+pass "every staged image source is a content path"
 
 # The exact-target lookup must filter server-side. Counting successes client-side
 # over a capped page reintroduces the window bug one level down: enough newer
@@ -81,8 +99,10 @@ pass "exact-target lookup filters server-side (no run-history cutoff)"
 
 # One implementation, not two: a re-inlined IMAGE_PATHS or gh run query in the cut
 # script is how the two consumers drift apart and how a soft-pass comes back.
-grep -q '^IMAGE_PATHS=' "$SCRIPT" \
-  && fail "cut-edge-release.sh must source IMAGE_PATHS from scripts/edge-select.sh, not redefine it"
+grep -Eq '^IMAGE(_CONTENT)?_PATHS=' "$SCRIPT" \
+  && fail "cut-edge-release.sh must source IMAGE_PATHS / IMAGE_CONTENT_PATHS from scripts/edge-select.sh, not redefine them"
+grep -Eq '^IMAGE(_CONTENT)?_PATHS=' scripts/land-queue-plan.sh \
+  && fail "land-queue-plan.sh must source IMAGE_PATHS / IMAGE_CONTENT_PATHS from scripts/edge-select.sh, not redefine them"
 grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'gh run list --workflow' \
   && fail "cut-edge-release.sh must query green builds through scripts/edge-select.sh"
 grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'rev-list --topo-order' \
@@ -358,6 +378,16 @@ never_created_pr     || fail "idempotent case must not open a PR"
 never_pushed         || fail "idempotent case must not push"
 printf '%s' "$RUN_OUT" | grep -q "already at" || fail "idempotent message should say 'already at'"
 pass "edge already at target SHA (read from origin/main) is a clean no-op"
+
+# Case 10b: the state real history reaches right after an edge cut: origin/main's
+# newest commit is the chore(edge) cut itself, so the only diff since the built SHA
+# is the edge add-on's own version line. That file is not image content, so this
+# must reach the "already at" no-op, not an "image files changed" refusal.
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_SHOW_VERSION="$OLDER_SHORT" GIT_MOCK_DIFF="ha-addon/mammamiradio-edge/config.yaml"
+[ "$RUN_RC" -eq 0 ]  || fail "post-edge-cut state should be a no-op (got $RUN_RC): $RUN_OUT"
+never_created_pr     || fail "post-edge-cut state must not open a PR"
+printf '%s' "$RUN_OUT" | grep -q "already at" || fail "post-edge-cut state should say 'already at', not refuse as drift"
+pass "the edge add-on's own version bump is not image drift (post-cut no-op)"
 
 # Case 11: an edge PR for the target is already open => no-op exit 0, no commit/PR.
 run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_PR_URL="https://github.com/florianhorner/mammamiradio/pull/999"
