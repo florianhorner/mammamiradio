@@ -694,23 +694,7 @@ Before merging ANY change that touches addon files:
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
 5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist. The perf smoke skips its stream-byte probe only for a persisted operator stop confirmed independently by `503 stopped` from `/readyz` and `session_stopped: true` from `/public-status`; every other starting or ready state must still produce bytes.
-6. **Starter media proof**: `make media-check` validates the canonical manifest,
-   evidence, bytes, and audio quickly. `make media-proof` additionally proves
-   wheel/sdist and amd64/aarch64 image parity, FFprobe facts, add-on extractor
-   absence, and Jamendo transience. While the starter content is absent by
-   design, the PR quality lane's direct step, the release-invariants media
-   section, the add-on build validate job, the add-on build full media-proof
-   job (so the proof remains visible while image publish and the edge channel
-   keep flowing), the edge cut, and
-   local `make media-check` run their proof report-only (verdict plus a
-   missing-content notice, exit 0); the stable promotion media-proof job in
-   `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
-   hard gate on the release path. Stable remains blocked until exactly 12
-   approved derivatives total at least 45 minutes and no more than 75 MiB and
-   every full audition receipt is complete. The 20 cold HA Green runs at p95
-   first accepted non-silent starter byte within two seconds are a separate
-   opt-in gate, armed with `MMR_REQUIRE_HA_RECEIPTS=1`; unset, the cut reports
-   the waiver instead of a pass.
+6. **Starter media proof**: `make media-check` validates the canonical manifest, evidence, bytes, and audio quickly, while `make media-proof` additionally proves wheel/sdist and amd64/aarch64 image parity, FFprobe facts, add-on extractor absence, and Jamendo transience. PR quality, release-invariants, the add-on validate job, edge cut, and local quick checks remain report-only, but the full `addon-build.yml` proof is blocking and runs one native job per architecture (`ubuntu-latest` for amd64, `ubuntu-24.04-arm` for aarch64); `addon-release.yml` repeats the same native per-arch gate before `promote`, so any failed or unprobed architecture blocks publication. Stable remains blocked until exactly 12 approved derivatives total at least 45 minutes and no more than 75 MiB and every full audition receipt is complete. The 20 cold HA Green runs at p95 first accepted non-silent starter byte within two seconds are a separate opt-in gate, armed with `MMR_REQUIRE_HA_RECEIPTS=1`; unset, the cut reports the waiver instead of a pass.
 7. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.

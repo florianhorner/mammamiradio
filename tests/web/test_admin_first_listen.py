@@ -139,8 +139,8 @@ def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() ->
          ("!['required','completing'].includes", "if(name!=='setup')finalizeFirstListenCompletion()")),
         ("initTabs", "initProgrammeActions", ("adminTabsForNav()", "if(initTab==='setup')initTab='scaletta'")),
         ("renderSetup", "setupRecheck", ("firstListenEntry==='required'", "firstListenTabAlert")),
-        ("finalizeFirstListenCompletion", "showAdminTab",
-         ("firstListenEntry!=='completing'", "stopFirstListenGuide()", "stopFirstListenStationAudio()",
+        ("finalizeFirstListenCompletion", "exitFirstListenFlow",
+         ("firstListenEntry!=='completing'",
           "firstListenEntry='complete'", "syncFirstListenSetupMount()")),
         ("resolveFirstListenLanding", "renderGuidedSetupStrip",
          ("_activeTab==='setup'&&_firstListenUi.showSuccess", "previous==='completing'",
@@ -149,6 +149,10 @@ def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() ->
     for start, end, needles in sections:
         body = _function(start, end)
         assert all(needle in body for needle in needles)
+
+    finalize = _function("finalizeFirstListenCompletion", "exitFirstListenFlow")
+    assert "stopFirstListenGuide(" not in finalize
+    assert "stopFirstListenStationAudio()" not in finalize
 
 
 def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
@@ -889,6 +893,7 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
 
     update = _function("updateFirstListenSuccess", "reviewFirstListenChoices")
     assert "const show=Boolean(_firstListenUi.showSuccess)" in update
+    assert "stopFirstListenStationAudio()" not in update
     assert "journey.toggleAttribute('inert',show)" in update
     assert "success.toggleAttribute('inert',!show)" in update
     assert "success.classList.add('is-celebrating')" in update
@@ -1119,23 +1124,35 @@ def test_a_superseded_guide_clip_never_tidies_up_the_shared_player() -> None:
 
 
 def test_leaving_first_listen_releases_the_station_audio_element() -> None:
-    """The hidden station element must be stopped on every way out of the step.
+    """Completion and direct listener opening do not own station teardown.
 
     `hidden` is display:none and does NOT pause media. Without a teardown the
     admin tab keeps its own hub subscription while `openListener()` opens a
     second one in a new tab, and the operator hears two unsynchronized copies
-    of the same live stream at the moment onboarding is supposed to land.
+    of the same live stream. The existing tab-away boundary owns that teardown;
+    completion itself is still inside First Listen and must keep playing.
     """
     html = _html()
     assert "stopFirstListenStationAudio" in html
 
     open_listener = _function("openListener", "jamendoFailureHint")
-    assert "stopFirstListenStationAudio()" in open_listener
-    assert open_listener.index("stopFirstListenStationAudio()") < open_listener.index("window.open(")
+    assert "stopFirstListenStationAudio()" not in open_listener
 
-    finalize = _function("finalizeFirstListenCompletion", "showAdminTab")
-    assert "stopFirstListenStationAudio()" in finalize
-    assert finalize.index("stopFirstListenStationAudio()") < finalize.index("syncFirstListenSetupMount()")
+    finalize = _function("finalizeFirstListenCompletion", "exitFirstListenFlow")
+    assert "stopFirstListenGuide(" not in finalize
+    assert "stopFirstListenStationAudio()" not in finalize
+
+    # Same-tab music-source setup is the one exit that cannot rely on the
+    # protected showAdminTab boundary because it remains inside Setup.
+    exit_flow = _function("exitFirstListenFlow", "showAdminTab")
+    assert exit_flow.count("finalizeFirstListenCompletion()") == 1
+    assert exit_flow.count("stopFirstListenGuide({resumeStation:false})") == 1
+    assert exit_flow.count("stopFirstListenStationAudio()") == 1
+    assert (
+        exit_flow.index("finalizeFirstListenCompletion()")
+        < exit_flow.index("stopFirstListenGuide({resumeStation:false})")
+        < exit_flow.index("stopFirstListenStationAudio()")
+    )
 
     open_listener_exit = _function("openFirstListenListener", "openFirstListenStation")
     assert open_listener_exit.index("showAdminTab('scaletta'") < open_listener_exit.index("openListener()")
@@ -1313,14 +1330,35 @@ def test_guide_resume_playing_event_does_not_replay_a_confirmed_sound_check() ->
 def test_leaving_the_setup_tab_by_any_route_stops_the_station_audio() -> None:
     """The hidden station element must release its hub subscription on every
 
-    tab switch away from Setup, not only the two exits that call it
-    explicitly (openListener, openFirstListenStation) -- direct tab-bar
-    clicks and the "Repair music source" shortcut both route through
-    showAdminTab and left it playing as a phantom listener.
+    tab switch away from Setup. This is the deliberate phantom-listener fix;
+    First Listen completion must not refactor or bypass its direct teardown.
     """
     show_tab = _function("showAdminTab", "syncFirstListenSetupMount")
+    assert "if(name!=='setup')finalizeFirstListenCompletion()" in show_tab
     assert "stopFirstListenStationAudio()" in show_tab
     assert show_tab.index("stopFirstListenGuide()") < show_tab.index("stopFirstListenStationAudio()")
+    assert "exitFirstListenFlow()" not in show_tab
+
+    open_setup = _function("openSetupPanel", "firstListenMusicSourceAction")
+    assert "finalizeFirstListenCompletion()" not in open_setup
+    assert "if(focus==='music-sources'&&firstListenRequired)exitFirstListenFlow()" in open_setup
+
+
+def test_receipt_and_success_transitions_never_replace_the_owned_station() -> None:
+    """Sound/privacy persistence and success rendering retain one connection."""
+    for owner, successor in (
+        ("verifyFirstListen", "loadHomeContextPreview"),
+        ("chooseFirstListenPrivacy", "renderHomeContextPreviewGate"),
+        ("updateFirstListenSuccess", "reviewFirstListenChoices"),
+        ("resolveFirstListenLanding", "renderGuidedSetupStrip"),
+    ):
+        body = _function(owner, successor)
+        assert "stopFirstListenStationAudio()" not in body, owner
+        assert "FIRST_LISTEN_STREAM" not in body, owner
+
+    stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
+    assert "resumeStation=true" in stop_guide
+    assert "if(resumeStation&&stationAudio&&stationAudio.src)stationAudio.play()" in stop_guide
 
 
 def test_active_setup_csrf_stale_403_is_structured_not_a_bare_string() -> None:
