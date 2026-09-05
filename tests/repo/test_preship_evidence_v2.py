@@ -2369,7 +2369,7 @@ def test_pr_rejects_self_consistent_historical_receipt_added_beside_final_receip
         source_digest=hashlib.sha256(b"historical import").hexdigest(),
     )
 
-    with pytest.raises(EvidenceError, match="does not match the target content"):
+    with pytest.raises(EvidenceError, match="vacuous|does not match the target content"):
         verify_v2(repo, target="HEAD", base=base, mode="pr")
 
 
@@ -2670,6 +2670,115 @@ def test_reattest_derives_receipt_after_clean_base_integration(repo: GitReposito
     target = _commit(repo.root, "reattest receipt swap")
     result = verify_v2(repo, target=target, base=base, mode="pr")
     assert result.matching_receipts == (path.as_posix(),)
+
+
+def test_pr_accepts_pre_integrate_receipt_via_merge_tree_witness(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """Clean merge of an advanced base must not burn a still-valid receipt.
+
+    This is the landing death-spiral fix: integrate origin/main, land without a
+    reattest rewrite (and without the CI restart that rewrite forced).
+    """
+
+    base, merge_commit, old_path, old_payload = _integrated_branch(repo, tmp_path)
+
+    result = verify_v2(repo, target=merge_commit, base=base, mode="pr")
+    assert result.matching_receipts == (old_path.as_posix(),)
+    assert result.content_sha256 == snapshot_tree(repo, merge_commit).content_sha256
+    # Receipt still pins the pre-merge reviewed tip, not the merge commit.
+    assert old_payload["reviewed_commit"] != merge_commit
+    assert old_payload["reviewed_content_sha256"] != result.content_sha256
+
+
+def test_pr_accepts_receipt_when_base_advance_is_content_profile_noop(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """Base moved, digest unchanged: still accept via merge witness, not exact-bind."""
+
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _, old_path = _emit_and_commit(repo, tmp_path)
+    pre_digest = snapshot_tree(repo, "HEAD").content_sha256
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    # Empty commit: history advances, content-profile digest does not.
+    base = _git(
+        repo.root,
+        "commit-tree",
+        f"{fork_point}^{{tree}}",
+        "-p",
+        fork_point,
+        input_bytes=b"empty base advance\n",
+    ).stdout.decode().strip()
+    _git(repo.root, "update-ref", "refs/heads/base-branch", base)
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    merge_commit = repo.head()
+    assert snapshot_tree(repo, merge_commit).content_sha256 == pre_digest
+    assert not repo.is_ancestor(base, json.loads((repo.root / old_path).read_text())["reviewed_commit"])
+
+    result = verify_v2(repo, target=merge_commit, base=base, mode="pr")
+    assert result.matching_receipts == (old_path.as_posix(),)
+    assert result.content_sha256 == pre_digest
+
+
+def test_pr_merge_witness_refuses_vacuous_reviewed_ancestor_of_base(
+    repo: GitRepository,
+) -> None:
+    """A receipt pinning a pre-base commit must not pass via merge_tree≡base."""
+
+    reviewed = repo.head()
+    content_digest = snapshot_tree(repo, reviewed).content_sha256
+    (repo.root / "base-only.txt").write_text("base advances\n")
+    base = _commit(repo.root, "base advances past the reviewed tip")
+    # Tip matches base content-profile after a receipt-only addition would, but
+    # here we pin the OLD reviewed tip whose merge with base is just base.
+    _add_receipt(repo, reviewed_commit=reviewed, content_digest=content_digest)
+    target = repo.head()
+    assert repo.is_ancestor(reviewed, base)
+    assert not repo.is_ancestor(base, reviewed)
+
+    with pytest.raises(EvidenceError, match="vacuous"):
+        verify_v2(repo, target=target, base=base, mode="pr")
+
+
+def test_pr_merge_witness_refuses_post_review_feature_drift(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+    (repo.root / "sneak.txt").write_text("unreviewed\n")
+    drifted = _commit(repo.root, "unreviewed change after the merge")
+
+    with pytest.raises(EvidenceError, match="does not match the target content"):
+        verify_v2(repo, target=drifted, base=base, mode="pr")
+
+
+def test_pr_merge_witness_refuses_hand_resolved_conflict(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _emit_and_commit(repo, tmp_path)
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "feature.txt").write_text("conflicting\n")
+    base = _commit(repo.root, "base edits the same file")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode != 0
+    (repo.root / "feature.txt").write_text("hand resolution\n")
+    _git(repo.root, "add", "feature.txt")
+    _git(repo.root, "commit", "-q", "--no-edit")
+    _set_origin_main(repo, base)
+
+    with pytest.raises(EvidenceError, match="conflicts"):
+        verify_v2(repo, target="HEAD", base=base, mode="pr")
 
 
 def test_reattest_is_idempotent_after_the_receipt_swap_lands(repo: GitRepository, tmp_path: Path) -> None:

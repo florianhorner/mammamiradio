@@ -848,15 +848,75 @@ def emit_v2(
     return relative_path, created
 
 
+def _merge_witness_mismatch(
+    repo: GitRepository,
+    *,
+    reviewed_commit: str,
+    base_commit: str,
+    content_sha256: str,
+) -> str | None:
+    """Return None when merge_tree(reviewed, base) digests to ``content_sha256``.
+
+    Otherwise return a short stable reason (``conflicts`` or ``drift``). Shared by
+    reattest (which rewrites a receipt after a clean integrate) and PR verify
+    (which accepts the pre-integrate receipt without a rewrite when the same
+    equality holds — so a clean ``git merge origin/main`` does not burn evidence).
+    """
+
+    merged_tree = repo.merge_tree_commits(reviewed_commit, base_commit)
+    if merged_tree is None:
+        return "conflicts"
+    if _tree_content_digest(repo, merged_tree) != content_sha256:
+        return "drift"
+    return None
+
+
+def _assert_reviewed_receipt_namespace_vs_base(
+    repo: GitRepository,
+    *,
+    base_commit: str,
+    reviewed_commit: str,
+) -> None:
+    """Refuse a reviewed commit that floods or mutates the base v2 namespace."""
+
+    reviewed_added_paths = repo.diff_paths(
+        base_commit,
+        reviewed_commit,
+        pathspec=RECEIPT_ROOT,
+        diff_filter="A",
+        max_paths=MAX_NEW_RECEIPTS,
+        max_path_bytes=MAX_RECEIPT_PATH_BYTES,
+    )
+    if len(reviewed_added_paths) > MAX_NEW_RECEIPTS:
+        raise EvidenceError(
+            f"reviewed commit {reviewed_commit} adds more than {MAX_NEW_RECEIPTS} entries "
+            "in the reserved v2 namespace"
+        )
+    reviewed_changed_paths = repo.diff_paths(
+        base_commit,
+        reviewed_commit,
+        pathspec=RECEIPT_ROOT,
+        diff_filter="a",
+        max_paths=0,
+        max_path_bytes=MAX_RECEIPT_PATH_BYTES,
+    )
+    if reviewed_changed_paths:
+        raise EvidenceError(
+            f"reviewed commit {reviewed_commit} deletes or modifies base v2 receipt "
+            f"{_display_path(reviewed_changed_paths[0])}"
+        )
+
+
 def _tree_content_digest(repo: GitRepository, tree_oid: str) -> str:
     """Content digest of a raw tree object under the same profile as snapshot_tree.
 
-    Used only as an equality witness during reattestation. v2 and HA Green
-    receipt entries are excluded from the digest entirely — exactly as
-    snapshot_tree excludes them — so their blob contents cannot affect the
-    equality claim and are not validated here; the surviving path-shape and mode
-    checks can only cause a refusal, never a false accept. The head tree that
-    actually carries the receipts is separately validated by snapshot_tree.
+    Used as an equality witness for clean base integration (reattest rewrite and
+    PR-verify merge acceptance). v2 and HA Green receipt entries are excluded
+    from the digest entirely — exactly as snapshot_tree excludes them — so their
+    blob contents cannot affect the equality claim and are not validated here;
+    the surviving path-shape and mode checks can only cause a refusal, never a
+    false accept. The head tree that actually carries the receipts is separately
+    validated by snapshot_tree.
     """
 
     digest = hashlib.sha256()
@@ -1066,11 +1126,16 @@ def reattest_v2(
         ):
             reasons.append(f"{label} does not match its reviewed commit's content")
             continue
-        merged_tree = repo.merge_tree_commits(reviewed_commit, base_commit)
-        if merged_tree is None:
+        witness = _merge_witness_mismatch(
+            repo,
+            reviewed_commit=reviewed_commit,
+            base_commit=base_commit,
+            content_sha256=head_snapshot.content_sha256,
+        )
+        if witness == "conflicts":
             reasons.append(f"{label}: merging its reviewed commit with the base conflicts")
             continue
-        if _tree_content_digest(repo, merged_tree) != head_snapshot.content_sha256:
+        if witness == "drift":
             reasons.append(f"{label}: HEAD is not exactly its reviewed content merged with the base")
             continue
         source = receipt
@@ -1198,6 +1263,7 @@ def verify_v2(
             raise EvidenceError("PR adds no new v2 review receipt")
 
         digest_cache: dict[str, str] = {}
+        path_checked: set[str] = set()
         for receipt in new_receipts:
             if receipt.content_profile != CONTENT_PROFILE:
                 raise EvidenceError(
@@ -1209,40 +1275,23 @@ def verify_v2(
                 raise EvidenceError(
                     f"new v2 receipt {_display_path(receipt.path)} pins an unavailable reviewed commit"
                 ) from exc
+            if not repo.is_ancestor(reviewed_commit, target_commit):
+                raise EvidenceError(
+                    f"new v2 receipt {_display_path(receipt.path)} pins a reviewed commit "
+                    "outside base-to-target history"
+                )
+
+            # When the reviewed tip descends from base, enforce namespace path
+            # checks before snapshot_tree: a transient corrupt mode on a base
+            # receipt must fail as a namespace mutation, not as a blob-shape error.
+            on_base_path = repo.is_ancestor(base_commit, reviewed_commit)
+            if on_base_path and reviewed_commit not in path_checked:
+                _assert_reviewed_receipt_namespace_vs_base(
+                    repo, base_commit=base_commit, reviewed_commit=reviewed_commit
+                )
+                path_checked.add(reviewed_commit)
+
             if reviewed_commit not in digest_cache:
-                if not repo.is_ancestor(base_commit, reviewed_commit) or not repo.is_ancestor(
-                    reviewed_commit, target_commit
-                ):
-                    raise EvidenceError(
-                        f"new v2 receipt {_display_path(receipt.path)} pins a reviewed commit "
-                        "outside base-to-target history"
-                    )
-                reviewed_added_paths = repo.diff_paths(
-                    base_commit,
-                    reviewed_commit,
-                    pathspec=RECEIPT_ROOT,
-                    diff_filter="A",
-                    max_paths=MAX_NEW_RECEIPTS,
-                    max_path_bytes=MAX_RECEIPT_PATH_BYTES,
-                )
-                if len(reviewed_added_paths) > MAX_NEW_RECEIPTS:
-                    raise EvidenceError(
-                        f"reviewed commit {reviewed_commit} adds more than {MAX_NEW_RECEIPTS} entries "
-                        "in the reserved v2 namespace"
-                    )
-                reviewed_changed_paths = repo.diff_paths(
-                    base_commit,
-                    reviewed_commit,
-                    pathspec=RECEIPT_ROOT,
-                    diff_filter="a",
-                    max_paths=0,
-                    max_path_bytes=MAX_RECEIPT_PATH_BYTES,
-                )
-                if reviewed_changed_paths:
-                    raise EvidenceError(
-                        f"reviewed commit {reviewed_commit} deletes or modifies base v2 receipt "
-                        f"{_display_path(reviewed_changed_paths[0])}"
-                    )
                 digest_cache[reviewed_commit] = snapshot_tree(
                     repo,
                     reviewed_commit,
@@ -1252,8 +1301,47 @@ def verify_v2(
                 raise EvidenceError(
                     f"new v2 receipt {_display_path(receipt.path)} does not match its reviewed commit's content"
                 )
-            if receipt.reviewed_content_sha256 != target_snapshot.content_sha256:
-                raise EvidenceError(f"new v2 receipt {_display_path(receipt.path)} does not match the target content")
+
+            if (
+                receipt.reviewed_content_sha256 == target_snapshot.content_sha256
+                and on_base_path
+            ):
+                # Classic exact bind: reviewed tip sits on base→target and digests
+                # match the target content profile.
+                continue
+
+            # Merge-tree witness: a clean `git merge <base>` of the reviewed tip
+            # produces exactly this target content. Covers the common integrate
+            # case (digest moved) and the rare case where base only moved
+            # content-profile-excluded paths (digest unchanged, but reviewed is
+            # no longer a base descendant). Conflicts or post-review feature
+            # drift fail closed — same predicate as reattest.
+            #
+            # Refuse a vacuous witness: if reviewed is already an ancestor of
+            # base, merge_tree(reviewed, base) collapses to base's tree and a
+            # receipt-only (or tip≈base) PR would falsely accept a pre-base
+            # review. The legitimate integrate case has reviewed as a sibling
+            # of base, not its ancestor.
+            if repo.is_ancestor(reviewed_commit, base_commit):
+                raise EvidenceError(
+                    f"new v2 receipt {_display_path(receipt.path)} pins a reviewed commit "
+                    "already contained in the base; merge-tree witness would be vacuous"
+                )
+            witness = _merge_witness_mismatch(
+                repo,
+                reviewed_commit=reviewed_commit,
+                base_commit=base_commit,
+                content_sha256=target_snapshot.content_sha256,
+            )
+            if witness == "conflicts":
+                raise EvidenceError(
+                    f"new v2 receipt {_display_path(receipt.path)}: "
+                    "merging its reviewed commit with the base conflicts"
+                )
+            if witness is not None:
+                raise EvidenceError(
+                    f"new v2 receipt {_display_path(receipt.path)} does not match the target content"
+                )
 
         matching = new_receipts
     else:
