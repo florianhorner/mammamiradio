@@ -189,17 +189,25 @@ jobs:
           done
 
   media-proof:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: pre-flight
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            image_option: --amd64-image
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image_option: --aarch64-image
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -219,31 +227,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull both prebuilt SHA images explicitly
+      - name: Pull exact native prebuilt SHA image
         env:
-          AMD64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
-          AARCH64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-aarch64:${{ github.sha }}
-        run: |
-          set -euo pipefail
-          docker pull --platform linux/amd64 "$AMD64_IMAGE"
-          docker pull --platform linux/arm64 "$AARCH64_IMAGE"
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+        run: docker pull "$IMAGE_REF"
 
-      - name: Prove source, packages, and both prebuilt SHA images
+      - name: Prove source, packages, and native prebuilt SHA image
         env:
-          AMD64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
-          AARCH64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-aarch64:${{ github.sha }}
+          IMAGE_ARCH: ${{ matrix.arch }}
+          IMAGE_OPTION: ${{ matrix.image_option }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          PROOF_OUTPUT: media-proof-${{ matrix.arch }}.json
         run: |
           python scripts/media-proof.py \
-            --amd64-image "$AMD64_IMAGE" \
-            --aarch64-image "$AARCH64_IMAGE" \
-            --output media-proof.json
+            --image-arch "$IMAGE_ARCH" \
+            "$IMAGE_OPTION" "$IMAGE_REF" \
+            --output "$PROOF_OUTPUT"
 
       - name: Upload stable-promotion media proof
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: media-proof-stable-${{ github.sha }}
-          path: media-proof.json
+          name: media-proof-stable-${{ matrix.arch }}-${{ github.sha }}
+          path: media-proof-${{ matrix.arch }}.json
           if-no-files-found: error
 
   smoke-prebuilt:

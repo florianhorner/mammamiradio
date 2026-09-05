@@ -174,16 +174,24 @@ jobs:
           compression-level: 0
 
   media-proof:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: [validate, build]
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            image_option: --amd64-image
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image_option: --aarch64-image
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -197,52 +205,40 @@ jobs:
           python -m pip install uv==0.10.11
           python -m pip install -e . -r requirements-dev.txt
 
-      - name: Download unpushed amd64 image
+      - name: Download unpushed native image
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
-          name: addon-image-amd64-${{ github.sha }}
-          path: ${{ runner.temp }}/images/amd64
+          name: addon-image-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/images/${{ matrix.arch }}
 
-      - name: Download unpushed aarch64 image
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
-        with:
-          name: addon-image-aarch64-${{ github.sha }}
-          path: ${{ runner.temp }}/images/aarch64
-
-      - name: Load both unpushed images
+      - name: Load unpushed native image
+        env:
+          IMAGE_TAR: ${{ runner.temp }}/images/${{ matrix.arch }}/addon-image-${{ matrix.arch }}.tar
         run: |
           set -euo pipefail
-          docker load --input "$RUNNER_TEMP/images/amd64/addon-image-amd64.tar"
-          docker load --input "$RUNNER_TEMP/images/aarch64/addon-image-aarch64.tar"
+          docker load --input "$IMAGE_TAR"
 
-      # Report-only while the twelve starter tracks are absent by design: the
-      # full proof still runs against both unpushed images and uploads its
-      # report, but this job does not fail on the missing content — publish
-      # needs this job, so a hard failure here still blocks every image publish
-      # and the edge channel. The stable promotion media-proof job in
-      # addon-release.yml and the hard gate in scripts/pre-release-check.sh
-      # (section 10) keep the release path blocked until the content lands.
-      - name: Prove source, packages, and both built images (report-only)
+      # This is the same blocking gate used before stable promotion. Each image
+      # runs on its native architecture so an arm64 tooling timeout cannot hide
+      # until a release tag is pushed.
+      - name: Prove source, packages, and native built image
         env:
-          AMD64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
-          AARCH64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-aarch64:${{ github.sha }}
+          IMAGE_ARCH: ${{ matrix.arch }}
+          IMAGE_OPTION: ${{ matrix.image_option }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          PROOF_OUTPUT: media-proof-${{ matrix.arch }}.json
         run: |
-          if python scripts/media-proof.py \
-            --amd64-image "$AMD64_IMAGE" \
-            --aarch64-image "$AARCH64_IMAGE" \
-            --output media-proof.json; then
-            echo "media-proof: PASS"
-          else
-            echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence under mammamiradio/assets/starter/) have not landed yet."
-            echo "NOTICE: this job is report-only; the stable promotion media-proof job in addon-release.yml and scripts/pre-release-check.sh section 10 still fail hard on this proof on the release path."
-          fi
+          python scripts/media-proof.py \
+            --image-arch "$IMAGE_ARCH" \
+            "$IMAGE_OPTION" "$IMAGE_REF" \
+            --output "$PROOF_OUTPUT"
 
       - name: Upload full media proof
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: media-proof-full-${{ github.sha }}
-          path: media-proof.json
+          name: media-proof-full-${{ matrix.arch }}-${{ github.sha }}
+          path: media-proof-${{ matrix.arch }}.json
           if-no-files-found: error
 
   push:

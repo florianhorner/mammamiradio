@@ -48,14 +48,9 @@ def test_per_pr_invariants_keep_non_media_sections_strict() -> None:
     assert 'fail "release beat manifest validation failed"' in invariants
 
 
-def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
-    """While the starter tracks are absent by design, the PR quality lane, the
-    add-on validate job, the add-on build full media-proof job, the per-PR
-    invariants media section, and local make media-check run the proof
-    report-only: the proof and its report remain, but the missing content no
-    longer fails the lane (the full job's hard failure was skipping push and
-    starving the edge channel of images). The release path asserted strict
-    above keeps release blocked."""
+def test_report_only_lanes_stay_visible_but_addon_build_runs_the_release_gate_blocking() -> None:
+    """Fast PR/local reports remain advisory, while every main image build must
+    pass the same full proof that gates stable promotion."""
 
     build = _read(".github/workflows/addon-build.yml")
     quality = _job(_read(".github/workflows/quality.yml"), "media-report")
@@ -71,10 +66,12 @@ def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
     assert "if python scripts/media-proof.py --quick --output media-proof.json; then" in validate
     assert notice in validate
     assert "name: media-proof-quick-${{ github.sha }}" in validate
-    assert "if python scripts/media-proof.py \\" in build_proof
-    assert "--output media-proof.json; then" in build_proof
-    assert notice in build_proof
-    assert "name: media-proof-full-${{ github.sha }}" in build_proof
+    assert "python scripts/media-proof.py \\" in build_proof
+    assert '--image-arch "$IMAGE_ARCH"' in build_proof
+    assert '"$IMAGE_OPTION" "$IMAGE_REF"' in build_proof
+    assert "if python scripts/media-proof.py" not in build_proof
+    assert notice not in build_proof
+    assert "name: media-proof-full-${{ matrix.arch }}-${{ github.sha }}" in build_proof
     assert 'if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then' in invariants
     assert notice in invariants
     assert 'fail "strict media proof failed' not in invariants
@@ -82,12 +79,8 @@ def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
     assert notice in makefile
 
 
-def test_addon_publish_and_stable_promotion_require_both_image_proof() -> None:
-    """Publish waits for the full both-image proof before either push.
-
-    The job is report-only on missing starter content — see the lane split
-    above — and the stable promotion proof in addon-release.yml stays strict:
-    a media-proof failure there fails the job, never a notice."""
+def test_addon_publish_and_stable_promotion_require_native_per_arch_image_proof() -> None:
+    """Both publish paths wait for blocking proofs on native architecture runners."""
 
     build = _read(".github/workflows/addon-build.yml")
     build_image = _job(build, "build")
@@ -100,16 +93,24 @@ def test_addon_publish_and_stable_promotion_require_both_image_proof() -> None:
     assert "push: false" in build_image
     assert "docker save --output" in build_image
     assert "needs: [validate, build]" in build_proof
-    assert "--amd64-image" in build_proof and "--aarch64-image" in build_proof
+    assert "addon-image-${{ matrix.arch }}-${{ github.sha }}" in build_proof
     assert "needs: [validate, media-proof]" in publish
     assert "packages: write" in publish
     assert 'docker push "$SHA_REF"' in publish
     assert 'docker push "$SHORT_REF"' in publish
     assert "docker push" not in build_image
     assert "push: true" not in build_image
-    assert 'docker pull --platform linux/amd64 "$AMD64_IMAGE"' in release_proof
-    assert 'docker pull --platform linux/arm64 "$AARCH64_IMAGE"' in release_proof
-    assert "--amd64-image" in release_proof and "--aarch64-image" in release_proof
+    for proof in (build_proof, release_proof):
+        assert "runs-on: ${{ matrix.runner }}" in proof
+        assert "- arch: amd64\n            runner: ubuntu-latest" in proof
+        assert "- arch: aarch64\n            runner: ubuntu-24.04-arm" in proof
+        assert "image_option: --amd64-image" in proof
+        assert "image_option: --aarch64-image" in proof
+        assert "docker/setup-qemu-action@" not in proof
+        assert '--image-arch "$IMAGE_ARCH"' in proof
+        assert '"$IMAGE_OPTION" "$IMAGE_REF"' in proof
+    assert 'run: docker pull "$IMAGE_REF"' in release_proof
+    assert "name: media-proof-stable-${{ matrix.arch }}-${{ github.sha }}" in release_proof
     assert "NOTICE: media-proof reported missing content" not in release_proof
     assert "needs: [pre-flight, media-proof, smoke-prebuilt]" in promote
 
