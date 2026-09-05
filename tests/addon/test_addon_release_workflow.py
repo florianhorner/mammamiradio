@@ -392,6 +392,7 @@ def test_release_workflow_proves_both_sha_images_before_promotion():
 
     assert "needs: pre-flight" in proof_block
     assert "runs-on: ${{ matrix.runner }}" in proof_block
+    assert "timeout-minutes: 30" in proof_block
     assert "fail-fast: false" in proof_block
     assert "- arch: amd64\n            runner: ubuntu-latest\n            image_option: --amd64-image" in proof_block
     assert (

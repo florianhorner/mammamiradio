@@ -102,6 +102,7 @@ def test_addon_publish_and_stable_promotion_require_native_per_arch_image_proof(
     assert "push: true" not in build_image
     for proof in (build_proof, release_proof):
         assert "runs-on: ${{ matrix.runner }}" in proof
+        assert "timeout-minutes: 30" in proof
         assert "fail-fast: false" in proof
         assert "- arch: amd64\n            runner: ubuntu-latest\n            image_option: --amd64-image" in proof
         assert (
