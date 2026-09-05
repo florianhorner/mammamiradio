@@ -162,6 +162,59 @@ async (page) => {
   // producer desk, so open it the way the operator does — through the page's
   // own tab navigation (render-free, exactly like initTabs' landing call).
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
+  const stationCategoryRow = await page.evaluate(() => {
+    document.body.removeAttribute('data-stopped');
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-station-id',
+        type: 'station_id',
+        label: 'Station ID',
+        metadata: {},
+        source: 'rendered_queue',
+        duration_ms: 7000,
+      }],
+      current_source: { kind: 'demo', label: 'Demo Radio' },
+      playlist_source: { kind: 'demo', label: 'Demo Radio' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      badge: row?.cells[1]?.textContent.trim() || '',
+      title: row?.cells[2]?.textContent.trim() || '',
+      rowText: row?.textContent.trim() || '',
+    };
+  });
+  const stationCategoryCount = (stationCategoryRow.rowText.match(/station id/gi) || []).length;
+  assert(
+    stationCategoryRow.badge.toLowerCase().includes('station id')
+      && stationCategoryRow.title === ''
+      && stationCategoryCount === 1,
+    `station category labels are not duplicated: ${JSON.stringify(stationCategoryRow)}`,
+  );
+  const localQueueRow = await page.evaluate(() => {
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-local-track',
+        type: 'music',
+        label: ' – Salvatore On Everything',
+        source_kind: 'local',
+        source: 'rendered_queue',
+        duration_ms: 240000,
+      }],
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      title: row?.cells[2]?.firstChild?.textContent.trim() || '',
+      source: row?.cells[3]?.textContent.trim() || '',
+    };
+  });
+  assert(
+    localQueueRow.title === 'Salvatore On Everything' && localQueueRow.source === 'local',
+    `local queue metadata was not rendered title-only: ${JSON.stringify(localQueueRow)}`,
+  );
   await exerciseListenerSongFailureRows();
   const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Music','ready','Ready'],['Sources','checking','Checking'],['Hosts','waiting_ai','Waiting for AI'],['Setup','blocked','Blocked'],['AI','not_configured','Optional']].map(([label,status,display_status])=>({label,status,display_status,shape:'BAD'}))}}};
   const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent,name:el.getAttribute('aria-label')}))},setupStatusFixture);

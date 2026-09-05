@@ -13,6 +13,20 @@ command -v gh >/dev/null 2>&1 || die "gh CLI not found."
 command -v jq >/dev/null 2>&1 || die "jq not found."
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
 
+EMIT_JSON=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) EMIT_JSON=1; shift ;;
+    -h|--help)
+      say "Usage: $0 [--json]"
+      say "  (no args)  human dashboard: per-PR merge state, evidence, thread debt, worktree"
+      say "  --json     the land queue's machine-readable states, enriched with local worktrees"
+      exit 0
+      ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
 root="$(git rev-parse --show-toplevel)"
 
 # Enumerate every worktree (path, local branch, upstream tracking branch)
@@ -151,17 +165,9 @@ thread_debt_count() {
     return 0
   }
 
-  printf '%s' "$response" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-    | select(.isResolved == false and .isOutdated == false)
-    | select(
-        [.comments.nodes[]?
-          | select(.author.login == "coderabbitai"
-              or .author.login == "copilot-pull-request-reviewer"
-              or .author.login == "chatgpt-codex-connector")
-          | .body // ""
-        ] | any(test("(Major|Critical|P0|P1)"; "i"))
-      )
-  ] | length'
+  # Same blocking-debt definition scripts/land-gates.sh gates on (it lives in
+  # review-threads.sh); this dashboard only counts them instead of refusing.
+  printf '%s' "$response" | jq -s "[ .[] | $REVIEW_THREADS_BLOCKING_JQ ] | length"
 }
 
 recommendation() {
@@ -190,6 +196,31 @@ recommendation() {
     say "inspect ($merge_state)"
   fi
 }
+
+# --json is the land queue's state vocabulary (READY / QUEUED / BLOCKED_* / ...),
+# not a second opinion about it: it delegates to scripts/land-queue-plan.sh and
+# only adds what that script cannot know — which local worktree owns each branch.
+# Two implementations of "is this PR landable" is exactly the drift this whole
+# refactor exists to prevent.
+if [ "$EMIT_JSON" = "1" ]; then
+  queue_json="$("$root/scripts/land-queue-plan.sh" --json)" \
+    || die "could not compute queue state (scripts/land-queue-plan.sh failed)."
+  printf '%s' "$queue_json" | jq -e 'type == "object" and has("prs")' >/dev/null 2>&1 \
+    || die "the shadow land queue returned no queue to read. It is switched off (.github/land-queue.enabled absent, or LAND_QUEUE=0) — restore it, or use this dashboard without --json."
+  # The planner already emits each PR's branch, so there is no second `gh pr list`
+  # here — one listing, one instant, no PR that appears in one set and not the
+  # other. worktree_for_branch is pure shell against the index built above.
+  worktrees="$(
+    printf '%s' "$queue_json" | jq -r '.prs[] | [(.number|tostring), .branch] | @tsv' \
+      | while IFS=$'\t' read -r number branch; do
+          jq -cn --arg k "$number" --arg w "$(worktree_for_branch "$branch" || true)" \
+            '{key:$k, value:(if $w == "" then null else $w end)}'
+        done | jq -s 'from_entries'
+  )"
+  printf '%s' "$queue_json" | jq --argjson wt "$worktrees" \
+    '.prs |= map(. + {worktree: ($wt[.number|tostring] // null)})'
+  exit 0
+fi
 
 prs="$(gh pr list --state open --json number,title,headRefName,headRefOid,baseRefOid,mergeStateStatus,isDraft,updatedAt,url 2>/dev/null)" \
   || die "could not list open PRs. Check gh auth and repository context."

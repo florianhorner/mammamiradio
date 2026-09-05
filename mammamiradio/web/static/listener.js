@@ -243,15 +243,35 @@
     return true;
   }
 
+  function musicLabelParts(seg) {
+    const metadata = (seg && seg.metadata) || {};
+    const sourceKind = String(metadata.source_kind || (seg && seg.source_kind) || '').trim().toLowerCase();
+    const metadataArtist = String(metadata.artist || '').trim();
+    const artist = sourceKind === 'local' && metadataArtist.toLowerCase() === 'unknown' ? '' : metadataArtist;
+    const titleOnly = String(metadata.title_only || '').trim();
+    if (titleOnly) return { title: titleOnly, artist };
+
+    const label = String((seg && seg.label) || '').trim();
+    for (const sep of [' \u2014 ', ' \u2013 ', ' - ']) {
+      const idx = label.indexOf(sep);
+      if (idx < 0) continue;
+      const labelArtist = label.slice(0, idx).trim();
+      return {
+        title: label.slice(idx + sep.length).trim(),
+        artist: artist || (sourceKind === 'local' && labelArtist.toLowerCase() === 'unknown' ? '' : labelArtist),
+      };
+    }
+    return { title: label, artist };
+  }
+
   function nowPlayingIdentity(np) {
     const metadata = (np && np.metadata) || {};
-    const label = (np && np.label) || '';
-    const splitAt = label.indexOf(' \u2014 ');
-    const fallbackArtist = splitAt > 0 ? label.slice(0, splitAt) : '';
-    const fallbackTitle = splitAt > 0 ? label.slice(splitAt + 3) : label;
+    const parts = musicLabelParts(np);
+    const metadataTitle = String(metadata.title || '').trim();
+    const label = String((np && np.label) || '').trim();
     return {
-      title: String(metadata.title_only || metadata.title || fallbackTitle || '').slice(0, 300),
-      artist: String(metadata.artist || fallbackArtist || '').slice(0, 300),
+      title: String(metadata.title_only || (metadataTitle && metadataTitle !== label ? metadataTitle : parts.title) || '').slice(0, 300),
+      artist: String(parts.artist || '').slice(0, 300),
     };
   }
 
@@ -600,9 +620,9 @@
     let title, artist;
     const label = np.label || '';
     if (np.type === 'music') {
-      const parts = label.split(' \u2014 ');
-      if (parts.length === 2) { artist = parts[0]; title = parts[1]; }
-      else { artist = stationName; title = label || _t('np_on_air', 'On Air'); }
+      const parts = musicLabelParts(np);
+      artist = parts.artist || stationName;
+      title = parts.title || label || _t('np_on_air', 'On Air');
     } else if (np.type === 'banter') {
       artist = label || 'Marco & Giulia';
       title = _t('np_live', 'Live') + ' \u2014 ' + _t('seg_banter', 'Banter');
@@ -658,14 +678,9 @@
       trackEl.textContent = _t('np_paused', 'Fermo');
       artistEl.textContent = '';
     } else if (np.type === 'music') {
-      const parts = label.split(' \u2014 ');
-      if (parts.length === 2) {
-        trackEl.textContent = parts[1];
-        artistEl.textContent = parts[0];
-      } else {
-        trackEl.textContent = label || _t('np_on_air', 'On Air');
-        artistEl.textContent = '';
-      }
+      const parts = musicLabelParts(np);
+      trackEl.textContent = parts.title || _t('np_on_air', 'On Air');
+      artistEl.textContent = parts.artist || '';
     } else if (np.type === 'banter') {
       trackEl.textContent = label ? label + ' ' + _t('np_banter_strip', 'in conversation') : _t('np_banter_idle', 'The hosts are on air');
       artistEl.textContent = _t('seg_banter', 'Banter');
@@ -926,15 +941,11 @@
   // label in slot-title AND the artist again in slot-host doubles the artist.
   // Split the label for music, fall back to raw label + hostLine otherwise.
   function splitMusicLabel(seg) {
-    const label = (seg && seg.label) || '';
     if (seg && seg.type === 'music') {
-      const sep = ' \u2014 ';
-      const idx = label.indexOf(sep);
-      if (idx > 0) {
-        return { title: label.slice(idx + sep.length), host: escHtml(label.slice(0, idx)) };
-      }
+      const parts = musicLabelParts(seg);
+      return { title: parts.title, host: escHtml(parts.artist) };
     }
-    return { title: label, host: hostLine(seg) };
+    return { title: (seg && seg.label) || '', host: hostLine(seg) };
   }
 
   function renderDediche(requests) {

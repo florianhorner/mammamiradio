@@ -71,8 +71,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Paths that trigger Build HA Addon — must mirror addon-build.yml `on.push.paths`.
-IMAGE_PATHS="ha-addon mammamiradio proof/media pyproject.toml requirements.txt requirements-dev.txt radio.toml model_registry.toml scripts/media-proof.py scripts/starter-catalog.py scripts/validate-addon.sh scripts/validate-starter-media.py scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py tests/media tests/playlist/test_jamendo_transient.py tests/playlist/test_legacy_media.py tests/scheduling/test_queue_mutations.py tests/web/test_streamer_routes_extended.py .github/workflows/addon-build.yml"
+# IMAGE_PATHS, the green-build queries, and the drift check live in
+# scripts/edge-select.sh so this cut and the shadow land queue
+# (scripts/land-queue-plan.sh) select the same commit from one implementation.
+EDGE_SELECT_LIB="$ROOT/scripts/edge-select.sh"
+if [ ! -r "$EDGE_SELECT_LIB" ]; then
+  echo "ERROR: edge selection library not found at $EDGE_SELECT_LIB." >&2
+  exit 1
+fi
+# shellcheck source=scripts/edge-select.sh
+. "$EDGE_SELECT_LIB"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: working tree not clean — commit or stash first, then cut the edge release." >&2
@@ -86,27 +94,6 @@ fi
 
 git fetch origin main --quiet
 
-# Candidate set: recent origin/main commits whose `Build HA Addon` run SUCCEEDED.
-# A successful run means validate -> build (both arches) -> push -> smoke all passed,
-# so both :<short-sha> images were pushed AT BUILD TIME. (A later GHCR prune/delete is
-# not detected — acceptable: the add-on images are not pruned, and the drift guard
-# below still blocks the dangerous "pin an image that predates an add-on change" case.)
-# `gh run list` orders by run-creation time, not commit topology, so this is only a
-# candidate set; we pick the topologically-newest one below. --limit 40 is the lookback
-# window (~weeks at this repo's velocity). Hard-fail (never soft-pass) if the query fails.
-OK_SHAS="$(gh run list --workflow=addon-build.yml --branch main --limit 40 \
-  --json headSha,status,conclusion \
-  -q '[.[] | select(.status == "completed" and .conclusion == "success") | .headSha] | .[]' \
-  2>/dev/null)" || {
-  echo "ERROR: could not query 'Build HA Addon' runs (gh run list failed)." >&2
-  echo "       Refusing to cut an edge release without a verified built commit." >&2
-  exit 1
-}
-
-# Walk origin/main newest-first and take the first commit that has a green build.
-# Selecting from `git rev-list --topo-order origin/main` makes the result inherently
-# an ancestor of main and topology-correct (children before parents) even when a merged
-# branch carries stale commit dates or an older commit was re-run after a newer one.
 TARGET_FULL=""
 if [ -n "$REQUESTED_SHA" ]; then
   # Exact-commit mode: resolve, then refuse anything that is not that commit.
@@ -119,35 +106,38 @@ if [ -n "$REQUESTED_SHA" ]; then
     echo "       Edge may only point at a commit that is actually on main." >&2
     exit 1
   fi
-  # Query the runs for THIS commit rather than reusing OK_SHAS. OK_SHAS is the 40
-  # most recent runs on main, so a target older than that window would be rejected
-  # as "no green build" even though its image exists.
+  # Query the runs for THIS commit rather than reusing the newest-built selection.
+  # That selection reads a capped window of recent runs, so a target older than the
+  # window would be rejected as "no green build" even though its image exists.
   #
-  # `--status success` filters server-side, so `--limit 1` is enough: we only need
-  # to know whether ANY successful run exists. Filtering client-side over a capped
-  # page would reintroduce the same class of bug one level down — enough newer
-  # failed reruns on the same commit would push the successful one out of the page.
-  # Hard-fail (never soft-pass) if the query itself fails.
-  if ! TARGET_RUNS="$(gh run list --workflow=addon-build.yml --commit "$TARGET_FULL" \
-      --status success --limit 1 --json conclusion -q 'length' 2>/dev/null)"; then
+  # edge_commit_has_green_build filters server-side (see the rationale there), and
+  # returns 2 for a failed query so an unverifiable answer is distinguishable from
+  # a genuine "no build". Hard-fail on both — never soft-pass.
+  TARGET_BUILD_RC=0
+  edge_commit_has_green_build "$TARGET_FULL" || TARGET_BUILD_RC=$?
+  if [ "$TARGET_BUILD_RC" -eq 2 ]; then
     echo "ERROR: could not query 'Build HA Addon' runs for $REQUESTED_SHA." >&2
     echo "       Refusing to pin an unverified commit." >&2
     exit 1
   fi
-  if [ "${TARGET_RUNS:-0}" -lt 1 ]; then
+  if [ "$TARGET_BUILD_RC" -ne 0 ]; then
     echo "ERROR: --target-sha $REQUESTED_SHA has no successful 'Build HA Addon' run." >&2
     echo "       No :<short-sha> image exists for it, so the Supervisor would pull a" >&2
     echo "       missing tag. Wait for its build to go green, then re-run." >&2
     exit 1
   fi
 else
-  while IFS= read -r _commit; do
-    [ -n "$_commit" ] || continue
-    if printf '%s\n' "$OK_SHAS" | grep -qxF "$_commit"; then
-      TARGET_FULL="$_commit"
-      break
-    fi
-  done < <(git rev-list --topo-order origin/main)
+  # Newest origin/main commit with a green build, chosen topologically (see
+  # edge_newest_built_sha in scripts/edge-select.sh). rc 2 means the query itself
+  # failed — hard-fail on that; rc 1 leaves TARGET_FULL empty for the shared
+  # "no green build" message below.
+  SELECT_RC=0
+  TARGET_FULL="$(edge_newest_built_sha origin/main)" || SELECT_RC=$?
+  if [ "$SELECT_RC" -eq 2 ]; then
+    echo "ERROR: could not query 'Build HA Addon' runs (gh run list failed)." >&2
+    echo "       Refusing to cut an edge release without a verified built commit." >&2
+    exit 1
+  fi
 fi
 
 if [ -z "$TARGET_FULL" ]; then
@@ -165,11 +155,11 @@ HEAD_SHORT="$(git rev-parse --short=7 origin/main)"
 # has NOT gone green yet (still building, or its build failed) — pinning the older
 # image would advertise edge metadata (options/schema, run.sh behaviour) the image
 # does not implement.
-# shellcheck disable=SC2086  # IMAGE_PATHS intentionally word-splits into pathspecs
-# No `|| true`: `git diff --name-only` already exits 0 for both changed and unchanged,
-# so a non-zero here is a real verification failure (bad object, git error). Treat it
-# like every other unverifiable state — hard-fail, never soft-pass.
-if ! CHANGED="$(git diff --name-only "$TARGET_FULL" origin/main -- $IMAGE_PATHS 2>/dev/null)"; then
+# edge_image_drift returns 2 when the diff itself could not be computed — an
+# unverifiable drift check is a refusal, never an assumed-clean pass.
+DRIFT_RC=0
+CHANGED="$(edge_image_drift "$TARGET_FULL" origin/main)" || DRIFT_RC=$?
+if [ "$DRIFT_RC" -eq 2 ]; then
   echo "ERROR: could not verify whether add-on image files changed since $SHA." >&2
   echo "       Refusing to cut an edge release without a verified drift check." >&2
   exit 1
@@ -200,7 +190,7 @@ fi
 # NOT the caller's checked-out tree — running from a stale local branch that already
 # carries `version: $SHA` must not falsely report "already released" while origin/main
 # still needs the bump. An unreadable config -> empty -> proceed to cut (the safe way).
-CURRENT="$(git show "origin/main:$EDGE_CONFIG" 2>/dev/null | awk '/^version:/ { print $2; exit }' | tr -d '"')" || CURRENT=""
+CURRENT="$(edge_pinned_version origin/main)"
 if [ "$CURRENT" = "$SHA" ]; then
   echo "Edge add-on already at $SHA (latest built main commit) — nothing to release."
   exit 0

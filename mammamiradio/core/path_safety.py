@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 
 
@@ -11,12 +12,64 @@ def safe_path_within(path: Path, root: Path, *, reject_symlinks: bool = False) -
     Callers use this around cleanup and admission paths, where malformed cache
     state must degrade to a skipped candidate rather than escape its owning
     directory or interrupt startup.
+
+    Three ways out of *root*, and the third needs its own probe::
+
+        path
+          |
+          +-- resolves outside root      --> is_relative_to False   REJECT
+          +-- resolution itself fails    --> OSError/RuntimeError    REJECT
+          +-- symlink cycle              --> stat() ELOOP            REJECT
+          +-- missing / unreadable       --> not a containment
+                                             failure; left to the
+                                             caller's own checks
+
+    The cycle probe is load-bearing, not defensive padding. On Python 3.12
+    and earlier ``Path.resolve(strict=False)`` raised ``RuntimeError`` on a
+    symlink cycle and the ``except`` below caught it for free. Python 3.13
+    and later return the unresolved path and raise nothing, so a cycle
+    satisfies ``is_relative_to`` and this function hands back a path it
+    should have refused. ``stat()`` reports ``ELOOP`` on every supported
+    interpreter, which is why the probe does not depend on the version.
+
+    That split is not hypothetical here: the add-on image runs 3.12, and the
+    standalone image runs 3.14, so both sides of it ship today.
+
+    It runs unconditionally, including for ``reject_symlinks=True``. That flag
+    does NOT make it redundant: ``Path.is_symlink()`` calls ``lstat()`` and
+    pathlib swallows ``ELOOP``, so it answers ``False`` when the cycle is in a
+    PARENT component rather than the leaf. Skipping the probe for those
+    callers would reopen the hole for every path under a looped directory.
+
+    ``ELOOP`` is broader than "cycle": Linux also returns it once a single
+    resolution exceeds its symlink-traversal limit, which a long but acyclic
+    chain can do. Such a path is refused too. That is deliberate. This
+    function answers "is this provably inside root", and a path the kernel
+    will not resolve cannot be proven inside anything.
     """
     try:
         if reject_symlinks and path.is_symlink():
             return None
         resolved_root = root.resolve(strict=False)
         resolved_path = path.resolve(strict=False)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
+        # ValueError is an embedded null byte. Like the others it is malformed
+        # input, not containment, and this function promises to skip a bad
+        # candidate rather than interrupt the caller.
         return None
-    return resolved_path if resolved_path.is_relative_to(resolved_root) else None
+    # This function promises a Path or None. A caller may hand in a test double
+    # or other path-like whose resolve() answers with something else, and an
+    # unchecked mock result satisfies is_relative_to() truthily -- reporting
+    # containment for an object that was never a path.
+    if not isinstance(resolved_path, Path) or not isinstance(resolved_root, Path):
+        return None
+    if not resolved_path.is_relative_to(resolved_root):
+        return None
+    try:
+        path.stat()
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None
+    except ValueError:
+        return None
+    return resolved_path

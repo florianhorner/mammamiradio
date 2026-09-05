@@ -332,7 +332,7 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-casa .casa-moments-stale { color: var(--text-secondary); font-size: 10px; line-height: 1.4; margin: 7px 0 0; }
 
 /* Radio illustration */
-.mmr-hero-art { position: relative; aspect-ratio: 1/1; max-height: 520px; width: 100%; display: flex; align-items: center; justify-content: center; }
+.mmr-hero-art { position: relative; aspect-ratio: 1/1; max-height: 520px; width: min(100%, 720px); max-width: 720px; min-width: 0; justify-self: center; display: flex; align-items: center; justify-content: center; }
 .mmr-radio { position: relative; width: 92%; aspect-ratio: 372/300; background: var(--terracotta); border-radius: 28px; box-shadow: inset 0 2px 0 rgba(255,255,255,0.18), inset 0 -3px 0 rgba(0,0,0,0.22), inset 0 0 0 1px rgba(0,0,0,0.15), 0 24px 48px rgba(0,0,0,0.55), 0 0 80px rgba(196,101,74,0.22); }
 .mmr-radio::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.05 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"); mix-blend-mode: overlay; opacity: 0.6; pointer-events: none; }
 .mmr-radio-strip { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; height: 6.3%; padding: 0; overflow: hidden; border-top-left-radius: 28px; border-top-right-radius: 28px; }

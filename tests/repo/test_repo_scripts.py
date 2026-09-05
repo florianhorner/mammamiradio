@@ -1345,6 +1345,10 @@ def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
     import re
 
     workflow = (ROOT / ".github" / "workflows" / "addon-build.yml").read_text()
+    # IMAGE_PATHS lives in the library both edge consumers read — the manual cut
+    # (cut-edge-release.sh) and the shadow land queue (land-queue-plan.sh) — so
+    # the parity contract is asserted against the one place it is declared.
+    library = (ROOT / "scripts" / "edge-select.sh").read_text()
     script = (ROOT / "scripts" / "cut-edge-release.sh").read_text()
 
     trigger_section_match = re.search(r"\bon:\s*\n(.*?)(?=\njobs:)", workflow, re.DOTALL)
@@ -1354,11 +1358,17 @@ def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
         for line in trigger_section_match.group(0).splitlines()
         if line.lstrip().startswith("- ")
     }
-    image_paths_match = re.search(r'^IMAGE_PATHS="([^"]+)"$', script, re.MULTILINE)
-    assert image_paths_match, "scripts/cut-edge-release.sh must declare IMAGE_PATHS"
+    image_paths_match = re.search(r'^IMAGE_PATHS="([^"]+)"$', library, re.MULTILINE)
+    assert image_paths_match, "scripts/edge-select.sh must declare IMAGE_PATHS"
     image_paths = set(image_paths_match.group(1).split())
 
     assert image_paths == trigger_paths
+
+    # One declaration, not two: a re-inlined copy in the cut script is how the
+    # two consumers drift apart while this test keeps passing.
+    assert not re.search(r'^IMAGE_PATHS="', script, re.MULTILINE), (
+        "scripts/cut-edge-release.sh must source IMAGE_PATHS from scripts/edge-select.sh"
+    )
 
 
 def test_validate_addon_allows_service_worker_rewrite(tmp_path: Path) -> None:
