@@ -789,3 +789,213 @@ async def test_ban_now_playing_honest_when_disk_write_fails(tmp_path):
     assert body["ok"] is True and body["persisted"] is False
     assert ("modugno", "volare") in state.blocklist
     assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ban_now_playing_works_for_a_title_only_local_song(tmp_path):
+    """An untagged operator MP3 has no artist, and the Ban button must still work.
+
+    The on-air identity resolver used to require BOTH artist and title, so the
+    exact songs the local-metadata pass exists to label correctly were the ones
+    the console refused to ban.
+    """
+    app = _make_app(tmp_path, [_track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    _airing_music(state, artist="", title_only="Salvatore On Everything", label="Salvatore On Everything")
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") in state.blocklist
+    assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_title_only_song_title_containing_a_dash_is_not_split_into_an_artist(tmp_path):
+    """The label fallback must not invent an artist out of a dash inside a title."""
+    app = _make_app(tmp_path, [_track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    _airing_music(state, artist="", title_only="Stop - Start", label="Stop - Start")
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/ban-now-playing")).json()
+
+    assert body["ok"] is True
+    assert ("", "stop - start") in state.blocklist
+    assert ("stop", "start") not in state.blocklist
+
+
+@pytest.mark.asyncio
+async def test_preference_on_an_unidentifiable_song_does_not_claim_nothing_is_playing(tmp_path):
+    """A message that denies the song on air is a lie, not an error (leadership #5)."""
+    app = _make_app(tmp_path, [_track("Felicità", "Al Bano")])
+    state = app.state.station_state
+    state.current_stream_audible = True
+    state.now_streaming = {
+        "type": "music",
+        "label": "Some Unsplittable Rescue Label",
+        "started": time.time(),
+        "metadata": {},
+    }
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/preference", json={"now_playing": True, "score": 1})).json()
+
+    assert body["ok"] is False
+    assert "nothing musical is on air" not in body["error"]
+    assert "rotation list" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_preference_by_key_accepts_a_title_only_song(tmp_path):
+    """A song with no artist must be markable from the rotation list.
+
+    The new "mark it from the rotation list instead" copy points there, so that
+    route has to actually work — otherwise the message is a dead end, which is
+    worse than no message (leadership #5).
+    """
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+
+    async with _client(app) as c:
+        body = (
+            await c.post(
+                "/api/track/preference",
+                json={"key": ["", "Salvatore On Everything"], "vote": "up"},
+            )
+        ).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") in state.song_preferences
+
+
+@pytest.mark.asyncio
+async def test_preference_on_a_title_only_song_can_be_cleared(tmp_path):
+    """A vote you cannot take back is a trap; the clear press must not 422."""
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+
+    async with _client(app) as c:
+        await c.post("/api/track/preference", json={"key": ["", "Salvatore On Everything"], "vote": "up"})
+        body = (
+            await c.post(
+                "/api/track/preference",
+                json={"key": ["", "Salvatore On Everything"], "vote": "clear"},
+            )
+        ).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") not in state.song_preferences
+
+
+@pytest.mark.asyncio
+async def test_preference_now_playing_marks_a_title_only_song(tmp_path):
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+    _airing_music(state, artist="", title_only="Salvatore On Everything", label="Salvatore On Everything")
+
+    async with _client(app) as c:
+        body = (await c.post("/api/track/preference", json={"now_playing": True, "vote": "up"})).json()
+
+    assert body["ok"] is True
+    assert ("", "salvatore on everything") in state.song_preferences
+
+
+@pytest.mark.asyncio
+async def test_preference_still_rejects_a_key_with_no_title(tmp_path):
+    """Relaxing the artist must not turn an empty key into a real one."""
+    app = _make_app(tmp_path, [_track("Felicita", "Al Bano")])
+    state = app.state.station_state
+
+    async with _client(app) as c:
+        response = await c.post("/api/track/preference", json={"key": ["Artist", "  "], "vote": "up"})
+
+    assert response.status_code == 422
+    assert state.song_preferences == {}
+
+
+def test_banning_a_local_song_quarantines_its_stale_norm_cache_artifact(tmp_path):
+    """Post-restart / prior-run state: the cache file outlives the label change.
+
+    A local track's cache key is path-derived, so re-labelling a file from its
+    tags does NOT move its norm-cache entry, and the sidecar is only rewritten
+    when the track next plays. Ban a song before it plays again and the sidecar
+    still carries the PRE-upgrade identity while the ban is stored under the new
+    one — and the rescue gate reads the sidecar. Without quarantine the banned
+    song stays airable from cache forever.
+    """
+    from mammamiradio.audio.norm_cache import select_norm_cache_rescue
+    from mammamiradio.audio.normalizer import save_track_metadata
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, is_rejected_cache_key
+
+    clear_rejected_cache_keys()
+    cache_dir = Path(tmp_path)
+    local_path = cache_dir / "music" / "29-salvatore-on-everything.mp3"
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(b"audio")
+
+    # Re-labelled from its tags by the scanner; cache key is unchanged (path-derived).
+    track = Track(
+        title="Musica Leggera",
+        artist="Colapesce",
+        duration_ms=180_000,
+        local_path=local_path,
+        source="local",
+    )
+    norm_file = cache_dir / f"norm_{track.cache_key}_128k.mp3"
+    norm_file.write_bytes(b"cached audio")
+    # The sidecar on disk is from BEFORE the upgrade.
+    save_track_metadata(norm_file, title="29-salvatore-on-everything", artist="Unknown", source_kind="local")
+
+    app = _make_app(tmp_path, [track])
+    state = app.state.station_state
+    config = app.state.config
+
+    _apply_ban(state, config, [track], queue=app.state.queue)
+
+    assert is_rejected_cache_key(track.cache_key) is True
+    state.blocklist = dict(state.blocklist)
+    assert select_norm_cache_rescue(cache_dir, state, allow_recent_repeat=True) is None
+    clear_rejected_cache_keys()
+
+
+def test_title_only_rescue_segment_carries_a_bare_title_for_ban_and_display(tmp_path):
+    """A rescue whose sidecar title contains " - " must not be split into an artist.
+
+    _norm_cache_bridge_payload stamps `title` but used to omit `title_only`, so
+    every consumer that splits a label (Ban/Like, the listener strip, the admin
+    card) invented an artist out of a real title. The fix is at the source, so
+    all three are covered by one stamp.
+    """
+    from mammamiradio.audio.normalizer import save_track_metadata
+    from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
+
+    cache_dir = Path(tmp_path)
+    norm_file = cache_dir / "norm_stopstart_128k.mp3"
+    norm_file.write_bytes(b"cached audio")
+    save_track_metadata(norm_file, title="Stop - Start", artist="", source_kind="local")
+
+    metadata, _detail = _norm_cache_bridge_payload(norm_file, "resume_bridge", "Mamma Mi Radio")
+
+    assert metadata["title"] == "Stop - Start"
+    assert metadata["title_only"] == "Stop - Start"
+    assert metadata["artist"] == ""
+
+    # The on-air identity resolver reads title_only first, so the ban key is the
+    # whole title rather than an invented ("stop", "start") pair.
+    track = streamer._now_playing_music_track({"type": "music", "label": "Stop - Start", "metadata": metadata})
+    assert track is not None
+    assert track.normalized_key == ("", "stop - start")
+
+
+def test_rescue_without_a_sidecar_still_withholds_title_only(tmp_path):
+    """A humanized filename is not a trustworthy bare title, so it earns no stamp."""
+    from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
+
+    norm_file = Path(tmp_path) / "norm_unknown_128k.mp3"
+    norm_file.write_bytes(b"cached audio")
+
+    metadata, _detail = _norm_cache_bridge_payload(norm_file, "resume_bridge", "Mamma Mi Radio")
+
+    assert "title_only" not in metadata

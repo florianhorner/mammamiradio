@@ -8220,12 +8220,19 @@ def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
         (("Ordinary", "Alex Warren"), None),
         (None, None),
         (("Safe Song", "Safe Artist"), "song"),
-        # A sidecar missing the artist yields no durable identity (load_track_metadata
-        # requires both fields), so the bed fails closed while a ban is active —
-        # whether or not the title collides with a ban. This is a deliberate, safe
-        # conservatism; loosening it would mean bypassing the identity contract.
+        # An untagged local file legitimately has no artist, so a missing artist
+        # alone is a real identity and does NOT disqualify the bed — refusing on
+        # that alone made every banter and ad air dry, permanently, for an
+        # operator with an untagged library and one banned song.
+        #
+        # This path stays stricter than `norm_cache._is_blocklisted` in exactly
+        # one case: an artist-less sidecar whose TITLE collides with a ban is
+        # plausibly the banned recording with a stripped sidecar, and this decides
+        # whether audio is reused as a bed UNDER speech. That case refuses; an
+        # artist-less title that collides with nothing is allowed. Keep the two
+        # gates different on purpose.
         (("Ordinary", ""), None),
-        (("Safe Song", ""), None),
+        (("Safe Song", ""), "song"),
     ],
     ids=["blocked", "unidentified", "identified-safe", "artist-missing-title-banned", "artist-missing-title-safe"],
 )
@@ -10020,7 +10027,10 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
 
     norm_file = tmp_path / "norm_abc123.mp3"
     norm_file.write_bytes(b"pre-normalized audio")
-    save_track_metadata(norm_file, title="Abc123", artist="", source_kind="local")
+    # Title deliberately UNLIKE humanize_norm_filename("norm_abc123.mp3") ("Abc123"),
+    # so this asserts the sidecar branch was taken. With a matching title the test
+    # passes identically whether or not a title-only sidecar is readable at all.
+    save_track_metadata(norm_file, title="Salvatore On Everything", artist="", source_kind="local")
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -10046,7 +10056,7 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
     assert seg.path == norm_file
     assert seg.duration_sec > 0
     assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
-    assert seg.metadata.get("title") == "Abc123"
+    assert seg.metadata.get("title") == "Salvatore On Everything"
     assert seg.metadata.get("artist") == ""
     # #547: the norm-cache resume bridge fire is recorded.
     assert state.bridge_fires_total >= 1

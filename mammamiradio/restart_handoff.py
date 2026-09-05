@@ -632,7 +632,13 @@ def _identity_metadata_rejection_reason(
     *,
     blocklist: Mapping[BlockKey, object] | None,
 ) -> str | None:
-    if not artist.strip() or not title.strip():
+    # The TITLE is the identity; the artist is optional. An untagged local file
+    # legitimately has artist == "" (the scanner refuses to invent one from a
+    # filename slug), and refusing it here would mean an operator whose library
+    # is untagged MP3s gets nothing from the post-restart continuity spool —
+    # exactly the population the local-metadata pass exists to serve. ("", title)
+    # is still a real key, so the blocklist check below still bites.
+    if not title.strip():
         return "missing_identity"
     if blocklist and song_identity_key_is_blocklisted(
         (_normalize_identity(artist), _normalize_identity(title)), blocklist
