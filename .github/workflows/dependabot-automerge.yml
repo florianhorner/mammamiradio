@@ -15,8 +15,10 @@ name: Dependabot Automerge
 #
 # The oracle is the registry (scripts/check-advertised-version.sh), never a flag
 # a human has to remember to set and clear. PRs this workflow disarms carry the
-# `cut-window-hold` label; only those are re-armed when the window closes, so a
-# maintainer's manual disarm is never overridden.
+# cut-window-hold label. The sweep only disarms. Arming still requires verified
+# Dependabot metadata on a fresh PR event; major updates need manual landing.
+# This is asynchronous reconciliation, not an atomic cut lock: preserve strict
+# branch freshness and disarm/freeze the queue before landing the release cut.
 
 on:
   pull_request_target:
@@ -40,29 +42,19 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: dependabot-automerge-${{ github.event.pull_request.number || 'sweep' }}
+  group: dependabot-automerge
   cancel-in-progress: false
-
-env:
-  HOLD_LABEL: cut-window-hold
 
 jobs:
   enable-automerge:
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.draft == false
+    if: github.repository == 'florianhorner/mammamiradio' && github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # pull_request_target checks out the BASE branch by default, never the PR
-      # head, so this reads main's config.yaml and main's scripts. Credentials are
-      # not persisted: the job holds contents: write for gh below, and the
-      # checkout must not leave that token in the tree.
+      # Read the current trusted main, not the older event SHA or PR head.
+      # A queued pre-cut event must not probe a previously published version.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: main
           persist-credentials: false
 
       # Read the verdict line, not the exit code: the script exits 1 on fail, and
@@ -80,6 +72,13 @@ jobs:
           [ -n "$VERDICT" ] || VERDICT="unknown"
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
 
+      - name: Fetch Dependabot metadata
+        id: metadata
+        if: steps.advertised.outputs.verdict == 'pass'
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       # Note: the approval step is intentionally absent.
       # GitHub Actions cannot self-approve PRs (403 on addPullRequestReview).
       # Branch protection has no required reviewer count, so CI-pass + auto-merge
@@ -94,9 +93,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          gh pr merge --squash --auto "$PR_NUMBER"
-          gh pr edit "$PR_NUMBER" --remove-label "$HOLD_LABEL" 2>/dev/null || true
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: bash scripts/dependabot-window-hold.sh arm "$PR_NUMBER" "$PR_HEAD_SHA" "$(git rev-parse HEAD)"
 
       - name: Disarm automerge while the cut window is open
         if: steps.advertised.outputs.verdict == 'fail'
@@ -114,11 +113,12 @@ jobs:
   # lands (push to main touching config.yaml), hourly, and on demand, because a
   # PR that was armed days ago gets no event when the window opens.
   sweep:
-    if: github.event_name != 'pull_request_target'
+    if: github.repository == 'florianhorner/mammamiradio' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: main
           persist-credentials: false
 
       - name: Read the advertised-version verdict

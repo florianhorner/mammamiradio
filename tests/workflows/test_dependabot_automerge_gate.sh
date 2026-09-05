@@ -1,192 +1,192 @@
 #!/usr/bin/env bash
-# Contract + runtime test for the Dependabot cut-window gate:
-#   .github/workflows/dependabot-automerge.yml and scripts/dependabot-window-hold.sh
-#
-# Static half: the workflow is PARSED (PyYAML), not grepped, so a comment or a key
-# reorder cannot satisfy an assertion. Runtime half: the verdict step body runs
-# under `bash -e` (what GitHub uses for `run:`) against a stub
-# check-advertised-version.sh, and both script verbs run against a mocked `gh`
-# that logs every call. No network.
+# Parsed workflow contracts and hermetic runtime checks. No GitHub writes.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 WF="${WF_OVERRIDE:-.github/workflows/dependabot-automerge.yml}"
-HOLD="scripts/dependabot-window-hold.sh"
+HOLD="${HOLD_OVERRIDE:-$REPO_ROOT/scripts/dependabot-window-hold.sh}"
+PY=python3
+[ ! -x .venv/bin/python ] || PY=.venv/bin/python
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/automerge-gate.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
 fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
-[ -f "$WF" ] || fail "workflow missing"
-[ -x "$HOLD" ] || chmod +x "$HOLD"
-
-PY="python3"
-[ -x .venv/bin/python ] && PY=".venv/bin/python"
-"$PY" -c 'import yaml' 2>/dev/null || fail "PyYAML is required (pip install -r requirements-dev.txt)"
-
-# ---- static: structure of the workflow -------------------------------------------
-"$PY" - "$WF" <<'PYEOF' || fail "workflow structure check failed (see message above)"
-import sys, yaml
-wf = yaml.safe_load(open(sys.argv[1]))
-on = wf.get(True) or wf.get("on")
-def die(msg): print("structure: " + msg); sys.exit(1)
-
-types = (on.get("pull_request_target") or {}).get("types") or []
-for ev in ["opened", "reopened", "synchronize", "labeled", "unlabeled", "ready_for_review"]:
-    ev in types or die(f"pull_request_target must keep the {ev} event (synchronize re-evaluates a pre-armed PR)")
-push = on.get("push") or {}
-push.get("branches") == ["main"] or die("sweep must run on push to main")
-"ha-addon/mammamiradio/config.yaml" in (push.get("paths") or []) or die("sweep must fire on the cut commit (config.yaml path)")
-on.get("schedule") or die("sweep needs a schedule so a disarmed PR re-arms after the window closes")
-"workflow_dispatch" in on or die("sweep must be runnable on demand")
-
-jobs = wf["jobs"]
-job = jobs.get("enable-automerge") or die("enable-automerge job missing")
-jif = job.get("if", "")
-"github.event_name == 'pull_request_target'" in jif or die("enable-automerge must run only on pull_request_target")
-"dependabot[bot]" in jif or die("enable-automerge must be limited to dependabot[bot] PRs (never touch human PRs armed by land-pr.sh)")
-
-def step(job, pred, what):
-    for s in job["steps"]:
-        if pred(s): return s
-    die(f"{what} step missing")
-
-for name, j in (("enable-automerge", job), ("sweep", jobs.get("sweep") or die("sweep job missing"))):
-    co = step(j, lambda s: str(s.get("uses", "")).startswith("actions/checkout@"), f"{name} checkout")
-    (co.get("with") or {}).get("persist-credentials") is False or die(f"{name}: checkout must set persist-credentials: false")
-    "ref" not in (co.get("with") or {}) or die(f"{name}: checkout must not select a ref (base branch only)")
-    adv = step(j, lambda s: s.get("id") == "advertised", f"{name} verdict")
-    run = adv.get("run", "")
-    for needle in ["set +e", "bash scripts/check-advertised-version.sh", "sed -n 's/^VERDICT: //p'", '[ -n "$VERDICT" ] || VERDICT="unknown"', 'echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"']:
-        needle in run or die(f"{name}: verdict step must contain {needle!r}")
-    run.index("set +e") < run.index("bash scripts/check-advertised-version.sh") or die(f"{name}: set +e must precede the script call")
-
-arm = step(job, lambda s: "Enable automerge" in str(s.get("name", "")), "arm")
-aif = " ".join(str(arm.get("if", "")).split())
-"steps.advertised.outputs.verdict == 'pass'" in aif or die("arm step must require verdict == pass")
-"version-update:semver-patch" in aif and "version-update:semver-minor" in aif or die("arm step must stay limited to patch and minor")
-"semver-major" not in aif or die("arm step must never include major updates")
-"gh pr merge --squash --auto" in arm.get("run", "") or die("arm step must arm auto-merge")
-"GH_TOKEN" in (arm.get("env") or {}) or die("arm step needs GH_TOKEN")
-
-dis = step(job, lambda s: "Disarm automerge" in str(s.get("name", "")), "disarm")
-"steps.advertised.outputs.verdict == 'fail'" in str(dis.get("if", "")) or die("disarm step must key on verdict == fail")
-"scripts/dependabot-window-hold.sh disarm" in dis.get("run", "") or die("disarm step must call the hold script")
-"|| true" not in dis.get("run", "") or die("disarm step must not swallow failures")
-"GH_TOKEN" in (dis.get("env") or {}) or die("disarm step needs GH_TOKEN")
-
-unk = step(job, lambda s: "steps.advertised.outputs.verdict == 'unknown'" in str(s.get("if", "")), "unknown")
-"gh pr" not in unk.get("run", "") or die("unknown verdict must not arm or disarm")
-
-sw = jobs["sweep"]
-"github.event_name != 'pull_request_target'" in str(sw.get("if", "")) or die("sweep must not run on PR events")
-rec = step(sw, lambda s: "scripts/dependabot-window-hold.sh sweep" in str(s.get("run", "")), "reconcile")
-"GH_TOKEN" in (rec.get("env") or {}) or die("reconcile step needs GH_TOKEN")
-print("structure ok")
+# Parse YAML, not comments; compare complete authorization expressions, not
+# substrings which would also accept an inverted guard or an extra OR clause.
+"$PY" - "$WF" "$TMP" <<'PYEOF'
+import pathlib, sys, yaml
+wf = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
+out = pathlib.Path(sys.argv[2])
+on = wf.get('on', wf.get(True))
+assert set(on['pull_request_target']['types']) == {'opened', 'reopened', 'synchronize', 'labeled', 'unlabeled', 'ready_for_review'}
+assert on['push']['branches'] == ['main']
+assert 'ha-addon/mammamiradio/config.yaml' in on['push']['paths']
+assert on['schedule'] and 'workflow_dispatch' in on
+assert wf['concurrency'] == {'group': 'dependabot-automerge', 'cancel-in-progress': False}
+assert wf['permissions'] == {'contents': 'write', 'pull-requests': 'write'}
+jobs = wf['jobs']
+compact = lambda s: ' '.join(s.split())
+assert compact(jobs['enable-automerge']['if']) == "github.repository == 'florianhorner/mammamiradio' && github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.draft == false"
+assert compact(jobs['sweep']['if']) == "github.repository == 'florianhorner/mammamiradio' && github.event_name != 'pull_request_target'"
+for name, job in jobs.items():
+    steps = job['steps']
+    checkout = next(s for s in steps if s.get('uses', '').startswith('actions/checkout@'))
+    assert checkout['with'] == {'ref': 'main', 'persist-credentials': False}
+    verdict = next(s for s in steps if s.get('id') == 'advertised')
+    (out / f'{name}-verdict.sh').write_text(verdict['run'])
+    assert steps.index(checkout) < steps.index(verdict)
+    for step in steps:
+        if 'scripts/dependabot-window-hold.sh' in step.get('run', ''):
+            assert step['env']['GH_TOKEN'] == '${{ secrets.GITHUB_TOKEN }}'
+            assert step['env']['GH_REPO'] == '${{ github.repository }}'
+pr = jobs['enable-automerge']['steps']
+metadata = next(s for s in pr if s.get('id') == 'metadata')
+assert metadata['if'] == "steps.advertised.outputs.verdict == 'pass'"
+assert metadata.get('with') == {'github-token': '${{ secrets.GITHUB_TOKEN }}'}
+assert metadata['uses'] == 'dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98'
+arm = next(s for s in pr if s.get('name', '').startswith('Enable automerge'))
+assert compact(arm['if']) == "steps.advertised.outputs.verdict == 'pass' && (steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor')"
+assert pr.index(next(s for s in pr if s.get('id') == 'advertised')) < pr.index(metadata) < pr.index(arm)
+assert arm['env']['PR_HEAD_SHA'] == '${{ github.event.pull_request.head.sha }}'
+assert arm['env']['UPDATE_TYPE'] == '${{ steps.metadata.outputs.update-type }}'
+assert arm['run'].strip() == 'bash scripts/dependabot-window-hold.sh arm "$PR_NUMBER" "$PR_HEAD_SHA" "$(git rev-parse HEAD)"'
+dis = next(s for s in pr if s.get('name', '').startswith('Disarm automerge'))
+assert dis['if'] == "steps.advertised.outputs.verdict == 'fail'"
+assert dis['run'].strip() == 'bash scripts/dependabot-window-hold.sh disarm "$PR_NUMBER"'
+unknown = next(s for s in pr if s.get('if') == "steps.advertised.outputs.verdict == 'unknown'")
+(out / 'unknown.sh').write_text(unknown['run'])
+rec = jobs['sweep']['steps'][-1]
+assert rec['env']['VERDICT'] == '${{ steps.advertised.outputs.verdict }}'
+assert rec['run'].strip() == 'bash scripts/dependabot-window-hold.sh sweep "$VERDICT"'
+quality = yaml.safe_load(pathlib.Path('.github/workflows/quality.yml').read_text())
+assert any(s.get('run') == 'bash tests/workflows/test_dependabot_automerge_gate.sh' and s.get('if') == "needs.changes.outputs.workflows == 'true'" for s in quality['jobs']['invariants']['steps'])
 PYEOF
-pass "workflow structure: base checkout, verdict step, arm/disarm/unknown branches, sweep job, triggers"
+pass "workflow authorization, current-main checkout, shared concurrency, metadata and CI wiring"
 
-for f in "$WF" .github/workflows/advertised-version.yml; do
-  grep -q "sed -n 's/^VERDICT: //p'" "$f" || fail "$f: VERDICT parsing drifted"
-  # shellcheck disable=SC2016  # the literal $VERDICT text is what we look for
-  grep -q '\[ -n "\$VERDICT" \] || VERDICT="unknown"' "$f" || fail "$f: empty-verdict default drifted"
-done
-pass "both VERDICT readers parse the same way"
-
-# ---- runtime: the verdict step body under bash -e --------------------------------
-STEP_BODY="$("$PY" - "$WF" <<'PYEOF'
-import sys, yaml
-wf = yaml.safe_load(open(sys.argv[1]))
-for s in wf["jobs"]["enable-automerge"]["steps"]:
-    if s.get("id") == "advertised":
-        print(s["run"]); break
-PYEOF
-)"
-[ -n "$STEP_BODY" ] || fail "could not extract the verdict step body"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/automerge-gate.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/scripts" "$TMP/bin"
-run_step() { # <stub-stdout> <stub-exit> -> GITHUB_OUTPUT contents
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\nexit %s\n' "$1" "$2" > "$TMP/scripts/check-advertised-version.sh"
-  chmod +x "$TMP/scripts/check-advertised-version.sh"
-  : > "$TMP/out"
-  ( cd "$TMP" && GITHUB_OUTPUT="$TMP/out" bash -e -c "$STEP_BODY" >/dev/null 2>&1 ) || echo "STEP_EXIT=$?" >> "$TMP/out"
-  cat "$TMP/out"
-}
-[ "$(run_step 'VERDICT: pass' 0)" = "verdict=pass" ]       || fail "pass verdict must reach GITHUB_OUTPUT (got: $(run_step 'VERDICT: pass' 0))"
-[ "$(run_step 'VERDICT: fail' 1)" = "verdict=fail" ]       || fail "a fail verdict exits 1; the step must survive it (got: $(run_step 'VERDICT: fail' 1))"
-[ "$(run_step 'VERDICT: unknown' 0)" = "verdict=unknown" ] || fail "unknown verdict must reach GITHUB_OUTPUT"
-[ "$(run_step 'no verdict line' 2)" = "verdict=unknown" ]  || fail "no VERDICT line must default to unknown (got: $(run_step 'no verdict line' 2))"
-pass "verdict step survives a fail exit code and records pass/fail/unknown"
+for job in enable-automerge sweep; do
+  for test_case in pass fail unknown missing; do
+    case "$test_case" in
+      pass) result=pass; code=0; message='VERDICT: pass' ;;
+      fail) result=fail; code=1; message='VERDICT: fail' ;;
+      unknown) result=unknown; code=0; message='VERDICT: unknown' ;;
+      missing) result=unknown; code=2; message='no verdict' ;;
+    esac
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\nexit %s\n' "$message" "$code" > "$TMP/scripts/check-advertised-version.sh"
+    : > "$TMP/out"
+    (cd "$TMP" && GITHUB_OUTPUT="$TMP/out" bash -e "$TMP/$job-verdict.sh" >/dev/null) || fail "$job: $test_case aborted the verdict step"
+    [ "$(cat "$TMP/out")" = "verdict=$result" ] || fail "$job: wrong $test_case verdict"
+  done
+done
+pass "both workflow verdict steps survive fail/unknown/error exits"
 
-# ---- runtime: the hold script against a mocked gh --------------------------------
-# Env: GH_MOCK_ARMED_<n>=true|false (pr view), GH_MOCK_DISABLE_FAIL=1 (disable errors),
-# GH_MOCK_LIST (pre-rendered TSV the `pr list --jq` would print), GH_MOCK_LOG.
 cat > "$TMP/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
+set -eu
 echo "$*" >> "$GH_MOCK_LOG"
 case "$1 $2" in
-  "pr view")
-    n="$3"; v="GH_MOCK_ARMED_$n"; echo "${!v:-false}" ;;
-  "pr merge")
-    if [ "$3" = "--disable-auto" ] && [ -n "${GH_MOCK_DISABLE_FAIL:-}" ]; then echo "HTTP 502: bad gateway" >&2; exit 1; fi ;;
-  "pr edit") ;;
-  "pr list") printf '%s\n' "${GH_MOCK_LIST:-}" ;;
-  "label create") ;;
-  *) echo "MOCK gh: unexpected '$*'" >&2; exit 99 ;;
+  'pr view')
+    [ "${FAIL_AT:-}" != view ] || exit 1
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${PR_STATE:-OPEN}" "${AUTHOR:-app/dependabot}" "${BASE:-main}" "${DRAFT:-false}" "${HEAD_SHA:-head1}" "${ARMED:-true}" "${HELD:-false}" ;;
+  'pr merge')
+    if [ "${FAIL_AT:-}" = merge ] && { [ -z "${FAIL_NUMBER:-}" ] || [ "${!#}" = "$FAIL_NUMBER" ]; }; then exit 1; fi ;;
+  'pr edit')
+    [ "${FAIL_AT:-}" != edit ] || exit 1 ;;
+  'label create')
+    [ "${FAIL_AT:-}" != label ] && [ "${LABEL_EXISTS:-false}" = false ] || exit 1 ;;
+  'label list')
+    echo "${LABEL_EXISTS:-false}" ;;
+  'api --paginate')
+    [ "$3" = 'repos/florianhorner/mammamiradio/pulls?state=open&base=main&per_page=100' ] || exit 99
+    [ "$5" = '.[] | select(.user.login == "dependabot[bot]") | .number' ] || exit 99
+    [ "${FAIL_AT:-}" != list ] || exit 1
+    printf '10\n11\n' ;;
+  'api repos/florianhorner/mammamiradio/git/ref/heads/main')
+    [ "${FAIL_AT:-}" != main ] || exit 1
+    echo "${MAIN_SHA:-main1}" ;;
+  *) echo "Unexpected gh call: $*" >&2; exit 99 ;;
 esac
-exit 0
 MOCK
 chmod +x "$TMP/bin/gh"
-run_hold() { # args... ; env passed via the caller. Sets RC, OUT, LOG.
+run_hold() {
   : > "$TMP/gh.log"; RC=0
-  OUT="$(PATH="$TMP/bin:$PATH" GH_MOCK_LOG="$TMP/gh.log" bash "$HOLD" "$@" 2>&1)" || RC=$?
+  OUT="$(PATH="$TMP/bin:$PATH" GH_REPO="${TEST_REPO-florianhorner/mammamiradio}" GH_MOCK_LOG="$TMP/gh.log" bash "$HOLD" "$@" 2>&1)" || RC=$?
   LOG="$(cat "$TMP/gh.log")"
 }
+no_mutations() { ! grep -Eq '^(pr (merge|edit)|label create)' <<< "$LOG" || fail "unexpected mutation: $LOG"; }
+succeeded() { [ "$RC" -eq 0 ] || fail "rc=$RC: $OUT"; }
+failed() { [ "$RC" -ne 0 ] || fail "expected failure: $OUT"; }
 
-GH_MOCK_ARMED_10=true run_hold disarm 10
-[ "$RC" -eq 0 ] || fail "disarm of an armed PR should succeed (rc $RC): $OUT"
-grep -q '^pr merge --disable-auto 10$' <<<"$LOG" || fail "disarm must call --disable-auto on the armed PR"
-grep -q '^pr edit 10 --add-label cut-window-hold$' <<<"$LOG" || fail "disarm must label the PR it paused"
-grep -q '::warning' <<<"$OUT" || fail "disarm must warn after it succeeded"
-pass "disarm: armed PR is disarmed and labelled"
+for mode in disarm sweep; do
+  arg=10; [ "$mode" != sweep ] || arg=fail
+  run_hold "$mode" "$arg"; succeeded
+  grep -q '^pr merge --disable-auto 10$' <<< "$LOG" || fail "$mode did not disarm"
+  grep -q '^pr edit 10 --add-label cut-window-hold$' <<< "$LOG" || fail "$mode did not record hold"
+  if [ "$mode" = sweep ]; then
+    grep -q '^pr merge --disable-auto 11$' <<< "$LOG" || fail "sweep stopped after the first PR"
+    grep -q '^pr edit 11 --add-label cut-window-hold$' <<< "$LOG" || fail "sweep did not record the second hold"
+  fi
+  for error in view merge label edit; do
+    FAIL_AT="$error" run_hold "$mode" "$arg"; failed
+    ! grep -q 'is disarmed and labelled' <<< "$OUT" || fail "$mode falsely claimed success after $error failure"
+  done
+  LABEL_EXISTS=true run_hold "$mode" "$arg"; succeeded
+  for unsafe in ARMED=false AUTHOR=human BASE=release PR_STATE=CLOSED; do
+    # Export only a fixed test-case assignment, never repository/user content.
+    export "${unsafe?}"
+    run_hold "$mode" "$arg"; succeeded; no_mutations
+    unset "${unsafe%%=*}"
+  done
+done
+FAIL_AT=merge FAIL_NUMBER=10 run_hold sweep fail; failed
+! grep -q '^pr edit 10 ' <<< "$LOG" || fail "failed PR must not be labelled"
+grep -q '^pr merge --disable-auto 11$' <<< "$LOG" || fail "one API failure must not prevent disarming the next PR"
+grep -q '^pr edit 11 --add-label cut-window-hold$' <<< "$LOG" || fail "next PR hold must still be recorded"
+FAIL_AT=list run_hold sweep fail; failed; no_mutations
+for repo in unowned/mammamiradio ''; do
+  TEST_REPO="$repo" run_hold sweep fail; failed
+  [ -z "$LOG" ] || fail "unowned/missing repository must be rejected before GitHub reads or writes"
+done
+ARMED=garbage run_hold disarm 10; failed; no_mutations
+pass "direct and sweep disarm: eligible PRs only, idempotent labels, every API failure visible"
 
-GH_MOCK_ARMED_11=false run_hold disarm 11
-[ "$RC" -eq 0 ] || fail "disarm of an unarmed PR should be a clean no-op (rc $RC): $OUT"
-grep -q 'pr merge' <<<"$LOG" && fail "disarm must not call the merge API on an unarmed PR"
-grep -q '::notice' <<<"$OUT" || fail "disarm of an unarmed PR must say nothing to disarm"
-pass "disarm: unarmed PR is a no-op, not an error"
+for verdict in pass unknown; do
+  run_hold sweep "$verdict"; succeeded
+  [ -z "$LOG" ] || fail "$verdict sweep must not grant merge authority or call GitHub"
+done
+run_hold sweep invalid; failed; no_mutations
+: > "$TMP/gh.log"
+PATH="$TMP/bin:$PATH" GH_MOCK_LOG="$TMP/gh.log" bash -e "$TMP/unknown.sh" >/dev/null
+[ ! -s "$TMP/gh.log" ] || fail "unknown PR branch must not call GitHub"
+pass "pass/unknown sweeps and unknown PR verdict do not mutate state"
 
-GH_MOCK_ARMED_12=true GH_MOCK_DISABLE_FAIL=1 run_hold disarm 12
-[ "$RC" -ne 0 ] || fail "a failed disable must fail the step, not report success"
-grep -q '::error' <<<"$OUT" || fail "a failed disable must emit ::error"
-grep -q 'add-label' <<<"$LOG" && fail "a failed disable must not label the PR as held"
-pass "disarm: API failure is loud (no swallowed || true)"
+for kind in version-update:semver-patch version-update:semver-minor; do
+  UPDATE_TYPE="$kind" HELD=true run_hold arm 10 head1 main1; succeeded
+  grep -q '^pr merge --squash --auto --match-head-commit head1 10$' <<< "$LOG" || fail "arm must pin the metadata head"
+  grep -q '^pr edit 10 --remove-label cut-window-hold$' <<< "$LOG" || fail "successful arm must clear an existing hold"
+done
+UPDATE_TYPE=version-update:semver-patch HELD=false run_hold arm 10 head1 main1; succeeded
+grep -q '^pr merge --squash --auto --match-head-commit head1 10$' <<< "$LOG" || fail "unheld eligible PR should arm"
+! grep -q '^pr edit' <<< "$LOG" || fail "unheld PR should not need a label edit"
+for kind in version-update:semver-major unknown ''; do
+  UPDATE_TYPE="$kind" run_hold arm 10 head1 main1; succeeded; no_mutations
+done
+for unsafe in HEAD_SHA=new-head MAIN_SHA=cut-main AUTHOR=human BASE=release DRAFT=true PR_STATE=CLOSED; do
+  export "${unsafe?}"
+  UPDATE_TYPE=version-update:semver-patch run_hold arm 10 head1 main1; succeeded; no_mutations
+  unset "${unsafe%%=*}"
+done
+for error in view main merge edit; do
+  UPDATE_TYPE=version-update:semver-patch HELD=true FAIL_AT="$error" run_hold arm 10 head1 main1; failed
+  if [ "$error" = view ] || [ "$error" = main ]; then no_mutations; fi
+done
+pass "arming requires verified update type, exact head, fresh main, eligible PR and successful APIs"
 
-run_hold sweep unknown
-[ "$RC" -eq 0 ] && [ -z "$LOG" ] || fail "sweep unknown must touch nothing (rc $RC, calls: $LOG)"
-pass "sweep: unknown verdict touches nothing"
-
-LIST_FAIL=$'10\tarmed\tnohold\tchore(deps): bump ruff from 0.16.4 to 0.16.5\n11\toff\tnohold\tchore(deps): bump click from 8.4.2 to 8.5.0'
-GH_MOCK_LIST="$LIST_FAIL" GH_MOCK_ARMED_10=true run_hold sweep fail
-[ "$RC" -eq 0 ] || fail "sweep fail should succeed (rc $RC): $OUT"
-grep -q '^pr merge --disable-auto 10$' <<<"$LOG" || fail "sweep fail must disarm the armed PR"
-grep -q 'disable-auto 11' <<<"$LOG" && fail "sweep fail must leave unarmed PRs alone"
-pass "sweep: open window disarms only armed PRs"
-
-LIST_PASS=$'20\toff\thold\tchore(deps): bump ruff from 0.16.4 to 0.16.5\n21\toff\thold\tchore(deps): bump anthropic from 0.122.0 to 1.2.0\n22\toff\tnohold\tchore(deps): bump click from 8.4.2 to 8.5.0\n23\toff\thold\tchore(deps-dev): bump the dev-tools group with 2 updates'
-GH_MOCK_LIST="$LIST_PASS" run_hold sweep pass
-[ "$RC" -eq 0 ] || fail "sweep pass should succeed (rc $RC): $OUT"
-grep -q '^pr merge --squash --auto 20$' <<<"$LOG" || fail "sweep pass must re-arm a held patch update"
-grep -q '^pr edit 20 --remove-label cut-window-hold$' <<<"$LOG" || fail "sweep pass must drop the hold label it re-armed"
-grep -q 'auto 21' <<<"$LOG" && fail "sweep pass must not arm a held MAJOR update"
-grep -q 'auto 22' <<<"$LOG" && fail "sweep pass must not touch a PR it never held (a maintainer's manual disarm)"
-grep -q 'auto 23' <<<"$LOG" && fail "sweep pass must not arm a group update it cannot classify"
-pass "sweep: closed window re-arms only held patch/minor updates"
-
-[ "$(bash "$HOLD" classify 'chore(deps): bump ruff from 0.16.4 to 0.16.5')" = patch ] || fail "classify patch"
-[ "$(bash "$HOLD" classify 'chore(deps): bump websockets from 17.0.1 to 17.1')" = minor ] || fail "classify minor (two-part version)"
-[ "$(bash "$HOLD" classify 'chore(deps): bump anthropic from 0.122.0 to 1.2.0')" = major ] || fail "classify major"
-[ "$(bash "$HOLD" classify 'chore(deps): bump actions/checkout from v7.0.0 to v7.0.1')" = patch ] || fail "classify with v prefix"
-[ "$(bash "$HOLD" classify 'chore(deps-dev): bump the dev-tools group with 2 updates')" = unknown ] || fail "classify group -> unknown"
-pass "classify: patch/minor/major/unknown from Dependabot titles"
-
+# Preserve the historical cut race: a pre-cut metadata event must not undo the
+# hold installed by the cut sweep after main advances.
+run_hold sweep fail; succeeded
+UPDATE_TYPE=version-update:semver-patch ARMED=false HELD=true MAIN_SHA=cut-main run_hold arm 10 head1 main1
+succeeded; no_mutations
+pass "delayed pre-cut arming cannot undo the cut sweep"
 echo "All dependabot automerge gate cases passed."

@@ -103,8 +103,12 @@ Hard rules agents must not invent around:
   next PR only when it is actually ready to land.
 - Let pure patch/minor Python Dependabot PRs with auto-merge armed land through
   Dependabot when they remain current and fresh required checks pass. A stale
-  PR parks until an authenticated maintainer updates it; this is deliberate. If A current PR may also be disarmed and labelled `cut-window-hold` while the cut window is open; leave it, the sweep re-arms it when the window closes.
-  quality fails on an unrelated one-test timeout, verify the focused test
+  PR parks until an authenticated maintainer updates it; this is deliberate.
+  A current PR may also carry `cut-window-hold` after being disarmed during an
+  open release window. The sweep never re-arms it: after publication, use a
+  fresh metadata-backed PR event or the landing workflow. A manual disarm alone
+  is not a persistent opt-out from the ordinary PR-event arming policy.
+  If quality fails on an unrelated one-test timeout, verify the focused test
   locally before treating it as a rerunnable flake; stop on any deterministic
   dependency break.
 - Treat semver-major GitHub Actions PRs as manual landings: inspect the fresh
