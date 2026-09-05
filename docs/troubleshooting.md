@@ -92,11 +92,7 @@ unchanged. See [Music sources and rights boundaries](music-sources.md).
 For the supplied Docker image or Home Assistant app, local audio belongs in the
 deployment's persistent `/data/music` directory. The scanner finds changes
 within one minute; use **Rotazione → Local music → Scan now** to refresh
-immediately. On a large library the first pass after a restart reads song tags
-in batches, so songs can keep appearing over the following few minutes; a song
-you delete leaves rotation once a pass has read every file. A tag edit that
-leaves the file's size and timestamp untouched is not noticed until the file
-changes again. Populate that data area through the deployment's supported storage
+immediately. Populate that data area through the deployment's supported storage
 tooling; do not patch files into a running Home Assistant app container. A
 source checkout uses `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
 

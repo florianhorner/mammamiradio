@@ -9407,7 +9407,9 @@ async def test_starter_bridge_preserves_pin_and_uses_starter_from_mixed_pool(tmp
         queued.append(segment)
         return True
 
-    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered):
+    with patch(
+        f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered
+    ) as render_music:
         ok = await producer._queue_starter_catalog_bridge_segment(
             _accept,
             state,
@@ -9417,59 +9419,11 @@ async def test_starter_bridge_preserves_pin_and_uses_starter_from_mixed_pool(tmp
         )
 
     assert ok is True
+    assert render_music.await_args is not None
+    assert render_music.await_args.args[0] is starter
     assert [segment.metadata.get("audio_source") for segment in queued] == ["starter"]
     assert state.pinned_track is pinned
     assert state.pinned_track_revision == pinned_revision
-
-
-@pytest.mark.asyncio
-async def test_starter_bridge_works_after_kind_promoted_to_local(tmp_path):
-    """Post-scan mixed crates keep kind=local; the bridge must still insert starter media."""
-    from mammamiradio.scheduling import producer
-
-    state = _make_starter_state()
-    local = Track(
-        title="Operator Local",
-        artist="Operator",
-        duration_ms=180_000,
-        source="local",
-        local_path=tmp_path / "local.mp3",
-    )
-    state.playlist.append(local)
-    state.playlist_revision += 1
-    assert state.playlist_source is not None
-    state.playlist_source.kind = "local"
-    state.playlist_source.label = "Local music"
-    starter = next(track for track in state.playlist if track.source == "starter")
-    rendered_path = tmp_path / "starter-bridge.mp3"
-    rendered_path.write_bytes(b"verified starter")
-    rendered = producer.RenderedMusicTrack(
-        track=starter,
-        path=rendered_path,
-        cache_path=rendered_path,
-        cache_hit=True,
-    )
-    queued: list[Segment] = []
-
-    async def _accept(segment: Segment, *, stale_check=None, admission_callback=None, **_kwargs) -> bool:
-        if admission_callback is not None:
-            admission_callback(segment)
-        queued.append(segment)
-        return True
-
-    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered):
-        ok = await producer._queue_starter_catalog_bridge_segment(
-            _accept,
-            state,
-            _make_config(),
-            bridge_type="drain",
-            bridge_flag="queue_drain_recovery",
-        )
-
-    assert ok is True
-    assert state.playlist_source.kind == "local"
-    assert [segment.metadata.get("audio_source") for segment in queued] == ["starter"]
-    assert queued[0].metadata.get("source_kind") == "starter"
 
 
 @pytest.mark.asyncio

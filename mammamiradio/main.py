@@ -646,13 +646,6 @@ async def startup():
 
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
-    # Boot deliberately skips the local-library directory scan (include_local=False)
-    # so starter audio is not delayed by a filesystem walk. A persisted Local source
-    # is therefore not restored here; the background scanner overlays operator files
-    # within ~60s. On a starter/demo bag that promotes playlist_source.kind to
-    # "local"; on a charts/url/jamendo/classic source kind is left alone, since
-    # it also selects the backing provider. Selection reads composition from
-    # track.source either way.
     try:
         tracks, playlist_source, startup_source_error = fetch_startup_playlist(
             config, persisted_source, include_local=False

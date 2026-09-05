@@ -1358,12 +1358,13 @@ def test_mixed_starter_local_pool_uses_weighted_selector_not_bag_order() -> None
         source="local",
         local_path=Path("/music/local.mp3"),
     )
-    # kind may still read "starter" briefly after boot; pool composition decides.
+    # Source provenance stays starter; pool composition decides.
     state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="starter"))
     captured: dict = {}
 
     def _choose(candidates, **kwargs):
         captured["candidates"] = list(candidates)
+        captured["weights"] = list(kwargs["weights"])
         return [local]
 
     with patch("mammamiradio.core.models.random.choices", side_effect=_choose) as choices:
@@ -1373,6 +1374,9 @@ def test_mixed_starter_local_pool_uses_weighted_selector_not_bag_order() -> None
     assert picked is local
     assert starter in captured["candidates"]
     assert local in captured["candidates"]
+    starter_weight = captured["weights"][captured["candidates"].index(starter)]
+    local_weight = captured["weights"][captured["candidates"].index(local)]
+    assert local_weight == pytest.approx(starter_weight * 2.0)
 
 
 def test_starter_only_pool_keeps_bag_order() -> None:
@@ -1396,7 +1400,7 @@ def test_restrict_to_source_limits_mixed_pool_to_starters() -> None:
         source="local",
         local_path=Path("/music/local.mp3"),
     )
-    state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="local"))
+    state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="starter"))
 
     with patch("mammamiradio.core.models.random.choices") as choices:
         picked = state.select_next_track(restrict_to_source="starter")

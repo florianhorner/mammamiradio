@@ -160,18 +160,3 @@ def _disable_runway_governor_by_default():
     producer.RUNWAY_FLOOR_SECONDS = 0
     yield
     producer.RUNWAY_FLOOR_SECONDS = old_runway_floor
-
-
-@pytest.fixture(autouse=True)
-def _clear_local_library_probe_cache():
-    """The local-library probe memo is a module global.
-
-    Session-wide rather than file-local: keys are absolute paths, and a test
-    configuring a repo-relative ``music_dir`` on a machine with a populated
-    ``music/`` writes stable keys that would otherwise outlive the test.
-    """
-    from mammamiradio.playlist import local_library
-
-    local_library._probe_cache.clear()
-    yield
-    local_library._probe_cache.clear()

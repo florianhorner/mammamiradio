@@ -1456,11 +1456,7 @@ async def _queue_starter_catalog_bridge_segment(
 ) -> bool:
     """Queue one verified starter song when a drain cannot see cache music."""
     source = state.playlist_source
-    # Gate on crate composition, not load provenance: a mixed local+starter
-    # rotation still carries starter media the bridge may use. Kind names the
-    # crate only for the provider-free bag kinds, so read ``track.source`` here.
-    has_starter = any(track.source == "starter" for track in state.playlist)
-    if source is None or not has_starter or not state.playlist or state.listener_request_handoff is not None:
+    if source is None or source.kind != "starter" or not state.playlist or state.listener_request_handoff is not None:
         return False
 
     captured_playlist_revision = state.playlist_revision
@@ -1478,7 +1474,7 @@ async def _queue_starter_catalog_bridge_segment(
         # remaining acceptance rules live in StationState and its reservation
         # ledger, so a private empty queue is enough to reuse the canonical
         # selector without widening every continuity-bridge call signature.
-        # restrict_to_source keeps this rung on starter media even when the
+        # Restrict this rung to starter media even when the
         # global weighted selector would prefer the operator's local base.
         if held_pin is not None:
             state.pinned_track = None

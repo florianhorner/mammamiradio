@@ -2,12 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
-import subprocess
-import threading
-import time
 from collections import Counter
 from dataclasses import dataclass, field
 from itertools import islice
@@ -23,32 +19,7 @@ logger = logging.getLogger(__name__)
 LOCAL_LIBRARY_SCAN_INTERVAL_SECONDS = 60.0
 MAX_LOCAL_LIBRARY_ENTRIES = 20_000
 MAX_LOCAL_LIBRARY_TRACKS = 5_000
-DEFAULT_LOCAL_DURATION_MS = 210_000
-# Bag kinds whose only job is to name what is in the crate. Every other kind
-# also picks a backing provider, so the scanner must leave it alone.
-_COMPOSITION_PROMOTABLE_KINDS = frozenset({"", "demo", "local", "starter"})
 SUPPORTED_LOCAL_AUDIO_SUFFIXES = frozenset({".aac", ".flac", ".m4a", ".mp3", ".mp4", ".ogg", ".opus", ".wav"})
-_FFPROBE_TIMEOUT_SEC = 5.0
-# Whole-scan ceiling on metadata probing. ffprobe runs once per file and the
-# scanner wakes every 60s, so an unbounded pass over a 5,000-track library could
-# hold the box for hours and starve the two-FFmpeg normalization ceiling. When
-# the budget is spent the scan stops probing, keeps the filename fallback for
-# the rest, and reports ``complete=False`` so reconcile preserves what it
-# already knows and the next pass finishes the job (successful probes are
-# cached, so each pass makes progress).
-_SCAN_PROBE_BUDGET_SEC = 20.0
-_PROBE_CACHE_MAX_ENTRIES = MAX_LOCAL_LIBRARY_TRACKS * 2
-# path key -> (size, mtime_ns, artist, title, duration_ms).  Only successful
-# probes are cached: a failure must be retried, never remembered.
-#
-# Guarded by _probe_cache_lock because scan_local_library has two independent
-# callers on worker threads — the 60s scanner (serialized by
-# local_library_scan_lock) and producer._recover_local_rotation via
-# load_operator_local_tracks, which is not. Without the lock, pruning iterates
-# the dict while the other thread inserts and raises "dictionary changed size
-# during iteration" straight into the generation cycle.
-_probe_cache: dict[str, tuple[int, int, str, str, int | None]] = {}
-_probe_cache_lock = threading.Lock()
 
 
 @dataclass
@@ -62,19 +33,6 @@ class LocalLibraryScanResult:
     supported_files: int = 0
     ignored: Counter[str] = field(default_factory=Counter)
     warnings: list[str] = field(default_factory=list)
-    # Path keys whose metadata came from a successful ffprobe on this pass (or
-    # from the cache, which only holds successful probes). Everything else in
-    # ``tracks`` carries a filename guess and must not overwrite what the live
-    # playlist already knows about that file.
-    probe_ok_paths: set[str] = field(default_factory=set)
-    # Subset of the above whose probe also yielded a real duration.
-    measured_duration_paths: set[str] = field(default_factory=set)
-    # Files this pass saw but ran out of probe budget before reading. They are
-    # deliberately absent from ``tracks``: the station has not looked at them
-    # yet, so it must neither admit them under a filename guess nor treat them
-    # as gone. Reconcile keeps an existing track for such a path and adds
-    # nothing new; the next pass reads them for real.
-    deferred_paths: set[str] = field(default_factory=set)
 
     def status_payload(self) -> dict[str, Any]:
         return {
@@ -96,133 +54,10 @@ def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibr
     return result
 
 
-def _filename_artist_title(path: Path) -> tuple[str, str]:
-    """Filename convention fallback: ``Artist - Title.ext``, else Unknown + stem."""
-    stem = path.stem.strip()
-    if " - " in stem:
-        artist, title = stem.split(" - ", 1)
-        return (artist.strip() or "Unknown", title.strip() or path.name)
-    return ("Unknown", stem or path.name)
-
-
-def _probe_local_metadata(path: Path) -> tuple[str, str, int | None, bool]:
-    """Read title/artist/duration via ffprobe; fall back to the filename.
-
-    Same ``ffprobe -show_entries`` path used by the normalizer, Jamendo prepare,
-    and audio-quality checks. Tags win when present; empty or missing tags keep
-    the ``Artist - Title`` filename convention (or Unknown + stem).
-
-    Returns ``(artist, title, duration_ms, ok)``. ``ok`` is False when ffprobe
-    did not run or its output could not be parsed, which makes the returned
-    artist/title a filename guess rather than a fact. ``duration_ms`` is None
-    whenever no real duration was measured. Callers must not let either value
-    overwrite metadata a previous successful probe established — a timeout is
-    not evidence that a tagged 4:05 song became an untagged 3:30 one.
-    """
-    artist, title = _filename_artist_title(path)
-    duration_ms: int | None = None
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration:format_tags=artist,title,ARTIST,TITLE",
-                "-of",
-                "json",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_FFPROBE_TIMEOUT_SEC,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.debug("ffprobe metadata skipped for %s: %s", path.name, exc)
-        return artist, title, duration_ms, False
-    if result.returncode != 0:
-        logger.debug(
-            "ffprobe metadata failed for %s: %s",
-            path.name,
-            (result.stderr or result.stdout or "").strip(),
-        )
-        return artist, title, duration_ms, False
-    try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError:
-        return artist, title, duration_ms, False
-    fmt = payload.get("format") if isinstance(payload, dict) else None
-    if not isinstance(fmt, dict):
-        return artist, title, duration_ms, False
-    tags = fmt.get("tags")
-    if isinstance(tags, dict):
-        tag_artist = tags.get("artist") or tags.get("ARTIST") or ""
-        tag_title = tags.get("title") or tags.get("TITLE") or ""
-        if isinstance(tag_artist, str) and tag_artist.strip():
-            artist = tag_artist.strip()
-        if isinstance(tag_title, str) and tag_title.strip():
-            title = tag_title.strip()
-    raw_duration = fmt.get("duration")
-    try:
-        seconds = float(raw_duration) if raw_duration is not None else 0.0
-    except (TypeError, ValueError):
-        seconds = 0.0
-    if seconds > 0:
-        duration_ms = max(1, round(seconds * 1000))
-    return artist, title, duration_ms, True
-
-
-def _probe_with_cache(
-    path: Path,
-    path_key: str,
-    size: int,
-    mtime_ns: int,
-    deadline: float | None,
-) -> tuple[str, str, int | None, bool, bool]:
-    """``_probe_local_metadata`` memoized on (size, mtime_ns), budget-aware.
-
-    Returns the probe tuple plus ``budget_spent``. An unchanged file is probed
-    once per process and reused by every later pass; only successful probes are
-    remembered, so a transient ffprobe failure is retried rather than cached as
-    truth. A cache hit is served even past ``deadline`` — a warm library never
-    trips the budget. Past ``deadline`` nothing new is probed and the caller
-    defers the file to the next pass.
-
-    The memo is process-local, so the first pass after a restart re-reads the
-    whole library. That is the pass the budget exists to bound.
-    """
-    with _probe_cache_lock:
-        cached = _probe_cache.get(path_key)
-    if cached is not None and cached[0] == size and cached[1] == mtime_ns:
-        return cached[2], cached[3], cached[4], True, False
-    if deadline is not None and time.monotonic() >= deadline:
-        artist, title = _filename_artist_title(path)
-        return artist, title, None, False, True
-    artist, title, duration_ms, ok = _probe_local_metadata(path)
-    if ok:
-        with _probe_cache_lock:
-            # At the cap, stop memoizing rather than dropping every warm entry:
-            # a clear() here would re-probe the whole library on the next pass
-            # and thrash forever on a library this size.
-            if len(_probe_cache) < _PROBE_CACHE_MAX_ENTRIES:
-                _probe_cache[path_key] = (size, mtime_ns, artist, title, duration_ms)
-    return artist, title, duration_ms, ok, False
-
-
-def _prune_probe_cache(live_path_keys: set[str]) -> None:
-    """Drop cache entries for files this scan no longer saw, bounding growth."""
-    with _probe_cache_lock:
-        for stale in [key for key in _probe_cache if key not in live_path_keys]:
-            del _probe_cache[stale]
-
-
 def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
     roots = (source,) if isinstance(source, Path) else (Path(source.music_dir),)
     result = LocalLibraryScanResult(roots=roots)
     seen_identities: set[tuple[str, str]] = set()
-    probe_deadline = time.monotonic() + _SCAN_PROBE_BUDGET_SEC
-    seen_path_keys: set[str] = set()
     scan_roots: dict[str, tuple[Path, Path]] = {}
     for root in roots:
         try:
@@ -280,8 +115,7 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                     result.ignored["unsupported_format"] += 1
                     continue
                 try:
-                    stat_result = entry.stat(follow_symlinks=False)
-                    if stat_result.st_size <= 0:
+                    if entry.stat(follow_symlinks=False).st_size <= 0:
                         result.ignored["empty_file"] += 1
                         continue
                 except OSError:
@@ -290,29 +124,13 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                     continue
 
                 result.supported_files += 1
-                path_key = _path_key(path)
-                seen_path_keys.add(path_key)
-                artist, title, probed_duration_ms, probe_ok, budget_spent = _probe_with_cache(
-                    path, path_key, stat_result.st_size, stat_result.st_mtime_ns, probe_deadline
-                )
-                if probe_ok:
-                    result.probe_ok_paths.add(path_key)
-                    if probed_duration_ms is not None:
-                        result.measured_duration_paths.add(path_key)
-                elif budget_spent:
-                    # Out of probe budget. Defer rather than degrade: the
-                    # enumeration itself is complete, so a file the operator
-                    # actually deleted must still leave rotation. Admitting this
-                    # one under a filename guess would put a fabricated 3:30 in
-                    # Up Next and hand a banned song a fresh identity.
-                    result.deferred_paths.add(path_key)
-                    continue
-                duration_ms = probed_duration_ms if probed_duration_ms is not None else DEFAULT_LOCAL_DURATION_MS
+                stem = path.stem.strip()
+                artist, title = stem.split(" - ", 1) if " - " in stem else ("Unknown", stem)
                 digest = hashlib.sha256(str(path).encode("utf-8", errors="surrogatepass")).hexdigest()[:20]
                 track = Track(
                     title=title.strip() or path.name,
                     artist=artist.strip() or "Unknown",
-                    duration_ms=duration_ms,
+                    duration_ms=210_000,
                     spotify_id=f"local_{digest}",
                     local_path=path,
                     source="local",
@@ -328,12 +146,6 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
             if entry_limit_reached:
                 return _finish_scan(result, f"More than {MAX_LOCAL_LIBRARY_ENTRIES} entries found; scan stopped.")
 
-    if result.has_available_root:
-        # A missing or briefly unmounted music folder must not evict the memo:
-        # pruning against an empty set would throw away every warm entry and
-        # make the remount re-probe the entire library — the storm the memo
-        # exists to prevent, triggered by the transient it should ride out.
-        _prune_probe_cache(seen_path_keys)
     return _finish_scan(result)
 
 
@@ -346,29 +158,11 @@ def _path_is_in_root_keys(path: Path | None, root_keys: tuple[str, ...]) -> bool
 
 def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -> dict[str, int]:
     root_keys = scan.root_keys or tuple(_path_key(root) for root in scan.roots)
-
-    known_identity_by_path = {
-        _path_key(track.local_path): normalized_track_key(track)
-        for track in state.playlist
-        if track.local_path is not None
-    }
-
-    def _is_banned(track: Track) -> bool:
-        """Ban checks need an identity; a failed probe only has a filename guess.
-
-        When the probe failed and the station already knows this file from an
-        earlier successful read, judge the ban on that known identity. A file
-        named after a banned song but tagged as something else would otherwise
-        be dropped from the scan on any ffprobe hiccup, leaving ``replacement
-        is None`` and deleting a live, legitimate track. With no prior reading
-        the guess is all there is, and a ban still applies to it.
-        """
-        identity = normalized_track_key(track)
-        if track.local_path is not None and _path_key(track.local_path) not in scan.probe_ok_paths:
-            identity = known_identity_by_path.get(_path_key(track.local_path), identity)
-        return song_identity_key_is_blocklisted(identity, state.blocklist)
-
-    candidates = [track for track in scan.tracks if not _is_banned(track)]
+    candidates = [
+        track
+        for track in scan.tracks
+        if not song_identity_key_is_blocklisted(normalized_track_key(track), state.blocklist)
+    ]
     banned = len(scan.tracks) - len(candidates)
     scanned_by_path = {_path_key(track.local_path): track for track in candidates if track.local_path is not None}
     removed_tracks: list[Track] = []
@@ -386,10 +180,6 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
             continue
         assert existing_path is not None
         path_key = _path_key(existing_path)
-        if path_key in scan.deferred_paths:
-            # Seen on disk but not read yet: not gone, and nothing new to learn.
-            reconciled.append(existing)
-            continue
         replacement = scanned_by_path.pop(path_key, None)
         if replacement is None:
             if scan.complete:
@@ -397,26 +187,12 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
             else:
                 reconciled.append(existing)
             continue
-        if path_key not in scan.probe_ok_paths:
-            # ffprobe could not read this file on this pass, so the replacement
-            # carries a filename guess, not a fact. Keep the track we already
-            # have: a transient timeout must not rename a tagged song to
-            # Unknown, drop its pins and reservations by changing its identity,
-            # or overwrite a measured duration with the 3:30 fallback.
-            reconciled.append(existing)
-            continue
         if normalized_track_key(replacement) in non_managed_identities:
             removed_tracks.append(existing)
             continue
         same_identity = normalized_track_key(existing) == normalized_track_key(replacement)
-        if same_identity:
-            # Keep the live Track object (reservations / pins), but refresh duration
-            # when this pass actually measured one.
-            if path_key in scan.measured_duration_paths and replacement.duration_ms != existing.duration_ms:
-                existing.duration_ms = replacement.duration_ms
-            reconciled.append(existing)
-        else:
-            reconciled.append(replacement)
+        reconciled.append(existing if same_identity else replacement)
+        if not same_identity:
             removed_tracks.append(existing)
 
     active_identities = {normalized_track_key(track) for track in reconciled}
@@ -439,9 +215,8 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
     readiness.configured = scan.has_available_root
     readiness.attempted = True
     readiness.candidates = len(local_tracks)
-    still_reading = bool(scan.deferred_paths)
-    readiness.exhausted = not local_tracks and scan.complete and not still_reading
-    if not local_tracks and scan.complete and not still_reading:
+    readiness.exhausted = not local_tracks and scan.complete
+    if not local_tracks and scan.complete:
         readiness.playable = 0
         readiness.failure = "Add supported songs to the local music library, then select Scan now."
     elif not local_tracks and scan.warnings:
@@ -452,31 +227,6 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
         state.source_readiness.reconcile_active_tracks(state.playlist, removed_tracks=removed_tracks)
     if state.playlist_source is not None:
         state.playlist_source.track_count = len(state.playlist)
-    # kind is composition, but only across the bag kinds that carry no loader or
-    # refresh semantics of their own. charts/url/jamendo/classic also name a
-    # backing provider — the producer's mid-session chart refresh, the
-    # _load_source dispatch, the persisted-source restore all branch on it — so
-    # overlaying local files onto one of those must not rewrite it. Doing so
-    # disabled chart refresh permanently, with no path back to "charts".
-    # Rotation reads composition from track.source, so it needs no help here.
-    if state.playlist_source is not None and state.playlist_source.kind in _COMPOSITION_PROMOTABLE_KINDS:
-        if local_tracks:
-            state.playlist_source.kind = "local"
-            state.playlist_source.source_id = state.playlist_source.source_id or "local_music_dir"
-            if not state.playlist_source.label or state.playlist_source.label in {
-                "Starter",
-                "Bundled starter music",
-                "Demo",
-            }:
-                state.playlist_source.label = "Local music"
-        elif scan.complete and state.playlist_source.kind == "local":
-            # Locals left the crate; restore a starter composition label when the
-            # remaining bag is starter media so kind stays an honest composition fact.
-            has_starter = any(track.source == "starter" for track in state.playlist)
-            if has_starter:
-                state.playlist_source.kind = "starter"
-                if state.playlist_source.label == "Local music":
-                    state.playlist_source.label = "Bundled starter music"
 
     return {
         "added": len(added_tracks),

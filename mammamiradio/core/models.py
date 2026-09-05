@@ -743,17 +743,7 @@ class RuntimeProviderObservation:
 
 @dataclass
 class PlaylistSource:
-    """The user-visible source backing the currently loaded playlist.
-
-    ``kind`` names the crate over the bag kinds that carry no provider of their
-    own: overlaying operator files onto a starter or demo bag promotes it to
-    ``local``. It is *not* rewritten for a kind that also selects a backing
-    provider (``charts``, ``url``, ``jamendo``, ``classic``) — those drive the
-    mid-session chart refresh, the source loader and the persisted-source
-    restore, and rewriting one strands the station on a provider it can no
-    longer refresh. Rotation reads composition from ``Track.source``, never
-    from ``kind``.
-    """
+    """The user-visible source backing the currently loaded playlist."""
 
     kind: str
     source_id: str = ""
@@ -3209,8 +3199,8 @@ class StationState:
                     )
                 raise RuntimeError("Playlist has no eligible tracks in the current starter cycle")
             # Strict bag order applies only to a genuinely starter-only pool.
-            # Kind is composition (what is in the crate), so a mixed local+starter
-            # rotation must reach the weighted selector below; locals are the base.
+            # A mixed local+starter rotation must reach the weighted selector
+            # below so local files can receive their configured lift.
             starter_only_pool = all(track.source == "starter" for track in pool)
             if starter_only_pool:
                 # Startup supplied one manifest-digest-pinned bag cycle in
