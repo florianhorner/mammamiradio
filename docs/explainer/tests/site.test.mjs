@@ -67,19 +67,17 @@ test("no scenario accent is green", () => {
   assert.doesNotMatch(css, /--sage/);
 });
 
-test("at least one moment is reachable by a fresh install", () => {
+test("at least one moment is the narrowest post-opt-in grant", () => {
   // Narrow ambient context projects only the sun and the weather
-  // (home/authorization.py). A page whose every demo needs a home grant
-  // sells a stranger something their install cannot do. This guard keeps
-  // the day-one scenario from being silently traded away.
-  assert.match(scenariosSource, /reachability: "day-one"/);
-  const dayOneBlocks = scenariosSource.match(/reachability: "day-one"/g);
-  assert.ok(dayOneBlocks.length >= 1);
-  // The day-one moment may only use ambient entities.
+  // (home/authorization.py), and only after the operator opts in. This
+  // guard keeps the ambient-grant scenario from being silently traded away.
+  assert.match(scenariosSource, /reachability: "ambient-grant"/);
+  const ambientBlocks = scenariosSource.match(/reachability: "ambient-grant"/g);
+  assert.ok(ambientBlocks.length >= 1);
   const quietBlock = scenariosSource.slice(scenariosSource.indexOf("quiet: {"));
   const sensorNames = [...quietBlock.matchAll(/\["[^"]*", "([^"]+)"/g)].map((m) => m[1]);
   for (const name of sensorNames.slice(0, 5)) {
-    assert.match(name, /^(sun\.sun|weather\.home)/, `day-one scenario uses non-ambient entity: ${name}`);
+    assert.match(name, /^(sun\.sun|weather\.home)/, `ambient-grant scenario uses non-ambient entity: ${name}`);
   }
 });
 
@@ -124,7 +122,7 @@ test("the voice plays on the first click, not the second", () => {
 });
 
 test("the day-one boundary is said in plain words", () => {
-  assert.match(html, /On day one the station knows the sky\./);
+  assert.match(html, /On day one the house stays off the air\./);
   assert.match(html, /day-one-chip/);
   assert.match(html, /class="aired-truth"/);
   // The demos are the fully-wired dreamstate (premium voices). The page may

@@ -8,8 +8,9 @@ notes.
 The scenarios are invented. Marco and Giulia are not: the clips in
 `public/audio/` are the station's own hosts in their own configured voices.
 One of the four moments ("Evening, officially") uses only the sun and the
-weather, which is all a fresh install can share. The other three need the home
-grant, and the page says so. The page reads no Home Assistant data and sends
+weather: the narrowest grant after you opt in. A fresh install shares no Home
+context until that choice. The other three need a wider grant, and the page
+says so. The page reads no Home Assistant data and sends
 nothing anywhere.
 
 ## How it is put together
@@ -48,12 +49,12 @@ npm run test:e2e  # drives the funnel in Chromium; run `npx playwright install c
 
 The build fails rather than shipping a broken page when a scenario in
 `index.html` and `scenarios.mjs` disagree, a clip is missing, a derived
-transcript is empty, no scenario is fresh-install reachable, or a produced
+transcript is empty, no ambient-grant scenario exists, or a produced
 clip has a `revealAtSec` that is absent or falls outside the clip.
 
 The unit tests pin the framing (station first, sensors as the reveal, no
 pipeline ordinals, including the meta description), the failure contract, the
-transport, the day-one scenario's ambient-only entities, and the responsive
+transport, the ambient-grant scenario's sun/weather-only entities, and the responsive
 and reduced-motion treatments, plus the link-preview card: that its URLs
 agree, that the og: and twitter: copy cannot drift apart, that the card ships
 in `dist/`, and that the declared size matches the real PNG. The end-to-end
