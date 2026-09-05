@@ -871,6 +871,34 @@ def _merge_witness_mismatch(
     return None
 
 
+def _assert_landed_base(
+    repo: GitRepository,
+    *,
+    base_commit: str,
+    landed_ref: str,
+) -> None:
+    """Refuse a base that is not landed content in ``landed_ref``.
+
+    Only meaningful where the base is read as CONTENT — the merge witness. A
+    divergent but untrusted base (``--base HEAD``, ``--base <an unmerged
+    branch>``) would otherwise let the sound-looking three-way merge sign
+    content nobody reviewed. ``reattest_v2`` enforces the same requirement
+    before running the same predicate.
+    """
+
+    try:
+        landed_commit = repo.resolve_commit(landed_ref)
+    except GitError as exc:
+        raise EvidenceError(
+            f"cannot verify the base: {landed_ref!r} does not resolve — fetch it and retry"
+        ) from exc
+    if not repo.is_ancestor(base_commit, landed_commit):
+        raise EvidenceError(
+            f"base {base_commit} is not landed content in {landed_ref!r}; verify against the "
+            "landed base, never against an unmerged branch"
+        )
+
+
 def _assert_reviewed_receipt_namespace_vs_base(
     repo: GitRepository,
     *,
@@ -1217,6 +1245,7 @@ def verify_v2(
     target: str,
     base: str | None,
     mode: str,
+    landed_ref: str = DEFAULT_LANDED_REF,
 ) -> VerificationResult:
     if mode not in {"pr", "main"}:
         raise EvidenceError(f"unsupported verification mode {mode!r}")
@@ -1284,8 +1313,12 @@ def verify_v2(
             # When the reviewed tip descends from base, enforce namespace path
             # checks before snapshot_tree: a transient corrupt mode on a base
             # receipt must fail as a namespace mutation, not as a blob-shape error.
+            # These path checks run for EVERY reviewed commit, on the base
+            # path or not. Gating them on descent let a reviewed commit opt out
+            # of the receipt-flood bound by forking before the base, which is
+            # the one thing an attacker picks freely.
             on_base_path = repo.is_ancestor(base_commit, reviewed_commit)
-            if on_base_path and reviewed_commit not in path_checked:
+            if reviewed_commit not in path_checked:
                 _assert_reviewed_receipt_namespace_vs_base(
                     repo, base_commit=base_commit, reviewed_commit=reviewed_commit
                 )
@@ -1327,6 +1360,22 @@ def verify_v2(
                     f"new v2 receipt {_display_path(receipt.path)} pins a reviewed commit "
                     "already contained in the base; merge-tree witness would be vacuous"
                 )
+            # The witness pulls content OUT of the base into the accepted
+            # result, so the base must be landed, trusted content. Before this
+            # predicate existed the base contributed only topology, and a wrong
+            # base could not admit a single unreviewed byte; now every line of
+            # it is reviewed by fiat. The exact-bind path above never reads the
+            # base as content and is deliberately left unguarded, so a repo with
+            # no landed ref still verifies the ordinary case.
+            #
+            # Scoped to the off-base-path case, which is exactly when the base
+            # can contribute anything: if the reviewed tip already contains the
+            # base, merge_tree(reviewed, base) collapses to the reviewed tree, so
+            # the witness can only ever refuse and no byte of the base reaches
+            # the accepted result.
+            if not on_base_path:
+                _assert_landed_base(repo, base_commit=base_commit, landed_ref=landed_ref)
+
             witness = _merge_witness_mismatch(
                 repo,
                 reviewed_commit=reviewed_commit,

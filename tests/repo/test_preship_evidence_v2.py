@@ -2714,6 +2714,7 @@ def test_pr_accepts_receipt_when_base_advance_is_content_profile_noop(
         input_bytes=b"empty base advance\n",
     ).stdout.decode().strip()
     _git(repo.root, "update-ref", "refs/heads/base-branch", base)
+    _set_origin_main(repo, base)  # the base is landed content
     _git(repo.root, "checkout", "-q", "main")
     merge = _git(repo.root, "merge", "--no-edit", base, check=False)
     assert merge.returncode == 0, merge.stderr.decode()
@@ -2744,6 +2745,103 @@ def test_pr_merge_witness_refuses_vacuous_reviewed_ancestor_of_base(
 
     with pytest.raises(EvidenceError, match="vacuous"):
         verify_v2(repo, target=target, base=base, mode="pr")
+
+
+def test_pr_merge_witness_refuses_an_untrusted_base_not_landed_on_origin_main(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """The witness reads the base as CONTENT, so the base must be landed.
+
+    Same fixture as the reattest twin. Without this guard, naming an unmerged
+    branch as the base makes a sound-looking three-way merge sign every byte of
+    it: `merge_tree(reviewed, evil) == target`, backdoor included.
+    """
+
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    reviewed = _commit(repo.root, "reviewed feature")
+    _emit_and_commit(repo, tmp_path)
+    _git(repo.root, "checkout", "-q", "-b", "evil", fork_point)
+    (repo.root / "backdoor.txt").write_text("backdoor\n")
+    evil = _commit(repo.root, "unreviewed backdoor")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", evil, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    target = repo.head()
+    _set_origin_main(repo, fork_point)  # honest main carries no backdoor
+
+    assert (repo.root / "backdoor.txt").exists()
+    with pytest.raises(EvidenceError, match="is not landed content in 'origin/main'"):
+        verify_v2(repo, target=target, base=evil, mode="pr")
+    # The other untrusted spellings stay refused too, by whichever guard fires first.
+    for bad_base in (target, reviewed):
+        with pytest.raises(EvidenceError):
+            verify_v2(repo, target=target, base=bad_base, mode="pr")
+
+
+def test_pr_merge_witness_refuses_when_the_landed_ref_is_unresolvable(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """No landed ref means the base cannot be trusted, so the witness refuses."""
+
+    base, merge_commit, _, _ = _integrated_branch(repo, tmp_path)
+    _git(repo.root, "update-ref", "-d", "refs/remotes/origin/main")
+
+    with pytest.raises(EvidenceError, match="'origin/main' does not resolve"):
+        verify_v2(repo, target=merge_commit, base=base, mode="pr")
+
+
+def test_pr_exact_bind_still_verifies_without_a_landed_ref(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """The exact-bind path never reads the base as content, so it stays unguarded.
+
+    A repo with no resolvable landed ref must still verify the ordinary case.
+    """
+
+    base = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _, path = _emit_and_commit(repo, tmp_path)
+    _git(repo.root, "update-ref", "-d", "refs/remotes/origin/main")
+
+    result = verify_v2(repo, target="HEAD", base=base, mode="pr")
+    assert result.matching_receipts == (path.as_posix(),)
+
+
+def test_pr_bounds_receipt_flood_on_an_off_base_reviewed_commit(
+    repo: GitRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The namespace bound must not be opt-out.
+
+    Gating it on descent from the base let a reviewed commit skip the flood
+    check by forking before the base, which is the one thing an attacker picks
+    freely. The reviewed commit here is deliberately NOT a base descendant.
+    """
+
+    monkeypatch.setattr(evidence_module, "MAX_NEW_RECEIPTS", 1)
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    flood_dir = repo.root / RECEIPT_ROOT / ("c" * 64)
+    flood_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(3):
+        (flood_dir / f"{index:064x}.json").write_text("{}\n")
+    reviewed = _commit(repo.root, "flood the reserved namespace")
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    base = _commit(repo.root, "base advances")
+    _git(repo.root, "checkout", "-q", "main")
+    assert not repo.is_ancestor(base, reviewed)
+
+    with pytest.raises(EvidenceError, match="reserved v2 namespace"):
+        evidence_module._assert_reviewed_receipt_namespace_vs_base(
+            repo, base_commit=base, reviewed_commit=reviewed
+        )
 
 
 def test_pr_merge_witness_refuses_post_review_feature_drift(
