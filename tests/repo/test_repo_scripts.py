@@ -586,6 +586,57 @@ def test_pre_release_check_rejects_browser_narration_hash_drift(
     assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
 
 
+def test_pre_release_check_validates_spoken_assets_through_resolved_interpreter(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    """Both validate-spoken-assets.py calls must run through $MEDIA_PYTHON, not a bare
+    `python3` — a host whose system python3 predates 3.11 (tomllib needs 3.11+) must
+    still pass here given a working .venv/bin/python."""
+    _write_release_check_repo(tmp_path)
+
+    real_python3 = shutil.which("python3")
+    assert real_python3, "a real python3 must be on PATH for this test to shadow"
+
+    fake_bin = tmp_path / ".fake-old-python-bin"
+    _write(
+        fake_bin / "python3",
+        "#!/usr/bin/env bash\n"
+        # Claim to predate 3.11, forcing the script's own fallback to .venv/bin/python.
+        'if [ "$1" = "-c" ] && [[ "$2" == *version_info* ]]; then\n'
+        "  exit 1\n"
+        "fi\n"
+        # Fail loudly if anything still calls this fake interpreter directly to run
+        # validate-spoken-assets.py instead of going through the resolved $MEDIA_PYTHON.
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        "    *validate-spoken-assets.py)\n"
+        '      echo "bare python3 was invoked instead of \\$MEDIA_PYTHON" >&2\n'
+        "      exit 1\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        # Everything else (e.g. the fixture's python3-shebang ffmpeg/ffprobe stubs)
+        # delegates to the real interpreter so only the targeted call is faked.
+        f'exec "{real_python3}" "$@"\n',
+    )
+    (fake_bin / "python3").chmod(0o755)
+
+    venv_python = tmp_path / ".venv/bin/python"
+    _write(venv_python, f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
+    venv_python.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "packaged spoken assets are manifest/hash/transcript approved" in result.stdout
+    assert "browser narration assets and admin metadata match the release manifest" in result.stdout
+    assert "bare python3 was invoked" not in result.stderr
+
+
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     body = HA_GREEN_PERF_SMOKE.read_text()
 
