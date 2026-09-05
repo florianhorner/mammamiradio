@@ -4,8 +4,10 @@
 ``--quick`` is the offline source-tree gate behind ``make media-check``.  The
 default full proof also builds a wheel and sdist in an isolated temporary
 source copy, validates two already-built add-on images, and runs the focused
-Jamendo transience tests.  This command never builds, pulls, pushes, or
-publishes a container image.
+Jamendo transience tests.  ``--image-arch`` restricts only the image checks to
+one architecture so CI can run each probe on its native runner; the source,
+package, and transient checks still run on every leg.  This command never
+builds, pulls, pushes, or publishes a container image.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ IMAGE_ENV = {
     "amd64": "MEDIA_PROOF_AMD64_IMAGE",
     "aarch64": "MEDIA_PROOF_AARCH64_IMAGE",
 }
+IMAGE_ARCHES = tuple(IMAGE_ENV)
 IMAGE_PLATFORM = {"amd64": "linux/amd64", "aarch64": "linux/arm64"}
 IMAGE_ARCH = {"amd64": "amd64", "aarch64": "arm64"}
 TRANSIENT_TESTS = (
@@ -396,8 +399,12 @@ def _sdist_starter_files(path: Path) -> dict[str, bytes]:
             except ValueError:
                 continue
             normalized = PurePosixPath(*parts[package_index:]).as_posix()
-            if not normalized.startswith(STARTER_PREFIX) or normalized.endswith("/"):
+            if not normalized.startswith(STARTER_PREFIX):
                 continue
+            if member.isdir():
+                continue
+            if member.issym() or member.islnk():
+                raise RuntimeError(f"sdist starter member is a symlink: {member.name}")
             if not member.isfile():
                 raise RuntimeError(f"sdist starter member is not a regular file: {member.name}")
             handle = archive.extractfile(member)
@@ -1068,9 +1075,18 @@ def _run_transient_tests(report: dict[str, Any]) -> None:
     )
 
 
-def run_full(*, work_dir: Path, images: Mapping[str, str | None]) -> dict[str, Any]:
+def run_full(
+    *,
+    work_dir: Path,
+    images: Mapping[str, str | None],
+    image_arches: Iterable[str] = IMAGE_ARCHES,
+) -> dict[str, Any]:
+    image_arches = tuple(image_arches)
+    if not image_arches:
+        raise ProofToolError("at least one image architecture must be selected")
     catalog = _read_catalog()
     report = _new_report(mode="full", catalog=catalog)
+    report["image_arches"] = list(image_arches)
     _starter_groups(report, catalog)
 
     if shutil.which("ffprobe") is None:
@@ -1259,7 +1275,7 @@ def run_full(*, work_dir: Path, images: Mapping[str, str | None]) -> dict[str, A
         )
 
     source_hashes = {name: _sha256_bytes(payload) for name, payload in source_files.items()}
-    for arch in ("amd64", "aarch64"):
+    for arch in image_arches:
         image = images.get(arch)
         if not image:
             message = f"{IMAGE_ENV[arch]} is required and must name an already-built local {arch} image"
@@ -1412,6 +1428,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--amd64-image", default=os.environ.get(IMAGE_ENV["amd64"]))
     parser.add_argument("--aarch64-image", default=os.environ.get(IMAGE_ENV["aarch64"]))
+    parser.add_argument(
+        "--image-arch",
+        choices=IMAGE_ARCHES,
+        help=(
+            "restrict the image checks to this architecture; source, package, and transient "
+            "checks still run and the other --*-image value is ignored (CI uses this on "
+            "native per-arch runners)"
+        ),
+    )
     return parser
 
 
@@ -1420,6 +1445,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         output = _safe_output_path(args.output, label="proof output")
         work_base = _safe_work_base(args.work_dir)
+        image_arches = (args.image_arch,) if args.image_arch else IMAGE_ARCHES
         if args.quick:
             report = run_quick()
         elif work_base is not None:
@@ -1428,6 +1454,7 @@ def main(argv: list[str] | None = None) -> int:
             report = run_full(
                 work_dir=work_dir,
                 images={"amd64": args.amd64_image, "aarch64": args.aarch64_image},
+                image_arches=image_arches,
             )
             report["work_dir"] = os.fspath(work_dir)
         else:
@@ -1435,6 +1462,7 @@ def main(argv: list[str] | None = None) -> int:
                 report = run_full(
                     work_dir=Path(temporary),
                     images={"amd64": args.amd64_image, "aarch64": args.aarch64_image},
+                    image_arches=image_arches,
                 )
         if output is not None:
             report["output"] = os.fspath(output)
