@@ -88,9 +88,12 @@ Mechanically, feature work may merge to `main` at any time — the only *hard* c
 is "`main` never advertises a version that has no image, outside the cut window." But
 there is a real discipline on top of it:
 
-- **Freeze image-affecting merges between the cut commit and the tag.** The window is
-  short (one build plus a tag), but a merge landing inside it means the commit you soak
-  and the commit you tag are not the same one. Pin the soak explicitly with
+- **Acquire the freeze before the cut and keep it through publication.** One release
+  operator owns freeze, cut and resume; follow the add-on runbook's "The cut window".
+  `land-pr.sh` requires a verified freeze for stable-version changes. Pause human
+  image-affecting merges until both architecture promotions succeed and the
+  advertised-version check passes. A merge inside this window can change the commit
+  between soak and tag. Pin the soak explicitly with
   `make edge-release ARGS="--target-sha <cut-sha>"` so the selection cannot silently
   drift to a newer commit.
 
