@@ -586,6 +586,73 @@ def test_pre_release_check_rejects_browser_narration_hash_drift(
     assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
 
 
+@pytest.mark.parametrize("fallback", ["venv", "python3.11"])
+@pytest.mark.parametrize("changed_asset", [None, "packaged", "browser"])
+def test_pre_release_check_validates_spoken_assets_through_resolved_interpreter(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+    fallback: str,
+    changed_asset: str | None,
+) -> None:
+    """Both Python fallbacks validate good assets and reject changed assets."""
+    _write_release_check_repo(tmp_path)
+
+    real_python3 = shutil.which("python3")
+    assert real_python3, "a real python3 must be on PATH for this test to shadow"
+
+    fake_bin = tmp_path / ".fake-old-python-bin"
+    _write(
+        fake_bin / "python3",
+        "#!/usr/bin/env bash\n"
+        # Simulate an old system Python to force interpreter selection.
+        'if [ "$1" = "-c" ] && [[ "$2" == *version_info* ]]; then\n'
+        "  exit 1\n"
+        "fi\n"
+        # Catch either validator bypassing the selected interpreter.
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        "    *validate-spoken-assets.py)\n"
+        '      echo "bare python3 was invoked instead of \\$MEDIA_PYTHON" >&2\n'
+        "      exit 1\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        # Keep the fixture's ffmpeg and ffprobe stubs working.
+        f'exec "{real_python3}" "$@"\n',
+    )
+    (fake_bin / "python3").chmod(0o755)
+
+    fallback_python = tmp_path / ".venv/bin/python" if fallback == "venv" else fake_bin / fallback
+    _write(fallback_python, f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
+    fallback_python.chmod(0o755)
+
+    if changed_asset == "packaged":
+        asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
+        asset.write_bytes(asset.read_bytes() + b"tampered")
+    elif changed_asset == "browser":
+        asset = tmp_path / "mammamiradio/web/static/audio/first_listen/welcome.mp3"
+        asset.write_bytes(asset.read_bytes() + b"tampered")
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=env)
+
+    assert "bare python3 was invoked" not in result.stderr
+    if changed_asset == "packaged":
+        assert result.returncode != 0
+        assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
+        assert "recovery/emergency_tone.mp3 sha256 does not match" in result.stderr
+    elif changed_asset == "browser":
+        assert result.returncode != 0
+        assert "browser narration asset/admin manifest validation failed" in result.stdout
+        assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
+    else:
+        assert result.returncode == 0
+        assert "packaged spoken assets are manifest/hash/transcript approved" in result.stdout
+        assert "browser narration assets and admin metadata match the release manifest" in result.stdout
+
+
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     body = HA_GREEN_PERF_SMOKE.read_text()
 
