@@ -903,10 +903,21 @@ def _assert_reviewed_receipt_namespace_vs_base(
     base_commit: str,
     reviewed_commit: str,
 ) -> None:
-    """Refuse a reviewed commit that floods or mutates the base v2 namespace."""
+    """Refuse a reviewed commit that floods or mutates the base v2 namespace.
 
+    The diff baseline is the reviewed commit's own fork point from the base,
+    not the base itself. When the reviewed tip descends from the base the two
+    are the same commit. When it forked earlier, every receipt the base gained
+    since the fork — one per PR that landed in between — would otherwise read
+    as a deletion by the reviewed commit and refuse the ordinary integrate. The
+    base→target check in ``verify_v2`` still proves the *target* preserves
+    every base receipt; this guard only bounds what the reviewed commit itself
+    added or touched.
+    """
+
+    baseline = repo.merge_base(base_commit, reviewed_commit)
     reviewed_added_paths = repo.diff_paths(
-        base_commit,
+        baseline,
         reviewed_commit,
         pathspec=RECEIPT_ROOT,
         diff_filter="A",
@@ -918,7 +929,7 @@ def _assert_reviewed_receipt_namespace_vs_base(
             f"reviewed commit {reviewed_commit} adds more than {MAX_NEW_RECEIPTS} entries in the reserved v2 namespace"
         )
     reviewed_changed_paths = repo.diff_paths(
-        base_commit,
+        baseline,
         reviewed_commit,
         pathspec=RECEIPT_ROOT,
         diff_filter="a",

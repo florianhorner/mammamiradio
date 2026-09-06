@@ -2846,6 +2846,98 @@ def test_pr_bounds_receipt_flood_on_an_off_base_reviewed_commit(
         evidence_module._assert_reviewed_receipt_namespace_vs_base(repo, base_commit=base, reviewed_commit=reviewed)
 
 
+def test_pr_accepts_witness_when_the_base_gained_another_prs_receipt(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """The ordinary integrate: another PR landed on main with its receipt.
+
+    The namespace guard once diffed the base against the reviewed commit
+    directly, so every receipt the base gained since the fork read as a
+    deletion by the reviewed commit and the witness never ran. The baseline is
+    the reviewed commit's own fork point.
+    """
+
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _, old_path = _emit_and_commit(repo, tmp_path)
+
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "other.txt").write_text("other landed work\n")
+    _commit(repo.root, "other feature")
+    _, other_receipt = _emit_and_commit(repo, tmp_path)  # that PR's receipt is on base
+    base = repo.head()
+
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, base)
+    assert (repo.root / other_receipt).exists(), "the target preserves the base receipt"
+
+    result = verify_v2(repo, target="HEAD", base=base, mode="pr")
+    assert result.matching_receipts == (old_path.as_posix(),)
+
+
+def test_pr_off_base_reviewed_commit_still_cannot_delete_a_fork_point_receipt(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """Rebaselining to the fork point must not weaken the mutation guard.
+
+    A receipt that existed at the fork point and was deleted on the reviewed
+    branch is still a mutation of landed evidence, and still refused.
+    """
+
+    _, landed_receipt = _emit_and_commit(repo, tmp_path)
+    fork_point = repo.head()
+    (repo.root / landed_receipt).unlink()
+    (repo.root / "feature.txt").write_text("feature\n")
+    reviewed = _commit(repo.root, "feature work that drops a landed receipt")
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    base = _commit(repo.root, "base advances")
+    _git(repo.root, "checkout", "-q", "main")
+    assert not repo.is_ancestor(base, reviewed)
+
+    with pytest.raises(EvidenceError, match="deletes or modifies base v2 receipt"):
+        evidence_module._assert_reviewed_receipt_namespace_vs_base(repo, base_commit=base, reviewed_commit=reviewed)
+
+
+def test_witness_accepted_receipt_does_not_satisfy_main_mode_after_squash(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    """Documents an asymmetry the merge witness introduces, on purpose.
+
+    A receipt accepted by the witness binds the pre-merge digest. Once the PR
+    squashes onto main, the landed tree's digest is the post-merge one, and
+    main-mode verification requires an exact bind — so it finds nothing. Main
+    mode is invoked by no workflow or script today; this test exists so the
+    gap is asserted rather than discovered when someone wires it up.
+    """
+
+    base, merge_commit, _, _ = _integrated_branch(repo, tmp_path)
+    verify_v2(repo, target=merge_commit, base=base, mode="pr")  # witness accepts
+
+    # The squash: one commit carrying the merged tree, no merge parents.
+    squashed = (
+        _git(
+            repo.root,
+            "commit-tree",
+            f"{merge_commit}^{{tree}}",
+            "-p",
+            base,
+            input_bytes=b"squash\n",
+        )
+        .stdout.decode()
+        .strip()
+    )
+
+    with pytest.raises(EvidenceError, match="no surviving v2 receipt"):
+        verify_v2(repo, target=squashed, base=None, mode="main")
+
+
 def test_pr_merge_witness_refuses_post_review_feature_drift(
     repo: GitRepository,
     tmp_path: Path,
@@ -3585,6 +3677,50 @@ def test_merge_tree_commits_rejects_bad_plumbing(
     # Pin the exact invocation: the flags are load-bearing (--write-tree makes a
     # pre-2.38 git parse it as a tree-ish, --no-messages suppresses conflict text).
     assert seen_argv == [("merge-tree", "--write-tree", "--no-messages", head, head)]
+
+
+def test_merge_base_returns_the_fork_point(repo: GitRepository) -> None:
+    fork_point = repo.head()
+    (repo.root / "a.txt").write_text("a\n")
+    left = _commit(repo.root, "left")
+    _git(repo.root, "checkout", "-q", "-b", "right-branch", fork_point)
+    (repo.root / "b.txt").write_text("b\n")
+    right = _commit(repo.root, "right")
+    _git(repo.root, "checkout", "-q", "main")
+
+    assert repo.merge_base(left, right) == fork_point
+    # Descent collapses to the ancestor: the baseline IS the base.
+    assert repo.merge_base(fork_point, left) == fork_point
+
+
+@pytest.mark.parametrize(
+    "returncode, stdout, expected",
+    [
+        (1, b"", "merge-base failed with exit 1"),
+        (0, b"", "returned no commit object ID"),
+        (0, b"\xff" * 40 + b"\n", "non-ASCII object ID"),
+        (0, b"abc\n", "malformed object ID"),
+    ],
+)
+def test_merge_base_rejects_bad_plumbing(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: bytes,
+    expected: str,
+) -> None:
+    head = repo.head()
+    real_run_result = repo.run_result
+
+    def dispatch(args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        args_tuple = tuple(args)
+        if args_tuple[:1] == ("merge-base",) and "--is-ancestor" not in args_tuple:
+            return _completed(returncode=returncode, stdout=stdout, stderr=b"boom")
+        return real_run_result(args_tuple, **kwargs)
+
+    monkeypatch.setattr(repo, "run_result", dispatch)
+    with pytest.raises(GitError, match=expected):
+        repo.merge_base(head, head)
 
 
 def test_merge_tree_commits_selection_is_deterministic_across_equal_candidates(repo: GitRepository) -> None:

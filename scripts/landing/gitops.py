@@ -502,6 +502,32 @@ class GitRepository:
         output = self.run(("ls-tree", "--name-only", "-z", "--full-tree", resolved, "--", path_str))
         return bool(output.strip(b"\0"))
 
+    def merge_base(self, one: str, two: str) -> str:
+        """Return the best common ancestor of two commits.
+
+        Used as the diff baseline for a reviewed commit that forked before the
+        base: comparing it against the base directly would report every path the
+        base gained since the fork as a deletion by the reviewed commit.
+        """
+
+        one_oid = self.resolve_commit(one)
+        two_oid = self.resolve_commit(two)
+        result = self.run_result(("merge-base", one_oid, two_oid))
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            suffix = f": {detail}" if detail else ""
+            raise GitError(f"git merge-base failed with exit {result.returncode}{suffix}")
+        lines = result.stdout.splitlines()
+        if not lines:
+            raise GitError("git merge-base returned no commit object ID")
+        try:
+            oid = lines[0].decode("ascii").lower()
+        except UnicodeDecodeError as exc:
+            raise GitError("git merge-base returned a non-ASCII object ID") from exc
+        if len(oid) != self.oid_length or _HEX_RE.fullmatch(oid) is None:
+            raise GitError(f"git merge-base returned malformed object ID {oid!r}")
+        return oid
+
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
         ancestor_oid = self.resolve_commit(ancestor)
         descendant_oid = self.resolve_commit(descendant)
