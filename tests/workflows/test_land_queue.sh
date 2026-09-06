@@ -147,7 +147,9 @@ case "\$1" in
     if [ -n "\${GIT_MOCK_EDGE_REPO:-}" ]; then exec "$REAL_GIT" -C "\$GIT_MOCK_EDGE_REPO" "\$@"; fi
     exec "$REAL_GIT" "\$@" ;;
   fetch)
-    # A shadow run may want fresh refs, but this test must stay offline.
+    # A shadow run may want fresh refs, but this test must stay offline. Log the
+    # call so a case can assert the landed ref is refreshed once per run.
+    printf '%s\\n' "\$*" >> "\${GIT_SHIM_LOG:-/dev/null}"
     exit 0 ;;
 esac
 echo "git mock: refusing mutating verb in a read-only shadow: \$*" >&2
@@ -254,9 +256,9 @@ pass "FIFO key is the immutable creation time, not updatedAt"
 PRS="[$(pr_row 30 "fix: behind" "$HEAD_FULL" BEHIND false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
 OUT="$(run_plan "$PRS")"
 [ "$(jq -r '.decision.action' <<<"$OUT")" = "integrate" ] || fail "BEHIND head must integrate, not arm"
-jq -e '.decision.why | test("reattest")' <<<"$OUT" >/dev/null \
-  || fail "integrate decision must name the reattest step"
-pass "BEHIND head routes to integrate + reattest"
+jq -e '.decision.why | test("merge origin/main")' <<<"$OUT" >/dev/null \
+  || fail "integrate decision must name the integrate step"
+pass "BEHIND head routes to integrate + push"
 
 # =============================================================================
 # Case 6: DIRTY is BLOCKED_CONFLICT and the queue STALLS (does not reorder).
@@ -738,6 +740,35 @@ OUT="$(run_plan "$PRS")"
 [ "$(jq -r '.prs[0].state' <<<"$OUT")" = "READY" ] \
   || fail "an old head commit date must not block when evidence is present"
 pass "ledger age check reads the head commit date, not the wall clock"
+
+# =============================================================================
+# The landed-ref refresh is need-driven: a base the local origin/main already
+# covers must not trigger a fetch (a seat with complete history never touches
+# the network), and a base it does not cover must.
+# =============================================================================
+FETCH_LOG="$TMPDIR_T/git-fetch.log"
+MAIN_TIP="$(git rev-parse "$MAIN_REF")"
+# Covered base: origin/main's own tip is trivially its ancestor -> no fetch.
+: > "$FETCH_LOG"
+COVERED="$(jq -cn --arg base "$MAIN_TIP" --arg head "$HEAD_FULL" \
+  '{number:210,title:"fix: covered",headRefOid:$head,baseRefOid:$base,mergeStateStatus:"CLEAN",
+    isDraft:false,labels:[],createdAt:"2026-01-01T00:00:00Z",headRefName:"feature/pr-210",
+    url:"https://example.test/pull/210",author:{login:"florianhorner",is_bot:false}}')"
+OUT="$(GIT_SHIM_LOG="$FETCH_LOG" run_plan "[$COVERED]")"
+[ "$(jq -r '.decision.pr' <<<"$OUT")" = "210" ] || fail "planner should decide on the covered-base PR"
+[ "$(grep -c '^fetch -q origin main' "$FETCH_LOG")" = "0" ] \
+  || fail "a base already covered by local origin/main must not trigger a fetch"
+# Uncovered base: the suite's ANC_FULL is branch-only history -> exactly one fetch.
+: > "$FETCH_LOG"
+PRS="[$(pr_row 211 "fix: stale" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
+OUT="$(GIT_SHIM_LOG="$FETCH_LOG" run_plan "$PRS")"
+if git merge-base --is-ancestor "$ANC_FULL" "$MAIN_REF" 2>/dev/null; then
+  : # fixture base happens to be on main here; the covered case above already holds the property
+else
+  [ "$(grep -c '^fetch -q origin main' "$FETCH_LOG")" = "1" ] \
+    || fail "a base not covered by local origin/main must trigger the refresh"
+fi
+pass "landed ref is refreshed only when the local ref does not cover the base"
 
 echo
 echo "All $PASS_COUNT land-queue cases passed."

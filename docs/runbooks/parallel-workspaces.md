@@ -315,7 +315,7 @@ hands entirely and stalls the head, for when you mean to land that one by seat.
 | State | Meaning |
 |---|---|
 | `READY` | Gates pass and no required check is red. Also covers `UNSTABLE` (only non-required checks red) and `HAS_HOOKS` |
-| `READY_BEHIND` | Gates pass but the base moved; needs integrate + reattest |
+| `READY_BEHIND` | Gates pass but the base moved; needs integrate + push |
 | `CI_PENDING` | A merge state GitHub has not settled: required checks, thread resolution, or mergeability not yet computed |
 | `BLOCKED_BOT` | Unresolved Major/Critical/P0/P1 bot thread |
 | `BLOCKED_EVIDENCE` | No committed v2 receipt covers this head |
@@ -341,7 +341,7 @@ off; the human dashboard is unaffected.
 **It is not live, and cannot be flipped live from a feature seat.** Doing that
 needs a GitHub App installed on the repo with `contents:write` +
 `pull-requests:write`. `GITHUB_TOKEN` is specifically not enough: commits it
-pushes do not trigger `push`/`pull_request` workflows, so a reattest commit
+pushes do not trigger `push`/`pull_request` workflows, so an integrate commit
 pushed with it would land with no CI and the queue would arm a head that no
 check ever ran against. The header comment in `land-queue.yml` lists the full
 set of preconditions.
