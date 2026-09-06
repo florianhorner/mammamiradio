@@ -111,6 +111,11 @@ classify_pr() {
   if [ "$merge_state" = "DIRTY" ]; then
     printf 'BLOCKED_CONFLICT\tmerge conflict with base — the owning workspace resolves it\n'; return
   fi
+  # The evidence gate trusts a base only if it is landed in origin/main. A stale
+  # local ref would report BLOCKED_EVIDENCE for every integrated PR; the refresh
+  # fetches only when the local ref does not already cover this PR's base, so a
+  # fresh CI checkout never touches the network.
+  refresh_landed_ref "$base"
   if ! ensure_head_local "$pr" "$head"; then
     printf 'BLOCKED_HEAD\thead object could not be fetched — gates cannot be evaluated against it\n'; return
   fi
@@ -150,11 +155,6 @@ classify_pr() {
     *)         printf 'CI_PENDING\tGitHub reports merge state %s — not acting on it\n' "$merge_state" ;;
   esac
 }
-
-# The evidence gate trusts a base only if it is landed in origin/main. In CI the
-# checkout is already fresh; a local shadow run may not be, and a stale ref would
-# report BLOCKED_EVIDENCE for every integrated PR. Once per run, not per PR.
-refresh_landed_ref
 
 # --- gather -------------------------------------------------------------------
 PR_JSON="$(gh pr list --state open --limit 50 \

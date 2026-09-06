@@ -213,19 +213,30 @@ verify_head() {
   thread_check "$pr" || return 1
 }
 
-# refresh_landed_ref -> always 0. Best-effort `git fetch origin main`.
+# refresh_landed_ref <base-sha> -> always 0. Need-driven `git fetch origin main`.
 #
 # The merge witness in verify_v2 trusts a base only if it is landed content in
-# origin/main. ensure_head_local fetches the PR head's OBJECTS, which is enough
-# to carry the base commit into the object store — but it never moves the
-# origin/main REF. A landing seat that has not fetched since main advanced then
-# refuses GitHub's real base as "not landed" and blocks the documented
-# integrate-push-land flow until someone thinks to fetch by hand. Refresh the
-# ref first. Failure is tolerated on purpose: an offline seat keeps a stale ref
-# and the evidence check refuses, which is the fail-closed outcome, never an
-# accept. MMR_LAND_SKIP_FETCH=1 keeps the self-tests offline.
+# origin/main. ensure_head_local fetches the PR head's OBJECTS, which carries the
+# base commit into the object store — but it never moves the origin/main REF. A
+# landing seat that has not fetched since main advanced then refuses GitHub's
+# real base as "not landed" and stalls the documented integrate-push-land flow
+# until someone thinks to fetch by hand.
+#
+# The refresh is keyed on the exact predicate the gate will evaluate: fetch only
+# when a resolvable local origin/main does NOT already contain the base. A seat
+# with complete history therefore never touches the network (a documented
+# invariant of its own), and a seat with no origin/main at all is left alone —
+# the evidence gate then refuses with "does not resolve", which is the
+# fail-closed outcome. Fetch failure is tolerated for the same reason: a stale
+# ref makes the gate refuse; the refresh can never be the thing that accepts.
+# MMR_LAND_SKIP_FETCH=1 keeps self-tests offline.
 refresh_landed_ref() {
+  local base="$1"
   if [ "${MMR_LAND_SKIP_FETCH:-0}" = "1" ]; then
+    return 0
+  fi
+  git rev-parse --verify --quiet origin/main >/dev/null 2>&1 || return 0
+  if git merge-base --is-ancestor "$base" origin/main 2>/dev/null; then
     return 0
   fi
   git fetch -q origin main 2>/dev/null || true

@@ -102,8 +102,9 @@ land_one() {
   fi
 
   # The base is only trusted if it is landed in origin/main; a stale local ref
-  # would refuse GitHub's real base. Refresh before verifying (see land-gates.sh).
-  refresh_landed_ref
+  # would refuse GitHub's real base. Refresh only if the local ref does not
+  # already cover it — a seat with complete history never fetches.
+  refresh_landed_ref "$base"
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
   # Evidence and cut admission both need the verified base and its ancestry.
