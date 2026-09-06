@@ -97,6 +97,7 @@ pass "every staged image source is a content path"
 SCRIPT_CODE="$(grep -v '^[[:space:]]*#' "$SELECT_LIB")"
 printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--status success' \
   || fail "--target-sha lookup must pass --status success so the result cannot be windowed out"
+# shellcheck disable=SC2016  # assert the literal shell source
 printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--commit "\$target"' \
   || fail "--target-sha lookup must query the target commit directly, not the recent-runs list"
 pass "exact-target lookup filters server-side (no run-history cutoff)"
@@ -377,7 +378,7 @@ for mode in default exact; do
     run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" \
       GH_MOCK_NEWER_BUILD="$state" GIT_MOCK_DIFF="scripts/media-proof.py"
     [ "$RUN_RC" -ne 0 ] || fail "$mode must refuse newer $state build: $RUN_OUT"
-    never_created_pr && never_committed && never_pushed || fail "$mode $state wrote"
+    if ! (never_created_pr && never_committed && never_pushed); then fail "$mode $state wrote"; fi
     ! grep -q '^checkout' "$GIT_MOCK_LOG" || fail "$mode $state checked out a branch"
     pass "$mode refuses newer $state build without writes"
   done
@@ -393,13 +394,13 @@ run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_NEWER_BUILD=skipped \
   GIT_MOCK_SHOW_VERSION="$OLDER_SHORT" GIT_MOCK_DIFF="ha-addon/mammamiradio-edge/config.yaml"
 [ "$RUN_RC" -eq 0 ] || fail "deliberately skipped edge-cut build must allow the no-op: $RUN_OUT"
 printf '%s' "$RUN_OUT" | grep -q "already at" || fail "skipped edge-cut build lost its no-op"
-never_created_pr && never_committed && never_pushed || fail "post-cut no-op wrote"
+if ! (never_created_pr && never_committed && never_pushed); then fail "post-cut no-op wrote"; fi
 pass "a completed skipped edge-version build preserves the post-cut no-op"
 
 for path in ha-addon/mammamiradio-edge/config.yaml ha-addon/mammamiradio-edge/apparmor.txt; do
   run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_DIFF="$path" GIT_MOCK_EDGE_BODY="homeassistant_api: false"
   [ "$RUN_RC" -ne 0 ] || fail "edge metadata must block the pin: $path"
-  never_created_pr && never_committed && never_pushed || fail "edge metadata refusal wrote"
+  if ! (never_created_pr && never_committed && never_pushed); then fail "edge metadata refusal wrote"; fi
   pass "edge metadata drift refuses $path"
 done
 
@@ -492,7 +493,7 @@ run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_ROOT_FAIL=1
 [ "$RUN_RC" -ne 0 ] || fail "library root lookup failure must refuse"
 [ "$(wc -l < "$GIT_MOCK_ROOT_LOG")" -eq 2 ] || fail "must reach the library root lookup"
 printf '%s' "$RUN_OUT" | grep -q "could not verify" || fail "missing root lookup failure message"
-never_created_pr && never_committed && never_pushed || fail "root lookup failure wrote"
+if ! (never_created_pr && never_committed && never_pushed); then fail "root lookup failure wrote"; fi
 ! grep -q '^checkout' "$GIT_MOCK_LOG" || fail "root lookup failure checked out a branch"
 pass "library root lookup failure refuses before writes"
 

@@ -420,7 +420,7 @@ pass "edge: unverifiable build query refuses (soft-pass guard)"
 # fixture is real repo history rather than an asserted assumption.
 DRIFTED=""
 while IFS= read -r c; do
-  # shellcheck disable=SC2086
+  # shellcheck disable=SC2086,SC2046  # declared path list intentionally splits
   if [ -n "$(git diff --name-only "$c" "$MAIN_REF" -- $(bash -c '. "'"$EDGE_LIB"'"; echo $IMAGE_CONTENT_PATHS') ':(exclude)ha-addon/mammamiradio-edge/config.yaml')" ]; then
     DRIFTED="$c"; break
   fi
@@ -710,8 +710,10 @@ pass "blocking filter matches both bot login spellings, and only bots"
 # Passing `date +%s` made every entry look stale once it aged past the grace
 # window, so the shadow blocked where land-pr.sh accepts.
 # =============================================================================
+# shellcheck disable=SC2016  # assert the literal shell source
 grep -q 'squad_check "$head" "$(date' "$PLAN" \
   && fail "the ledger age check must use the head commit date, not wall clock"
+# shellcheck disable=SC2016  # assert the literal shell source
 grep -q 'gh pr view "$pr" --json commits' "$PLAN" \
   || fail "the ledger age check must read the head commit date from the PR"
 PRS="[$(pr_row 190 "fix: aged" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false "feature/pr-190" "2026-01-01T00:00:00Z")]"
