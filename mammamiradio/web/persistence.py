@@ -103,12 +103,30 @@ def _fsync_parent_directory(path: Path) -> None:
         os.close(fd)
 
 
-def _rearm_cloud_voice_engine(engine: str) -> None:
+def _rearm_cloud_voice_engine(state: StationState, engine: str) -> None:
     # Mirrors the Anthropic branch's reset_provider_backoff(): a saved key is the
     # operator's retry signal, so the session breaker must not outlive it.
     from mammamiradio.audio.tts import reset_cloud_engine_failures
 
     reset_cloud_engine_failures(engine)
+    runtime_state = getattr(state, "runtime_provider_state", None)
+    if not isinstance(runtime_state, dict):
+        return
+    engine_observation = runtime_state.get(f"tts:{engine}")
+    if isinstance(engine_observation, dict):
+        engine_observation["invalidated_by_credential_save"] = True
+    aggregate = runtime_state.get("tts_provider")
+    if not isinstance(aggregate, dict):
+        return
+    # Keep last-audible history, but invalidate current evidence made with the
+    # old key. The next synthesis replaces it through observe_runtime_provider().
+    aggregate_reason = str(aggregate.get("reason") or "").lower()
+    aggregate_providers = {
+        str(aggregate.get("current_provider") or "").lower(),
+        str(aggregate.get("primary_provider") or "").lower(),
+    }
+    if isinstance(engine_observation, dict) or engine in aggregate_providers or f"{engine}=" in aggregate_reason:
+        aggregate["invalidated_by_credential_save"] = True
 
 
 def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
@@ -129,16 +147,16 @@ def _apply_live_credentials(state: StationState, config, updates: dict[str, str]
         config.openai_api_key = updates["OPENAI_API_KEY"]
         state.openai_key_status = "unverified"
         state.openai_key_checked_at = 0.0
-        _rearm_cloud_voice_engine("openai")
+        _rearm_cloud_voice_engine(state, "openai")
     if "AZURE_SPEECH_KEY" in updates:
         config.azure_speech_key = updates["AZURE_SPEECH_KEY"]
     if "AZURE_SPEECH_REGION" in updates:
         config.azure_speech_region = updates["AZURE_SPEECH_REGION"]
     if "AZURE_SPEECH_KEY" in updates or "AZURE_SPEECH_REGION" in updates:
-        _rearm_cloud_voice_engine("azure")
+        _rearm_cloud_voice_engine(state, "azure")
     if "ELEVENLABS_API_KEY" in updates:
         config.elevenlabs_api_key = updates["ELEVENLABS_API_KEY"]
-        _rearm_cloud_voice_engine("elevenlabs")
+        _rearm_cloud_voice_engine(state, "elevenlabs")
 
 
 def _save_dotenv(updates: dict[str, str]) -> None:

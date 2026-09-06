@@ -378,8 +378,8 @@ Voice validation now runs at config load, not at synthesis time:
   reports `tts_degraded: true`. The Engine Room "Voices" line separately reports live
   cloud-breaker evidence: a rejected key reads *key not working*, exhausted quota reads
   *quota exhausted*, and a single bad voice reads *1 voice on Edge* without claiming the
-  whole provider is down. A route-wide 401/403 stays off until the key is saved again in
-  Settings or the station restarts.
+  whole provider is down. A route-wide rejected-key or exhausted-quota response stays off until the key is saved again in
+  **First Listen → Change AI services → Voice providers**; saving it rearms the route live.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
 ## First Listen does not play on this device

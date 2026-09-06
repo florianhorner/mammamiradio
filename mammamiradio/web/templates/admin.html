@@ -8198,16 +8198,16 @@ function updateEngineRoom(st,caps){
       const p=ph[key]||{};
       if(!p.configured)continue;
       if(p.quota_exhausted){
-        voiceLines.push(label+' '+statusInline('blocked','quota exhausted','Restore provider quota or credits, then save the voice key again in Settings'));
+        voiceLines.push(label+' '+statusInline('blocked','quota exhausted','Restore provider quota or credits, then save the key under First Listen → Change AI services → Voice providers'));
       }else if(p.key_status==='rejected'){
-        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key in Settings, or restart the station'));
+        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key under First Listen → Change AI services → Voice providers'));
       }else if(p.cooldown){
-        voiceLines.push(label+' '+statusInline('degraded','retrying',p.last_error||'Temporary provider trouble; will retry automatically'));
+        voiceLines.push(label+' '+statusInline('degraded','retrying','Temporary provider trouble; will retry automatically'));
       }else if(p.disabled){
-        voiceLines.push(label+' '+statusInline('degraded','off this session',p.last_error||''));
+        voiceLines.push(label+' '+statusInline('degraded','off this session','Save the key again under First Listen → Change AI services → Voice providers to retry'));
       }else if(p.failed_voices>0){
         const voiceCount=p.failed_voices+' voice'+(p.failed_voices===1?'':'s')+' on Edge';
-        voiceLines.push(label+' '+statusInline('degraded',voiceCount,p.last_error||''));
+        voiceLines.push(label+' '+statusInline('degraded',voiceCount,'Check the configured provider voice, model, and region settings, then restart the station'));
       }else{
         voiceLines.push(label+' '+statusInline('idle','configured','No cloud voice failure is currently recorded'));
       }

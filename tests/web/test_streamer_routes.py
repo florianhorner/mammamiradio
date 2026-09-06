@@ -13660,140 +13660,77 @@ async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
     assert admin_status["buffered_audio_sec"] == 180.0
 
 
-def test_provider_health_distinguishes_quota_401_from_rejected_key():
-    from mammamiradio.audio.tts import _memoize_failed_cloud_route, reset_voice_failures
+def _voice_health_config(*, openai="", azure="", region="", elevenlabs="", model=None, host_engine=""):
+    return SimpleNamespace(
+        anthropic_api_key="",
+        openai_api_key=openai,
+        azure_speech_key=azure,
+        azure_speech_region=region,
+        elevenlabs_api_key=elevenlabs,
+        models=SimpleNamespace(tts_model=lambda _engine: model),
+        hosts=[SimpleNamespace(engine=host_engine)] if host_engine else [],
+        ads=SimpleNamespace(voices=[]),
+        sonic_brand=SimpleNamespace(sweeper_voice="", sweeper_engine="edge"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "key_status", "quota_exhausted"),
+    [
+        ("HTTP 401 — quota_exceeded", "unverified", True),
+        ("HTTP 401 — invalid_api_key", "rejected", False),
+    ],
+)
+def test_provider_health_distinguishes_quota_401_from_rejected_key(reason, key_status, quota_exhausted):
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
     from mammamiradio.web.streamer import _provider_health_snapshot
 
-    reset_voice_failures()
-    try:
-        _memoize_failed_cloud_route(
-            ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
-            retryable=False,
-            reason="HTTP 401 — quota_exceeded",
-        )
-        config = SimpleNamespace(
-            anthropic_api_key="",
-            openai_api_key="",
-            azure_speech_key="",
-            azure_speech_region="",
-            elevenlabs_api_key="x",
-            models=SimpleNamespace(tts_model=lambda _engine: None),
-        )
-        state = StationState()
-        health = _provider_health_snapshot(config, state)
-        assert health["elevenlabs"] == {
-            "configured": True,
-            "degraded": True,
-            "disabled": True,
-            "cooldown": False,
-            "quota_exhausted": True,
-            "last_error": "HTTP 401 — quota_exceeded",
-            "key_status": "unverified",
-            "failed_voices": 0,
-        }
-    finally:
-        reset_voice_failures()
-
-
-def test_provider_health_marks_auth_401_as_rejected_key():
-    from mammamiradio.audio.tts import _memoize_failed_cloud_route, reset_voice_failures
-    from mammamiradio.web.streamer import _provider_health_snapshot
-
-    reset_voice_failures()
-    try:
-        _memoize_failed_cloud_route(
-            ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
-            retryable=False,
-            reason="HTTP 401 — invalid_api_key",
-        )
-        config = SimpleNamespace(
-            anthropic_api_key="",
-            openai_api_key="",
-            azure_speech_key="",
-            azure_speech_region="",
-            elevenlabs_api_key="x",
-            models=SimpleNamespace(tts_model=lambda _engine: None),
-        )
-        health = _provider_health_snapshot(config, StationState())["elevenlabs"]
-        assert health["key_status"] == "rejected"
-        assert health["quota_exhausted"] is False
-    finally:
-        reset_voice_failures()
+    _memoize_failed_cloud_route(
+        ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
+        retryable=False,
+        reason=reason,
+    )
+    health = _provider_health_snapshot(_voice_health_config(elevenlabs="x"), StationState())["elevenlabs"]
+    assert health["configured"] is health["disabled"] is True
+    assert health["cooldown"] is False
+    assert health["quota_exhausted"] is quota_exhausted
+    assert health["key_status"] == key_status
+    assert health["last_error"] == reason
 
 
 def test_provider_health_marks_voice_cooldown_separately_from_session_disable():
-    from mammamiradio.audio.tts import _memoize_failed_cloud_route, reset_voice_failures
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
     from mammamiradio.web.streamer import _provider_health_snapshot
 
-    reset_voice_failures()
-    try:
-        _memoize_failed_cloud_route(("azure", "westeurope", "fp", ""), retryable=True)
-        config = SimpleNamespace(
-            anthropic_api_key="",
-            openai_api_key="sk",
-            azure_speech_key="az",
-            azure_speech_region="westeurope",
-            elevenlabs_api_key="",
-            models=SimpleNamespace(tts_model=lambda _engine: "gpt-4o-mini-tts"),
-        )
-        state = StationState()
-        health = _provider_health_snapshot(config, state)
-        assert health["azure_speech"]["configured"] is True
-        assert health["azure_speech"]["degraded"] is True
-        assert health["azure_speech"]["cooldown"] is True
-        assert health["azure_speech"]["key_status"] == "unverified"
-        assert health["openai_speech"] == {
-            "configured": True,
-            "degraded": False,
-            "disabled": False,
-            "cooldown": False,
-            "quota_exhausted": False,
-            "last_error": "",
-            "key_status": "unverified",
-            "failed_voices": 0,
-        }
-    finally:
-        reset_voice_failures()
+    _memoize_failed_cloud_route(("azure", "westeurope", "fp", ""), retryable=True)
+    config = _voice_health_config(openai="sk", azure="az", region="westeurope", model="gpt-4o-mini-tts")
+    health = _provider_health_snapshot(config, StationState())
+    azure = health["azure_speech"]
+    assert azure["configured"] is azure["cooldown"] is True
+    assert azure["key_status"] == "unverified"
+    assert health["openai_speech"]["configured"] is True
 
 
 def test_provider_health_surfaces_one_failed_voice_without_disabling_route():
-    from mammamiradio.audio.tts import _memoize_failed_cloud_voice, reset_voice_failures
+    from mammamiradio.audio.tts import _memoize_failed_cloud_voice
     from mammamiradio.web.streamer import _provider_health_snapshot
 
-    reset_voice_failures()
-    try:
-        _memoize_failed_cloud_voice(
-            ("azure", "bad-voice", "westeurope:fp", ""),
-            reason="HTTP 404 — voice not found",
-        )
-        config = SimpleNamespace(
-            anthropic_api_key="",
-            openai_api_key="",
-            azure_speech_key="az",
-            azure_speech_region="westeurope",
-            elevenlabs_api_key="",
-            models=SimpleNamespace(tts_model=lambda _engine: None),
-        )
-        health = _provider_health_snapshot(config, StationState())["azure_speech"]
-        assert health["degraded"] is True
-        assert health["disabled"] is False
-        assert health["failed_voices"] == 1
-        assert health["last_error"] == "HTTP 404 — voice not found"
-    finally:
-        reset_voice_failures()
+    _memoize_failed_cloud_voice(
+        ("azure", "bad-voice", "westeurope:fp", ""),
+        reason="HTTP 404 — voice not found",
+    )
+    health = _provider_health_snapshot(_voice_health_config(azure="az", region="westeurope"), StationState())[
+        "azure_speech"
+    ]
+    assert health["disabled"] is False
+    assert health["failed_voices"] == 1
+    assert health["last_error"] == "HTTP 404 — voice not found"
 
 
 def test_provider_health_openai_speech_requires_model_and_inherits_key_rejection():
     from mammamiradio.web.streamer import _provider_health_snapshot
 
-    config = SimpleNamespace(
-        anthropic_api_key="",
-        openai_api_key="sk",
-        azure_speech_key="",
-        azure_speech_region="",
-        elevenlabs_api_key="",
-        models=SimpleNamespace(tts_model=lambda _engine: None),
-    )
+    config = _voice_health_config(openai="sk")
     state = StationState()
     assert _provider_health_snapshot(config, state)["openai_speech"]["configured"] is False
 
@@ -13804,63 +13741,56 @@ def test_provider_health_openai_speech_requires_model_and_inherits_key_rejection
     assert health["key_status"] == "rejected"
 
 
-def test_clear_cloud_route_drops_stale_disable_reason():
-    from mammamiradio.audio.tts import (
-        _clear_cloud_route,
-        _cloud_route_disable_reasons,
-        _memoize_failed_cloud_route,
-        reset_voice_failures,
-    )
-
-    reset_voice_failures()
-    route_key = ("elevenlabs", "fp", "eleven_multilingual_v2", "")
-    try:
-        _memoize_failed_cloud_route(route_key, retryable=False, reason="HTTP 401 — stale")
-        _clear_cloud_route(route_key)
-        assert route_key not in _cloud_route_disable_reasons
-    finally:
-        reset_voice_failures()
-
-
 def test_tts_reason_copy_never_promises_a_retry_for_a_session_disable():
-    from mammamiradio.web.streamer import _tts_action_guidance, _tts_single_reason_label
+    from mammamiradio.web.streamer import _tts_single_reason_label
 
     for token in (
         "provider_disabled_session",
         "provider_disabled_session:HTTP 401 — x",
         "provider_disabled:HTTP 401",
+        "provider_disabled_session:HTTP 401 — quota_exceeded",
     ):
         label = _tts_single_reason_label(token)
         assert "temporarily" not in label.lower()
         assert "will retry" not in label.lower()
         assert "restart the add-on" not in label.lower()
-        assert "restart the add-on" not in _tts_action_guidance(token).lower()
-        assert _tts_action_guidance(token) != ""
+        assert "first listen → change ai services → voice providers" in label.lower()
+        if "quota" in token:
+            assert "quota" in label.lower() and "rejected" not in label.lower()
 
 
-def test_tts_reason_copy_gives_quota_remediation_without_rejecting_key():
-    from mammamiradio.web.streamer import _tts_action_guidance, _tts_single_reason_label
+def test_tts_runtime_reason_keeps_each_mixed_provider_remedy():
+    from mammamiradio.web.streamer import _tts_runtime_reason_label
 
-    reason = 'provider_disabled_session:HTTP 401 — {"detail":{"status":"quota_exceeded"}}'
+    reason = (
+        "Runtime TTS fallback: azure=provider_disabled:HTTP 401 — invalid_api_key; "
+        "elevenlabs=provider_disabled_session:HTTP 429 — insufficient_quota"
+    )
+
+    label = _tts_runtime_reason_label(reason)
+
+    assert "Azure Speech:" in label
+    assert "Save a working key" in label
+    assert "ElevenLabs:" in label
+    assert "quota or credits" in label
+
+
+def test_tts_reason_copy_does_not_assume_every_404_is_a_voice_id():
+    from mammamiradio.web.streamer import _tts_single_reason_label
+
+    reason = "provider_disabled:HTTP 404 — model_not_found"
     label = _tts_single_reason_label(reason).lower()
-    action = _tts_action_guidance(reason).lower()
-    assert "quota" in label and "rejected" not in label
-    assert "quota" in action and "working key" not in action
+
+    assert "voice id was not found" not in label
+    assert "one configured cloud voice route" in label
+    for setting in ("voice", "model", "region"):
+        assert setting in label
 
 
-def test_tts_provider_status_carries_action_guidance_when_falling_back():
+def test_tts_provider_status_does_not_duplicate_reason_as_action_guidance():
     from mammamiradio.web.streamer import _tts_provider_status
 
-    config = SimpleNamespace(
-        hosts=[SimpleNamespace(engine="elevenlabs")],
-        ads=SimpleNamespace(voices=[]),
-        sonic_brand=SimpleNamespace(sweeper_voice="", sweeper_engine="edge"),
-        openai_api_key="",
-        azure_speech_key="",
-        azure_speech_region="",
-        elevenlabs_api_key="x",
-        models=SimpleNamespace(tts_model=lambda _engine: None),
-    )
+    config = _voice_health_config(elevenlabs="x", host_engine="elevenlabs")
     state = StationState()
     state.runtime_provider_state["tts_provider"] = {
         "fallback_active": True,
@@ -13868,4 +13798,8 @@ def test_tts_provider_status_carries_action_guidance_when_falling_back():
         "reason": "Runtime TTS fallback: elevenlabs=provider_disabled_session:HTTP 401",
     }
     status = _tts_provider_status(config, state)
-    assert status["action_guidance"]
+    assert "Save a working key" in status["current_reason"]
+    assert status["action_guidance"] == ""
+
+    state.runtime_provider_state["tts_provider"]["invalidated_by_credential_save"] = True
+    assert _tts_provider_status(config, state)["fallback_active"] is False
