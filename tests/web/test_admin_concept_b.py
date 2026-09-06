@@ -94,12 +94,21 @@ def test_console_and_tabbar_share_one_sticky_deck() -> None:
     html = _html()
     assert 'class="mmr-deck"' in html
     assert ".mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate" in html
-    assert (
-        '.mmr-deck::before{content:"";position:absolute;inset:0 0 -16px 0;background:var(--bg);'
-        "z-index:0;pointer-events:none}" in html
-    )
+    # The deck's backdrop is armed by state, never painted permanently: `html`
+    # carries the page atmosphere and a standing opaque fill stamps a
+    # hard-edged rectangle over it. See the matching contract test in
+    # test_admin_mobile_invariants.py for the full rationale.
+    assert ".mmr-deck::before{" not in html
+    assert 'class="mmr-deck-sentinel"' in html
+    assert ".mmr-deck.is-pinned{background:var(--bg)" in html
     assert ".mmr-tabpanel:focus-visible{outline:none;box-shadow:inset 0 0 0 2px" in html
-    assert re.search(r"@media \(max-width:768px\)\{\s*\.mmr-deck\{position:static;top:auto;z-index:auto\}", html)
+    # Tolerate an intervening comment; the contract is that the 768px block is
+    # where the deck stops being sticky, not that the rule is the first token.
+    assert re.search(
+        r"@media \(max-width:768px\)\{(?:\s|/\*.*?\*/)*\.mmr-deck\{position:static;top:auto;z-index:auto\}",
+        html,
+        re.DOTALL,
+    )
     # the individual elements must NOT each declare their own sticky/top
     assert ".mmr-console{position:sticky" not in html
     tabbar_rule_start = html.index(".mmr-tabbar{")

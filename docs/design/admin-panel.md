@@ -46,6 +46,28 @@ On desktop, the **live deck** (`.mmr-deck`, containing `.mmr-console` + `.mmr-ta
 is pinned to the top and never scrolls away. It carries the whole live glance in
 one block:
 
+**The deck has two visual states, and the difference is deliberate.** At rest it
+paints no backdrop at all: the page atmosphere (Sun Glow, grain, warm top
+gradient — see `system.md`) runs straight through it, because at `scrollTop 0`
+there is nothing behind the deck to hide. Once it actually pins, a 1px sentinel
+above it (`.mmr-deck-sentinel`, watched by `initDeckPinned()`) adds `.is-pinned`,
+which arms the opaque `var(--bg)` fill plus a soft drop shadow. The shadow is the
+affordance: without it a pinned deck looks identical to an unpinned one and
+nothing tells the operator that content is passing underneath.
+
+A permanent opaque backdrop is the bug this replaced — a flat fill over the
+warmest part of the atmosphere reads as a hard-edged rectangle stamped across the
+top of the control room. Do not reintroduce one; `test_admin_mobile_invariants.py`
+asserts the deck is transparent at rest.
+
+`scroll-padding-top` is derived from the live deck height by the same function,
+not hardcoded, because the console collapses and expands with `is-idle`. Without
+it, tabbing into a scrolled panel parks the focused control underneath the deck.
+
+On mobile (`<=768px`) the deck is `position: static` and scrolls away with the
+page, so it never pins and never arms a backdrop; the `.is-pinned` rule is scoped
+to `min-width: 769px` and is inert there.
+
 - **Left:** now-playing (segment type `.status-chip`, title, artist, progress),
   Skip / Stop, the compact token cost counter, and two context-sensitive controls:
   Ban (songs only) and Keep this (voice segments only, plus a short grace after a
