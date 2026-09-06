@@ -375,9 +375,11 @@ Voice validation now runs at config load, not at synthesis time:
 - Every runtime cloud fallback now emits a route record such as `TTS fallback provider=elevenlabs ... effective_provider=edge ... reason=...` followed by `Synthesized (Edge fallback): ...`. A plain `Synthesized: ...` line means the voice was intentionally configured for Edge, not that a cloud route silently failed. Ad lines also include the configured character name.
 - The admin runtime card uses those route records: `tts_provider.current_provider` becomes `edge` and `fallback_active` becomes `true` after a live cloud-to-Edge fallback, even when all provider keys are configured. This is runtime evidence, while `Mixed TTS` by itself remains a configuration summary. That runtime state is tracked per provider engine, not per voice: on a station with several voices on the same cloud engine, one voice's successful render clears the degraded state for that engine even if a different voice on the same engine is still falling back to Edge every segment. Grep logs for the specific character name in `Synthesized (Edge fallback)` lines to see which voice is actually degraded.
 - When any voice was substituted at load or during live synthesis, `/api/capabilities`
-  reports `tts_degraded: true` **and** the Engine Room "Voices" line shows the engine as
-  *key not working* / *off this session* with the provider's reason; a 401/403 stays off
-  until the key is saved again in Settings or the add-on restarts.
+  reports `tts_degraded: true`. The Engine Room "Voices" line separately reports live
+  cloud-breaker evidence: a rejected key reads *key not working*, exhausted quota reads
+  *quota exhausted*, and a single bad voice reads *1 voice on Edge* without claiming the
+  whole provider is down. A route-wide 401/403 stays off until the key is saved again in
+  Settings or the station restarts.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
 ## First Listen does not play on this device

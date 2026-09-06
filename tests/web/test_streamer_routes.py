@@ -13660,7 +13660,7 @@ async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
     assert admin_status["buffered_audio_sec"] == 180.0
 
 
-def test_provider_health_marks_voice_key_rejected_after_401():
+def test_provider_health_distinguishes_quota_401_from_rejected_key():
     from mammamiradio.audio.tts import _memoize_failed_cloud_route, reset_voice_failures
     from mammamiradio.web.streamer import _provider_health_snapshot
 
@@ -13677,17 +13677,46 @@ def test_provider_health_marks_voice_key_rejected_after_401():
             azure_speech_key="",
             azure_speech_region="",
             elevenlabs_api_key="x",
+            models=SimpleNamespace(tts_model=lambda _engine: None),
         )
         state = StationState()
         health = _provider_health_snapshot(config, state)
         assert health["elevenlabs"] == {
             "configured": True,
             "degraded": True,
+            "disabled": True,
             "cooldown": False,
+            "quota_exhausted": True,
             "last_error": "HTTP 401 — quota_exceeded",
-            "key_status": "rejected",
+            "key_status": "unverified",
             "failed_voices": 0,
         }
+    finally:
+        reset_voice_failures()
+
+
+def test_provider_health_marks_auth_401_as_rejected_key():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route, reset_voice_failures
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    reset_voice_failures()
+    try:
+        _memoize_failed_cloud_route(
+            ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
+            retryable=False,
+            reason="HTTP 401 — invalid_api_key",
+        )
+        config = SimpleNamespace(
+            anthropic_api_key="",
+            openai_api_key="",
+            azure_speech_key="",
+            azure_speech_region="",
+            elevenlabs_api_key="x",
+            models=SimpleNamespace(tts_model=lambda _engine: None),
+        )
+        health = _provider_health_snapshot(config, StationState())["elevenlabs"]
+        assert health["key_status"] == "rejected"
+        assert health["quota_exhausted"] is False
     finally:
         reset_voice_failures()
 
@@ -13705,6 +13734,7 @@ def test_provider_health_marks_voice_cooldown_separately_from_session_disable():
             azure_speech_key="az",
             azure_speech_region="westeurope",
             elevenlabs_api_key="",
+            models=SimpleNamespace(tts_model=lambda _engine: "gpt-4o-mini-tts"),
         )
         state = StationState()
         health = _provider_health_snapshot(config, state)
@@ -13715,13 +13745,63 @@ def test_provider_health_marks_voice_cooldown_separately_from_session_disable():
         assert health["openai_speech"] == {
             "configured": True,
             "degraded": False,
+            "disabled": False,
             "cooldown": False,
+            "quota_exhausted": False,
             "last_error": "",
             "key_status": "unverified",
             "failed_voices": 0,
         }
     finally:
         reset_voice_failures()
+
+
+def test_provider_health_surfaces_one_failed_voice_without_disabling_route():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_voice, reset_voice_failures
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    reset_voice_failures()
+    try:
+        _memoize_failed_cloud_voice(
+            ("azure", "bad-voice", "westeurope:fp", ""),
+            reason="HTTP 404 — voice not found",
+        )
+        config = SimpleNamespace(
+            anthropic_api_key="",
+            openai_api_key="",
+            azure_speech_key="az",
+            azure_speech_region="westeurope",
+            elevenlabs_api_key="",
+            models=SimpleNamespace(tts_model=lambda _engine: None),
+        )
+        health = _provider_health_snapshot(config, StationState())["azure_speech"]
+        assert health["degraded"] is True
+        assert health["disabled"] is False
+        assert health["failed_voices"] == 1
+        assert health["last_error"] == "HTTP 404 — voice not found"
+    finally:
+        reset_voice_failures()
+
+
+def test_provider_health_openai_speech_requires_model_and_inherits_key_rejection():
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    config = SimpleNamespace(
+        anthropic_api_key="",
+        openai_api_key="sk",
+        azure_speech_key="",
+        azure_speech_region="",
+        elevenlabs_api_key="",
+        models=SimpleNamespace(tts_model=lambda _engine: None),
+    )
+    state = StationState()
+    assert _provider_health_snapshot(config, state)["openai_speech"]["configured"] is False
+
+    config.models = SimpleNamespace(tts_model=lambda _engine: "gpt-4o-mini-tts")
+    state.openai_key_status = "rejected"
+    health = _provider_health_snapshot(config, state)["openai_speech"]
+    assert health["configured"] is True
+    assert health["key_status"] == "rejected"
 
 
 def test_clear_cloud_route_drops_stale_disable_reason():
@@ -13753,7 +13833,19 @@ def test_tts_reason_copy_never_promises_a_retry_for_a_session_disable():
         label = _tts_single_reason_label(token)
         assert "temporarily" not in label.lower()
         assert "will retry" not in label.lower()
+        assert "restart the add-on" not in label.lower()
+        assert "restart the add-on" not in _tts_action_guidance(token).lower()
         assert _tts_action_guidance(token) != ""
+
+
+def test_tts_reason_copy_gives_quota_remediation_without_rejecting_key():
+    from mammamiradio.web.streamer import _tts_action_guidance, _tts_single_reason_label
+
+    reason = 'provider_disabled_session:HTTP 401 — {"detail":{"status":"quota_exceeded"}}'
+    label = _tts_single_reason_label(reason).lower()
+    action = _tts_action_guidance(reason).lower()
+    assert "quota" in label and "rejected" not in label
+    assert "quota" in action and "working key" not in action
 
 
 def test_tts_provider_status_carries_action_guidance_when_falling_back():

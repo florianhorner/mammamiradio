@@ -3032,6 +3032,18 @@ _ACTION_REQUIRED_FALLBACK_REASONS = {
 
 
 _TTS_RUNTIME_FALLBACK_PREFIX = "Runtime TTS fallback: "
+_TTS_QUOTA_REASON_MARKERS = (
+    "quota_exceeded",
+    "insufficient_quota",
+    "quota exceeded",
+    "credit balance",
+    "usage limit",
+)
+
+
+def _tts_reason_is_quota(reason: str) -> bool:
+    normalized = reason.strip().lower()
+    return any(marker in normalized for marker in _TTS_QUOTA_REASON_MARKERS)
 
 
 def _tts_single_reason_label(reason: str) -> str:
@@ -3041,11 +3053,17 @@ def _tts_single_reason_label(reason: str) -> str:
         return ""
     if "missing_credentials" in normalized:
         return "A cloud voice key is missing; Edge voice is carrying the show. Add the key and restart the station."
+    if _tts_reason_is_quota(normalized):
+        return (
+            "The voice provider quota is exhausted, so its cloud voices are off for this session. "
+            "Restore quota or credits, then save the voice key again in Settings to retry. "
+            "Edge voice is carrying the show."
+        )
     if "http 401" in normalized or "http 403" in normalized:
         return (
             "The saved voice key was rejected by the provider, so its cloud voices are off for this session. "
             "Save a working key in Settings → Voice providers (the station retries by itself) or restart the "
-            "add-on. Edge voice is carrying the show."
+            "station. Edge voice is carrying the show."
         )
     if "http 404" in normalized:
         return (
@@ -3059,7 +3077,7 @@ def _tts_single_reason_label(reason: str) -> str:
     if "provider_disabled_session" in normalized:
         return (
             "A cloud voice route is switched off for the rest of this session after a provider error; "
-            "Edge voice is carrying the show. Save the key again in Settings to retry, or restart the add-on."
+            "Edge voice is carrying the show. Save the key again in Settings to retry, or restart the station."
         )
     if "edge_voice_failure" in normalized:
         return "The configured voice was unavailable; the station is trying its house voice."
@@ -3106,14 +3124,16 @@ def _tts_action_guidance(reason: str) -> str:
     normalized = reason.strip().lower()
     if not normalized:
         return ""
+    if _tts_reason_is_quota(normalized):
+        return "Restore the provider's voice quota or credits, then save the voice key again in Settings to retry."
     if "http 401" in normalized or "http 403" in normalized:
-        return "Save a working voice key in Settings → Voice providers, or restart the add-on."
+        return "Save a working voice key in Settings → Voice providers, or restart the station."
     if "http 404" in normalized:
-        return "Check the voice IDs in radio.toml, then restart the add-on."
+        return "Check the voice IDs in radio.toml, then restart the station."
     if "missing_credentials" in normalized:
-        return "Add the voice key in Settings → Voice providers, then restart the add-on."
+        return "Add the voice key in Settings → Voice providers, then restart the station."
     if "provider_disabled_session" in normalized:
-        return "Save the voice key again in Settings to retry, or restart the add-on."
+        return "Save the voice key again in Settings to retry, or restart the station."
     if "provider_cooldown" in normalized or "provider_error" in normalized:
         return "No action needed - will retry automatically"
     return ""
@@ -4519,13 +4539,20 @@ def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> 
     return _runtime_monotonic() - state.last_air_monotonic > SILENCE_FAILURE_SECONDS
 
 
-def _voice_provider_health(engine: str, configured: bool, voice_health: dict[str, dict[str, object]]) -> dict:
+def _voice_provider_health(
+    engine: str,
+    configured: bool,
+    voice_health: dict[str, dict[str, object]],
+    *,
+    key_rejected: bool = False,
+) -> dict:
     """Same shape as the Anthropic entry so the admin can render voices the same way."""
     health = voice_health.get(engine, {})
     reason = str(health.get("reason") or "")
     disabled = bool(health.get("disabled"))
     cooldown = bool(health.get("cooldown"))
-    rejected = disabled and ("HTTP 401" in reason or "HTTP 403" in reason)
+    quota_exhausted = disabled and _tts_reason_is_quota(reason)
+    rejected = key_rejected or (disabled and not quota_exhausted and ("HTTP 401" in reason or "HTTP 403" in reason))
     if not configured:
         key_status = "missing"
     elif rejected:
@@ -4533,13 +4560,17 @@ def _voice_provider_health(engine: str, configured: bool, voice_health: dict[str
     else:
         key_status = "unverified"
     raw_failed = health.get("failed_voices") or 0
+    failed_voices = raw_failed if isinstance(raw_failed, int) else 0
+    degraded = disabled or cooldown or failed_voices > 0
     return {
         "configured": configured,
-        "degraded": disabled or cooldown,
+        "degraded": degraded,
+        "disabled": disabled,
         "cooldown": cooldown,
-        "last_error": reason if (disabled or cooldown) else "",
+        "quota_exhausted": quota_exhausted,
+        "last_error": reason if degraded else "",
         "key_status": key_status,
-        "failed_voices": raw_failed if isinstance(raw_failed, int) else 0,
+        "failed_voices": failed_voices,
     }
 
 
@@ -4550,6 +4581,7 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
     anthropic_configured = bool(config.anthropic_api_key)
     anthropic_degraded = anthropic_configured and state.anthropic_disabled_until > now
     retry_after = max(0, int(state.anthropic_disabled_until - now)) if anthropic_degraded else 0
+    openai_tts_configured = bool(config.openai_api_key and config.models.tts_model("openai"))
     return {
         "anthropic": {
             "configured": anthropic_configured,
@@ -4566,7 +4598,12 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "configured": bool(config.openai_api_key),
             "key_status": state.openai_key_status,
         },
-        "openai_speech": _voice_provider_health("openai", bool(config.openai_api_key), voice_health),
+        "openai_speech": _voice_provider_health(
+            "openai",
+            openai_tts_configured,
+            voice_health,
+            key_rejected=state.openai_key_status == "rejected",
+        ),
         "azure_speech": _voice_provider_health(
             "azure", bool(config.azure_speech_key and config.azure_speech_region), voice_health
         ),

@@ -1189,7 +1189,7 @@ async def test_synthesize_azure_auth_error_is_memoized_for_session(_mock_all, tm
         )
 
     assert seen["posts"] == 1
-    assert caplog.text.count("Azure TTS disabled for voice 'it-IT-Isabella:DragonHDLatestNeural'") == 1
+    assert caplog.text.count("azure TTS route disabled for this session") == 1
     assert _mock_all["Communicate"].call_args_list[0].args[1] == "it-IT-DiegoNeural"
     assert _mock_all["Communicate"].call_args_list[1].args[1] == "it-IT-DiegoNeural"
 
@@ -1243,7 +1243,7 @@ async def test_synthesize_azure_auth_error_lock_collapses_concurrent_attempts(_m
         await asyncio.gather(first, second)
 
     assert seen["posts"] == 1
-    assert caplog.text.count("Azure TTS disabled for voice 'it-IT-Isabella:DragonHDLatestNeural'") == 1
+    assert caplog.text.count("azure TTS route disabled for this session") == 1
     assert [call.args[1] for call in _mock_all["Communicate"].call_args_list] == [
         "it-IT-DiegoNeural",
         "it-IT-DiegoNeural",
@@ -1332,7 +1332,7 @@ async def test_synthesize_elevenlabs_auth_error_is_memoized_for_session(_mock_al
         )
 
     assert seen["posts"] == 1
-    assert caplog.text.count("ElevenLabs TTS disabled for voice 'elevenlabs-voice-id'") == 1
+    assert caplog.text.count("elevenlabs TTS route disabled for this session") == 1
     assert _mock_all["Communicate"].call_args_list[0].args[1] == "it-IT-DiegoNeural"
     assert _mock_all["Communicate"].call_args_list[1].args[1] == "it-IT-DiegoNeural"
 
@@ -1376,14 +1376,13 @@ async def test_elevenlabs_401_disables_route_with_body_and_warns_once(_mock_all,
             state=state,
         )
 
-    route_warnings = [
+    body_warnings = [
         record
         for record in caplog.records
-        if record.levelno == logging.WARNING
-        and "route disabled for this session after HTTP 401" in record.getMessage()
-        and "quota_exceeded" in record.getMessage()
+        if record.levelno == logging.WARNING and "quota_exceeded" in record.getMessage()
     ]
-    assert len(route_warnings) == 1
+    assert len(body_warnings) == 1
+    assert "route disabled for this session after HTTP 401" in body_warnings[0].getMessage()
     engine_state = state.runtime_provider_state["tts:elevenlabs"]
     assert engine_state["reason"].startswith("provider_disabled_session:HTTP 401")
 
@@ -1444,6 +1443,155 @@ def test_reset_cloud_engine_failures_rearms_only_that_engine():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 404])
+@pytest.mark.parametrize("saved_key", ["old-key", "new-key"])
+async def test_reset_cloud_engine_failures_fences_in_flight_failure(
+    status_code, saved_key, _mock_all, tmp_path, monkeypatch
+):
+    """A request started before a key save cannot restore route or voice failure state."""
+    from mammamiradio.audio.tts import cloud_tts_health, reset_cloud_engine_failures, synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "old-key")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def _stale_then_healthy(text, voice, output_path, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            request = httpx.Request("POST", "https://api.elevenlabs.io/v1/text-to-speech/x")
+            response = httpx.Response(status_code, content=b"provider failure", request=request)
+            raise httpx.HTTPStatusError("provider failure", request=request, response=response)
+        output_path.write_bytes(b"cloud audio")
+        return output_path
+
+    monkeypatch.setattr("mammamiradio.audio.tts.synthesize_elevenlabs", _stale_then_healthy)
+
+    first = asyncio.create_task(
+        synthesize(
+            "Ciao",
+            "elevenlabs-voice-id",
+            tmp_path / "stale.mp3",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", saved_key)
+    reset_cloud_engine_failures("elevenlabs")
+    release.set()
+    await first
+
+    assert "elevenlabs" not in cloud_tts_health()
+    await synthesize(
+        "Ancora",
+        "elevenlabs-voice-id",
+        tmp_path / "fresh.mp3",
+        engine="elevenlabs",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert calls == 2
+    assert "elevenlabs" not in cloud_tts_health()
+
+
+@pytest.mark.asyncio
+async def test_queued_cloud_attempt_skips_provider_after_credential_reset(tmp_path, monkeypatch):
+    """A pre-save call waiting for a render slot must not use post-save credentials."""
+    import mammamiradio.audio.tts as tts_mod
+
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+    monkeypatch.setattr(tts_mod, "_HEAVY_SEM", semaphore)
+    route_key = ("elevenlabs", "fp", "eleven_multilingual_v2", "")
+    generation = tts_mod._cloud_engine_generation("elevenlabs")
+    called = False
+
+    async def _provider_call():
+        nonlocal called
+        called = True
+        return tmp_path / "unexpected.mp3"
+
+    attempt = asyncio.create_task(tts_mod._run_cloud_route_attempt(route_key, _provider_call, "ElevenLabs", generation))
+    await asyncio.sleep(0)
+    assert not attempt.done()
+
+    tts_mod.reset_cloud_engine_failures("elevenlabs")
+    semaphore.release()
+    result, reason = await asyncio.wait_for(attempt, timeout=1.0)
+
+    assert result is None
+    assert reason == "provider_error:credential_changed_during_attempt"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_stale_attempt_cannot_claim_current_generation_probe(tmp_path, monkeypatch):
+    """A stale waiter must not strand a current-generation half-open probe."""
+    import mammamiradio.audio.tts as tts_mod
+
+    route_key = ("elevenlabs", "fp", "eleven_multilingual_v2", "")
+    stale_generation = tts_mod._cloud_engine_generation("elevenlabs")
+    tts_mod.reset_cloud_engine_failures("elevenlabs")
+    current_generation = tts_mod._cloud_engine_generation("elevenlabs")
+    monkeypatch.setattr(tts_mod, "_CLOUD_ROUTE_COOLDOWN_SECONDS", 0.0)
+    tts_mod._memoize_failed_cloud_route(
+        route_key,
+        retryable=True,
+        expected_generation=current_generation,
+    )
+    called = False
+
+    async def _provider_call():
+        nonlocal called
+        called = True
+        return tmp_path / "unexpected.mp3"
+
+    result, reason = await tts_mod._run_cloud_route_attempt(
+        route_key,
+        _provider_call,
+        "ElevenLabs",
+        stale_generation,
+    )
+
+    assert result is None
+    assert reason == "provider_error:credential_changed_during_attempt"
+    assert called is False
+    assert tts_mod._claim_cloud_route(route_key, expected_generation=current_generation) == "probe"
+    tts_mod._resolve_unfinished_cloud_route_probe(route_key, expected_generation=current_generation)
+
+
+@pytest.mark.asyncio
+async def test_pre_reset_probe_cannot_clear_post_reset_failure(tmp_path, monkeypatch):
+    """A stale successful probe must not erase newer breaker evidence for the same route."""
+    import mammamiradio.audio.tts as tts_mod
+
+    route_key = ("elevenlabs", "fp", "eleven_multilingual_v2", "")
+    monkeypatch.setattr(tts_mod, "_CLOUD_ROUTE_COOLDOWN_SECONDS", 0.0)
+    tts_mod._memoize_failed_cloud_route(route_key, retryable=True)
+    generation = tts_mod._cloud_engine_generation("elevenlabs")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _stale_success():
+        started.set()
+        await release.wait()
+        return tmp_path / "stale-success.mp3"
+
+    probe = asyncio.create_task(tts_mod._run_cloud_route_attempt(route_key, _stale_success, "ElevenLabs", generation))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    tts_mod.reset_cloud_engine_failures("elevenlabs")
+    tts_mod._memoize_failed_cloud_route(route_key, retryable=False, reason="HTTP 401 — current")
+    release.set()
+    await probe
+
+    assert tts_mod._claim_cloud_route(route_key) == "permanent"
+    tts_mod.reset_cloud_engine_failures("elevenlabs")
+
+
+@pytest.mark.asyncio
 async def test_synthesize_elevenlabs_auth_error_lock_collapses_concurrent_attempts(
     _mock_all, tmp_path, monkeypatch, caplog
 ):
@@ -1493,7 +1641,7 @@ async def test_synthesize_elevenlabs_auth_error_lock_collapses_concurrent_attemp
         await asyncio.gather(first, second)
 
     assert seen["posts"] == 1
-    assert caplog.text.count("ElevenLabs TTS disabled for voice 'elevenlabs-voice-id'") == 1
+    assert caplog.text.count("elevenlabs TTS route disabled for this session") == 1
     assert [call.args[1] for call in _mock_all["Communicate"].call_args_list] == [
         "it-IT-DiegoNeural",
         "it-IT-DiegoNeural",
@@ -1932,7 +2080,7 @@ async def test_synthesize_cloud_route_retries_after_transient_cooldown(_mock_all
 
 
 @pytest.mark.asyncio
-async def test_synthesize_azure_404_disables_only_that_voice_not_the_route(_mock_all, tmp_path, monkeypatch):
+async def test_synthesize_azure_404_disables_only_that_voice_not_the_route(_mock_all, tmp_path, monkeypatch, caplog):
     """A 404 for one bad voice ID must not push other configured voices to Edge."""
     import mammamiradio.audio.tts as tts_mod
     from mammamiradio.audio.tts import synthesize
@@ -1972,6 +2120,7 @@ async def test_synthesize_azure_404_disables_only_that_voice_not_the_route(_mock
     # Only the bad voice fell back to Edge; the good voice was served by the cloud stub.
     assert _mock_all["Communicate"].call_count == 1
     assert _mock_all["Communicate"].call_args_list[0].args[1] == "it-IT-DiegoNeural"
+    assert caplog.text.count("Azure TTS disabled for voice 'it-IT-BadVoice:DragonHDLatestNeural'") == 1
 
     # The bad voice itself stays memoized this session (per-voice, not route-wide).
     again = await synthesize(

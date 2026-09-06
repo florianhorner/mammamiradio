@@ -8190,21 +8190,26 @@ function updateEngineRoom(st,caps){
     }else{
       openaiLine=statusInline('ready','available');
     }
-    // Voices: same states as the LLM rows. provider_health is on the same payload.
+    // Voices use breaker evidence. A configured key alone is not connectivity proof.
     // openai_speech is the TTS breaker (LLM OpenAI key status stays on the OpenAI line).
     const ph=caps.provider_health||{};
     const voiceLines=[];
     for(const [key,label] of [['elevenlabs','ElevenLabs'],['azure_speech','Azure'],['openai_speech','OpenAI']]){
       const p=ph[key]||{};
       if(!p.configured)continue;
-      if(p.key_status==='rejected'){
-        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key in Settings, or restart the add-on'));
+      if(p.quota_exhausted){
+        voiceLines.push(label+' '+statusInline('blocked','quota exhausted','Restore provider quota or credits, then save the voice key again in Settings'));
+      }else if(p.key_status==='rejected'){
+        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key in Settings, or restart the station'));
       }else if(p.cooldown){
         voiceLines.push(label+' '+statusInline('degraded','retrying',p.last_error||'Temporary provider trouble; will retry automatically'));
-      }else if(p.degraded){
+      }else if(p.disabled){
         voiceLines.push(label+' '+statusInline('degraded','off this session',p.last_error||''));
+      }else if(p.failed_voices>0){
+        const voiceCount=p.failed_voices+' voice'+(p.failed_voices===1?'':'s')+' on Edge';
+        voiceLines.push(label+' '+statusInline('degraded',voiceCount,p.last_error||''));
       }else{
-        voiceLines.push(label+' '+statusInline('ready','connected'));
+        voiceLines.push(label+' '+statusInline('idle','configured','No cloud voice failure is currently recorded'));
       }
     }
     const voicesLine=voiceLines.length?voiceLines.join(' · '):statusInline('idle','Edge only');

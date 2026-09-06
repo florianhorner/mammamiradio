@@ -632,8 +632,14 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "'Voices: '+voicesLine" in block
     assert "statusInline('idle','Edge only')" in block
     assert "['openai_speech','OpenAI']" in block
+    assert "p.quota_exhausted" in block
+    assert "statusInline('blocked','quota exhausted'" in block
     assert "p.cooldown" in block
     assert "statusInline('degraded','retrying'" in block
+    assert "p.failed_voices>0" in block
+    assert "voiceCount" in block
+    assert "statusInline('idle','configured'" in block
+    assert "restart the add-on" not in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
 
 
