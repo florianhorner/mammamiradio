@@ -11,6 +11,7 @@ PASS: freeze admission rejects active, armed, incomplete, malformed and unreadab
 PASS: freeze disables, drains a late arming run, disarms afterward and refuses timeout/API errors
 PASS: thaw validates current release proof, blocks pending cuts and reports ambiguous enable without claiming success
 PASS: real landing path gates pinned version changes after evidence; ordinary PRs retain existing behavior
+PASS: landing hydrates shallow history before evidence and refuses unavailable history
 All dependabot automerge gate cases passed.
 Exit code: 0
 

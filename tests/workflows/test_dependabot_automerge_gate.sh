@@ -347,6 +347,8 @@ RUN_STATUSES=pending run_hold freeze 0; failed
 ! grep -q '^pr merge' <<< "$LOG" || fail "must not disarm before pending runs drain"
 STUCK_ARMED=1 run_hold freeze 0; failed
 REACTIVATE=1 run_hold freeze 0; failed
+RUN_STATUSES=in_progress DRAIN_AFTER=3 REACTIVATE=1 run_hold freeze 30; failed
+! grep -q '^pr merge' <<< "$LOG" || fail "must not disarm after workflow reactivation during drain"
 for timeout in -1 601 invalid; do
   run_hold freeze "$timeout"; failed; no_mutations
 done
@@ -367,8 +369,10 @@ run_thaw() {
 run_thaw; succeeded
 grep -q '^workflow enable dependabot-automerge.yml --repo florianhorner/mammamiradio$' <<< "$LOG" || fail "published cut should resume"
 grep -q '^florianhorner/mammamiradio-addon-aarch64 2.18.0$' <<< "$LOG" || fail "must verify both current images"
+grep -q '^florianhorner/mammamiradio-addon-amd64 2.18.0$' <<< "$LOG" || fail "must verify both current images"
 CONFIG_BODY=$'version: "2.18.0"\nimage: "ghcr.io/florianhorner/current-image-{arch}"' run_thaw; succeeded
 grep -q '^florianhorner/current-image-aarch64 2.18.0$' <<< "$LOG" || fail "registry probe must use pinned main config, not the local checkout"
+grep -q '^florianhorner/current-image-amd64 2.18.0$' <<< "$LOG" || fail "registry probe must use pinned main config, not the local checkout"
 for invalid in THAW_WORKFLOW=active THAW_ARMED=true RELEASE_RESULT=failure RELEASE_STATUS=in_progress RELEASE_TAG=v3.0.0 RELEASE_WORKFLOW=789 PROMOTE_RESULT=failure JOB_STATUS=in_progress WRONG_TAG_SHA=1 CHANGE_PROOF=main CHANGE_PROOF=tag CHANGE_PROOF=attempt REACTIVATE=1; do
   export "${invalid?}"
   run_thaw; failed
@@ -422,14 +426,17 @@ printf 'version: "99.0.0"\n' > "$FIXTURE/ha-addon/mammamiradio/config.yaml"
 cat > "$TMP/evidence" <<'EVIDENCE'
 #!/usr/bin/env bash
 echo "evidence $*" >> "$GH_MOCK_LOG"
+git merge-base --is-ancestor "$LAND_BASE" "$LAND_HEAD" || exit 1
 exit "${EVIDENCE_RC:-0}"
 EVIDENCE
 printf '#!/usr/bin/env bash\necho ---CONFIG---\n' > "$TMP/reader"
 chmod +x "$TMP/evidence" "$TMP/reader"
 run_landing() {
   : > "$TMP/gh.log"; rm -f "$TMP/freeze-state.json"; RC=0
+  : > "$TMP/git.trace"
   OUT="$(cd "$FIXTURE" && PATH="$TMP/bin:$PATH" GH_REPO=florianhorner/mammamiradio \
     GH_MOCK_LOG="$TMP/gh.log" GH_MOCK_DIR="$TMP" LAND_BASE="$BASE_COMMIT" LAND_HEAD="$1" \
+    GIT_TRACE="$TMP/git.trace" \
     MMR_LAND_REVIEW_READER="$TMP/reader" MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
     MMR_LAND_EVIDENCE_CHECKER="$TMP/evidence" MMR_LAND_SKIP_THREAD_CHECK=1 \
     bash "$REPO_ROOT/scripts/land-pr.sh" 7 2>&1)" || RC=$?
@@ -437,6 +444,7 @@ run_landing() {
 }
 no_merge() { ! grep -q '^pr merge .*--auto' <<< "$LOG" || fail "blocked landing attempted merge"; }
 run_landing "$ORDINARY_COMMIT"; succeeded
+! grep -q 'built-in: git fetch' "$TMP/git.trace" || fail "complete history must not fetch"
 grep -q "^pr merge 7 --squash --auto --match-head-commit $ORDINARY_COMMIT$" <<< "$LOG" || fail "ordinary PR must still land"
 ! grep -q '/actions/' <<< "$LOG" || fail "ordinary config change must not read freeze state"
 run_landing "$CUT_COMMIT"; failed; no_merge
@@ -462,4 +470,32 @@ done
 # an unavailable PR head in the wrapper, which is intentionally not simulated.
 (cd "$FIXTURE" && GH_REPO=florianhorner/mammamiradio bash "$HOLD" check-cut missing "$CUT_COMMIT" >/dev/null 2>&1) && fail "missing base object must refuse"
 pass "real landing path gates pinned version changes after evidence; ordinary PRs retain existing behavior"
+
+# A base-object fetch alone does not repair ancestry across a shallow boundary.
+# These clones use a local file transport; no GitHub or network access.
+FULL_FIXTURE="$FIXTURE"
+git -C "$FULL_FIXTURE" update-ref refs/heads/ordinary "$ORDINARY_COMMIT"
+git -C "$FULL_FIXTURE" update-ref refs/heads/cut "$CUT_COMMIT"
+shallow_fixture() {
+  FIXTURE="$TMP/shallow-$1"
+  git clone -q --depth=1 --branch "$2" "file://$FULL_FIXTURE" "$FIXTURE"
+  [ "$(git -C "$FIXTURE" rev-parse --is-shallow-repository)" = true ] || fail "fixture must be shallow"
+}
+for kind in ordinary cut; do
+  shallow_fixture "$kind" "$kind"
+  ! git -C "$FIXTURE" cat-file -e "${BASE_COMMIT}^{commit}" 2>/dev/null || fail "base must start missing"
+  head="$CUT_COMMIT"; [ "$kind" != ordinary ] || head="$ORDINARY_COMMIT"
+  WF_STATE=disabled_manually ARMED=false run_landing "$head"; succeeded
+  grep -q "^pr merge 7 --squash --auto --match-head-commit $head$" <<< "$LOG" || fail "shallow $kind must recover"
+done
+shallow_fixture base-present cut
+git -C "$FIXTURE" fetch -q origin "$BASE_COMMIT"
+! git -C "$FIXTURE" merge-base --is-ancestor "$BASE_COMMIT" "$CUT_COMMIT" || fail "base object alone must leave ancestry shallow"
+WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; succeeded
+shallow_fixture unavailable-origin cut
+git -C "$FIXTURE" remote set-url origin "$TMP/missing-origin"
+WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; failed; no_merge
+grep -q 'could not fetch head' <<< "$OUT" || fail "history fetch failure must explain recovery"
+! grep -q '^evidence\|/actions/' <<< "$LOG" || fail "history fetch failure must precede evidence and freeze checks"
+pass "landing hydrates shallow history before evidence and refuses unavailable history"
 echo "All dependabot automerge gate cases passed."

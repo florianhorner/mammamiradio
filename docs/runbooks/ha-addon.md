@@ -265,10 +265,8 @@ they are ever counted as listeners.
    ha-addon CHANGELOG head do not equal the tag, or either arch `:sha` image is missing.
 
    **The window closes only when both arch `promote` jobs finish** — not at tag push.
-   Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`, or just
-   `bash scripts/check-advertised-version.sh`. Keep the freeze through this check;
-   resume with `dependabot-window-hold.sh thaw <release-run-id>` as described in
-   "The cut window".
+   Verify both images with `bash scripts/check-advertised-version.sh`. Keep the
+   freeze through this check, then use the full `thaw` command in "The cut window".
 
 4. **Write the GitHub Release.** Nothing in CI creates it, and HACS keys the integration
    update off it. There is **no** "open the next RC" step — you are back at steady state.
