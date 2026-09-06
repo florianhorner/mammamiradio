@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parsed workflow contracts and hermetic runtime checks. No GitHub writes.
+# Validate the workflow and run the helper with GitHub mocked.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -12,8 +12,8 @@ trap 'rm -rf "$TMP"' EXIT
 fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
-# Parse YAML, not comments; compare complete authorization expressions, not
-# substrings which would also accept an inverted guard or an extra OR clause.
+# Compare full YAML authorization expressions to catch inverted guards and
+# extra OR clauses.
 "$PY" - "$WF" "$TMP" <<'PYEOF'
 import pathlib, sys, yaml
 wf = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())

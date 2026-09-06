@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Reconcile Dependabot auto-merge with the advertised add-on version.
+# Update Dependabot auto-merge from the advertised-version check.
 # The workflow supplies GH_REPO and verified UPDATE_TYPE for PR-event arming.
-# The sweep can only disarm; it never derives merge permission from PR titles.
-# Offline regression tests: tests/workflows/test_dependabot_automerge_gate.sh.
+# The sweep only disarms. Tests mock GitHub in
+# tests/workflows/test_dependabot_automerge_gate.sh.
 set -euo pipefail
 
 HOLD_LABEL=cut-window-hold
@@ -11,8 +11,7 @@ usage() {
   exit 2
 }
 
-# Refresh the fields needed at the mutation boundary. Do not trust list/event
-# snapshots when the PR may have closed, changed author/base, or gained commits.
+# Read current PR state before changing auto-merge; list/event data can be stale.
 load_pr() {
   local snapshot
   snapshot="$(gh pr view "$1" --json state,author,baseRefName,isDraft,headRefOid,autoMergeRequest,labels \
@@ -92,7 +91,7 @@ sweep() {
     fail) ;;
     *) usage ;;
   esac
-  # Paginate rather than silently leaving PRs after the first page armed.
+  # Read all pages so the sweep reaches PRs beyond the first 100.
   numbers="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&base=main&per_page=100" \
     --jq '.[] | select(.user.login == "dependabot[bot]") | .number')" || return 1
   while IFS= read -r num; do

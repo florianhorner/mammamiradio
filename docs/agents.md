@@ -104,10 +104,10 @@ Hard rules agents must not invent around:
 - Let pure patch/minor Python Dependabot PRs with auto-merge armed land through
   Dependabot when they remain current and fresh required checks pass. A stale
   PR parks until an authenticated maintainer updates it; this is deliberate.
-  A current PR may also carry `cut-window-hold` after being disarmed during an
-  open release window. The sweep never re-arms it: after publication, use a
-  fresh metadata-backed PR event or the landing workflow. A manual disarm alone
-  is not a persistent opt-out from the ordinary PR-event arming policy.
+  The workflow adds `cut-window-hold` to PRs it disarms during a release cut.
+  After publication, use a fresh PR event with verified Dependabot metadata or
+  the landing workflow to resume them. The sweep only disarms. PR events can
+  re-arm a PR you disarmed by hand.
   If quality fails on an unrelated one-test timeout, verify the focused test
   locally before treating it as a rerunnable flake; stop on any deterministic
   dependency break.

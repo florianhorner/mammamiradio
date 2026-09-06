@@ -1,24 +1,18 @@
 name: Dependabot Automerge
 
-# Arms auto-merge for Dependabot patch and minor updates, and keeps them out of
-# the release cut window.
+# Enable auto-merge for Dependabot patch and minor updates after checking GHCR.
+# During a release cut, main advertises a version before both images exist.
+# GITHUB_TOKEN merges trigger no push workflows, so a Dependabot merge during
+# that window leaves main without CI or a :sha image for the edge soak.
 #
-# The cut window: main advertises an add-on version GHCR does not publish yet
-# (between the `chore(release): cut` merge and the second promote job). A
-# Dependabot merge inside it moves main off the cut commit with no push CI and
-# no :sha image behind it (GITHUB_TOKEN merges fire no push workflows), so the
-# edge soak cannot pin the result and a tag on HEAD would publish an unsoaked
-# tree. On 2026-09-02 #1082 had been armed 2.5 days before the 3.0.0 cut and
-# merged 16 minutes after it. Refusing to arm was never enough; an open window
-# has to disarm, and PR events alone never see a window open or close, so a
-# sweep runs on the cut commit itself, hourly, and on demand.
+# scripts/check-advertised-version.sh checks image availability. Missing images
+# disable auto-merge and add cut-window-hold to affected PRs. The sweep runs on
+# config.yaml pushes to main, hourly, and on demand to catch PRs already armed.
+# It only disarms; arming requires verified metadata from a fresh PR event.
+# Major updates need manual landing.
 #
-# The oracle is the registry (scripts/check-advertised-version.sh), never a flag
-# a human has to remember to set and clear. PRs this workflow disarms carry the
-# cut-window-hold label. The sweep only disarms. Arming still requires verified
-# Dependabot metadata on a fresh PR event; major updates need manual landing.
-# This is asynchronous reconciliation, not an atomic cut lock: preserve strict
-# branch freshness and disarm/freeze the queue before landing the release cut.
+# Merges can occur before the workflow runs. Keep strict up-to-date checks and
+# disarm and freeze the queue before landing a release cut.
 
 on:
   pull_request_target:
@@ -50,17 +44,15 @@ jobs:
     if: github.repository == 'florianhorner/mammamiradio' && github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      # Read the current trusted main, not the older event SHA or PR head.
-      # A queued pre-cut event must not probe a previously published version.
+      # Read current main so queued events check the version advertised now.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: main
           persist-credentials: false
 
-      # Read the verdict line, not the exit code: the script exits 1 on fail, and
-      # `run:` is `bash -e`, so the capture must not abort the step. Same parse as
-      # advertised-version.yml; tests/workflows/test_dependabot_automerge_gate.sh
-      # keeps both readers in step.
+      # Capture the verdict even when the script exits 1 under bash -e.
+      # This uses the same parser as advertised-version.yml; the gate test
+      # executes both verdict steps below.
       - name: Read the advertised-version verdict
         id: advertised
         run: |
@@ -109,9 +101,7 @@ jobs:
         if: steps.advertised.outputs.verdict == 'unknown'
         run: echo "::notice::advertised-version check returned unknown (registry unreachable); auto-merge state left as is."
 
-  # Reconcile every open Dependabot PR with the window. Runs when the cut commit
-  # lands (push to main touching config.yaml), hourly, and on demand, because a
-  # PR that was armed days ago gets no event when the window opens.
+  # Check PRs already armed before the cut, without waiting for a PR event.
   sweep:
     if: github.repository == 'florianhorner/mammamiradio' && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest

@@ -30,8 +30,8 @@
 # read the last line instead, which is always one of:
 #   VERDICT: pass | VERDICT: unknown | VERDICT: fail
 # advertised-version.yml uses that to decide whether to open, close, or leave the
-# drift issue alone, and dependabot-automerge.yml uses it to arm (pass), disarm
-# (fail) or leave (unknown) Dependabot auto-merge. Branching on the exit code
+# drift issue alone. dependabot-automerge.yml also reads it: pass allows arming,
+# fail disarms, and unknown leaves auto-merge unchanged. Branching on the exit code
 # alone would let an UNKNOWN close a live drift issue with a false all-clear.
 #
 # Do NOT wire this into scripts/pre-release-check.sh. That script runs from
