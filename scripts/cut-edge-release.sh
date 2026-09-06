@@ -212,7 +212,7 @@ fi
 if [ "$SHA" != "$HEAD_SHORT" ]; then
   echo "Note: pinning to the latest BUILT main commit $SHA (origin/main HEAD is $HEAD_SHORT;" >&2
   echo "      the commits in between change nothing that enters the image or its" >&2
-  echo "      add-on metadata; any attempted newer main build has a successful run)." >&2
+  echo "      add-on metadata; newer build checks passed, including deliberate skips)." >&2
 fi
 
 # OWNER feeds the PR body and image-path string below. Derive it AFTER target

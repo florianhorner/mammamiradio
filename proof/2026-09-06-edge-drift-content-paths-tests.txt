@@ -1,17 +1,28 @@
-# Test evidence — edge drift by content paths (commit 0b00c135)
-# Recorded 2026-09-05T22:46:03Z on tree 1d298427410be500606de106f085da35ab84b280
+# Test evidence: edge content and build-proof guards
+# Refreshed 2026-09-06 after the review fixes and main integration.
 
-$ .venv/bin/python -m pytest tests/ -q -n auto --no-cov -p no:cacheprovider
-8702 passed, 4 skipped, 18 warnings in 143.22s (0:02:23)
+$ .venv/bin/pytest tests/repo/test_repo_scripts.py -k 'edge_drift or cut_edge_release' -q --no-cov
+45 passed, 95 deselected
 
 $ bash tests/workflows/test_cut_edge_release.sh
-30 PASS lines, 0 FAIL
+All 57 cut-edge-release checks passed.
 
 $ bash tests/workflows/test_land_queue.sh
-36 PASS lines, 0 FAIL
+All 53 land-queue cases passed.
 
-$ shellcheck scripts/edge-select.sh scripts/cut-edge-release.sh
-clean
+$ shellcheck scripts/edge-select.sh scripts/cut-edge-release.sh tests/workflows/test_cut_edge_release.sh tests/workflows/test_land_queue.sh
+Passed (no findings).
 
-$ real history: edge_image_drift f4ebb43 f653a237 (pinned SHA vs its own edge-cut commit)
-no content drift (previously a false refusal)
+$ bash scripts/validate-addon.sh
+All checks passed.
+
+The Git fixtures cover version-only changes; runtime metadata, access policy,
+translations and file changes; malformed/duplicate version fields; NUL bytes on
+both sides and beyond 8 KiB; file modes; renames; and subdirectory callers.
+The shell fixtures cover both cut modes and the actual queue planner, including
+root lookup failure, failed/cancelled/unfinished builds, deliberate skips,
+failed runs behind newer commits, successful retries, truncated history,
+malformed responses and main-branch proof. GitHub writes are mocked.
+
+Player/Admin manual QA: not applicable to this release-tooling patch.
+No live edge cut, image build, Home Assistant operation or deployment was run.

@@ -74,7 +74,10 @@ edge_green_shas() {
 edge_commit_has_green_build() {
   local target="$1" runs
   runs="$(gh run list --workflow=addon-build.yml --branch main --commit "$target" \
-    --status success --limit 1 --json conclusion -q 'length' 2>/dev/null)" || return 2
+    --status success --limit 1 --json conclusion \
+    -q 'if type != "array" then error("invalid run list")
+        elif length > 1 or any(.[]; type != "object" or .conclusion != "success") then error("invalid success run")
+        else length end' 2>/dev/null)" || return 2
   case "$runs" in 1) return 0 ;; 0) return 1 ;; *) return 2 ;; esac
 }
 
@@ -91,7 +94,11 @@ edge_newer_builds_verified() {
     [ -n "$commit" ] || continue
     runs="$(gh run list --workflow=addon-build.yml --branch main --commit "$commit" \
       --limit "$limit" --json status,conclusion \
-      -q "if length >= $limit or any(.[]; .status != \"completed\" or .conclusion != \"skipped\") then 1 else 0 end" \
+      -q "if type != \"array\" then error(\"invalid run list\")
+          elif any(.[]; type != \"object\" or (.status | type) != \"string\" or
+                        (.conclusion | type) != \"string\") then error(\"invalid run\")
+          elif length >= $limit or any(.[]; .status != \"completed\" or .conclusion != \"skipped\")
+          then 1 else 0 end" \
       2>/dev/null)" || return 2
     case "$runs" in
       0) continue ;;
@@ -166,10 +173,16 @@ edge_image_drift() (
 
 # Compare immutable regular-file snapshots, including modes and trailing lines.
 # Malformed/duplicate version fields cannot take the version-only exception.
-edge_config_without_version() {
-  local entry content
+edge_config_without_version() (
+  set -o pipefail
+  local entry content blob nul_free
   entry="$(git ls-tree "$1" -- "$EDGE_CONFIG" 2>/dev/null)" || return 2
   case "$entry" in '100644 blob '*|'100755 blob '*) ;; *) return 1 ;; esac
+  # Bash drops NUL bytes in command substitutions. Prove none are present before
+  # storing the text; hash-object without -w does not write an object.
+  blob="${entry#* blob }"; blob="${blob%%$'\t'*}"
+  nul_free="$(git show "$1:$EDGE_CONFIG" 2>/dev/null | tr -d '\000' | git hash-object --stdin)" || return 2
+  [ "$blob" = "$nul_free" ] || return 1
   content="$(git show "$1:$EDGE_CONFIG" 2>/dev/null && printf '.')" || return 2
   printf '%s\n' "$content" | awk -v mode="${entry%% *}" '
     BEGIN { print mode }
@@ -185,7 +198,7 @@ edge_config_without_version() {
     { print }
     END { if (count != 1 || invalid) exit 1 }
   '
-}
+)
 
 # edge_pinned_version [<ref>] -> the short SHA edge currently advertises on <ref>
 # (default origin/main), or empty when the config cannot be read. Reads the ref,

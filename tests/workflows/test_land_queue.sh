@@ -79,12 +79,13 @@ case "$1 $2" in
     exit 0 ;;
   "run list")
     [ "${GH_MOCK_RUN_FAIL:-0}" = "1" ] && exit 1
-    want=""; status=""; branch=""; prev=""; query=""
+    want=""; status=""; branch=""; prev=""; query=""; limit=1
     for arg in "$@"; do
       [ "$prev" = --commit ] && want="$arg"
       [ "$prev" = --status ] && status="$arg"
       [ "$prev" = --branch ] && branch="$arg"
       [ "$prev" = -q ] && query="$arg"
+      [ "$prev" = --limit ] && limit="$arg"
       prev="$arg"
     done
     if [ -n "$want" ]; then
@@ -98,18 +99,25 @@ case "$1 $2" in
         esac
       fi
       if [ "$status" = success ]; then
-        if printf '%s\n' "${GH_MOCK_SUCCESS_SHAS:-}" | grep -qxF "$want"; then echo 1; else echo 0; fi
+        runs='[]'
+        if printf '%s\n' "${GH_MOCK_SUCCESS_SHAS:-}" | grep -qxF "$want"; then runs='[{"conclusion":"success"}]'; fi
+        printf '%s' "$runs" | jq -r "$query"
+        exit $?
       else
         state=none
         [ "$want" != "${GH_MOCK_NEWER_SHA:-}" ] || state="${GH_MOCK_NEWER_BUILD:-none}"
         case "$state" in
           none) runs='[]' ;;
+          object) runs='{}' ;;
+          missing-status) runs='[{"conclusion":"skipped"}]' ;;
+          missing-conclusion) runs='[{"status":"completed"}]' ;;
           in_progress) runs='[{"status":"in_progress","conclusion":""}]' ;;
           skipped-after-failure) runs='[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"failure"}]' ;;
           full-skipped-page) runs="$(jq -cn '[range(100) | {status:"completed",conclusion:"skipped"}]')" ;;
           *) runs="$(jq -cn --arg state "$state" '[{status:"completed",conclusion:$state}]')" ;;
         esac
-        printf '%s' "$runs" | jq -r "$query"
+        printf '%s' "$runs" | jq --argjson limit "$limit" 'if type == "array" then .[:$limit] else . end' | jq -r "$query"
+        exit $?
       fi
       exit 0
     fi
@@ -135,7 +143,7 @@ cat > "$BIN/git" <<GITEOF
 #!/usr/bin/env bash
 if [ "\$1 \${2:-}" = 'rev-parse --show-toplevel' ] && [ "\${GIT_MOCK_ROOT_FAIL:-0}" = 1 ]; then exit 1; fi
 case "\$1" in
-  rev-parse|rev-list|cat-file|show|merge-base|diff|status|log|for-each-ref|worktree|symbolic-ref|show-ref|ls-tree|config)
+  rev-parse|rev-list|cat-file|show|merge-base|diff|status|log|for-each-ref|worktree|symbolic-ref|show-ref|ls-tree|hash-object|config)
     if [ -n "\${GIT_MOCK_EDGE_REPO:-}" ]; then exec "$REAL_GIT" -C "\$GIT_MOCK_EDGE_REPO" "\$@"; fi
     exec "$REAL_GIT" "\$@" ;;
   fetch)
@@ -456,7 +464,7 @@ git -C "$EDGE_FIXTURE" add .
 git -C "$EDGE_FIXTURE" commit -qm 'chore: proof-only change'
 PROOF_SHA="$(git -C "$EDGE_FIXTURE" rev-parse HEAD)"
 git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main "$PROOF_SHA"
-for state in none skipped failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed retry; do
+for state in none skipped failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed object missing-status missing-conclusion retry; do
   successes=""; [ "$state" != retry ] || successes="$PROOF_SHA"
   OUT="$(EDGE_REPO="$EDGE_FIXTURE" RUN_SHAS="$BUILT_SHA" NEWER_SHA="$PROOF_SHA" \
     NEWER_BUILD="$state" SUCCESS_SHAS="$successes" run_plan '[]')"
@@ -467,6 +475,15 @@ for state in none skipped failure cancelled in_progress skipped-after-failure fu
   fi
   pass "edge queue handles newer $state build"
 done
+printf 'documentation\n' > "$EDGE_FIXTURE/README.md"
+git -C "$EDGE_FIXTURE" add .
+git -C "$EDGE_FIXTURE" commit -qm 'chore: newest commit has no build'
+git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main HEAD
+OUT="$(EDGE_REPO="$EDGE_FIXTURE" RUN_SHAS="$BUILT_SHA" NEWER_SHA="$PROOF_SHA" \
+  NEWER_BUILD=failure run_plan '[]')"
+jq -e '.edge.state == "blocked" and .edge.target == null' <<<"$OUT" >/dev/null \
+  || fail "queue must inspect failures between the candidate and the newest commit: $OUT"
+pass "edge queue cannot skip failed proof behind a newer no-run commit"
 OUT="$(ROOT_FAIL=1 RUN_SHAS="$MAIN_FULL" run_plan '[]')"
 jq -e '.edge.state == "blocked" and .edge.target == null and (.edge.why | test("could not check"))' \
   <<<"$OUT" >/dev/null || fail "queue must block a failed root lookup: $OUT"

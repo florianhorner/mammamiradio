@@ -156,12 +156,13 @@ case "$1 $2" in
     # The real query passes `--status success`, so the server returns only
     # successful runs; membership in GH_MOCK_COMMIT_OK models exactly that, and
     # the count is unaffected by how many failed reruns the commit also has.
-    _want=""; _prev=""; _status=""; _branch=""; _query=""
+    _want=""; _prev=""; _status=""; _branch=""; _query=""; _limit=1
     for _a in "$@"; do
       [ "$_prev" = "--commit" ] && _want="$_a"
       [ "$_prev" = "--status" ] && _status="$_a"
       [ "$_prev" = "--branch" ] && _branch="$_a"
       [ "$_prev" = "-q" ] && _query="$_a"
+      [ "$_prev" = "--limit" ] && _limit="$_a"
       _prev="$_a"
     done
     if [ -n "$_want" ]; then
@@ -173,18 +174,25 @@ case "$1 $2" in
         esac
       fi
       if [ "$_status" = success ]; then
-        if printf '%s\n' "${GH_MOCK_COMMIT_OK:-}" | grep -qxF "$_want"; then echo 1; else echo 0; fi
+        _runs='[]'
+        if printf '%s\n' "${GH_MOCK_COMMIT_OK:-}" | grep -qxF "$_want"; then _runs='[{"conclusion":"success"}]'; fi
+        printf '%s' "${GH_MOCK_SUCCESS_RESPONSE:-$_runs}" | jq -r "$_query"
+        exit $?
       else
         _state=none
         [ "$_want" != "$GIT_MOCK_MAIN_FULL" ] || _state="${GH_MOCK_NEWER_BUILD:-none}"
         case "$_state" in
           none) _runs='[]' ;;
+          object) _runs='{}' ;;
+          missing-status) _runs='[{"conclusion":"skipped"}]' ;;
+          missing-conclusion) _runs='[{"status":"completed"}]' ;;
           in_progress) _runs='[{"status":"in_progress","conclusion":""}]' ;;
           skipped-after-failure) _runs='[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"failure"}]' ;;
           full-skipped-page) _runs="$(jq -cn '[range(100) | {status:"completed",conclusion:"skipped"}]')" ;;
           *) _runs="$(jq -cn --arg state "$_state" '[{status:"completed",conclusion:$state}]')" ;;
         esac
-        printf '%s' "$_runs" | jq -r "$_query"
+        printf '%s' "$_runs" | jq --argjson limit "$_limit" 'if type == "array" then .[:$limit] else . end' | jq -r "$_query"
+        exit $?
       fi
       exit 0
     fi
@@ -252,6 +260,7 @@ case "$1" in
       *) printf '%s\n' "${GIT_MOCK_REVLIST:-}" ;;
     esac ;;
   ls-tree) printf '100644 blob abcdef\t%s\n' 'ha-addon/mammamiradio-edge/config.yaml' ;;
+  hash-object) cat >/dev/null; echo abcdef ;;
   show)
     echo "version: ${GIT_MOCK_SHOW_VERSION:-aeafa99}"
     if [ "$2" = "origin/main:ha-addon/mammamiradio-edge/config.yaml" ] && [ -n "${GIT_MOCK_EDGE_BODY:-}" ]; then
@@ -373,7 +382,7 @@ pass "trigger-only drift (dev lockfile) does not block the edge pin"
 # A failed proof must not disappear behind the green-candidate filter, including
 # when an exact target sits outside that window. All refusal paths precede writes.
 for mode in default exact; do
-  for state in failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed; do
+  for state in failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed object missing-status missing-conclusion; do
     [ "$mode" != exact ] || CUT_ARGS=(--target-sha "$OLDER_FULL")
     run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" \
       GH_MOCK_NEWER_BUILD="$state" GIT_MOCK_DIFF="scripts/media-proof.py"
@@ -543,6 +552,14 @@ run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_D
 [ "$RUN_RC" -eq 0 ]                   || fail "--target-sha outside the run window should still pin: $RUN_OUT"
 [ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "should pin $OLDER_SHORT, wrote '$WROTE_VERSION'"
 pass "--target-sha is not limited by the recent-runs window"
+
+for response in '{"fake":"success"}' '[{"conclusion":"failure"}]'; do
+  CUT_ARGS=(--target-sha "$OLDER_FULL")
+  run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_SUCCESS_RESPONSE="$response"
+  [ "$RUN_RC" -ne 0 ] || fail "exact target must reject malformed successful-run data"
+  never_created_pr || fail "malformed target proof must not open a PR"
+  pass "--target-sha rejects invalid successful-run response $response"
+done
 
 # Case: an unresolvable commit-ish is refused before anything is written.
 CUT_ARGS=(--target-sha deadbeefdeadbeefdeadbeefdeadbeefdeadbeef)

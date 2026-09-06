@@ -102,7 +102,7 @@ there is a real discipline on top of it:
 
   `--target-sha` pins that exact commit. It refuses the cut if newer image content
   (`ha-addon/mammamiradio/`, `ha-addon/mammamiradio-edge/`, `mammamiradio/`,
-  `pyproject.toml`, `radio.toml`, `model_registry.toml`, the build workflow) has
+  `pyproject.toml`, `radio.toml`, `model_registry.toml`, the build workflow)
   has landed on top. Only a valid top-level edge `version:` change is exempt.
   The edge branch takes its metadata from `origin/main`, so an older image would
   advertise options it does not implement. A commit that only

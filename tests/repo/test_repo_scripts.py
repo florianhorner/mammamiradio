@@ -1400,6 +1400,9 @@ def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
         "old_malformed",
         "trailing_newline",
         "missing_final_newline",
+        "nul",
+        "late_nul",
+        "old_nul",
     ],
 )
 @pytest.mark.parametrize("subdirectory", [False, True])
@@ -1408,7 +1411,11 @@ def test_edge_drift_exempts_only_valid_version_changes(tmp_path: Path, change: s
     edge = tmp_path / "ha-addon/mammamiradio-edge"
     config = edge / "config.yaml"
     original = "version: aaa1111\nhomeassistant_api: true\noptions:\n  version: one\n"
+    if change == "late_nul":
+        original += "#" * 8192 + "\n"
     _write(config, original.replace("aaa1111", "bad") if change == "old_malformed" else original)
+    if change == "old_nul":
+        config.write_bytes(original.replace("true", "tr\x00ue").encode())
     _write(edge / "apparmor.txt", "policy\n")
     _write(edge / "translations/en.yaml", "name: Radio\n")
     assert _run(["git", "add", "."], cwd=tmp_path).returncode == 0
@@ -1451,6 +1458,10 @@ def test_edge_drift_exempts_only_valid_version_changes(tmp_path: Path, change: s
         config.write_text(updated + "\n")
     elif change == "missing_final_newline":
         config.write_text(updated.rstrip("\n"))
+    elif change == "nul":
+        config.write_bytes(updated.replace("true", "tr\x00ue").encode())
+    elif change == "late_nul":
+        config.write_bytes(updated.encode() + b"\x00")
     assert _run(["git", "add", "-A"], cwd=tmp_path).returncode == 0
     assert _run(["git", "commit", "-qm", "chore: fixture change"], cwd=tmp_path).returncode == 0
     cwd = tmp_path / "scripts" if subdirectory else tmp_path
