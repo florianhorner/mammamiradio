@@ -13658,3 +13658,71 @@ async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
     # Only the clean track counts; the banned queued segment (which the playback
     # loop discards before its first byte) must not inflate the honest readout.
     assert admin_status["buffered_audio_sec"] == 180.0
+
+
+def test_provider_health_marks_voice_key_rejected_after_401():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route, reset_voice_failures
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    reset_voice_failures()
+    try:
+        _memoize_failed_cloud_route(
+            ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
+            retryable=False,
+            reason="HTTP 401 — quota_exceeded",
+        )
+        config = SimpleNamespace(
+            anthropic_api_key="",
+            openai_api_key="",
+            azure_speech_key="",
+            azure_speech_region="",
+            elevenlabs_api_key="x",
+        )
+        state = StationState()
+        health = _provider_health_snapshot(config, state)
+        assert health["elevenlabs"] == {
+            "configured": True,
+            "degraded": True,
+            "last_error": "HTTP 401 — quota_exceeded",
+            "key_status": "rejected",
+            "failed_voices": 0,
+        }
+    finally:
+        reset_voice_failures()
+
+
+def test_tts_reason_copy_never_promises_a_retry_for_a_session_disable():
+    from mammamiradio.web.streamer import _tts_action_guidance, _tts_single_reason_label
+
+    for token in (
+        "provider_disabled_session",
+        "provider_disabled_session:HTTP 401 — x",
+        "provider_disabled:HTTP 401",
+    ):
+        label = _tts_single_reason_label(token)
+        assert "temporarily" not in label.lower()
+        assert "will retry" not in label.lower()
+        assert _tts_action_guidance(token) != ""
+
+
+def test_tts_provider_status_carries_action_guidance_when_falling_back():
+    from mammamiradio.web.streamer import _tts_provider_status
+
+    config = SimpleNamespace(
+        hosts=[SimpleNamespace(engine="elevenlabs")],
+        ads=SimpleNamespace(voices=[]),
+        sonic_brand=SimpleNamespace(sweeper_voice="", sweeper_engine="edge"),
+        openai_api_key="",
+        azure_speech_key="",
+        azure_speech_region="",
+        elevenlabs_api_key="x",
+        models=SimpleNamespace(tts_model=lambda _engine: None),
+    )
+    state = StationState()
+    state.runtime_provider_state["tts_provider"] = {
+        "fallback_active": True,
+        "current_provider": "edge",
+        "reason": "Runtime TTS fallback: elevenlabs=provider_disabled_session:HTTP 401",
+    }
+    status = _tts_provider_status(config, state)
+    assert status["action_guidance"]

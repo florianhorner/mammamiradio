@@ -67,6 +67,7 @@ from mammamiradio.audio.normalizer import (
     probe_duration_sec,
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
+from mammamiradio.audio.tts import cloud_tts_health
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.config import (
     DEFAULT_STATION_NAME,
@@ -3040,18 +3041,25 @@ def _tts_single_reason_label(reason: str) -> str:
         return ""
     if "missing_credentials" in normalized:
         return "A cloud voice key is missing; Edge voice is carrying the show. Add the key and restart the station."
-    if "provider_disabled:http 401" in normalized or "provider_disabled:http 403" in normalized:
-        return "A cloud voice key was not accepted; check the saved key and restart the station."
-    if "provider_disabled:http 404" in normalized:
-        return "A cloud voice route is not available; check the selected voice and restart the station."
+    if "http 401" in normalized or "http 403" in normalized:
+        return (
+            "The saved voice key was rejected by the provider, so its cloud voices are off for this session. "
+            "Save a working key in Settings → Voice providers (the station retries by itself) or restart the "
+            "add-on. Edge voice is carrying the show."
+        )
+    if "http 404" in normalized:
+        return (
+            "A configured voice ID was not found at the provider; check the voice IDs in radio.toml and restart. "
+            "Edge voice is carrying the show."
+        )
     if "cloud tts route rendered successfully" in normalized or "primary_success" in normalized:
         return "Cloud voice route is working."
     if "provider_cooldown" in normalized or "provider_error" in normalized:
         return "A cloud voice route had trouble; Edge voice is carrying the show and will retry automatically."
     if "provider_disabled_session" in normalized:
         return (
-            "A cloud voice route is temporarily unavailable; Edge voice is carrying the show and will retry "
-            "automatically."
+            "A cloud voice route is switched off for the rest of this session after a provider error; "
+            "Edge voice is carrying the show. Save the key again in Settings to retry, or restart the add-on."
         )
     if "edge_voice_failure" in normalized:
         return "The configured voice was unavailable; the station is trying its house voice."
@@ -3091,6 +3099,24 @@ def _tts_runtime_reason_label(reason: str) -> str:
             return "; ".join(labeled)
         return _tts_single_reason_label(reason)
     return _tts_single_reason_label(reason)
+
+
+def _tts_action_guidance(reason: str) -> str:
+    """The operator's way out for a TTS fallback, keyed on the raw reason token."""
+    normalized = reason.strip().lower()
+    if not normalized:
+        return ""
+    if "http 401" in normalized or "http 403" in normalized:
+        return "Save a working voice key in Settings → Voice providers, or restart the add-on."
+    if "http 404" in normalized:
+        return "Check the voice IDs in radio.toml, then restart the add-on."
+    if "missing_credentials" in normalized:
+        return "Add the voice key in Settings → Voice providers, then restart the add-on."
+    if "provider_disabled_session" in normalized:
+        return "Save the voice key again in Settings to retry, or restart the add-on."
+    if "provider_cooldown" in normalized or "provider_error" in normalized:
+        return "No action needed - will retry automatically"
+    return ""
 
 
 _PROVIDER_CLASS_LABELS = {
@@ -3386,6 +3412,7 @@ def _tts_provider_status(config, state: StationState, *, use_runtime_observation
         fallback_active=fallback_active,
         reason=reason,
         state=state,
+        action_guidance=_tts_action_guidance(reason) if fallback_active else "",
     )
     runtime_reason = str(runtime_tts.get("reason") or "")
     if status["switch_reason"]:
@@ -4492,9 +4519,33 @@ def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> 
     return _runtime_monotonic() - state.last_air_monotonic > SILENCE_FAILURE_SECONDS
 
 
+def _voice_provider_health(engine: str, configured: bool, voice_health: dict[str, dict[str, object]]) -> dict:
+    """Same shape as the Anthropic entry so the admin can render voices the same way."""
+    health = voice_health.get(engine, {})
+    reason = str(health.get("reason") or "")
+    disabled = bool(health.get("disabled"))
+    cooldown = bool(health.get("cooldown"))
+    rejected = disabled and ("HTTP 401" in reason or "HTTP 403" in reason)
+    if not configured:
+        key_status = "missing"
+    elif rejected:
+        key_status = "rejected"
+    else:
+        key_status = "unverified"
+    raw_failed = health.get("failed_voices") or 0
+    return {
+        "configured": configured,
+        "degraded": disabled or cooldown,
+        "last_error": reason if (disabled or cooldown) else "",
+        "key_status": key_status,
+        "failed_voices": raw_failed if isinstance(raw_failed, int) else 0,
+    }
+
+
 def _provider_health_snapshot(config, state: StationState) -> dict:
     """Return current provider degradation state for admin diagnostics."""
     now = time.time()
+    voice_health = cloud_tts_health()
     anthropic_configured = bool(config.anthropic_api_key)
     anthropic_degraded = anthropic_configured and state.anthropic_disabled_until > now
     retry_after = max(0, int(state.anthropic_disabled_until - now)) if anthropic_degraded else 0
@@ -4511,12 +4562,10 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "configured": bool(config.openai_api_key),
             "key_status": state.openai_key_status,
         },
-        "azure_speech": {
-            "configured": bool(config.azure_speech_key and config.azure_speech_region),
-        },
-        "elevenlabs": {
-            "configured": bool(config.elevenlabs_api_key),
-        },
+        "azure_speech": _voice_provider_health(
+            "azure", bool(config.azure_speech_key and config.azure_speech_region), voice_health
+        ),
+        "elevenlabs": _voice_provider_health("elevenlabs", bool(config.elevenlabs_api_key), voice_health),
         "chaos": {
             "enabled": state.chaos_mode_active,
             "pending": state.chaos_pending.value if state.chaos_pending else "",

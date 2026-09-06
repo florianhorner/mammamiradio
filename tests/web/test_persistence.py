@@ -799,3 +799,25 @@ def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatc
     assert os.environ["ELEVENLABS_API_KEY"] == "el-new"
     assert state.anthropic_disabled_until == 0.0
     assert state.anthropic_last_error == ""
+
+
+def test_saving_voice_key_rearms_the_engine(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "mammamiradio.audio.tts.reset_cloud_engine_failures",
+        lambda engine: calls.append(engine),
+    )
+    config = SimpleNamespace(
+        anthropic_api_key="",
+        openai_api_key="",
+        azure_speech_key="",
+        azure_speech_region="",
+        elevenlabs_api_key="",
+    )
+    state = SimpleNamespace()
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+
+    persistence._apply_live_credentials(state, config, {"ELEVENLABS_API_KEY": "k"})
+
+    assert calls == ["elevenlabs"]
+    assert config.elevenlabs_api_key == "k"

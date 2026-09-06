@@ -103,6 +103,14 @@ def _fsync_parent_directory(path: Path) -> None:
         os.close(fd)
 
 
+def _rearm_cloud_voice_engine(engine: str) -> None:
+    # Mirrors the Anthropic branch's reset_provider_backoff(): a saved key is the
+    # operator's retry signal, so the session breaker must not outlive it.
+    from mammamiradio.audio.tts import reset_cloud_engine_failures
+
+    reset_cloud_engine_failures(engine)
+
+
 def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
     for env_key, value in updates.items():
         os.environ[env_key] = value
@@ -125,8 +133,11 @@ def _apply_live_credentials(state: StationState, config, updates: dict[str, str]
         config.azure_speech_key = updates["AZURE_SPEECH_KEY"]
     if "AZURE_SPEECH_REGION" in updates:
         config.azure_speech_region = updates["AZURE_SPEECH_REGION"]
+    if "AZURE_SPEECH_KEY" in updates or "AZURE_SPEECH_REGION" in updates:
+        _rearm_cloud_voice_engine("azure")
     if "ELEVENLABS_API_KEY" in updates:
         config.elevenlabs_api_key = updates["ELEVENLABS_API_KEY"]
+        _rearm_cloud_voice_engine("elevenlabs")
 
 
 def _save_dotenv(updates: dict[str, str]) -> None:

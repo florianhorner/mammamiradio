@@ -8190,10 +8190,26 @@ function updateEngineRoom(st,caps){
     }else{
       openaiLine=statusInline('ready','available');
     }
+    // Voices: same states as the LLM rows. provider_health is on the same payload.
+    const ph=caps.provider_health||{};
+    const voiceLines=[];
+    for(const [key,label] of [['elevenlabs','ElevenLabs'],['azure_speech','Azure']]){
+      const p=ph[key]||{};
+      if(!p.configured)continue;
+      if(p.key_status==='rejected'){
+        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key in Settings, or restart the add-on'));
+      }else if(p.degraded){
+        voiceLines.push(label+' '+statusInline('degraded','off this session',p.last_error||''));
+      }else{
+        voiceLines.push(label+' '+statusInline('ready','connected'));
+      }
+    }
+    const voicesLine=voiceLines.length?voiceLines.join(' · '):statusInline('idle','Edge only');
     ce.innerHTML=[
       'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
       'Anthropic: '+anthropicLine,
       'OpenAI: '+openaiLine,
+      'Voices: '+voicesLine,
       'Home Assistant: '+statusInline(c.ha?'ready':'idle',c.ha?'connected':'disabled'),
     ].join('<br>');
   }

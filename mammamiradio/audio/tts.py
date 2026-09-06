@@ -97,6 +97,11 @@ _failed_cloud_voices: set[tuple[str, str, str, str]] = set()
 _CLOUD_ROUTE_COOLDOWN_SECONDS = 30.0
 _ROUTE_PROBE_IN_FLIGHT = math.inf
 _failed_cloud_routes: dict[tuple[str, str, str, str], float | None] = {}
+# Why a route/voice was disabled for the session ("HTTP 401 — <provider body>"),
+# keyed like the entries above, so later skips and the admin can name the cause
+# instead of the bare "provider_disabled_session" token.
+_cloud_route_disable_reasons: dict[tuple[str, str, str, str], str] = {}
+_failed_cloud_voice_reasons: dict[tuple[str, str, str, str], str] = {}
 _cloud_voice_attempt_locks: dict[tuple[str, str, str, str], asyncio.Lock] = {}
 _cloud_voice_state_lock = threading.Lock()
 
@@ -186,12 +191,58 @@ def _configured_openai_tts_model() -> str | None:
 
 
 def reset_voice_failures() -> None:
-    """Clear memoized voice and route failures. Used by tests."""
+    """Clear memoized voice and route failures (tests, and a credential save)."""
     _failed_edge_voices.clear()
     with _cloud_voice_state_lock:
         _failed_cloud_voices.clear()
         _failed_cloud_routes.clear()
+        _cloud_route_disable_reasons.clear()
+        _failed_cloud_voice_reasons.clear()
         _cloud_voice_attempt_locks.clear()
+
+
+def reset_cloud_engine_failures(engine: str) -> None:
+    """Forget every memoized failure for one cloud engine (called on a key save).
+
+    The memo keys embed a fingerprint of the key, so saving a *different* key
+    already re-armed the route; saving the *same* key (quota reset, re-enabled
+    key) did nothing until this existed.
+    """
+    engine = engine.strip().lower()
+    with _cloud_voice_state_lock:
+        for key in [k for k in _failed_cloud_routes if k[0] == engine]:
+            _failed_cloud_routes.pop(key, None)
+            _cloud_route_disable_reasons.pop(key, None)
+        for key in [k for k in _failed_cloud_voices if k[0] == engine]:
+            _failed_cloud_voices.discard(key)
+            _failed_cloud_voice_reasons.pop(key, None)
+            _cloud_voice_attempt_locks.pop(key, None)
+    logger.info("%s TTS route re-armed after a credential save", engine)
+
+
+def cloud_tts_health() -> dict[str, dict[str, object]]:
+    """Per-engine breaker state for operator status. Never raises."""
+    health: dict[str, dict[str, object]] = {}
+    now = time.monotonic()
+
+    def _entry(engine: str) -> dict[str, object]:
+        return health.setdefault(engine, {"disabled": False, "cooldown": False, "reason": "", "failed_voices": 0})
+
+    with _cloud_voice_state_lock:
+        for key, retry_at in _failed_cloud_routes.items():
+            entry = _entry(key[0])
+            if retry_at is None:
+                entry["disabled"] = True
+                entry["reason"] = _cloud_route_disable_reasons.get(key, "") or "auth/config error"
+            elif retry_at == _ROUTE_PROBE_IN_FLIGHT or now < retry_at:
+                entry["cooldown"] = True
+        for key in _failed_cloud_voices:
+            entry = _entry(key[0])
+            failed = entry.get("failed_voices", 0)
+            entry["failed_voices"] = (failed if isinstance(failed, int) else 0) + 1
+            if not entry["reason"]:
+                entry["reason"] = _failed_cloud_voice_reasons.get(key, "")
+    return health
 
 
 def _secret_fingerprint(value: str) -> str:
@@ -227,9 +278,11 @@ def _cloud_voice_failed(cloud_key: tuple[str, str, str, str]) -> bool:
         return cloud_key in _failed_cloud_voices
 
 
-def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str, str]) -> None:
+def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str, str], reason: str = "") -> None:
     with _cloud_voice_state_lock:
         _failed_cloud_voices.add(cloud_key)
+        if reason:
+            _failed_cloud_voice_reasons[cloud_key] = reason
 
 
 def _cloud_route_key(engine: str, *, elevenlabs_model: str = "") -> tuple[str, str, str, str]:
@@ -303,7 +356,7 @@ def _clear_cloud_route(route_key: tuple[str, str, str, str]) -> None:
         _failed_cloud_routes.pop(route_key, None)
 
 
-def _memoize_failed_cloud_route(route_key: tuple[str, str, str, str], *, retryable: bool) -> None:
+def _memoize_failed_cloud_route(route_key: tuple[str, str, str, str], *, retryable: bool, reason: str = "") -> None:
     """Block a route permanently for auth/config errors or briefly for outages."""
     retry_at = time.monotonic() + _CLOUD_ROUTE_COOLDOWN_SECONDS if retryable else None
     with _cloud_voice_state_lock:
@@ -312,7 +365,19 @@ def _memoize_failed_cloud_route(route_key: tuple[str, str, str, str], *, retryab
         # already known to be rejected.
         if retryable and route_key in _failed_cloud_routes and _failed_cloud_routes[route_key] is None:
             return
+        already_permanent = _failed_cloud_routes.get(route_key, 0) is None
         _failed_cloud_routes[route_key] = retry_at
+        if not retryable:
+            _cloud_route_disable_reasons[route_key] = reason
+    if not retryable and not already_permanent:
+        # The transition itself was never logged before; the only WARNING was
+        # per voice and dropped the provider body.
+        logger.warning(
+            "%s TTS route disabled for this session after %s. Cloud voices stay on Edge "
+            "until a working key is saved in Settings or the add-on restarts.",
+            route_key[0],
+            reason or "an auth/config error",
+        )
 
 
 def _should_disable_cloud_route(exc: Exception) -> bool:
@@ -344,8 +409,18 @@ def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str, str]) -> asyncio.L
         return lock
 
 
-def _route_skip_reason(claimed: str) -> str:
-    return "provider_cooldown" if claimed == "cooldown" else "provider_disabled_session"
+def _route_skip_reason(claimed: str, route_key: tuple[str, str, str, str]) -> str:
+    if claimed == "cooldown":
+        return "provider_cooldown"
+    with _cloud_voice_state_lock:
+        detail = _cloud_route_disable_reasons.get(route_key, "")
+    return f"provider_disabled_session:{detail}" if detail else "provider_disabled_session"
+
+
+def _voice_skip_reason(cloud_key: tuple[str, str, str, str]) -> str:
+    with _cloud_voice_state_lock:
+        detail = _failed_cloud_voice_reasons.get(cloud_key, "")
+    return f"provider_disabled_session:{detail}" if detail else "provider_disabled_session"
 
 
 async def _run_cloud_route_attempt(
@@ -368,7 +443,7 @@ async def _run_cloud_route_attempt(
     claimed = _claim_cloud_route(route_key)
     if claimed in ("cooldown", "permanent"):
         logger.info("%s TTS route %s; using edge fallback", engine_label, claimed)
-        return None, _route_skip_reason(claimed)
+        return None, _route_skip_reason(claimed, route_key)
     probing = claimed == "probe"
     try:
         async with _HEAVY_SEM:
@@ -376,7 +451,7 @@ async def _run_cloud_route_attempt(
                 claimed = _claim_cloud_route(route_key)
                 if claimed in ("cooldown", "permanent"):
                     logger.info("%s TTS route %s; using edge fallback", engine_label, claimed)
-                    return None, _route_skip_reason(claimed)
+                    return None, _route_skip_reason(claimed, route_key)
                 probing = claimed == "probe"
             result = await provider_call()
             if probing:
@@ -384,7 +459,13 @@ async def _run_cloud_route_attempt(
             return result, ""
     except Exception as e:
         if _should_disable_cloud_route(e):
-            _memoize_failed_cloud_route(route_key, retryable=not bool(_non_retryable_cloud_tts_error(e)))
+            non_retryable = _non_retryable_cloud_tts_error(e)
+            body = _cloud_error_body(e)
+            _memoize_failed_cloud_route(
+                route_key,
+                retryable=not bool(non_retryable),
+                reason=f"{non_retryable} — {body}" if body else non_retryable,
+            )
         raise
     finally:
         if probing:
@@ -502,6 +583,19 @@ def _cloud_http_status(exc: Exception) -> int | None:
     if isinstance(exc, openai.APIStatusError):
         return exc.status_code
     return None
+
+
+def _cloud_error_body(exc: Exception) -> str:
+    """First 200 chars of a provider error body, one line, for logs and status.
+
+    ElevenLabs answers HTTP 401 for both a rejected key and an exhausted quota;
+    only the body says which. Losing it left an operator guessing for 8 days.
+    """
+    response = getattr(exc, "response", None)
+    raw = getattr(response, "text", "") if response is not None else ""
+    if not raw:
+        raw = str(getattr(exc, "message", "") or getattr(exc, "body", "") or "")
+    return " ".join(str(raw).split())[:200]
 
 
 def _non_retryable_cloud_tts_error(exc: Exception) -> str:
@@ -1001,7 +1095,7 @@ async def synthesize(
             cloud_key = _cloud_failure_key(engine, voice)
             route_key = _cloud_route_key(engine)
             if _cloud_voice_failed(cloud_key):
-                fallback_reason = "provider_disabled_session"
+                fallback_reason = _voice_skip_reason(cloud_key)
                 logger.debug("OpenAI TTS voice '%s' previously failed this session; using edge fallback", voice)
             else:
                 try:
@@ -1030,12 +1124,14 @@ async def synthesize(
                 except Exception as e:
                     reason = _non_retryable_cloud_tts_error(e)
                     if reason:
-                        _memoize_failed_cloud_voice(cloud_key)
+                        body = _cloud_error_body(e)
+                        detail = f"{reason} — {body}" if body else reason
+                        _memoize_failed_cloud_voice(cloud_key, reason=detail)
                         fallback_reason = f"provider_disabled:{reason}"
                         logger.warning(
                             "OpenAI TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
                             voice,
-                            reason,
+                            detail,
                         )
                     else:
                         fallback_reason = f"provider_error:{type(e).__name__}"
@@ -1051,7 +1147,7 @@ async def synthesize(
             route_key = _cloud_route_key(engine)
             async with _cloud_voice_attempt_lock(cloud_key):
                 if _cloud_voice_failed(cloud_key):
-                    fallback_reason = "provider_disabled_session"
+                    fallback_reason = _voice_skip_reason(cloud_key)
                     logger.debug("Azure TTS voice '%s' previously failed this session; using edge fallback", voice)
                 else:
                     try:
@@ -1081,12 +1177,14 @@ async def synthesize(
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
-                            _memoize_failed_cloud_voice(cloud_key)
+                            body = _cloud_error_body(e)
+                            detail = f"{reason} — {body}" if body else reason
+                            _memoize_failed_cloud_voice(cloud_key, reason=detail)
                             fallback_reason = f"provider_disabled:{reason}"
                             logger.warning(
                                 "Azure TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
                                 voice,
-                                reason,
+                                detail,
                             )
                         else:
                             fallback_reason = f"provider_error:{type(e).__name__}"
@@ -1101,7 +1199,7 @@ async def synthesize(
             route_key = _cloud_route_key(engine, elevenlabs_model=elevenlabs_model)
             async with _cloud_voice_attempt_lock(cloud_key):
                 if _cloud_voice_failed(cloud_key):
-                    fallback_reason = "provider_disabled_session"
+                    fallback_reason = _voice_skip_reason(cloud_key)
                     logger.debug(
                         "ElevenLabs TTS voice '%s' model '%s' previously failed this session; using edge fallback",
                         voice,
@@ -1138,14 +1236,16 @@ async def synthesize(
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
-                            _memoize_failed_cloud_voice(cloud_key)
+                            body = _cloud_error_body(e)
+                            detail = f"{reason} — {body}" if body else reason
+                            _memoize_failed_cloud_voice(cloud_key, reason=detail)
                             fallback_reason = f"provider_disabled:{reason}"
                             logger.warning(
                                 "ElevenLabs TTS disabled for voice '%s' model '%s' this session after %s; "
                                 "falling back to edge-tts",
                                 voice,
                                 elevenlabs_model,
-                                reason,
+                                detail,
                             )
                         else:
                             fallback_reason = f"provider_error:{type(e).__name__}"

@@ -1338,6 +1338,112 @@ async def test_synthesize_elevenlabs_auth_error_is_memoized_for_session(_mock_al
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_401_disables_route_with_body_and_warns_once(_mock_all, tmp_path, monkeypatch, caplog):
+    """A 401 must log the provider body once and keep later skips named."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "quota-key")
+    state = StationState()
+
+    async def _fake_elevenlabs(text, voice, output_path, **kwargs):
+        request = httpx.Request("POST", "https://api.elevenlabs.io/v1/text-to-speech/x")
+        response = httpx.Response(
+            401,
+            content=b'{"detail":{"status":"quota_exceeded"}}',
+            request=request,
+        )
+        raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.synthesize_elevenlabs", _fake_elevenlabs)
+
+    with caplog.at_level(logging.WARNING, logger="mammamiradio.audio.tts"):
+        await synthesize(
+            "Ciao",
+            "elevenlabs-voice-id",
+            tmp_path / "el_401_first.mp3",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            state=state,
+        )
+        await synthesize(
+            "Ancora",
+            "elevenlabs-voice-id",
+            tmp_path / "el_401_second.mp3",
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            state=state,
+        )
+
+    route_warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "route disabled for this session after HTTP 401" in record.getMessage()
+        and "quota_exceeded" in record.getMessage()
+    ]
+    assert len(route_warnings) == 1
+    engine_state = state.runtime_provider_state["tts:elevenlabs"]
+    assert engine_state["reason"].startswith("provider_disabled_session:HTTP 401")
+
+
+@pytest.mark.asyncio
+async def test_cloud_tts_health_reports_disabled_engine(_mock_all, tmp_path, monkeypatch):
+    """After a session disable, cloud_tts_health names the engine and reason."""
+    from mammamiradio.audio.tts import cloud_tts_health, synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "quota-key")
+
+    async def _fake_elevenlabs(text, voice, output_path, **kwargs):
+        request = httpx.Request("POST", "https://api.elevenlabs.io/v1/text-to-speech/x")
+        response = httpx.Response(
+            401,
+            content=b'{"detail":{"status":"quota_exceeded"}}',
+            request=request,
+        )
+        raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.synthesize_elevenlabs", _fake_elevenlabs)
+
+    await synthesize(
+        "Ciao",
+        "elevenlabs-voice-id",
+        tmp_path / "el_health.mp3",
+        engine="elevenlabs",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    health = cloud_tts_health()["elevenlabs"]
+    assert health["disabled"] is True
+    assert "HTTP 401" in str(health["reason"])
+
+
+def test_reset_cloud_engine_failures_rearms_only_that_engine():
+    from mammamiradio.audio.tts import (
+        _memoize_failed_cloud_route,
+        cloud_tts_health,
+        reset_cloud_engine_failures,
+        reset_voice_failures,
+    )
+
+    reset_voice_failures()
+    try:
+        _memoize_failed_cloud_route(
+            ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
+            retryable=False,
+            reason="HTTP 401",
+        )
+        _memoize_failed_cloud_route(("azure", "westeurope", "fp", ""), retryable=False, reason="HTTP 401")
+        reset_cloud_engine_failures("elevenlabs")
+        health = cloud_tts_health()
+        assert "elevenlabs" not in health
+        assert health["azure"]["disabled"] is True
+    finally:
+        reset_voice_failures()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_elevenlabs_auth_error_lock_collapses_concurrent_attempts(
     _mock_all, tmp_path, monkeypatch, caplog
 ):

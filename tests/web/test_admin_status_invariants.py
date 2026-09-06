@@ -629,6 +629,8 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "openaiLine=statusInline('blocked','key not working'" in block
     assert "openaiLine=statusInline('ready','available')" in block
     assert "OpenAI: '+openaiLine" in block
+    assert "'Voices: '+voicesLine" in block
+    assert "statusInline('idle','Edge only')" in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
 
 
