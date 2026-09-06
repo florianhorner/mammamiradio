@@ -53,4 +53,3 @@ Exit code: 0
 $ bash scripts/check-changelog-lint.sh
 Changelog lint clean.
 Exit code: 0
-
