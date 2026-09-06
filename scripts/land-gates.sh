@@ -213,6 +213,25 @@ verify_head() {
   thread_check "$pr" || return 1
 }
 
+# refresh_landed_ref -> always 0. Best-effort `git fetch origin main`.
+#
+# The merge witness in verify_v2 trusts a base only if it is landed content in
+# origin/main. ensure_head_local fetches the PR head's OBJECTS, which is enough
+# to carry the base commit into the object store — but it never moves the
+# origin/main REF. A landing seat that has not fetched since main advanced then
+# refuses GitHub's real base as "not landed" and blocks the documented
+# integrate-push-land flow until someone thinks to fetch by hand. Refresh the
+# ref first. Failure is tolerated on purpose: an offline seat keeps a stale ref
+# and the evidence check refuses, which is the fail-closed outcome, never an
+# accept. MMR_LAND_SKIP_FETCH=1 keeps the self-tests offline.
+refresh_landed_ref() {
+  if [ "${MMR_LAND_SKIP_FETCH:-0}" = "1" ]; then
+    return 0
+  fi
+  git fetch -q origin main 2>/dev/null || true
+  return 0
+}
+
 # ensure_head_local <pr> <head-sha> -> 0 when the head object is present locally.
 # Returns 1 SILENTLY instead of exiting: land-pr.sh wraps it in `|| die` (hard
 # abort, stderr), while a reporting caller records BLOCKED and keeps going. The

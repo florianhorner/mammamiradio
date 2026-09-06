@@ -103,7 +103,9 @@ case "\$1" in
   rev-parse|rev-list|cat-file|show|merge-base|diff|status|log|for-each-ref|worktree|symbolic-ref|show-ref|ls-tree|config)
     exec "$REAL_GIT" "\$@" ;;
   fetch)
-    # A shadow run may want fresh refs, but this test must stay offline.
+    # A shadow run may want fresh refs, but this test must stay offline. Log the
+    # call so a case can assert the landed ref is refreshed once per run.
+    printf '%s\\n' "\$*" >> "\${GIT_SHIM_LOG:-/dev/null}"
     exit 0 ;;
 esac
 echo "git mock: refusing mutating verb in a read-only shadow: \$*" >&2
@@ -623,6 +625,19 @@ OUT="$(run_plan "$PRS")"
 [ "$(jq -r '.prs[0].state' <<<"$OUT")" = "READY" ] \
   || fail "an old head commit date must not block when evidence is present"
 pass "ledger age check reads the head commit date, not the wall clock"
+
+# =============================================================================
+# The landed-ref refresh happens ONCE per run, before any PR is classified. A
+# stale local origin/main would report BLOCKED_EVIDENCE for every integrated PR.
+# =============================================================================
+FETCH_LOG="$TMPDIR_T/git-fetch.log"; : > "$FETCH_LOG"
+PRS="[$(pr_row 200 "fix: a" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false),
+      $(pr_row 201 "fix: b" "$HEAD_FULL" CLEAN false '[]' "2026-02-01T00:00:00Z" florianhorner false)]"
+OUT="$(GIT_SHIM_LOG="$FETCH_LOG" run_plan "$PRS")"
+[ "$(jq -r '.decision.pr' <<<"$OUT")" = "200" ] || fail "planner should still decide with the refresh in place"
+[ "$(grep -c '^fetch -q origin main' "$FETCH_LOG")" = "1" ] \
+  || fail "origin/main must be refreshed exactly once per run, not per PR (got $(grep -c '^fetch -q origin main' "$FETCH_LOG"))"
+pass "landed ref is refreshed once per run before classification"
 
 echo
 echo "All $PASS_COUNT land-queue cases passed."

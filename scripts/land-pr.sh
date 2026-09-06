@@ -101,6 +101,9 @@ land_one() {
     return 1
   fi
 
+  # The base is only trusted if it is landed in origin/main; a stale local ref
+  # would refuse GitHub's real base. Refresh before verifying (see land-gates.sh).
+  refresh_landed_ref
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
   verify_head "$pr" "$head" "$base" "$last_push_epoch" || return 1

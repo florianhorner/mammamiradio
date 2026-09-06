@@ -137,6 +137,7 @@ run_land() {
       GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
       GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" GH_MOCK_COMMENT_JSON="$EMPTY_COMMENTS" \
       MMR_LAND_REVIEW_READER="$reader" \
+      MMR_LAND_SKIP_FETCH="${MMR_LAND_SKIP_FETCH:-1}" \
       MMR_LAND_SKIP_EVIDENCE_CHECK="${MMR_LAND_SKIP_EVIDENCE_CHECK:-1}" \
       MMR_LAND_SKIP_THREAD_CHECK="${MMR_LAND_SKIP_THREAD_CHECK:-1}" \
       "$@" bash "$LAND" 7 2>&1)" || RUN_RC=$?
@@ -332,6 +333,41 @@ never_merged || fail "skipped v2 evidence without ledger must never merge"
 printf '%s' "$RUN_OUT" | grep -q "committed evidence was skipped" \
   || fail "deny message should explain that skipped evidence requires a ledger"
 pass "evidence skip without local ledger denies"
+
+# =============================================================================
+# The landed-ref refresh. The merge witness trusts a base only if it is landed in
+# origin/main; a landing seat that has not fetched since main advanced would
+# refuse GitHub's real base. The wrapper must refresh the ref before it verifies,
+# and the refresh must never be the thing that fails the landing.
+# =============================================================================
+GIT_SHIM_DIR="$TMPDIR_T/gitshim"; mkdir -p "$GIT_SHIM_DIR"
+GIT_SHIM_LOG="$TMPDIR_T/git-shim.log"; : > "$GIT_SHIM_LOG"
+REAL_GIT="$(command -v git)"
+cat > "$GIT_SHIM_DIR/git" <<GITEOF
+#!/usr/bin/env bash
+if [ "\$1" = "fetch" ]; then
+  printf '%s\\n' "\$*" >> "$GIT_SHIM_LOG"
+  [ "\${GIT_SHIM_FETCH_FAIL:-0}" = "1" ] && exit 128
+  exit 0
+fi
+exec "$REAL_GIT" "\$@"
+GITEOF
+chmod +x "$GIT_SHIM_DIR/git"
+
+READER_OK="$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
+: > "$GIT_SHIM_LOG"
+PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK"
+[ "$RUN_RC" -eq 0 ] || fail "clean PR should still arm with the fetch enabled: $RUN_OUT"
+grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "wrapper must refresh origin/main before verifying"
+merged_with "$HEAD_FULL" || fail "arming must still happen after the refresh"
+pass "wrapper refreshes origin/main before verifying the base"
+
+: > "$GIT_SHIM_LOG"
+PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GIT_SHIM_FETCH_FAIL=1
+[ "$RUN_RC" -eq 0 ] || fail "a failed refresh must not itself fail the landing (the evidence gate decides): $RUN_OUT"
+grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "refresh must still be attempted"
+merged_with "$HEAD_FULL" || fail "with valid evidence, a failed refresh must not block the arm"
+pass "a failed refresh is tolerated; the evidence gate remains the decider"
 
 echo
 echo "All $PASS_COUNT land-pr cases passed."

@@ -151,6 +151,11 @@ classify_pr() {
   esac
 }
 
+# The evidence gate trusts a base only if it is landed in origin/main. In CI the
+# checkout is already fresh; a local shadow run may not be, and a stale ref would
+# report BLOCKED_EVIDENCE for every integrated PR. Once per run, not per PR.
+refresh_landed_ref
+
 # --- gather -------------------------------------------------------------------
 PR_JSON="$(gh pr list --state open --limit 50 \
   --json number,title,headRefName,headRefOid,baseRefOid,mergeStateStatus,isDraft,labels,createdAt,url,author \
