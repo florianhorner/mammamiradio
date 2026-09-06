@@ -35,7 +35,7 @@ fix is one shared model, stated below.
    architecture `promote` jobs finish. If any stage of `addon-release.yml` fails, land
    the revert first: `git revert --no-commit <cut-sha>`, then
    `git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit. Revert the
-   commit rather than hand-editing the version files back: the cut also folded both
+   complete cut: it also folded both
    changelogs, and a version-only revert is refused by `check-changelog-sync.sh` locally
    and by `pre-release-check.sh` in CI. Keep the receipt directory because the evidence
    checker refuses a PR whose base receipt was deleted or modified.
@@ -100,15 +100,17 @@ there is a real discipline on top of it:
   `make edge-release ARGS="--target-sha <cut-sha>"` so the selection cannot silently
   drift to a newer commit.
 
-  Note what `--target-sha` can and cannot do: it refuses to pin *anything but* that
-  commit, but it cannot rescue a cut once a commit that changes image content
-  (`ha-addon/`, `mammamiradio/`, `pyproject.toml`, `radio.toml`, `model_registry.toml`,
-  the build workflow) has already landed on top. The edge branch takes its metadata
-  from `origin/main`, so pinning an older image would advertise options the image does
-  not implement — `cut-edge-release.sh` correctly refuses. A commit that only
+  `--target-sha` pins that exact commit. It refuses the cut if newer image content
+  (`ha-addon/mammamiradio/`, `ha-addon/mammamiradio-edge/`, `mammamiradio/`,
+  `pyproject.toml`, `radio.toml`, `model_registry.toml`, the build workflow) has
+  has landed on top. Only a valid top-level edge `version:` change is exempt.
+  The edge branch takes its metadata from `origin/main`, so an older image would
+  advertise options it does not implement. A commit that only
   re-triggers the build (a dev-dependency bump, a validator script, a test) does not
-  block the pin. If real content landed, cut a fresh release from current `main`. The
-  flag prevents drift; it does not undo it.
+  make the image stale. If that newer commit has a main build run, it still needs
+  a successful run; failed, cancelled or unfinished runs block the pin until a
+  retry succeeds. A commit with no run is allowed when image content is unchanged.
+  If real content landed, cut a fresh release from current `main`.
 - **Don't merge a large off-theme PR into a cut you're about to make.** It joins that
   version's changelog whether or not it soaked. Cut first, then merge the big work so it
   soaks as the *next* version's content.

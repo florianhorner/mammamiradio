@@ -19,7 +19,8 @@
 # refuses if any IMAGE_CONTENT_PATHS file — content that enters the image or its add-on
 # metadata — changed between that built commit and HEAD, because the pinned image would
 # not implement the newer metadata. A file that only re-triggers the build (a dev
-# lockfile, a test) does not block the pin.
+# lockfile, a test) does not make the image stale, but a newer main build without
+# a successful run still blocks the pin.
 #
 # Selection uses `gh run list` (needs only actions:read). The old GHCR packages-API
 # check is gone: it needed the read:packages scope the maintainer token lacks and
@@ -188,6 +189,16 @@ if [ -n "$CHANGED" ]; then
   exit 1
 fi
 
+# Unchanged content cannot excuse a failed, cancelled or unfinished build on a
+# newer main commit. This also covers --target-sha outside the candidate window.
+BUILD_PROOF_RC=0
+edge_newer_builds_verified "$TARGET_FULL" origin/main || BUILD_PROOF_RC=$?
+if [ "$BUILD_PROOF_RC" -ne 0 ]; then
+  echo "ERROR: newer main build proof is missing or could not be verified." >&2
+  echo "       Wait for its build to succeed, then re-run the edge cut." >&2
+  exit 1
+fi
+
 # Read the current edge version from origin/main (what the cut actually rewrites),
 # NOT the caller's checked-out tree — running from a stale local branch that already
 # carries `version: $SHA` must not falsely report "already released" while origin/main
@@ -201,7 +212,7 @@ fi
 if [ "$SHA" != "$HEAD_SHORT" ]; then
   echo "Note: pinning to the latest BUILT main commit $SHA (origin/main HEAD is $HEAD_SHORT;" >&2
   echo "      the commits in between change nothing that enters the image or its" >&2
-  echo "      add-on metadata; some may be trigger-only commits with no or a failed build)." >&2
+  echo "      add-on metadata; any newer main build has a successful run)." >&2
 fi
 
 # OWNER feeds the PR body and image-path string below. Derive it AFTER target

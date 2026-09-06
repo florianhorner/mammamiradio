@@ -32,7 +32,7 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **The cut window.** Between the cut merge and the second `promote` job, `main` advertises a version whose image is not published yet. A fresh install of the stable add-on fails and rolls back, and an update fails to download. A station already playing keeps playing, because the Supervisor pulls the new image before it stops the old container.
 
-The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). Recovery is under "Cutting a stable release" below: land `git revert <cut-sha>`, the whole cut commit rather than the version files alone, with the cut's review receipt directory restored, then debug.
+The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). For recovery, prepare `git revert --no-commit <cut-sha>`, restore the cut's review receipt directory, then commit and land the complete revert before debugging. See "Cutting a stable release" below for the commands.
 
 To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily. `dependabot-automerge.yml` reads current `main` on Dependabot PR events, config.yaml pushes to main, hourly, and on demand. A missing image disables auto-merge on eligible Dependabot PRs and adds `cut-window-hold`; a failed label write fails the run. An unreachable registry leaves auto-merge unchanged. Arming requires verified patch/minor metadata, a matching PR head, a current `main` check, and an active workflow. The sweep only disarms. After publication, request `@dependabot rebase` from a maintainer account to trigger a fresh PR event, or use the landing workflow. Major updates need manual landing. Label events can re-arm a PR you disarmed by hand.
 
@@ -182,9 +182,9 @@ worked, and the watchdog was satisfied. Nothing in the log grep would have shown
 Prolonged-silence detection cannot catch this either, because listeners fail before
 they are ever counted as listeners.
 
-**The cut — 4 steps, when the edge line feels good.** Land the cut PR only when you can
+**The cut: 4 steps, after edge validation.** Land the cut PR only when you can
 finish the tag and the QA in the same sitting: the window opens at the merge, and every
-hour it stays open is a failed install for someone. The 3.0.0 cut of 2026-09-02 merged in
+hour it stays open leaves new installs broken. The 3.0.0 cut of 2026-09-02 merged in
 the evening with QA deferred to "the stable image", which cannot exist before the tag; it
 had to be reverted the same night.
 
@@ -213,9 +213,9 @@ had to be reverted the same night.
    The physical 20-run HA Green receipt gate is opt-in (`MMR_REQUIRE_HA_RECEIPTS=1`);
    unset, pre-flight prints a waiver and continues. When armed, the cut must already
    contain the receipt set for its complete release content, recorded with the commands in
-   [`docs/music-sources.md`](../music-sources.md), and pre-flight fails loud if the
-   evidence is missing, stale, or over its two-second p95. Pre-flight always fails
-   loud if the tag/version, release metadata, changelog head, or either per-arch
+   [`docs/music-sources.md`](../music-sources.md), and pre-flight fails if the
+   evidence is missing, stale, or over its two-second p95. Pre-flight also fails
+   if the tag/version, release metadata, changelog head, or either per-arch
    `:sha` image disagrees.
 
 2. **Wait for `addon-build.yml` green** on `$CUT_SHA` (~15-25 min; the PR touches
@@ -280,8 +280,9 @@ had to be reverted the same night.
    update off it. There is **no** "open the next RC" step — you are back at steady state.
 
 **If the release fails, revert first, debug second.** Any failure in `addon-release.yml`
-leaves the window open indefinitely. Land `git revert <cut-sha>`, then investigate. A stuck
-window is a broken install for everyone.
+leaves the window open indefinitely. Prepare the complete revert with
+`git revert --no-commit <cut-sha>`, restore its review receipt as described below,
+then commit and land it before investigating. A stuck window breaks new installs.
 
 Revert the whole cut commit, not just the version files. The cut also folded both
 changelogs, so a version-only revert leaves the ha-addon CHANGELOG head at the unreleased
@@ -561,7 +562,11 @@ Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-a
 
 1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
 
-The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the image trigger set (`IMAGE_PATHS` in `scripts/edge-select.sh` is the full list — `ha-addon/**`, `mammamiradio/**`, `proof/media/**`, `pyproject.toml`, `requirements*.txt`, `radio.toml`, `model_registry.toml`, several `scripts/` and `tests/` entries, and `.github/workflows/addon-build.yml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). "Image file" here means `IMAGE_CONTENT_PATHS`: the Dockerfile COPY set, `ha-addon/mammamiradio/`, the build workflow. A change to a trigger-only path such as `requirements-dev.txt` since the built commit does not block the pin. Both path sets, the green-build queries and the drift check live in `scripts/edge-select.sh`, which `cut-edge-release.sh` sources — so the manual cut and the shadow land queue (`scripts/land-queue-plan.sh`, which reports the edge target it *would* pin) select from one implementation. Two hermetic tests fail on drift: `tests/workflows/test_cut_edge_release.sh` (shell) and `tests/repo/test_repo_scripts.py` (Python), both asserting against that one declaration site. It uses `gh run list` (needs only `actions:read` — which is why `.github/workflows/land-queue.yml` grants that scope; the lookback window is `EDGE_RUN_LOOKBACK`, default 40 runs); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
+The pin **may trail `origin/main` HEAD**. Commits outside the build trigger paths have no image tag, so the script selects the newest main commit with a successful `Build HA Addon` run. It refuses to open a PR when that proof cannot be read or newer image content differs.
+
+`IMAGE_CONTENT_PATHS` covers the Dockerfile COPY sources, both add-on directories, and the build workflow. Only a valid top-level `version:` change in the edge config is exempt; its other metadata, translations and access policy still count. A trigger-only change, such as `requirements-dev.txt`, does not make an older image stale. But if a newer main commit has a build run, it needs a successful run: failed, cancelled or unfinished runs block the pin until a retry succeeds. A commit with no run is allowed when image content is unchanged.
+
+Both path sets and all selection checks live in `scripts/edge-select.sh`, shared by the manual cut and the shadow queue (`scripts/land-queue-plan.sh`). Tests check trigger parity, staged-source coverage, metadata drift and failed-proof refusal. Selection uses `gh run list` with `actions:read`; `EDGE_RUN_LOOKBACK` defaults to 40 candidate runs. Newer commits are checked individually, so that window cannot hide failed proof. The script does not use the GHCR packages API.
 
 Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
 
@@ -735,7 +740,7 @@ Before merging ANY change that touches addon files:
 - [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —
       `scripts/check-merge-gate.sh` passes if anything about merging looks off
 
-**After merging a cut commit**, follow "Cutting a stable release" above. Do not tag `HEAD`: tag the cut commit itself, and if the release workflow fails, land `git revert <cut-sha>` — the whole cut commit, not the version files alone, with the cut's review receipt directory restored.
+**After merging a cut commit**, follow "Cutting a stable release" above. Tag the cut commit itself. If the release workflow fails, prepare `git revert --no-commit <cut-sha>`, restore its review receipt directory, then commit and land the whole revert using the commands above.
 
 ## Release invariants gate (2026-04-27 onward)
 
@@ -888,7 +893,8 @@ rolls back; an update fails to download but leaves a playing station alone.
 - Or by hand: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:VERSION`
 - **Release mid-flight?** Wait for `addon-release.yml` to finish promoting *both*
   architectures, then re-check.
-- **Release failed or abandoned?** Land `git revert <cut-sha>` immediately, then debug.
+- **Release failed or abandoned?** Prepare `git revert --no-commit <cut-sha>`, restore
+  its review receipt, then commit and land the revert before debugging.
   Revert the commit rather than the version files alone: the cut folded both changelogs
   too, and a partial revert is refused by `check-changelog-sync.sh` and `pre-release-check.sh`.
   Keep the cut's review receipt directory in the revert (`git revert --no-commit <cut-sha>`,

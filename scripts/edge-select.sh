@@ -16,8 +16,9 @@
 #       main, so the pinned image would not implement the metadata being advertised.
 #       Files that only re-trigger the build (a dev lockfile, a validator script, a
 #       test) are in IMAGE_PATHS but not in IMAGE_CONTENT_PATHS: they never enter
-#       the image, so they never make an older image stale. The edge add-on's own
-#       metadata is excluded too; its version line is the thing being cut.
+#       the image. Only the edge config's valid top-level version line is exempt.
+#       A newer main commit with a build run but no successful run still blocks
+#       the pin: unchanged image content does not excuse failed proof.
 #
 # Every function fails CLOSED: an unverifiable state (gh error, git error) is a
 # refusal, never a soft pass.
@@ -34,14 +35,12 @@ IMAGE_PATHS="ha-addon mammamiradio proof/media pyproject.toml requirements.txt r
 # the sources addon-build.yml stages into the build context ("Copy source into
 # addon build context": mammamiradio/, pyproject.toml, model_registry.toml) plus
 # the COPY lines in ha-addon/mammamiradio/Dockerfile (radio.toml, rootfs/), the
-# stable add-on directory itself (Dockerfile, config.yaml options/schema,
-# translations) and the workflow that picks the base image and build args. The
-# drift check (I3) uses THIS set. ha-addon/mammamiradio-edge/ is deliberately NOT
-# in it: its config.yaml version line moves on every edge cut, and its options
-# mirror the stable add-on, so including it refused the pin right after each cut.
+# stable and edge add-on directories (config, translations, access policy), and
+# the workflow that picks the base image and build args. The drift check (I3)
+# exempts only a valid version-line change in the edge config.
 # It must stay a subset of IMAGE_PATHS and cover every staged source;
 # tests/workflows/test_cut_edge_release.sh asserts both directions.
-IMAGE_CONTENT_PATHS="ha-addon/mammamiradio mammamiradio pyproject.toml radio.toml model_registry.toml .github/workflows/addon-build.yml"
+IMAGE_CONTENT_PATHS="ha-addon/mammamiradio ha-addon/mammamiradio-edge mammamiradio pyproject.toml radio.toml model_registry.toml .github/workflows/addon-build.yml"
 
 # The edge add-on config whose `version:` field IS the image tag the Supervisor
 # pulls. cut-edge-release.sh sets this before sourcing; the default serves every
@@ -74,9 +73,33 @@ edge_green_shas() {
 # Returns 2 (distinct from "no build") when the query itself fails.
 edge_commit_has_green_build() {
   local target="$1" runs
-  runs="$(gh run list --workflow=addon-build.yml --commit "$target" \
+  runs="$(gh run list --workflow=addon-build.yml --branch main --commit "$target" \
     --status success --limit 1 --json conclusion -q 'length' 2>/dev/null)" || return 2
-  [ "${runs:-0}" -ge 1 ]
+  case "$runs" in 1) return 0 ;; 0) return 1 ;; *) return 2 ;; esac
+}
+
+# Check every intervening main SHA directly; the candidate window cannot prove
+# that an older failed run is absent. No run is allowed for content-identical
+# commits. Once a run exists, require a success for that SHA (including retries),
+# just as the exact-target check does. Return 2 when proof cannot be read.
+edge_newer_builds_verified() {
+  local target="$1" ref="${2:-origin/main}" commits commit runs rc
+  commits="$(git rev-list "$target..$ref" 2>/dev/null)" || return 2
+  while IFS= read -r commit; do
+    [ -n "$commit" ] || continue
+    runs="$(gh run list --workflow=addon-build.yml --branch main --commit "$commit" \
+      --limit 1 --json status -q 'length' 2>/dev/null)" || return 2
+    case "$runs" in
+      0) continue ;;
+      1)
+        edge_commit_has_green_build "$commit" || {
+          rc=$?
+          echo "Build HA Addon has no verified successful run for newer main commit $commit." >&2
+          return "$rc"
+        } ;;
+      *) return 2 ;;
+    esac
+  done <<< "$commits"
 }
 
 # edge_newest_built_sha [<ref>] -> full SHA of the newest commit on <ref>
@@ -108,18 +131,56 @@ edge_newest_built_sha() {
 # <sha> and <ref> (default origin/main). Empty output + 0 means no drift.
 # Returns 2 when the diff itself could not be computed — an unverifiable drift
 # check is a refusal, never an assumed-clean pass.
-edge_image_drift() {
-  local target="$1" ref="${2:-origin/main}" changed top
+edge_image_drift() (
+  local target="$1" ref="${2:-origin/main}" changed top path before after rc drift=""
   # No `|| true`: `git diff --name-only` already exits 0 for both changed and
   # unchanged, so a non-zero here is a real verification failure (bad object,
   # git error). Treat it like every other unverifiable state — hard-fail.
   # Pathspecs are relative to the cwd; anchor at the repository root so a caller in
   # a subdirectory cannot get an empty diff and accept a stale image.
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 2
+  cd "$top" || return 2
   # shellcheck disable=SC2086  # IMAGE_CONTENT_PATHS intentionally word-splits into pathspecs
-  changed="$(cd "$top" && git diff --name-only "$target" "$ref" -- $IMAGE_CONTENT_PATHS 2>/dev/null)" || return 2
-  printf '%s' "$changed"
-  [ -z "$changed" ]
+  changed="$(git diff --no-renames --name-only "$target" "$ref" -- $IMAGE_CONTENT_PATHS 2>/dev/null)" || return 2
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ "$path" = "$EDGE_CONFIG" ]; then
+      rc=0
+      before="$(edge_config_without_version "$target")" || rc=$?
+      [ "$rc" -ne 2 ] || return 2
+      if [ "$rc" -eq 0 ]; then
+        after="$(edge_config_without_version "$ref")" || rc=$?
+        [ "$rc" -ne 2 ] || return 2
+        if [ "$rc" -eq 0 ] && [ "$before" = "$after" ]; then continue; fi
+      fi
+    fi
+    drift="${drift}${path}"$'\n'
+  done <<< "$changed"
+  printf '%s' "$drift"
+  [ -z "$drift" ]
+)
+
+# Compare immutable regular-file snapshots, including modes and trailing lines.
+# Malformed/duplicate version fields cannot take the version-only exception.
+edge_config_without_version() {
+  local entry content
+  entry="$(git ls-tree "$1" -- "$EDGE_CONFIG" 2>/dev/null)" || return 2
+  case "$entry" in '100644 blob '*|'100755 blob '*) ;; *) return 1 ;; esac
+  content="$(git show "$1:$EDGE_CONFIG" 2>/dev/null && printf '.')" || return 2
+  printf '%s\n' "$content" | awk -v mode="${entry%% *}" '
+    BEGIN { print mode }
+    /^version:/ {
+      count++
+      value = substr($0, 10)
+      if (value ~ /^"[0-9a-f]+"$/ || value ~ /^\047[0-9a-f]+\047$/)
+        value = substr(value, 2, length(value) - 2)
+      if ($0 !~ /^version: / || value !~ /^[0-9a-f]+$/ || length(value) < 7 || length(value) > 40)
+        invalid = 1
+      next
+    }
+    { print }
+    END { if (count != 1 || invalid) exit 1 }
+  '
 }
 
 # edge_pinned_version [<ref>] -> the short SHA edge currently advertises on <ref>
@@ -156,5 +217,6 @@ eligible_edge_sha() {
     printf '%s\n' "$drift" | sed 's/^/  /' >&2
     return 1
   }
+  edge_newer_builds_verified "$target" "$ref" || return $?
   git rev-parse --short=7 "$target"
 }
