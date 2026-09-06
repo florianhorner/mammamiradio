@@ -107,7 +107,10 @@ Hard rules agents must not invent around:
   The workflow adds `cut-window-hold` to PRs it disarms during a release cut.
   After publication, use a fresh PR event with verified Dependabot metadata or
   the landing workflow to resume them. The sweep only disarms. PR events can
-  re-arm a PR you disarmed by hand.
+  re-arm a PR you disarmed by hand. Before a cut, the release operator uses
+  `dependabot-window-hold.sh freeze` and keeps human landings paused until both
+  architecture promotions succeed. Resume explicitly with `thaw <release-run-id>`;
+  see the add-on runbook for the required proof and recovery.
   If quality fails on an unrelated one-test timeout, verify the focused test
   locally before treating it as a rerunnable flake; stop on any deterministic
   dependency break.

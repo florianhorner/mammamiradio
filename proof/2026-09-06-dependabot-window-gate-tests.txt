@@ -7,6 +7,10 @@ PASS: direct and sweep disarm: eligible PRs only, idempotent labels, every API f
 PASS: pass/unknown sweeps and unknown PR verdict do not mutate state
 PASS: arming requires verified update type, exact head, fresh main, eligible PR and successful APIs
 PASS: delayed pre-cut arming cannot undo the cut sweep
+PASS: freeze admission rejects active, armed, incomplete, malformed and unreadable state
+PASS: freeze disables, drains a late arming run, disarms afterward and refuses timeout/API errors
+PASS: thaw validates current release proof, blocks pending cuts and reports ambiguous enable without claiming success
+PASS: real landing path gates pinned version changes after evidence; ordinary PRs retain existing behavior
 All dependabot automerge gate cases passed.
 Exit code: 0
 
@@ -40,7 +44,23 @@ PASS: guard catches renamed and indirect Dependabot command automation
 PASS: workflows and scripts do not automate Dependabot comment commands
 Exit code: 0
 
-$ shellcheck scripts/dependabot-window-hold.sh scripts/check-advertised-version.sh tests/workflows/test_dependabot_automerge_gate.sh
+$ bash tests/workflows/test_land_pr.sh
+All 22 land-pr cases passed.
+Exit code: 0
+
+$ bash tests/workflows/test_land_queue.sh
+All 35 land-queue cases passed.
+Exit code: 0
+
+$ bash tests/workflows/test_preship_squad_gate.sh
+All 33 pre-ship squad gate cases passed.
+Exit code: 0
+
+$ .venv/bin/python -m pytest tests/repo/test_repo_scripts.py -q -n 4 --no-cov -p no:cacheprovider
+96 passed.
+Exit code: 0
+
+$ shellcheck -x scripts/dependabot-window-hold.sh scripts/land-pr.sh scripts/check-advertised-version.sh tests/workflows/test_dependabot_automerge_gate.sh
 Exit code: 0
 
 $ actionlint .github/workflows/dependabot-automerge.yml .github/workflows/quality.yml

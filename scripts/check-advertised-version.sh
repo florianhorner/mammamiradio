@@ -15,6 +15,8 @@
 # Usage:
 #   scripts/check-advertised-version.sh              # check config.yaml's version
 #   scripts/check-advertised-version.sh --version X.Y.Z
+#   scripts/check-advertised-version.sh --config path/to/config.yaml [--version X.Y.Z]
+#   cat config.yaml | scripts/check-advertised-version.sh --config /dev/stdin --version X.Y.Z
 #
 # Exit codes:
 #   0  PASS    - the advertised tag exists for every architecture
@@ -46,9 +48,19 @@ CONFIG="$REPO_ROOT/ha-addon/mammamiradio/config.yaml"
 ARCHES=("amd64" "aarch64")
 REGISTRY_HOST="${MAMMAMIRADIO_REGISTRY_HOST:-ghcr.io}"
 
+# A release thaw supplies main's pinned config, even from an older checkout.
+# --config accepts a file; /dev/stdin requires --version so it is read only once.
 VERSION=""
 while [ $# -gt 0 ]; do
     case "$1" in
+        --config)
+            CONFIG="${2:-}"
+            if [ -z "$CONFIG" ]; then
+                echo "ERROR: --config needs a path" >&2
+                exit 2
+            fi
+            shift 2
+            ;;
         --version)
             VERSION="${2:-}"
             if [ -z "$VERSION" ]; then

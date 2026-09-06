@@ -11,8 +11,9 @@ name: Dependabot Automerge
 # It only disarms; arming requires verified metadata from a fresh PR event.
 # Major updates need manual landing.
 #
-# Merges can occur before the workflow runs. Keep strict up-to-date checks and
-# disarm and freeze the queue before landing a release cut.
+# Before a cut, the release operator disables this workflow, drains existing
+# runs and disarms PRs via dependabot-window-hold.sh freeze. land-pr.sh verifies
+# that barrier for stable-version changes. Resume explicitly after publication.
 
 on:
   pull_request_target:
@@ -32,6 +33,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
 

@@ -367,8 +367,12 @@ Patch and minor Python PRs may use
 The workflow adds `cut-window-hold` to PRs it disarms during a release cut.
 The sweep only disarms. After publication, a fresh PR event with verified
 Dependabot metadata may re-arm patch/minor updates. Major GitHub Actions
-updates still use `scripts/land-pr.sh`. Disarm and freeze the queue before a
-cut; merges can occur before the workflow runs. See
+updates still use `scripts/land-pr.sh`. Before a cut, the release operator runs
+`dependabot-window-hold.sh freeze`: disable new runs, drain existing runs, then
+disarm PRs. Stable-version changes require that verified freeze at landing.
+Keep human landings paused through both architecture promotions and resume
+explicitly with `thaw <release-run-id>`. The report-only queue covers ordinary
+review/proof readiness; its READY result does not establish cut admission. See
 `docs/runbooks/ha-addon.md`, "The cut window". Do not attach Dependabot branches
 to Conductor feature slots.
 

@@ -103,6 +103,12 @@ land_one() {
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
   verify_head "$pr" "$head" "$base" "$last_push_epoch" || return 1
 
+  # A stable-version change must not race an earlier Dependabot arming run.
+  # This is read-only admission; freeze/thaw remain explicit release actions.
+  local slug
+  slug="$(_repo_slug)" || return 1
+  GH_REPO="$slug" bash "$SCRIPT_DIR/dependabot-window-hold.sh" check-cut "$base" "$head" || return 1
+
   # Pin the merge to the exact head verified above. If anything pushes to the
   # branch after this, GitHub refuses the merge instead of landing unseen code.
   gh pr merge "$pr" --squash --auto --match-head-commit "$head" \
