@@ -354,6 +354,7 @@ def _clear_cloud_route(route_key: tuple[str, str, str, str]) -> None:
     stale failure a straggler call recorded while the probe was in flight."""
     with _cloud_voice_state_lock:
         _failed_cloud_routes.pop(route_key, None)
+        _cloud_route_disable_reasons.pop(route_key, None)
 
 
 def _memoize_failed_cloud_route(route_key: tuple[str, str, str, str], *, retryable: bool, reason: str = "") -> None:

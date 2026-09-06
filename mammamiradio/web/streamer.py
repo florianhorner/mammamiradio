@@ -4536,6 +4536,7 @@ def _voice_provider_health(engine: str, configured: bool, voice_health: dict[str
     return {
         "configured": configured,
         "degraded": disabled or cooldown,
+        "cooldown": cooldown,
         "last_error": reason if (disabled or cooldown) else "",
         "key_status": key_status,
         "failed_voices": raw_failed if isinstance(raw_failed, int) else 0,
@@ -4558,10 +4559,14 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "auth_failures": state.anthropic_auth_failures,
             "key_status": state.anthropic_key_status,
         },
+        # LLM OpenAI key probe (Engine Room "OpenAI:" line). TTS breaker state for
+        # the same key lives under openai_speech so Voices can show session-off /
+        # cooldown without colliding with the script-provider verdict.
         "openai": {
             "configured": bool(config.openai_api_key),
             "key_status": state.openai_key_status,
         },
+        "openai_speech": _voice_provider_health("openai", bool(config.openai_api_key), voice_health),
         "azure_speech": _voice_provider_health(
             "azure", bool(config.azure_speech_key and config.azure_speech_region), voice_health
         ),

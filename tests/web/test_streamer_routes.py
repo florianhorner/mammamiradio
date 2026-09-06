@@ -13683,10 +13683,61 @@ def test_provider_health_marks_voice_key_rejected_after_401():
         assert health["elevenlabs"] == {
             "configured": True,
             "degraded": True,
+            "cooldown": False,
             "last_error": "HTTP 401 — quota_exceeded",
             "key_status": "rejected",
             "failed_voices": 0,
         }
+    finally:
+        reset_voice_failures()
+
+
+def test_provider_health_marks_voice_cooldown_separately_from_session_disable():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route, reset_voice_failures
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    reset_voice_failures()
+    try:
+        _memoize_failed_cloud_route(("azure", "westeurope", "fp", ""), retryable=True)
+        config = SimpleNamespace(
+            anthropic_api_key="",
+            openai_api_key="sk",
+            azure_speech_key="az",
+            azure_speech_region="westeurope",
+            elevenlabs_api_key="",
+        )
+        state = StationState()
+        health = _provider_health_snapshot(config, state)
+        assert health["azure_speech"]["configured"] is True
+        assert health["azure_speech"]["degraded"] is True
+        assert health["azure_speech"]["cooldown"] is True
+        assert health["azure_speech"]["key_status"] == "unverified"
+        assert health["openai_speech"] == {
+            "configured": True,
+            "degraded": False,
+            "cooldown": False,
+            "last_error": "",
+            "key_status": "unverified",
+            "failed_voices": 0,
+        }
+    finally:
+        reset_voice_failures()
+
+
+def test_clear_cloud_route_drops_stale_disable_reason():
+    from mammamiradio.audio.tts import (
+        _clear_cloud_route,
+        _cloud_route_disable_reasons,
+        _memoize_failed_cloud_route,
+        reset_voice_failures,
+    )
+
+    reset_voice_failures()
+    route_key = ("elevenlabs", "fp", "eleven_multilingual_v2", "")
+    try:
+        _memoize_failed_cloud_route(route_key, retryable=False, reason="HTTP 401 — stale")
+        _clear_cloud_route(route_key)
+        assert route_key not in _cloud_route_disable_reasons
     finally:
         reset_voice_failures()
 

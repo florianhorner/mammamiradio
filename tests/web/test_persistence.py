@@ -814,10 +814,16 @@ def test_saving_voice_key_rearms_the_engine(monkeypatch):
         azure_speech_region="",
         elevenlabs_api_key="",
     )
-    state = SimpleNamespace()
+    state = SimpleNamespace(openai_key_status="rejected", openai_key_checked_at=1.0)
     monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
 
-    persistence._apply_live_credentials(state, config, {"ELEVENLABS_API_KEY": "k"})
+    persistence._apply_live_credentials(
+        state,
+        config,
+        {"ELEVENLABS_API_KEY": "k", "OPENAI_API_KEY": "sk-new"},
+    )
 
-    assert calls == ["elevenlabs"]
+    assert calls == ["openai", "elevenlabs"]
     assert config.elevenlabs_api_key == "k"
+    assert config.openai_api_key == "sk-new"

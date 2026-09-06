@@ -8191,13 +8191,16 @@ function updateEngineRoom(st,caps){
       openaiLine=statusInline('ready','available');
     }
     // Voices: same states as the LLM rows. provider_health is on the same payload.
+    // openai_speech is the TTS breaker (LLM OpenAI key status stays on the OpenAI line).
     const ph=caps.provider_health||{};
     const voiceLines=[];
-    for(const [key,label] of [['elevenlabs','ElevenLabs'],['azure_speech','Azure']]){
+    for(const [key,label] of [['elevenlabs','ElevenLabs'],['azure_speech','Azure'],['openai_speech','OpenAI']]){
       const p=ph[key]||{};
       if(!p.configured)continue;
       if(p.key_status==='rejected'){
         voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key in Settings, or restart the add-on'));
+      }else if(p.cooldown){
+        voiceLines.push(label+' '+statusInline('degraded','retrying',p.last_error||'Temporary provider trouble; will retry automatically'));
       }else if(p.degraded){
         voiceLines.push(label+' '+statusInline('degraded','off this session',p.last_error||''));
       }else{
