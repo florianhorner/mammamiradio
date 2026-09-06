@@ -34,7 +34,49 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). Recovery is under "Cutting a stable release" below: land `git revert <cut-sha>`, the whole cut commit rather than the version files alone, then debug.
 
-To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily and raises a flag if it never closed.
+To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily. `dependabot-automerge.yml` reads current `main` on Dependabot PR events, config.yaml pushes to main, hourly, and on demand. A missing image disables auto-merge on eligible Dependabot PRs and adds `cut-window-hold`; a failed label write fails the run. An unreachable registry leaves auto-merge unchanged. Arming requires verified patch/minor metadata, a matching PR head, a current `main` check, and an active workflow. The sweep only disarms. After publication, request `@dependabot rebase` from a maintainer account to trigger a fresh PR event, or use the landing workflow. Major updates need manual landing. Label events can re-arm a PR you disarmed by hand.
+
+Before landing a cut, the release operator must freeze Dependabot. The same
+operator owns the freeze, cut and resume; do not run them concurrently from
+different seats. Keep strict up-to-date branch checks and pause human landings
+through publication.
+
+```bash
+GH_REPO=florianhorner/mammamiradio bash scripts/dependabot-window-hold.sh freeze
+```
+
+This explicitly disables the workflow, waits up to five minutes for every
+existing run to finish, then disarms existing Dependabot auto-merges. It verifies
+disabled state, zero active runs and zero armed Dependabot PRs. If disable fails
+or its result cannot be verified, inspect the workflow state and do not cut.
+After a verified pause, a timeout or later API failure does not enable it again;
+finish draining and rerun `freeze`. Disabling alone does not stop a run that
+already passed the arming check.
+
+`scripts/land-pr.sh` compares the stable versions in the verified base and PR
+head. A version change, including a cut revert, requires this freeze admission
+before it can arm the merge. An ordinary PR keeps the existing landing checks.
+The gate reads state; it never disables workflows or disarms PRs itself. Direct
+GitHub UI/API merges bypass this local guard and must obey the same freeze.
+
+Keep the workflow disabled until both architecture promotions succeed. Then use
+the successful `addon-release.yml` run ID to resume explicitly:
+
+```bash
+GH_REPO=florianhorner/mammamiradio bash scripts/dependabot-window-hold.sh thaw <release-run-id>
+```
+
+`thaw` requires the current main version, its exact release tag/commit, a
+successful release run, successful amd64 and aarch64 promotion jobs in the same
+run attempt, and an explicit registry `pass` for main's image configuration.
+It also refuses any still-armed PR, so an old release cannot reopen Dependabot
+while a cut is waiting for CI. Before enable, changed proof, missing jobs, API
+errors or an unknown registry verdict retain the pause. If the enable request
+or its read-back fails, the workflow may already be active: inspect its actual
+state before proceeding. After a partial workflow rerun,
+rerun all release jobs if that attempt lacks either promotion. After reverting
+a failed cut, use the successful release run for the restored published version.
+A successful thaw enables future PR events; it does not re-arm held PRs itself.
 
 ## First-listen operator check
 
@@ -223,8 +265,8 @@ they are ever counted as listeners.
    ha-addon CHANGELOG head do not equal the tag, or either arch `:sha` image is missing.
 
    **The window closes only when both arch `promote` jobs finish** — not at tag push.
-   Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`, or just
-   `bash scripts/check-advertised-version.sh`.
+   Verify both images with `bash scripts/check-advertised-version.sh`. Keep the
+   freeze through this check, then use the full `thaw` command in "The cut window".
 
 4. **Write the GitHub Release.** Nothing in CI creates it, and HACS keys the integration
    update off it. There is **no** "open the next RC" step — you are back at steady state.
@@ -643,7 +685,8 @@ gates" (single source of truth). The short version:
   `scripts/emit-review-evidence.sh --reattest --base origin/main`, commit and
   push the receipt swap, then retry after CI. For an up-to-date head it arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
-  fires on the exact head it verified.
+  fires on the exact head it verified. Stable-version changes also require the
+  read-only Dependabot freeze admission described in "The cut window".
 - Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local
   hook (`scripts/hooks/require-preship-squad.sh`); `--disable-auto`
   (disarming) is allowed. The hook is a local guard, not a security boundary.
