@@ -8,13 +8,13 @@
 # ghcr.io/<owner>/mammamiradio-addon-{arch}:<short-sha>), and "update available" is
 # a version-string compare — so changing it surfaces an in-place Update on the Pi.
 #
-# Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` only
-# builds an image when a commit touches IMAGE_PATHS (scripts/edge-select.sh): add-on or
+# Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` runs on
+# main pushes that touch IMAGE_PATHS (scripts/edge-select.sh): add-on or
 # application source, canonical project/model config, media-proof inputs, image
 # validation/smoke scripts, or the build workflow itself. When the tip commits are
-# outside that trigger set, no :<sha> image exists for them, so pinning HEAD would make
-# the Supervisor pull a missing tag. This script picks the newest main commit with a
-# successful build run (that success is the proof both per-arch images were pushed,
+# outside that trigger set, they need a manual build to get a :<sha> image. Pinning
+# HEAD without build proof could make the Supervisor pull a missing tag. This script
+# picks the newest main commit with a successful build run (the proof both per-arch images were pushed,
 # proven, and smoked) and HARD-FAILS rather than advertise an unverified tag. It also
 # refuses if any IMAGE_CONTENT_PATHS file — content that enters the image or its add-on
 # metadata — changed between that built commit and HEAD, because the pinned image would

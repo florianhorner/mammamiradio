@@ -4,6 +4,9 @@
 $ .venv/bin/pytest tests/repo/test_repo_scripts.py -k 'edge_drift or cut_edge_release' -q --no-cov
 45 passed, 95 deselected
 
+$ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fileMode GIT_CONFIG_VALUE_0=false .venv/bin/pytest tests/repo/test_repo_scripts.py -k 'edge_drift or cut_edge_release' -q --no-cov -p no:cacheprovider
+45 passed, 95 deselected
+
 $ bash tests/workflows/test_cut_edge_release.sh
 All 57 cut-edge-release checks passed.
 
@@ -19,6 +22,7 @@ All checks passed.
 The Git fixtures cover version-only changes; runtime metadata, access policy,
 translations and file changes; malformed/duplicate version fields; NUL bytes on
 both sides and beyond 8 KiB; file modes; renames; and subdirectory callers.
+The mode fixtures record the executable bit in Git's index with fileMode disabled.
 The shell fixtures cover both cut modes and the actual queue planner, including
 root lookup failure, failed/cancelled/unfinished builds, deliberate skips,
 failed runs behind newer commits, successful retries, truncated history,

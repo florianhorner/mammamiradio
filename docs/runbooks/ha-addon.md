@@ -562,7 +562,7 @@ Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-a
 
 1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
 
-The pin **may trail `origin/main` HEAD**. Commits outside the build trigger paths have no image tag, so the script selects the newest main commit with a successful `Build HA Addon` run. It refuses to open a PR when that proof cannot be read or newer image content differs.
+The pin **may trail `origin/main` HEAD**. Commits outside the push build trigger paths do not automatically get an image tag, so the script selects the newest main commit with a successful `Build HA Addon` run. It refuses to open a PR when that proof cannot be read or newer image content differs.
 
 `IMAGE_CONTENT_PATHS` covers the Dockerfile COPY sources, both add-on directories, and the build workflow. Only a valid top-level `version:` change in the edge config is exempt; its other metadata, translations and access policy still count. A trigger-only change, such as `requirements-dev.txt`, does not make an older image stale. But if a newer main commit has an attempted build, it needs a successful run: failed, cancelled or unfinished runs block the pin until a retry succeeds. No run, or only completed skipped runs, is allowed when image content is unchanged. The workflow deliberately skips edge-version cuts.
 
@@ -570,7 +570,7 @@ Both path sets and all selection checks live in `scripts/edge-select.sh`, shared
 
 Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
 
-**Constraint:** `Build HA Addon` is push-only (it does not run on PRs), so it must never be a required check on `main` — requiring it would make every PR unmergeable.
+**Constraint:** `Build HA Addon` runs on `main` pushes and manual dispatch, not PRs, so it must never be a required check on `main` — requiring it would make every PR unmergeable.
 
 **Smoke runs in addon mode.** Every smoke `docker run` (`addon-build.yml`, and both blocks in `addon-release.yml`) sets `-e SUPERVISOR_TOKEN=smoke-ci`, mirroring how the HA Supervisor launches the image. Without it the container boots in standalone mode, where binding `0.0.0.0` with no admin token is a fatal config error (`config._is_addon` is false), uvicorn never starts, and the smoke fails with `/healthz` connection-refused — a false negative that doesn't reflect the real addon. Keep the token on any new smoke step.
 

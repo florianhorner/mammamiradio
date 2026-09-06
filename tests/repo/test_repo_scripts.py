@@ -1442,7 +1442,7 @@ def test_edge_drift_exempts_only_valid_version_changes(tmp_path: Path, change: s
     elif change == "renamed_config":
         config.rename(edge / "renamed.yaml")
     elif change == "mode":
-        config.chmod(0o755)
+        assert _run(["git", "config", "core.fileMode", "false"], cwd=tmp_path).returncode == 0
     elif change == "symlink":
         config.unlink()
         config.symlink_to("apparmor.txt")
@@ -1463,6 +1463,9 @@ def test_edge_drift_exempts_only_valid_version_changes(tmp_path: Path, change: s
     elif change == "late_nul":
         config.write_bytes(updated.encode() + b"\x00")
     assert _run(["git", "add", "-A"], cwd=tmp_path).returncode == 0
+    if change == "mode":
+        # Set the committed mode even when Git ignores working-tree mode changes.
+        assert _run(["git", "update-index", "--chmod=+x", str(config)], cwd=tmp_path).returncode == 0
     assert _run(["git", "commit", "-qm", "chore: fixture change"], cwd=tmp_path).returncode == 0
     cwd = tmp_path / "scripts" if subdirectory else tmp_path
     cwd.mkdir(exist_ok=True)
