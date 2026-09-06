@@ -363,9 +363,18 @@ Do not resolve either path from a third workspace.
 Dependabot is the automated exception to the human and feature landing path.
 Patch and minor Python PRs may use
 `.github/workflows/dependabot-automerge.yml`. Stale PR handling follows
-`docs/agents.md`: rejected or behind PRs park for an authenticated maintainer,
-including manual major-Action landings through `scripts/land-pr.sh`. Do not
-attach Dependabot branches to Conductor feature slots.
+`docs/agents.md`: rejected or behind PRs park for an authenticated maintainer.
+The workflow adds `cut-window-hold` to PRs it disarms during a release cut.
+The sweep only disarms. After publication, a fresh PR event with verified
+Dependabot metadata may re-arm patch/minor updates. Major GitHub Actions
+updates still use `scripts/land-pr.sh`. Before a cut, the release operator runs
+`GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze`: disable new runs, drain existing runs, then
+disarm PRs. Stable-version changes require that verified freeze at landing.
+Keep human landings paused through both architecture promotions and resume
+explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`. The report-only queue covers ordinary
+review/proof readiness; its READY result does not establish cut admission. See
+`docs/runbooks/ha-addon.md`, "The cut window". Do not attach Dependabot branches
+to Conductor feature slots.
 
 ## Explicitly out of scope
 
