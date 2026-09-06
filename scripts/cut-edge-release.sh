@@ -8,16 +8,19 @@
 # ghcr.io/<owner>/mammamiradio-addon-{arch}:<short-sha>), and "update available" is
 # a version-string compare — so changing it surfaces an in-place Update on the Pi.
 #
-# Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` only
-# builds an image when a commit touches the IMAGE_PATHS below: add-on or application
-# source, canonical project/model config, media-proof inputs, image validation/smoke
-# scripts, or the build workflow itself. When the tip commits are outside that trigger
-# set, no :<sha> image exists for them, so pinning HEAD would make the Supervisor pull
-# a missing tag. This script picks the newest main commit with a successful build run
-# (that success is the proof both per-arch images were pushed, proven, and smoked) and
-# HARD-FAILS rather than advertise an unverified tag. It also refuses if any trigger
-# path changed between that built commit and HEAD — the pinned image would not implement
-# the newer edge metadata.
+# Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` runs on
+# main pushes that touch IMAGE_PATHS (scripts/edge-select.sh): add-on or
+# application source, canonical project/model config, media-proof inputs, image
+# validation/smoke scripts, or the build workflow itself. When the tip commits are
+# outside that trigger set, they need a manual build to get a :<sha> image. Pinning
+# HEAD without build proof could make the Supervisor pull a missing tag. This script
+# picks the newest main commit with a successful build run (the proof both per-arch images were pushed,
+# proven, and smoked) and HARD-FAILS rather than advertise an unverified tag. It also
+# refuses if any IMAGE_CONTENT_PATHS file — content that enters the image or its add-on
+# metadata — changed between that built commit and HEAD, because the pinned image would
+# not implement the newer metadata. A file that only re-triggers the build (a dev
+# lockfile, a test) does not make the image stale, but an attempted newer main build without
+# a successful run still blocks the pin.
 #
 # Selection uses `gh run list` (needs only actions:read). The old GHCR packages-API
 # check is gone: it needed the read:packages scope the maintainer token lacks and
@@ -167,9 +170,9 @@ fi
 if [ -n "$CHANGED" ]; then
   echo "ERROR: add-on image files changed between $SHA and origin/main:" >&2
   printf '%s\n' "$CHANGED" | sed 's/^/         /' >&2
-  echo "       The edge branch takes its metadata (options/schema, run.sh) from" >&2
-  echo "       origin/main, so pinning $SHA would advertise metadata that image does" >&2
-  echo "       not implement." >&2
+  echo "       These files enter the image or its add-on metadata. The edge branch" >&2
+  echo "       takes its metadata (options/schema, run.sh) from origin/main, so pinning" >&2
+  echo "       $SHA would advertise metadata that image does not implement." >&2
   if [ -n "$REQUESTED_SHA" ]; then
     # Mode-aware: with an explicit target the problem is never "wait for a build".
     # A newer image-affecting commit has landed, so this commit can no longer be
@@ -186,6 +189,16 @@ if [ -n "$CHANGED" ]; then
   exit 1
 fi
 
+# Unchanged content cannot excuse a failed, cancelled or unfinished build on a
+# newer main commit. This also covers --target-sha outside the candidate window.
+BUILD_PROOF_RC=0
+edge_newer_builds_verified "$TARGET_FULL" origin/main || BUILD_PROOF_RC=$?
+if [ "$BUILD_PROOF_RC" -ne 0 ]; then
+  echo "ERROR: newer main build proof is missing or could not be verified." >&2
+  echo "       Wait for its build to succeed, then re-run the edge cut." >&2
+  exit 1
+fi
+
 # Read the current edge version from origin/main (what the cut actually rewrites),
 # NOT the caller's checked-out tree — running from a stale local branch that already
 # carries `version: $SHA` must not falsely report "already released" while origin/main
@@ -198,7 +211,8 @@ fi
 
 if [ "$SHA" != "$HEAD_SHORT" ]; then
   echo "Note: pinning to the latest BUILT main commit $SHA (origin/main HEAD is $HEAD_SHORT;" >&2
-  echo "      the commits in between touch no add-on image files)." >&2
+  echo "      the commits in between change nothing that enters the image or its" >&2
+  echo "      add-on metadata; newer build checks passed, including deliberate skips)." >&2
 fi
 
 # OWNER feeds the PR body and image-path string below. Derive it AFTER target
@@ -241,9 +255,10 @@ shows an in-place Update.
 
 \`$SHA\` is the newest \`main\` commit with a green \`Build HA Addon\` image (that run is the
 proof both per-arch images were pushed). It may trail \`origin/main\` HEAD ($HEAD_SHORT) when
-the tip commits touch only files that do not rebuild the image (tests/docs/CI); no \`:<sha>\`
-image exists for those, so pinning to the newest *built* commit is what guarantees the Update
-can actually pull. Manual edge release; stable is untouched.
+the tip commits change nothing that enters the image or its add-on metadata (tests, docs,
+CI, dev lockfiles). Some of those commits may have no \`:<sha>\` image at all, so pinning to
+the newest *built* commit is what guarantees the Update can actually pull. Manual edge
+release; stable is untouched.
 
 ## Proof
 
