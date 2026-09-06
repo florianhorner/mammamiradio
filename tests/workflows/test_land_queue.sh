@@ -79,6 +79,48 @@ case "$1 $2" in
     exit 0 ;;
   "run list")
     [ "${GH_MOCK_RUN_FAIL:-0}" = "1" ] && exit 1
+    want=""; status=""; branch=""; prev=""; query=""; limit=1
+    for arg in "$@"; do
+      [ "$prev" = --commit ] && want="$arg"
+      [ "$prev" = --status ] && status="$arg"
+      [ "$prev" = --branch ] && branch="$arg"
+      [ "$prev" = -q ] && query="$arg"
+      [ "$prev" = --limit ] && limit="$arg"
+      prev="$arg"
+    done
+    if [ -n "$want" ]; then
+      # An off-main dispatch succeeded for the same SHA; it cannot clear a
+      # failed main build. Removing --branch main must make this test fail.
+      [ "$branch" = main ] || { echo 1; exit 0; }
+      if [ "$want" = "${GH_MOCK_NEWER_SHA:-}" ]; then
+        case "${GH_MOCK_NEWER_BUILD:-none}" in
+          query-error) exit 1 ;;
+          malformed) echo unknown; exit 0 ;;
+        esac
+      fi
+      if [ "$status" = success ]; then
+        runs='[]'
+        if printf '%s\n' "${GH_MOCK_SUCCESS_SHAS:-}" | grep -qxF "$want"; then runs='[{"conclusion":"success"}]'; fi
+        printf '%s' "$runs" | jq -r "$query"
+        exit $?
+      else
+        state=none
+        [ "$want" != "${GH_MOCK_NEWER_SHA:-}" ] || state="${GH_MOCK_NEWER_BUILD:-none}"
+        case "$state" in
+          none) runs='[]' ;;
+          object) runs='{}' ;;
+          missing-status) runs='[{"conclusion":"skipped"}]' ;;
+          missing-conclusion) runs='[{"status":"completed"}]' ;;
+          in_progress) runs='[{"status":"in_progress","conclusion":""}]' ;;
+          skipped-after-failure) runs='[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"failure"}]' ;;
+          full-skipped-page) runs="$(jq -cn '[range(100) | {status:"completed",conclusion:"skipped"}]')" ;;
+          *) runs="$(jq -cn --arg state "$state" '[{status:"completed",conclusion:$state}]')" ;;
+        esac
+        printf '%s' "$runs" | jq --argjson limit "$limit" 'if type == "array" then .[:$limit] else . end' | jq -r "$query"
+        exit $?
+      fi
+      exit 0
+    fi
     printf '%s' "${GH_MOCK_RUN_SHAS:-}"
     exit 0 ;;
   "api graphql")
@@ -99,8 +141,10 @@ chmod +x "$BIN/gh"
 # the shadow planner cannot quietly grow a write.
 cat > "$BIN/git" <<GITEOF
 #!/usr/bin/env bash
+if [ "\$1 \${2:-}" = 'rev-parse --show-toplevel' ] && [ "\${GIT_MOCK_ROOT_FAIL:-0}" = 1 ]; then exit 1; fi
 case "\$1" in
-  rev-parse|rev-list|cat-file|show|merge-base|diff|status|log|for-each-ref|worktree|symbolic-ref|show-ref|ls-tree|config)
+  rev-parse|rev-list|cat-file|show|merge-base|diff|status|log|for-each-ref|worktree|symbolic-ref|show-ref|ls-tree|hash-object|config)
+    if [ -n "\${GIT_MOCK_EDGE_REPO:-}" ]; then exec "$REAL_GIT" -C "\$GIT_MOCK_EDGE_REPO" "\$@"; fi
     exec "$REAL_GIT" "\$@" ;;
   fetch)
     # A shadow run may want fresh refs, but this test must stay offline.
@@ -152,6 +196,11 @@ run_plan() { # prs-json [extra env assignments handled by caller]
   GH_MOCK_COMMENTS="${COMMENTS:-$EMPTY_COMMENTS}" \
   GH_MOCK_RUN_SHAS="${RUN_SHAS:-}" \
   GH_MOCK_RUN_FAIL="${RUN_FAIL:-0}" \
+  GH_MOCK_NEWER_SHA="${NEWER_SHA:-}" \
+  GH_MOCK_NEWER_BUILD="${NEWER_BUILD:-none}" \
+  GH_MOCK_SUCCESS_SHAS="${SUCCESS_SHAS:-}" \
+  GIT_MOCK_ROOT_FAIL="${ROOT_FAIL:-0}" \
+  GIT_MOCK_EDGE_REPO="${EDGE_REPO:-}" \
   GH_MOCK_PR_LIST_FAIL="${PR_LIST_FAIL:-0}" \
   MMR_LAND_EVIDENCE_CHECKER="${EVIDENCE:-$TMPDIR_T/evidence-ok.sh}" \
   MMR_LAND_REVIEW_READER="/nonexistent" \
@@ -374,13 +423,13 @@ IFS=$'\t' read -r rc out <<<"$(edge_probe "" 1)"
 [ -z "$out" ] || fail "a failed query must not print a sha"
 pass "edge: unverifiable build query refuses (soft-pass guard)"
 
-# 19: a built commit with IMAGE_PATHS drift since main is refused (invariant I3).
-# Walk back to a commit that actually differs from main under IMAGE_PATHS, so the
+# 19: a built commit with IMAGE_CONTENT_PATHS drift since main is refused (invariant I3).
+# Walk back to a commit that actually differs from main under IMAGE_CONTENT_PATHS, so the
 # fixture is real repo history rather than an asserted assumption.
 DRIFTED=""
 while IFS= read -r c; do
-  # shellcheck disable=SC2086
-  if [ -n "$(git diff --name-only "$c" "$MAIN_REF" -- $(bash -c '. "'"$EDGE_LIB"'"; echo $IMAGE_PATHS'))" ]; then
+  # shellcheck disable=SC2086,SC2046  # declared path list intentionally splits
+  if [ -n "$(git diff --name-only "$c" "$MAIN_REF" -- $(bash -c '. "'"$EDGE_LIB"'"; echo $IMAGE_CONTENT_PATHS') ':(exclude)ha-addon/mammamiradio-edge/config.yaml')" ]; then
     DRIFTED="$c"; break
   fi
 done < <(git rev-list --topo-order -n 40 "$MAIN_REF")
@@ -389,6 +438,70 @@ IFS=$'\t' read -r rc out <<<"$(edge_probe "$DRIFTED")"
 [ "$rc" != "0" ] || fail "a built commit with image drift must be refused"
 [ -z "$out" ] || fail "a drift refusal must not print a sha"
 pass "edge: image-path drift since the built commit refuses the pin"
+
+# 19b: the same refusal must hold from a subdirectory. Git pathspecs are cwd-relative;
+# the library anchors them at the repository root so a caller in scripts/ cannot read
+# an empty diff as "no drift" (a soft pass this library promises never to produce).
+IFS=$'\t' read -r rc out <<<"$(cd scripts && edge_probe "$DRIFTED")"
+[ "$rc" != "0" ] || fail "drift refusal must not depend on the caller's cwd"
+pass "edge: drift refusal holds from a subdirectory (root-anchored pathspecs)"
+
+# Drive the actual planner with a small immutable Git history: newer proof-only
+# content may have no run, but a failed/cancelled/unfinished run cannot be skipped.
+EDGE_FIXTURE="$TMPDIR_T/edge-history"
+mkdir -p "$EDGE_FIXTURE/ha-addon/mammamiradio-edge"
+git init -q "$EDGE_FIXTURE"
+git -C "$EDGE_FIXTURE" config user.name 'Test User'
+git -C "$EDGE_FIXTURE" config user.email tests@example.com
+git -C "$EDGE_FIXTURE" config core.hooksPath /dev/null
+git -C "$EDGE_FIXTURE" config commit.gpgsign false
+printf 'version: aaa1111\nhomeassistant_api: true\n' > "$EDGE_FIXTURE/ha-addon/mammamiradio-edge/config.yaml"
+git -C "$EDGE_FIXTURE" add .
+git -C "$EDGE_FIXTURE" commit -qm 'chore: edge fixture baseline'
+BUILT_SHA="$(git -C "$EDGE_FIXTURE" rev-parse HEAD)"
+printf 'test proof\n' > "$EDGE_FIXTURE/requirements-dev.txt"
+git -C "$EDGE_FIXTURE" add .
+git -C "$EDGE_FIXTURE" commit -qm 'chore: proof-only change'
+PROOF_SHA="$(git -C "$EDGE_FIXTURE" rev-parse HEAD)"
+git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main "$PROOF_SHA"
+for state in none skipped failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed object missing-status missing-conclusion retry; do
+  successes=""; [ "$state" != retry ] || successes="$PROOF_SHA"
+  OUT="$(EDGE_REPO="$EDGE_FIXTURE" RUN_SHAS="$BUILT_SHA" NEWER_SHA="$PROOF_SHA" \
+    NEWER_BUILD="$state" SUCCESS_SHAS="$successes" run_plan '[]')"
+  if [ "$state" = none ] || [ "$state" = skipped ] || [ "$state" = retry ]; then
+    jq -e '.edge.state == "advance" and .edge.target != null' <<<"$OUT" >/dev/null || fail "queue refused $state: $OUT"
+  else
+    jq -e '.edge.state == "blocked" and .edge.target == null' <<<"$OUT" >/dev/null || fail "queue accepted $state: $OUT"
+  fi
+  pass "edge queue handles newer $state build"
+done
+printf 'documentation\n' > "$EDGE_FIXTURE/README.md"
+git -C "$EDGE_FIXTURE" add .
+git -C "$EDGE_FIXTURE" commit -qm 'chore: newest commit has no build'
+git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main HEAD
+OUT="$(EDGE_REPO="$EDGE_FIXTURE" RUN_SHAS="$BUILT_SHA" NEWER_SHA="$PROOF_SHA" \
+  NEWER_BUILD=failure run_plan '[]')"
+jq -e '.edge.state == "blocked" and .edge.target == null' <<<"$OUT" >/dev/null \
+  || fail "queue must inspect failures between the candidate and the newest commit: $OUT"
+pass "edge queue cannot skip failed proof behind a newer no-run commit"
+OUT="$(ROOT_FAIL=1 RUN_SHAS="$MAIN_FULL" run_plan '[]')"
+jq -e '.edge.state == "blocked" and .edge.target == null and (.edge.why | test("could not check"))' \
+  <<<"$OUT" >/dev/null || fail "queue must block a failed root lookup: $OUT"
+pass "edge queue blocks failed repository-root lookup"
+printf 'version: bbb2222\nhomeassistant_api: true\n' > "$EDGE_FIXTURE/ha-addon/mammamiradio-edge/config.yaml"
+git -C "$EDGE_FIXTURE" add .
+git -C "$EDGE_FIXTURE" commit -qm 'chore: edge version only'
+git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main HEAD
+OUT="$(EDGE_REPO="$EDGE_FIXTURE" RUN_SHAS="$BUILT_SHA" run_plan '[]')"
+jq -e '.edge.state == "advance"' <<<"$OUT" >/dev/null || fail "queue must allow version-only drift: $OUT"
+pass "edge queue allows a version-only change"
+printf 'version: bbb2222\nhomeassistant_api: false\n' > "$EDGE_FIXTURE/ha-addon/mammamiradio-edge/config.yaml"
+git -C "$EDGE_FIXTURE" add .
+git -C "$EDGE_FIXTURE" commit -qm 'chore: edge access change'
+git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main HEAD
+OUT="$(EDGE_REPO="$EDGE_FIXTURE" RUN_SHAS="$BUILT_SHA" run_plan '[]')"
+jq -e '.edge.state == "blocked" and .edge.target == null' <<<"$OUT" >/dev/null || fail "queue accepted metadata drift: $OUT"
+pass "edge queue refuses non-version metadata drift"
 
 # =============================================================================
 # Case 21: the shadow workflow must stay report-only and keep its kill switch.
@@ -614,8 +727,10 @@ pass "blocking filter matches both bot login spellings, and only bots"
 # Passing `date +%s` made every entry look stale once it aged past the grace
 # window, so the shadow blocked where land-pr.sh accepts.
 # =============================================================================
+# shellcheck disable=SC2016  # assert the literal shell source
 grep -q 'squad_check "$head" "$(date' "$PLAN" \
   && fail "the ledger age check must use the head commit date, not wall clock"
+# shellcheck disable=SC2016  # assert the literal shell source
 grep -q 'gh pr view "$pr" --json commits' "$PLAN" \
   || fail "the ledger age check must read the head commit date from the PR"
 PRS="[$(pr_row 190 "fix: aged" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false "feature/pr-190" "2026-01-01T00:00:00Z")]"
