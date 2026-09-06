@@ -79,11 +79,12 @@ case "$1 $2" in
     exit 0 ;;
   "run list")
     [ "${GH_MOCK_RUN_FAIL:-0}" = "1" ] && exit 1
-    want=""; status=""; branch=""; prev=""
+    want=""; status=""; branch=""; prev=""; query=""
     for arg in "$@"; do
       [ "$prev" = --commit ] && want="$arg"
       [ "$prev" = --status ] && status="$arg"
       [ "$prev" = --branch ] && branch="$arg"
+      [ "$prev" = -q ] && query="$arg"
       prev="$arg"
     done
     if [ -n "$want" ]; then
@@ -98,9 +99,17 @@ case "$1 $2" in
       fi
       if [ "$status" = success ]; then
         if printf '%s\n' "${GH_MOCK_SUCCESS_SHAS:-}" | grep -qxF "$want"; then echo 1; else echo 0; fi
-      elif [ "$want" = "${GH_MOCK_NEWER_SHA:-}" ] && [ "${GH_MOCK_NEWER_BUILD:-none}" != none ]; then
-        echo 1
-      else echo 0
+      else
+        state=none
+        [ "$want" != "${GH_MOCK_NEWER_SHA:-}" ] || state="${GH_MOCK_NEWER_BUILD:-none}"
+        case "$state" in
+          none) runs='[]' ;;
+          in_progress) runs='[{"status":"in_progress","conclusion":""}]' ;;
+          skipped-after-failure) runs='[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"failure"}]' ;;
+          full-skipped-page) runs="$(jq -cn '[range(100) | {status:"completed",conclusion:"skipped"}]')" ;;
+          *) runs="$(jq -cn --arg state "$state" '[{status:"completed",conclusion:$state}]')" ;;
+        esac
+        printf '%s' "$runs" | jq -r "$query"
       fi
       exit 0
     fi
@@ -447,11 +456,11 @@ git -C "$EDGE_FIXTURE" add .
 git -C "$EDGE_FIXTURE" commit -qm 'chore: proof-only change'
 PROOF_SHA="$(git -C "$EDGE_FIXTURE" rev-parse HEAD)"
 git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main "$PROOF_SHA"
-for state in none failure cancelled in_progress query-error malformed retry; do
+for state in none skipped failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed retry; do
   successes=""; [ "$state" != retry ] || successes="$PROOF_SHA"
   OUT="$(EDGE_REPO="$EDGE_FIXTURE" RUN_SHAS="$BUILT_SHA" NEWER_SHA="$PROOF_SHA" \
     NEWER_BUILD="$state" SUCCESS_SHAS="$successes" run_plan '[]')"
-  if [ "$state" = none ] || [ "$state" = retry ]; then
+  if [ "$state" = none ] || [ "$state" = skipped ] || [ "$state" = retry ]; then
     jq -e '.edge.state == "advance" and .edge.target != null' <<<"$OUT" >/dev/null || fail "queue refused $state: $OUT"
   else
     jq -e '.edge.state == "blocked" and .edge.target == null' <<<"$OUT" >/dev/null || fail "queue accepted $state: $OUT"

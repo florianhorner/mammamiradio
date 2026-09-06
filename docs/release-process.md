@@ -107,9 +107,10 @@ there is a real discipline on top of it:
   The edge branch takes its metadata from `origin/main`, so an older image would
   advertise options it does not implement. A commit that only
   re-triggers the build (a dev-dependency bump, a validator script, a test) does not
-  make the image stale. If that newer commit has a main build run, it still needs
+  make the image stale. If that newer commit has an attempted main build, it needs
   a successful run; failed, cancelled or unfinished runs block the pin until a
-  retry succeeds. A commit with no run is allowed when image content is unchanged.
+  retry succeeds. No run, or only completed skipped runs, is allowed when image
+  content is unchanged. The workflow deliberately skips edge-version cuts.
   If real content landed, cut a fresh release from current `main`.
 - **Don't merge a large off-theme PR into a cut you're about to make.** It joins that
   version's changelog whether or not it soaked. Cut first, then merge the big work so it

@@ -17,7 +17,7 @@
 #       Files that only re-trigger the build (a dev lockfile, a validator script, a
 #       test) are in IMAGE_PATHS but not in IMAGE_CONTENT_PATHS: they never enter
 #       the image. Only the edge config's valid top-level version line is exempt.
-#       A newer main commit with a build run but no successful run still blocks
+#       A newer main commit with an attempted build but no successful run blocks
 #       the pin: unchanged image content does not excuse failed proof.
 #
 # Every function fails CLOSED: an unverifiable state (gh error, git error) is a
@@ -80,15 +80,19 @@ edge_commit_has_green_build() {
 
 # Check every intervening main SHA directly; the candidate window cannot prove
 # that an older failed run is absent. No run is allowed for content-identical
-# commits. Once a run exists, require a success for that SHA (including retries),
-# just as the exact-target check does. Return 2 when proof cannot be read.
+# commits, as are completed skipped runs (the workflow skips edge-version cuts).
+# Otherwise require a success for that SHA, including retries. A full response
+# page cannot prove all attempts were skipped, so it also requires success.
+# Return 2 when proof cannot be read.
 edge_newer_builds_verified() {
-  local target="$1" ref="${2:-origin/main}" commits commit runs rc
+  local target="$1" ref="${2:-origin/main}" commits commit runs rc limit=100
   commits="$(git rev-list "$target..$ref" 2>/dev/null)" || return 2
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
     runs="$(gh run list --workflow=addon-build.yml --branch main --commit "$commit" \
-      --limit 1 --json status -q 'length' 2>/dev/null)" || return 2
+      --limit "$limit" --json status,conclusion \
+      -q "if length >= $limit or any(.[]; .status != \"completed\" or .conclusion != \"skipped\") then 1 else 0 end" \
+      2>/dev/null)" || return 2
     case "$runs" in
       0) continue ;;
       1)

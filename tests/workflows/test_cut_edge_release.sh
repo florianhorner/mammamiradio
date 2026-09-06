@@ -155,11 +155,12 @@ case "$1 $2" in
     # The real query passes `--status success`, so the server returns only
     # successful runs; membership in GH_MOCK_COMMIT_OK models exactly that, and
     # the count is unaffected by how many failed reruns the commit also has.
-    _want=""; _prev=""; _status=""; _branch=""
+    _want=""; _prev=""; _status=""; _branch=""; _query=""
     for _a in "$@"; do
       [ "$_prev" = "--commit" ] && _want="$_a"
       [ "$_prev" = "--status" ] && _status="$_a"
       [ "$_prev" = "--branch" ] && _branch="$_a"
+      [ "$_prev" = "-q" ] && _query="$_a"
       _prev="$_a"
     done
     if [ -n "$_want" ]; then
@@ -172,9 +173,17 @@ case "$1 $2" in
       fi
       if [ "$_status" = success ]; then
         if printf '%s\n' "${GH_MOCK_COMMIT_OK:-}" | grep -qxF "$_want"; then echo 1; else echo 0; fi
-      elif [ "$_want" = "$GIT_MOCK_MAIN_FULL" ] && [ "${GH_MOCK_NEWER_BUILD:-none}" != none ]; then
-        echo 1
-      else echo 0
+      else
+        _state=none
+        [ "$_want" != "$GIT_MOCK_MAIN_FULL" ] || _state="${GH_MOCK_NEWER_BUILD:-none}"
+        case "$_state" in
+          none) _runs='[]' ;;
+          in_progress) _runs='[{"status":"in_progress","conclusion":""}]' ;;
+          skipped-after-failure) _runs='[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"failure"}]' ;;
+          full-skipped-page) _runs="$(jq -cn '[range(100) | {status:"completed",conclusion:"skipped"}]')" ;;
+          *) _runs="$(jq -cn --arg state "$_state" '[{status:"completed",conclusion:$state}]')" ;;
+        esac
+        printf '%s' "$_runs" | jq -r "$_query"
       fi
       exit 0
     fi
@@ -363,7 +372,7 @@ pass "trigger-only drift (dev lockfile) does not block the edge pin"
 # A failed proof must not disappear behind the green-candidate filter, including
 # when an exact target sits outside that window. All refusal paths precede writes.
 for mode in default exact; do
-  for state in failure cancelled in_progress query-error malformed; do
+  for state in failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed; do
     [ "$mode" != exact ] || CUT_ARGS=(--target-sha "$OLDER_FULL")
     run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" \
       GH_MOCK_NEWER_BUILD="$state" GIT_MOCK_DIFF="scripts/media-proof.py"
@@ -379,6 +388,13 @@ run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL"$'\n'"$MAI
 [ "$RUN_RC" -eq 0 ] || fail "a successful retry must clear newer failed proof: $RUN_OUT"
 created_pr || fail "verified retry should permit the exact pin"
 pass "a successful main retry clears an earlier failed run"
+
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_NEWER_BUILD=skipped \
+  GIT_MOCK_SHOW_VERSION="$OLDER_SHORT" GIT_MOCK_DIFF="ha-addon/mammamiradio-edge/config.yaml"
+[ "$RUN_RC" -eq 0 ] || fail "deliberately skipped edge-cut build must allow the no-op: $RUN_OUT"
+printf '%s' "$RUN_OUT" | grep -q "already at" || fail "skipped edge-cut build lost its no-op"
+never_created_pr && never_committed && never_pushed || fail "post-cut no-op wrote"
+pass "a completed skipped edge-version build preserves the post-cut no-op"
 
 for path in ha-addon/mammamiradio-edge/config.yaml ha-addon/mammamiradio-edge/apparmor.txt; do
   run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_DIFF="$path" GIT_MOCK_EDGE_BODY="homeassistant_api: false"

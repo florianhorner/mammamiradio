@@ -19,7 +19,7 @@
 # refuses if any IMAGE_CONTENT_PATHS file — content that enters the image or its add-on
 # metadata — changed between that built commit and HEAD, because the pinned image would
 # not implement the newer metadata. A file that only re-triggers the build (a dev
-# lockfile, a test) does not make the image stale, but a newer main build without
+# lockfile, a test) does not make the image stale, but an attempted newer main build without
 # a successful run still blocks the pin.
 #
 # Selection uses `gh run list` (needs only actions:read). The old GHCR packages-API
@@ -212,7 +212,7 @@ fi
 if [ "$SHA" != "$HEAD_SHORT" ]; then
   echo "Note: pinning to the latest BUILT main commit $SHA (origin/main HEAD is $HEAD_SHORT;" >&2
   echo "      the commits in between change nothing that enters the image or its" >&2
-  echo "      add-on metadata; any newer main build has a successful run)." >&2
+  echo "      add-on metadata; any attempted newer main build has a successful run)." >&2
 fi
 
 # OWNER feeds the PR body and image-path string below. Derive it AFTER target
