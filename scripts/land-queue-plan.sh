@@ -111,6 +111,11 @@ classify_pr() {
   if [ "$merge_state" = "DIRTY" ]; then
     printf 'BLOCKED_CONFLICT\tmerge conflict with base — the owning workspace resolves it\n'; return
   fi
+  # The evidence gate trusts a base only if it is landed in origin/main. A stale
+  # local ref would report BLOCKED_EVIDENCE for every integrated PR; the refresh
+  # fetches only when the local ref does not already cover this PR's base, so a
+  # fresh CI checkout never touches the network.
+  refresh_landed_ref "$base"
   if ! ensure_head_local "$pr" "$head"; then
     printf 'BLOCKED_HEAD\thead object could not be fetched — gates cannot be evaluated against it\n'; return
   fi
@@ -143,7 +148,7 @@ classify_pr() {
 
   # Plan Q7: UNSTABLE means only non-required checks are failing and is landable.
   case "$merge_state" in
-    BEHIND)    printf 'READY_BEHIND\tgates pass; base moved — needs integrate + reattest\n' ;;
+    BEHIND)    printf 'READY_BEHIND\tgates pass; base moved — needs integrate + push\n' ;;
     CLEAN)     printf 'READY\tgates pass and required checks are green\n' ;;
     UNSTABLE)  printf 'READY\tgates pass; only non-required checks are red\n' ;;
     HAS_HOOKS) printf 'READY\tgates pass; merge would fire repository hooks\n' ;;
@@ -236,7 +241,7 @@ while IFS="$GATHER_SEP" read -r number head base merge_state is_draft held skipp
         DECISION_WHY="queue head, gates pass — would arm --squash --auto --match-head-commit ${head:0:12}" ;;
       READY_BEHIND)
         HEAD_DECIDED=1; DECISION_ACTION="integrate"; DECISION_PR="$number"
-        DECISION_WHY="queue head, gates pass but base moved — would merge origin/main, reattest, push" ;;
+        DECISION_WHY="queue head, gates pass but base moved — would merge origin/main and push" ;;
       *)
         HEAD_DECIDED=1; DECISION_PR="$number"
         DECISION_WHY="queue head is $state — the queue stalls here rather than reordering around it" ;;

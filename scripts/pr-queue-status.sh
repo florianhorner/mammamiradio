@@ -181,7 +181,7 @@ recommendation() {
   elif [ -z "$worktree" ]; then
     say "inspect/no local worktree"
   elif [ "$merge_state" = "BEHIND" ]; then
-    say "integrate + reattest"
+    say "integrate + push"
   elif [ "$thread_debt" = "unknown" ]; then
     say "inspect/thread check unavailable"
   elif [ "$thread_debt" != "0" ] && [ "$thread_debt" != "skipped" ]; then
