@@ -6602,7 +6602,7 @@ async function copySetupSnippet(){
     await navigator.clipboard.writeText(txt);
     toast('Snippet copied');
   }catch(_){
-    toast('Clipboard unavailable');
+    toast('Your browser would not let us copy it — select the snippet above and copy it by hand.');
   }
 }
 

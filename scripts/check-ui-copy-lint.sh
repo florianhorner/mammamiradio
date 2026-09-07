@@ -22,8 +22,13 @@ if [ -z "$PYTHON_BIN" ]; then
   fi
 fi
 
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "check-ui-copy-lint: no Python at '$PYTHON_BIN' — install Python 3.11+ or set MAMMAMIRADIO_PYTHON to one" >&2
+  exit 1
+fi
+
 if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
-  echo "check-ui-copy-lint: needs Python 3.11+ (set MAMMAMIRADIO_PYTHON)" >&2
+  echo "check-ui-copy-lint: '$PYTHON_BIN' is older than 3.11 — point MAMMAMIRADIO_PYTHON at a newer one" >&2
   exit 1
 fi
 

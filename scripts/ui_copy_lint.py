@@ -102,16 +102,23 @@ _FAILURE_KEY_RE = re.compile(
     r"(?:error|failed|declined|unavailable|not_|no_|lost|expired|required|rate_limited|queue_full)"
 )
 
-# Rules allowed to fail CI. `no_way_out` is deliberately absent: deciding whether a
-# sentence offers a remedy needs understanding, and this module approximates it with a
-# verb list, which flags correct copy ("Could not save that. Please try again." reads as
-# a dead end only because "Please" sits between the full stop and the verb). Blocking on
-# it would train authors to grandfather good copy. It still shows up in --audit, where a
-# human reads it. Promote it once the check earns it.
-BLOCKING_RULES = ("tech_lingo", "stale_speaker_copy")
+# Rules allowed to fail CI.
+BLOCKING_RULES = ("tech_lingo", "stale_speaker_copy", "no_way_out")
 
-# Admin helpers whose whole job is producing failure copy.
-ADMIN_COPY_FUNCTIONS = ("wayOut", "offlineMsg", "metadataOnlyMutationCopy", "transportFailureCopy")
+# `no_way_out` blocks only where copy is authored as a structured row. Those tables give
+# every failure its own action field, and the verb list reads them cleanly — all 75 rows
+# scanned today pass. Free-text toasts are where the check misjudges: it wants a remedy
+# verb from a fixed list right after the sentence break, so "Could not save that. Please
+# try again." reads as a dead end because "Please" is in the way, and "Pick another one."
+# reads as one because "pick" is not on the list. A verb list cannot enumerate English
+# imperatives, so on free text the rule stays advisory — visible in --audit for a human,
+# never a build failure that pushes an author to grandfather good copy.
+WAY_OUT_BLOCKING_CONTEXTS = ("first_listen_error", "setup_error", "jamendo_hint", "jamendo_form")
+
+# Admin helpers whose whole job is producing failure copy. Each must hold literals of its
+# own, so a name here that collects nothing means the scan broke. `transportFailureCopy` is
+# deliberately absent: it returns `payload.error || fallback` and authors no copy itself.
+ADMIN_COPY_FUNCTIONS = ("wayOut", "offlineMsg", "metadataOnlyMutationCopy")
 
 _URL_RE = re.compile(r"(?:https?://|www\.w3\.org)\S+")
 
@@ -668,6 +675,25 @@ def check_strings(refs: list[StringRef]) -> list[Violation]:
     return violations
 
 
+def is_blocking(violation: Violation, context: str) -> bool:
+    """Whether this violation may fail the build (see BLOCKING_RULES)."""
+    if violation.rule not in BLOCKING_RULES:
+        return False
+    if violation.rule == "no_way_out":
+        return context.startswith(WAY_OUT_BLOCKING_CONTEXTS)
+    return True
+
+
+def split_blocking(refs: list[StringRef]) -> tuple[list[Violation], list[Violation]]:
+    """Return (blocking, advisory) violations for ``refs``."""
+    blocking: list[Violation] = []
+    advisory: list[Violation] = []
+    for ref in refs:
+        for violation in check_strings([ref]):
+            (blocking if is_blocking(violation, ref.context) else advisory).append(violation)
+    return blocking, advisory
+
+
 def check_coverage(refs: list[StringRef]) -> list[str]:
     """Report every extractor group that collected less than its floor."""
     collected = Counter(ref.context.split(":")[0] for ref in refs)
@@ -732,7 +758,9 @@ def print_audit(violations: list[Violation], refs: list[StringRef]) -> None:
     print(f"Found {len(violations)} violations in {len(by_rule)} rule classes.\n")
     for rule in sorted(by_rule):
         items = by_rule[rule]
-        blocks = "blocking" if rule in BLOCKING_RULES else "advisory only"
+        blocks = "blocking" if rule in BLOCKING_RULES else "advisory"
+        if rule == "no_way_out":
+            blocks = "blocking in authored tables, advisory in free text"
         print(f"## {rule} ({len(items)}, {blocks})")
         for v in items:
             print(f"  {v.file}:{v.line}  [{v.detail}]")
@@ -748,7 +776,7 @@ def main() -> int:
 
     refs = collect_strings()
     violations = check_strings(refs)
-    blocking = [violation for violation in violations if violation.rule in BLOCKING_RULES]
+    blocking, advisory = split_blocking(refs)
     gaps = check_coverage(refs)
 
     if args.write_baseline:
@@ -804,8 +832,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    advisory = len(violations) - len(blocking)
-    note = f"; {advisory} advisory, see --audit" if advisory else ""
+    note = f"; {len(advisory)} advisory, see --audit" if advisory else ""
     print(f"UI copy lint clean ({len(blocking)} known violations baselined{note}).")
     return 0
 

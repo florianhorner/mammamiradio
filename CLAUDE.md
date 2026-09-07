@@ -457,16 +457,20 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
   strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,
   HA add-on option descriptions, and the streamer setup errors. Three rules: machine words on
   a human screen (`tech_lingo`) and copy still phrased around picking a speaker or room
-  (`stale_speaker_copy`) both fail CI; a stated failure with no next step (`no_way_out`) is
-  advisory only, reported by `--audit` for a human to read, because the verb-list check behind
-  it flags correct copy. `BLOCKING_RULES` in the script is the list that can fail a build.
+  (`stale_speaker_copy`) always fail CI. A stated failure with no next step (`no_way_out`)
+  fails CI only for copy authored as a structured table row (`WAY_OUT_BLOCKING_CONTEXTS`),
+  where every failure has its own action field and the check reads all 75 rows cleanly; in
+  free-text toasts it is advisory, reported by `--audit`, because a fixed verb list cannot
+  enumerate English imperatives and would flag correct copy.
   Admin/addon/server copy is held to the same banned-word list as the listener — a warmer
   register, not a shorter list.
   - Known violations are grandfathered by fingerprint in `.config/ui-copy-baseline.json`;
     CI fails on NEW ones. Refresh with `bash scripts/check-ui-copy-lint.sh --write-baseline`,
     which prints every violation it newly accepts so a refresh cannot silently absorb a
     regression. A baselined violation that no longer reproduces is also a failure — the
-    baseline may only shrink, and `MAX_BASELINED_VIOLATIONS` in the test pins the ceiling.
+    baseline may only shrink. `MAX_BASELINED_VIOLATIONS` and `MAX_ADVISORY_VIOLATIONS` in
+    `tests/repo/test_ui_copy_lint.py` pin both ceilings, so advisory findings cannot pile up
+    unwatched just because they do not fail the build.
   - `MIN_STRINGS_PER_GROUP` is a per-extractor coverage floor. The lint scrapes copy out of
     templates, so an extractor that stops matching after a reformat would otherwise collect
     nothing, find no violations, and report "clean" — the floors make that a failure instead.

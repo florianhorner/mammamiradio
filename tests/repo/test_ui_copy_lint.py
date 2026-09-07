@@ -198,7 +198,8 @@ def test_empty_baseline_is_valid(lint, tmp_path: Path, monkeypatch) -> None:
 # The backlog may only shrink. Raising this is a deliberate edit that says
 # "we grandfathered more copy", which is exactly the moment worth reviewing.
 MAX_BASELINED_VIOLATIONS = 6
-KNOWN_RULES = {"stale_speaker_copy", "tech_lingo"}
+MAX_ADVISORY_VIOLATIONS = 0
+KNOWN_RULES = {"stale_speaker_copy", "tech_lingo", "no_way_out"}
 
 
 def test_baseline_backlog_only_shrinks() -> None:
@@ -368,3 +369,46 @@ def test_gate_runs_in_the_quality_workflow() -> None:
     """A guard nobody runs is not a guard; keep it in the lint job with its siblings."""
     workflow = (ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
     assert "bash scripts/check-ui-copy-lint.sh" in workflow
+
+
+def _main_exit(lint, monkeypatch, tmp_path, refs) -> int:
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"violations": []}), encoding="utf-8")
+    monkeypatch.setattr(lint, "BASELINE_PATH", baseline)
+    monkeypatch.setattr(lint, "collect_strings", lambda: refs)
+    monkeypatch.setattr(lint, "check_coverage", lambda _refs: [])
+    monkeypatch.setattr(sys, "argv", ["ui_copy_lint.py"])
+    return lint.main()
+
+
+def test_machine_word_fails_the_build(lint, tmp_path, monkeypatch) -> None:
+    ref = lint.StringRef("admin.html", 1, "The buffer is empty. Try again.", "admin", "toast")
+    assert _main_exit(lint, monkeypatch, tmp_path, [ref]) == 1
+
+
+def test_dead_end_in_an_authored_table_fails_the_build(lint, tmp_path, monkeypatch) -> None:
+    """A table row carries its own action field, so a missing remedy there is real."""
+    ref = lint.StringRef("admin.html", 1, "That client ID belongs to another application.", "admin", "jamendo_form:x")
+    assert _main_exit(lint, monkeypatch, tmp_path, [ref]) == 1
+
+
+def test_dead_end_in_free_text_is_advisory_not_a_build_failure(lint, tmp_path, monkeypatch) -> None:
+    """The verb list misjudges free text, so it may report but never fail."""
+    ref = lint.StringRef("admin.html", 1, "That song is unavailable. Pick another one.", "admin", "toast")
+    assert _main_exit(lint, monkeypatch, tmp_path, [ref]) == 0
+    assert any(v.rule == "no_way_out" for v in lint.check_strings([ref]))
+
+
+def test_advisory_backlog_only_shrinks(lint) -> None:
+    """Nothing else bounds advisory violations, so they could balloon unseen."""
+    _blocking, advisory = lint.split_blocking(lint.collect_strings())
+    assert len(advisory) <= MAX_ADVISORY_VIOLATIONS, (
+        f"advisory copy grew to {len(advisory)}; fix it or raise MAX_ADVISORY_VIOLATIONS on purpose"
+    )
+
+
+def test_every_declared_copy_helper_still_holds_copy(lint) -> None:
+    """A helper listed but collecting nothing means the scan broke, not that it is silent."""
+    contexts = {ref.context for ref in lint._extract_admin_tables()}
+    for name in lint.ADMIN_COPY_FUNCTIONS:
+        assert f"admin_helper:{name}" in contexts, f"{name} collected no copy"
