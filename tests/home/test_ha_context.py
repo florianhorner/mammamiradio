@@ -6023,6 +6023,10 @@ def test_ha_publish_status_payload_settings_not_home_context():
     config.is_addon = True
     addon_missing = ha_publish_status_payload(config)
     assert missing["status"] == "unconfigured"
+    # The operator DID turn HA on; they just haven't finished url/token yet.
+    # enabled=False here would make "unconfigured" indistinguishable from
+    # "disabled" to anything reading only the enabled field.
+    assert missing["enabled"] is True
     assert ".env" in missing["next_step"]
     assert "Supervisor" in addon_missing["next_step"]
     config.homeassistant.url, config.ha_token, config.is_addon = "http://ha.local:8123", "tok", False

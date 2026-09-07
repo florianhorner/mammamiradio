@@ -981,7 +981,7 @@ heartbeat above. It is never present on `/public-status`, `/healthz`, or
 |---|---|---|
 | `enabled` | bool | Home Assistant is turned on in config |
 | `status` | string | `disabled` / `unconfigured` / `idle` / `ok` / `degraded` |
-| `reason` | string | `""` outside `degraded`, otherwise one of `transport` / `http_error` / `auth_denied` / `unexpected` |
+| `reason` | string | `""` for `disabled` / `unconfigured` / `idle`; `"ok"` for `ok`; one of `transport` / `http_error` / `auth_denied` / `unexpected` for `degraded` |
 | `failure_streak` | int | consecutive failed heartbeat/push cycles |
 | `last_success_at` / `last_failure_at` / `last_attempt_at` | float \| null | unix timestamps |
 | `message` / `next_step` | string | operator-safe copy and a concrete recovery action, worded for standalone vs. add-on installs |

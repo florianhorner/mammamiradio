@@ -3089,7 +3089,11 @@ def ha_publish_status_payload(config: object | None = None) -> dict[str, object]
         return _payload(enabled=False, status="disabled", reason="", message=message, next_step=next_step)
     if not publishing_ready:
         message, next_step = _ha_publish_copy("unconfigured", config)
-        return _payload(enabled=False, status="unconfigured", reason="", message=message, next_step=next_step)
+        # `enabled` reflects the config toggle, not readiness: the operator did
+        # turn Home Assistant on here, they just haven't finished the URL/token
+        # yet. Reporting False would make "unconfigured" indistinguishable from
+        # "disabled" to anything reading this field.
+        return _payload(enabled=enabled_flag, status="unconfigured", reason="", message=message, next_step=next_step)
 
     last_success = health.last_success_at or None
     last_failure = health.last_failure_at or None
