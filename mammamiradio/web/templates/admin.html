@@ -8190,10 +8190,34 @@ function updateEngineRoom(st,caps){
     }else{
       openaiLine=statusInline('ready','available');
     }
+    // Voices use breaker evidence. A configured key alone is not connectivity proof.
+    // openai_speech is the TTS breaker (LLM OpenAI key status stays on the OpenAI line).
+    const ph=caps.provider_health||{};
+    const voiceLines=[];
+    for(const [key,label] of [['elevenlabs','ElevenLabs'],['azure_speech','Azure'],['openai_speech','OpenAI']]){
+      const p=ph[key]||{};
+      if(!p.configured)continue;
+      if(p.quota_exhausted){
+        voiceLines.push(label+' '+statusInline('blocked','quota exhausted','Restore provider quota or credits, then save the key under First Listen → Change AI services → Voice providers'));
+      }else if(p.key_status==='rejected'){
+        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key under First Listen → Change AI services → Voice providers'));
+      }else if(p.cooldown){
+        voiceLines.push(label+' '+statusInline('degraded','retrying','Temporary provider trouble; will retry automatically'));
+      }else if(p.disabled){
+        voiceLines.push(label+' '+statusInline('degraded','off this session','Save the key again under First Listen → Change AI services → Voice providers to retry'));
+      }else if(p.failed_voices>0){
+        const voiceCount=p.failed_voices+' voice'+(p.failed_voices===1?'':'s')+' on Edge';
+        voiceLines.push(label+' '+statusInline('degraded',voiceCount,'Check the configured provider voice, model, and region settings, then restart the station'));
+      }else{
+        voiceLines.push(label+' '+statusInline('idle','configured','No cloud voice failure is currently recorded'));
+      }
+    }
+    const voicesLine=voiceLines.length?voiceLines.join(' · '):statusInline('idle','Edge only');
     ce.innerHTML=[
       'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
       'Anthropic: '+anthropicLine,
       'OpenAI: '+openaiLine,
+      'Voices: '+voicesLine,
       'Home Assistant: '+statusInline(c.ha?'ready':'idle',c.ha?'connected':'disabled'),
     ].join('<br>');
   }
