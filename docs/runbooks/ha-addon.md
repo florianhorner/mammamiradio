@@ -90,8 +90,8 @@ primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
 Failed background checks must offer a concrete recovery action and clear the
 warning after a successful check, without losing saved progress. Final privacy
-saves must keep First Listen open and preserve source-repair navigation. A
-first privacy choice must not be described as an unsuccessful save.
+saves must keep First Listen open. A first privacy choice must not be described
+as an unsuccessful save.
 
 Required First Listen proof is hearing the station on this device in the add-on
 Web UI. Select **Start sound check**, then **Yes, I hear it** only after you hear

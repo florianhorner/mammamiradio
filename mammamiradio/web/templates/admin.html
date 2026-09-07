@@ -3224,7 +3224,7 @@ async function apiResponse(m,p,b,timeoutMs){
   try{
     const response=await fetch(_base+p,options);
     let payload=null;
-    try{payload=await response.json();}catch(_){}
+    try{payload=await response.json();}catch(error){if(error?.name==='AbortError')throw error;}
     return {response,payload};
   }finally{
     if(deadline)clearTimeout(deadline);
@@ -6285,6 +6285,7 @@ async function chooseFirstListenPrivacy(enabled,el){
     const receiptRepairAccepted=response.ok===false&&response.status===503&&resp?.ok===false&&resp?.persisted===true&&enabledMatches&&code==='privacy_receipt_unavailable';
     const previewRequiredActiveOff=response.ok===false&&response.status===409&&resp?.ok===false&&resp?.persisted===true&&resp?.enabled===false&&code==='preview_required';
     const choiceSaved=response.ok===true&&resp?.ok===true&&resp?.persisted===true&&resp?.privacy_reviewed===true&&enabledMatches;
+    if(response.ok&&!choiceSaved)throw new Error('The privacy save could not be confirmed');
     if(!choiceSaved){
       if(receiptRepairAccepted){
         _firstListenUi.privacyReceiptChoice=requestedEnabled;
@@ -6330,6 +6331,10 @@ async function chooseFirstListenPrivacy(enabled,el){
     console.error('first_listen_privacy_choice',error);
     // A lost response may follow a committed save. Use the last server evidence.
     _firstListenUi.privacyChoice=null;
+    _firstListenUi.privacyReceiptChoice=null;
+    _firstListenUi.privacyPreviewValid=false;
+    _firstListenUi.privacyPreviewUseful=false;
+    _firstListenUi.privacyPreview='untouched';
     firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage({error:{code:'privacy_save_unconfirmed'}}),'blocked');
   }finally{
     _firstListenUi.privacySaving=false;

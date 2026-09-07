@@ -863,21 +863,24 @@ async (page) => {
       else assert(await page.evaluate(()=>firstListenProjection().privacyEnabled)&&!(await page.locator('#firstListenPrivacyStatus').innerText()).includes('stays off'),'failed preview contradicted the active sharing choice');
     }
 
-    for(const enabled of [true,false]){
-      await resetUi(setupProjection({audio:true,privacy:true,privacyEnabled:!enabled}),audioReadyOverrides());
+    for(const responseFailure of ['headers','body','invalid'])for(const pendingReceipt of [false,true])for(const enabled of [true,false]){
+      await resetUi(setupProjection({audio:true,privacy:!pendingReceipt,privacyEnabled:!enabled}),{...audioReadyOverrides(),privacyReceiptChoice:pendingReceipt?!enabled:null});
       setupStatusProjection=setupProjection({audio:true,privacy:true,privacyEnabled:enabled});
-      await page.evaluate(async({enabled,projection})=>{
+      await page.evaluate(async({enabled,projection,responseFailure})=>{
         const fetchOriginal=window.fetch,timerOriginal=window.setTimeout;
         _firstListenUi.reviewStep='privacy';_firstListenUi.privacyPreviewValid=true;
         window.setTimeout=(fn,ms,...args)=>timerOriginal.call(window,fn,ms===FIRST_LISTEN_TIMEOUTS.privacy?25:ms,...args);
-        window.fetch=(url,options)=>String(url).includes('home-context-choice')?new Promise((resolve,reject)=>{
+        window.fetch=(url,options)=>{
+          if(!String(url).includes('home-context-choice'))return fetchOriginal(url,options);
           renderSetup(projection);
-          options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')));
-        }):fetchOriginal(url,options);
+          const lostResponse=new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError'))));
+          return responseFailure==='headers'?lostResponse:Promise.resolve({ok:true,status:200,json:()=>responseFailure==='invalid'?Promise.reject(new SyntaxError('Invalid JSON')):lostResponse});
+        };
         try{await chooseFirstListenPrivacy(enabled);}finally{window.fetch=fetchOriginal;window.setTimeout=timerOriginal;}
-      },{enabled,projection:setupStatusProjection});
+      },{enabled,projection:setupStatusProjection,responseFailure});
       assert((await page.locator('#firstListenPrivacyStatus').innerText()).includes('may already have reached'),'lost save response falsely claimed privacy stayed off');
       assert(await page.evaluate(()=>firstListenProjection().privacyEnabled)===enabled,'lost privacy response hid the saved server choice');
+      assert(await page.evaluate(()=>_firstListenUi.privacyReceiptChoice===null&&!_firstListenUi.privacyPreviewValid),'lost response retained an earlier privacy receipt or consent preview');
       await page.evaluate(()=>refreshSlow());
       assert(await page.evaluate(()=>_firstListenUi.privacyChoice)===enabled,'identical poll did not reconcile privacy after a timed-out save');
       assert((await page.locator('#firstListenPrivacyChip').innerText()).includes(enabled?'HOME CONTEXT ON':'STAYS OFF'),'privacy summary contradicted saved server state');
