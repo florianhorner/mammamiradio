@@ -920,12 +920,15 @@ async def test_all_browser_narration_clips_are_public_audio_mpeg() -> None:
             assert response.content, relative_path
 
 
+@pytest.mark.parametrize("default_root", [False, True])
 @pytest.mark.parametrize("failure", [None, "inventory", "hash", "voice", "render", "validation"])
 def test_station_render_preserves_both_packs_and_fails_before_publication(
-    tmp_path, monkeypatch, generator_media_tools, failure
+    tmp_path, monkeypatch, generator_media_tools, failure, default_root
 ):
     root = tmp_path / "demo"
     shutil.copytree(GENERATOR.STATION_OUTPUT_ROOT, root)
+    if default_root:
+        monkeypatch.setattr(GENERATOR, "STATION_OUTPUT_ROOT", root)
     browser_before = {p: p.read_bytes() for p in SHIPPED_AUDIO_ROOT.rglob("*.mp3")}
     original = json.loads((root / "spoken_assets.json").read_text())
     if failure == "inventory":
@@ -962,6 +965,7 @@ def test_station_render_preserves_both_packs_and_fails_before_publication(
         GENERATOR.runpy,
         "run_path",
         lambda _path: {
+            "DEMO_SPOKEN_PATHS": VALIDATOR.DEMO_SPOKEN_PATHS,
             "validate_spoken_asset_manifest": VALIDATOR.validate_spoken_asset_manifest,
             "validate_demo_spoken_assets": lambda **kwargs: (
                 ["invalid staged media"]
@@ -995,3 +999,47 @@ def test_station_opening_media_and_transcript_match_approved_script():
     assert entry["transcript"] == GENERATOR.STATION_OPENING_CLIP.transcript
     assert entry["canonical_render_receipt"] == VALIDATOR._canonical_render_receipt()
     assert VALIDATOR.validate_demo_spoken_assets() == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("missing", None, "inventory must contain"),
+        ("language", "it", "English Marco/Giulia"),
+        ("speakers", ["Giulia"], "English Marco/Giulia"),
+        ("canonical_render_receipt", {}, "canonical_render_receipt does not match"),
+        ("duration_seconds", 2, "declared duration does not match"),
+        ("measured", 14.9, "outside 15.0-20.0s"),
+        ("measured", 20.1, "outside 15.0-20.0s"),
+    ],
+)
+def test_station_opening_validator_rejects_invalid_retained_media(tmp_path, monkeypatch, field, value, error):
+    root = tmp_path / "demo"
+    shutil.copytree(GENERATOR.STATION_OUTPUT_ROOT, root)
+    manifest = json.loads((root / "spoken_assets.json").read_text())
+    entry = next(item for item in manifest["assets"] if item["path"] == VALIDATOR.ADMIN_STATION_OPENING_PATH)
+    if field == "missing":
+        manifest["assets"].remove(entry)
+    elif field != "measured":
+        entry[field] = value
+    (root / "spoken_assets.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(VALIDATOR, "_is_demo_assets_root", lambda _root: True)
+    monkeypatch.setattr(VALIDATOR.shutil, "which", lambda command: f"/test-bin/{command}")
+    monkeypatch.setattr(VALIDATOR, "_measure_loudness", lambda path, **kwargs: ((-16.0, -2.0), None))
+
+    def probe(path, **kwargs):
+        opening = path.name == "first_listen_admin_show.mp3"
+        duration = value if opening and field == "measured" else 15.096 if opening else 30.0
+        stream = {
+            "codec_type": "audio",
+            "codec_name": "mp3",
+            "sample_rate": 48000,
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bit_rate": 192000,
+        }
+        return {"stream": stream, "format": {"duration": duration}}, None
+
+    monkeypatch.setattr(VALIDATOR, "_probe_audio", probe)
+    errors = VALIDATOR.validate_demo_spoken_assets(assets_root=root, package_assets_root=root)
+    assert any(error in message for message in errors), errors

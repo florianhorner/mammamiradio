@@ -80,7 +80,7 @@ A successful thaw enables future PR events; it does not re-arm held PRs itself.
 
 ## First-listen operator check
 
-Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+Open the add-on Web UI. A fresh unfinished install opens **First Listen** with a
 recorded English Marco/Giulia station opening, then a source-aware handoff to
 the live stream. It needs no AI key or Home context. Ordinary listener playback
 retains its existing opening. Source readiness is supporting detail under that

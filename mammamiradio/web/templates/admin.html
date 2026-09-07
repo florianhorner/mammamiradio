@@ -2823,12 +2823,13 @@ const FIRST_LISTEN_ERRORS={
   receipt_unavailable:{title:'The station started, but the sound check was not saved',message:'Restoring the sound check will not start playback again.',action:'Choose “Restore sound check.”'},
   receipt_recovery_missing:{title:'That sound check can no longer be restored',message:'The station did not play again.',action:'Refresh First Listen, then select “Start sound check” on this device once more.'},
   attempt_mismatch:{title:'This sound check belongs to an earlier play',message:'A newer play replaced it in this tab.',action:'Listen to the latest play, or start this device again.'},
-  preview_unavailable:{title:'Your Home details are not available right now',message:'The hosts received nothing, and Home context stays off.',action:'Keep Home context off, or reconnect Home Assistant and try the preview again.'},
+  preview_unavailable:{title:'Your Home details are not available right now',message:'Opening a preview does not change your sharing choice.',action:'Try the preview again, or choose to keep Home private.'},
   preview_required:{title:'Check your Home details again before turning this on',message:'The earlier preview is out of date.',action:'Show a new preview, then choose whether Marco and Giulia may use it.'},
   first_listen_required:{title:'Finish First Listen first',message:'Home context stays off until you confirm sound on this device.',action:'Return to “Check the sound,” then review your Home details.'},
   privacy_persist_failed:{title:'Mamma Mi Radio could not save that choice',message:'Home context stays off for now.',action:'Try again. Home context will stay off until the choice is saved.'},
   privacy_receipt_unavailable:{title:'Your choice is active, but First Listen did not save this step',message:'The station is following your privacy choice now.',action:'Use the action below to save the choice again.'},
   persistence_failed:{title:'Mamma Mi Radio could not save that change',message:'The station kept the safer choice shown below.',action:'Try saving the choice again.'},
+  privacy_save_unconfirmed:{title:'We could not confirm your choice',message:'The save may already have reached the station.',action:'Reload this page to check your current choice before trying again.'},
   invalid_request:{title:'This setup view is out of date',message:'This setup screen no longer matches the running station.',action:'Refresh Setup, then try the action again.'},
 };
 // Every First Listen mutation needs a deadline. apiResponse only arms an
@@ -5093,9 +5094,7 @@ async function turnOffJamendo(){
     applyJamendoResponse(result,'Jamendo turned off. Starter and local music continue.');
   }catch(_){setJamendoFormMessage(offlineMsg()+' The saved setting was not changed.','degraded');}
 }
-function openSetupPanel(focus='',{preserveFocus=false}={}){
-  const focused=preserveFocus&&document.getElementById('setupMusicSources')?.contains(document.activeElement)?document.activeElement:null;
-  if(preserveFocus)syncFirstListenSetupMount();
+function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
@@ -5111,7 +5110,6 @@ function openSetupPanel(focus='',{preserveFocus=false}={}){
   setFirstListenSetupView(focus);
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
-  if(focused?.isConnected){focused.focus();return;}
   const summary=details?.querySelector('summary');
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
@@ -5158,8 +5156,7 @@ function resolveFirstListenLanding(setup){
   if(first.bootstrap_ready!==true)return;
   const required=firstListenEntryRequired(setup);
   const previous=document.body.dataset.firstListenEntry;
-  const musicSources=document.body.dataset.firstListenSetupView==='music-sources';
-  const preserveSuccess=!required&&!musicSources&&(
+  const preserveSuccess=!required&&(
     previous==='completing'||(previous==='required'&&_activeTab==='setup')
   );
   if(required&&previous==='completing'){
@@ -5169,11 +5166,9 @@ function resolveFirstListenLanding(setup){
     setTimeout(()=>focusCurrentFirstListenStep(),0);
   }
   document.body.dataset.firstListenEntry=preserveSuccess?'completing':required?'required':'complete';
-  if(previous==='required'&&!required&&_activeTab==='setup'&&musicSources){
-    openSetupPanel('music-sources',{preserveFocus:true});
-  }else{
-    syncFirstListenSetupMount();
-    if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess)showAdminTab('scaletta',{render:true,persist:true});
+  syncFirstListenSetupMount();
+  if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess){
+    showAdminTab('scaletta',{render:true,persist:true});
   }
   if(_firstListenLandingResolved)return;
   _firstListenLandingResolved=true;
@@ -6319,10 +6314,10 @@ async function chooseFirstListenPrivacy(enabled,el){
     _firstListenUi.reviewStep='';
     _firstListenUi.optionalStep='';
     _firstListenUi.reviewTrigger=null;
-    const current=firstListenProjection(),musicSources=document.body.dataset.firstListenSetupView==='music-sources';
+    const current=firstListenProjection();
     const canComplete=celebrate&&current.heard&&!current.proofPending&&firstListenSourceState(current).continuityAvailable;
-    const showCelebration=canComplete&&_activeTab==='setup'&&!musicSources;
-    if(canComplete){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';if(musicSources&&_activeTab==='setup')openSetupPanel('music-sources',{preserveFocus:true});syncFirstListenSetupMount();}
+    const showCelebration=canComplete&&_activeTab==='setup';
+    if(canComplete){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';syncFirstListenSetupMount();}
     _firstListenUi.showSuccess=showCelebration;
     firstListenSetStatus('firstListenPrivacyStatus',requestedEnabled?'Marco and Giulia may use the Home details you approved.':'Home stays private.','ready');
     renderFirstListenProgress();
@@ -6333,9 +6328,13 @@ async function chooseFirstListenPrivacy(enabled,el){
     await refreshSlow();
   }catch(error){
     console.error('first_listen_privacy_choice',error);
-    firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage({error:{code:'persistence_failed'}}),'blocked');
+    // A lost response may follow a committed save. Use the last server evidence.
+    _firstListenUi.privacyChoice=null;
+    firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage({error:{code:'privacy_save_unconfirmed'}}),'blocked');
   }finally{
     _firstListenUi.privacySaving=false;
+    // Polls during the save skip hydration; the same payload must render again.
+    _lastSetupJson=null;
     if(el)el.removeAttribute('aria-busy');
     renderFirstListenProgress();
     if(focusTarget)document.getElementById(focusTarget)?.focus();

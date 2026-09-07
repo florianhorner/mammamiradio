@@ -635,7 +635,10 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
     html = _html()
     # Network exceptions use one fixed client-only safe-state message. Every
     # server reason must otherwise have exactly one explicit UI mapping.
-    assert _ui_first_listen_error_codes() == _server_setup_error_codes() | {"persistence_failed"}
+    assert _ui_first_listen_error_codes() == _server_setup_error_codes() | {
+        "persistence_failed",
+        "privacy_save_unconfirmed",
+    }
     assert "stale_attempt:" not in html
 
     error_block = _function("firstListenErrorCopy", "firstListenErrorMessage")

@@ -370,13 +370,12 @@ async def _render_station_opening(output_root, hosts, canonical_receipt, motif_n
     if errors:
         raise RuntimeError("invalid station pack: " + "; ".join(errors))
     manifest = json.loads((output_root / MANIFEST_FILENAME).read_text())
-    shipped = json.loads((STATION_OUTPUT_ROOT / MANIFEST_FILENAME).read_text())
     relative = f"first_listen/{STATION_OPENING_CLIP.clip_id}.mp3"
 
     def retained(pack):
         return {entry["path"] for entry in pack["assets"] if entry["path"] != relative}
 
-    if retained(manifest) != retained(shipped):
+    if retained(manifest) != set(validator["DEMO_SPOKEN_PATHS"]) - {relative}:
         raise RuntimeError("station pack retained inventory does not match the shipped pack")
     for entry in manifest["assets"]:
         if entry["path"] == relative and entry.get("canonical_render_receipt") != canonical_receipt:

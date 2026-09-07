@@ -104,6 +104,34 @@ DEMO_BANTER_MAX_LUFS = -14.0
 DEMO_BANTER_MAX_TRUE_PEAK_DBTP = -1.0
 DEMO_BANTER_MAX_BYTES = 40 * 1024 * 1024
 ADMIN_STATION_OPENING_PATH = "first_listen/first_listen_admin_show.mp3"
+# Independent inventory: partial renders must not bless missing retained audio.
+DEMO_SPOKEN_PATHS = (
+    "recovery/continuity_1.mp3",
+    "recovery/emergency_tone.mp3",
+    "first_listen/first_listen_show.mp3",
+    "banter/01-normal-espresso-machine-union.mp3",
+    "banter/02-normal-corridor-case.mp3",
+    "banter/03-normal-emergency-kit.mp3",
+    "banter/04-normal-nico-button.mp3",
+    "banter/05-normal-lonely-antenna.mp3",
+    "banter/06-normal-long-time-coming.mp3",
+    "banter/07-italian-cattaneo-scorecard.mp3",
+    "banter/08-italian-archivio-scontrino.mp3",
+    "banter/09-italian-microfono-geloso.mp3",
+    "banter/10-italian-manuale-studio-b.mp3",
+    "banter/11-italian-nico-cartolina.mp3",
+    "banter/12-italian-dance-with-me.mp3",
+    "banter/13-normal-cattaneo-scorecard-en.mp3",
+    "banter/14-normal-archive-receipt-en.mp3",
+    "banter/15-normal-jealous-microphone-en.mp3",
+    "banter/16-normal-studio-b-manual-en.mp3",
+    "banter/17-normal-nico-postcard-en.mp3",
+    "banter/18-normal-dance-with-me-en.mp3",
+    "banter/19-special-other-side.mp3",
+    "banter/20-special-third-chair.mp3",
+    "banter/21-special-not-a-test.mp3",
+    "first_listen/first_listen_admin_show.mp3",
+)
 
 
 def _parse_args() -> argparse.Namespace:
