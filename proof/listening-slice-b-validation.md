@@ -44,4 +44,4 @@ No live Home Assistant or physical/audible player validation was performed. The 
 
 Under the current Unreleased heading in `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`, add a Fixed bullet that failed Home Assistant entity updates back off the heartbeat and recover without leaking HA bodies or tokens in logs or `/status`.
 
-Immutable receipt: `proof/preship-reviews/v2/129b9fe35da707a1e4e92d57e6978a0005e501a21035c446cdf10c87785ffcc9/5daf7addd9c9c99171bb0f01dcfaad662f8dbc95113c046a4c2109f4bb13784c.json`.
+Immutable receipt: the final content-addressed receipt is committed under `proof/preship-reviews/v2/`.
