@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -218,7 +219,12 @@ def test_baseline_rows_are_the_only_source_of_fingerprints(lint) -> None:
     assert "fingerprints" not in data
     baseline = lint.load_baseline()
     assert baseline is not None
+    # `sum(Counter(...).values()) == len(rows)` is an identity that holds whatever
+    # `fingerprint` computes, so it proves nothing on its own. Pin the real property:
+    # every row round-trips through Violation and the fingerprints are distinct.
     assert sum(baseline.values()) == len(data["violations"])
+    assert len(baseline) == len(data["violations"]), "two baseline rows share a fingerprint"
+    assert all(lint.Violation(**row).fingerprint in baseline for row in data["violations"])
 
 
 def test_new_violation_outside_baseline_fails(lint, tmp_path: Path, monkeypatch) -> None:
@@ -310,16 +316,24 @@ def test_block_slicing_survives_reformatting_and_new_neighbours(lint) -> None:
     spaced = admin.replace("const FIRST_LISTEN_ERRORS={", "const FIRST_LISTEN_ERRORS = {").replace(
         "no_players:{", "no_players: {"
     )
+    # Without this, a future reformat of admin.html turns every `replace` below into a
+    # no-op and the whole test degrades to comparing a value to itself, still green.
+    assert spaced != admin
     assert len(lint._parse_js_object_entries(spaced, "FIRST_LISTEN_ERRORS")) == baseline_rows
 
     # JAMENDO_ERROR_COPY is what a renamed neighbour used to swallow: its block ran to
     # EOF when the declaration after it stopped matching the old three-shape heuristic.
     renamed = admin.replace("function jamendoFailureHint(code){", "const jamendoFailureHint = (code) => {")
+    assert renamed != admin
     before = lint._parse_js_scalar_entries(admin, "JAMENDO_ERROR_COPY")
+    # An absolute floor, not just equality: both sides run the same code, so a slicer
+    # that returns nothing at all would satisfy `len(x) == len(before)` with 0 == 0.
+    assert len(before) >= 7
     assert len(lint._parse_js_scalar_entries(renamed, "JAMENDO_ERROR_COPY")) == len(before)
 
     # The same block, reached through the marker rather than its neighbour.
     respaced = admin.replace("const JAMENDO_ERROR_COPY={", "const JAMENDO_ERROR_COPY = {\n")
+    assert respaced != admin
     assert len(lint._parse_js_scalar_entries(respaced, "JAMENDO_ERROR_COPY")) == len(before)
 
 
@@ -445,3 +459,200 @@ def test_every_declared_copy_helper_still_holds_copy(lint) -> None:
     contexts = {ref.context for ref in lint._extract_admin_tables()}
     for name in lint.ADMIN_COPY_FUNCTIONS:
         assert f"admin_helper:{name}" in contexts, f"{name} collected no copy"
+
+
+def test_admin_only_terms_match_the_jamendo_hint_contract(lint) -> None:
+    """The two operator-word lists drifted apart once; `api` went missing from this one."""
+    contract = (ROOT / "tests/playlist/test_jamendo_failure_code_contract.py").read_text(encoding="utf-8")
+    match = re.search(r"for machine_word in \(([^)]*)\):", contract)
+    assert match, "the jamendo hint contract no longer declares its machine-word tuple"
+    sibling = {word.strip() for word in re.findall(r"\"([^\"]+)\"", match.group(1))}
+    # The sibling scans one JS block and so also bans two listener terms; this list is
+    # the operator-only half, and every operator-only word must appear in both.
+    operator_only = sibling - set(lint.TECH_LINGO_LISTENER)
+    assert operator_only <= set(lint.TECH_LINGO_ADMIN_ONLY), (
+        f"banned in the jamendo hint contract but not in the lint: {operator_only - set(lint.TECH_LINGO_ADMIN_ONLY)}"
+    )
+
+
+@pytest.mark.parametrize("term", ["http", "ffmpeg", "ffprobe", "admission", "lease", "api"])
+def test_every_admin_only_machine_word_is_caught(lint, term: str) -> None:
+    """No repo string trips these, so without this the whole operator half was unpinned."""
+    ref = lint.StringRef("admin.html", 1, f"The {term} step did not finish. Try again.", "admin", "toast")
+    assert [v.rule for v in lint.check_strings([ref])] == ["tech_lingo"]
+    listener = lint.StringRef("listener.html", 1, f"The {term} step did not finish.", "listener", "inline")
+    assert not any(v.rule == "tech_lingo" for v in lint.check_strings([listener])) or term in lint.TECH_LINGO_LISTENER
+
+
+def test_inflected_machine_words_are_caught(lint) -> None:
+    """`_compile_lingo` allows a suffix on purpose; nothing exercised it."""
+    for text in ("Buffering the next track.", "The request timeouts often.", "Two songs were rejected."):
+        ref = lint.StringRef("listener.html", 1, text, "listener", "inline")
+        assert any(v.rule == "tech_lingo" for v in lint.check_strings([ref])), text
+
+
+def test_every_blocking_context_row_carries_a_way_out(lint) -> None:
+    """The property the `no_way_out` blocking split rests on, recomputed not restated.
+
+    The comment above `WAY_OUT_BLOCKING_CONTEXTS` used to state a row count instead.
+    It was wrong within one commit of being written.
+    """
+    rows = [ref for ref in lint.collect_strings() if lint.context_group(ref.context) in lint.WAY_OUT_BLOCKING_CONTEXTS]
+    assert len(rows) >= 60, f"only {len(rows)} authored table rows collected — an extractor shrank"
+    dead_ends = [ref for ref in rows if any(v.rule == "no_way_out" for v in lint.check_strings([ref]))]
+    assert not dead_ends, "\n".join(f"  {r.file}:{r.line} [{r.context}] {r.text[:90]}" for r in dead_ends)
+
+
+def test_yaml_block_scalar_description_is_read(lint, tmp_path, monkeypatch) -> None:
+    """Rewriting a long description as `description: >` used to hide its body.
+
+    The count was preserved (the literal `>` counted as one ref), so the coverage
+    floors were structurally unable to notice.
+    """
+    yaml_path = tmp_path / "ha-addon/mammamiradio/translations/en.yaml"
+    yaml_path.parent.mkdir(parents=True)
+    yaml_path.write_text(
+        "configuration:\n"
+        "  admin_token:\n"
+        "    name: Admin Token\n"
+        "    description: >\n"
+        "      The request hit a timeout.\n"
+        "      Try again in a moment.\n"
+        "  other:\n"
+        "    name: Other\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(lint, "ROOT", tmp_path)
+
+    refs = lint._extract_yaml_descriptions()
+    assert "The request hit a timeout. Try again in a moment." in [ref.text for ref in refs]
+    assert ">" not in [ref.text for ref in refs]
+    assert any(v.rule == "tech_lingo" for v in lint.check_strings(refs))
+
+
+def test_apostrophe_in_a_double_quoted_field_does_not_truncate_the_sentence(lint) -> None:
+    """Truncation hid real machine words AND fabricated a blocking dead-end violation."""
+    block = (
+        "const FIRST_LISTEN_ERRORS={\n"
+        '  no_players:{title:"We didn\'t hear it",'
+        'message:"Home Assistant didn\'t answer before the timeout.",action:"Try again"},\n'
+        "};\n"
+    )
+    entries = lint._parse_js_object_entries(block, "FIRST_LISTEN_ERRORS")
+    assert len(entries) == 1
+    text = entries[0][2]
+    assert "didn't answer" in text and "timeout" in text
+    ref = lint.StringRef("admin.html", 1, text, "admin", "first_listen_error:no_players")
+    rules = {v.rule for v in lint.check_strings([ref])}
+    assert "tech_lingo" in rules
+    assert "no_way_out" not in rules
+
+
+def test_a_template_literal_does_not_make_an_authored_row_vanish(lint) -> None:
+    """All three row parsers dropped a whole row when one field held a `${...}` hole."""
+    objects = "const FIRST_LISTEN_ERRORS={\n  a:{title:'One',message:`Waited ${secs} seconds.`,action:'Retry'},\n};\n"
+    assert [key for _line, key, _text in lint._parse_js_object_entries(objects, "FIRST_LISTEN_ERRORS")] == ["a"]
+
+    scalars = "const JAMENDO_ERROR_COPY={\n  a:'Plain.',\n  b:`Wait ${n} minutes, then try again.`,\n};\n"
+    assert [key for _line, key, _text in lint._parse_js_scalar_entries(scalars, "JAMENDO_ERROR_COPY")] == ["a", "b"]
+
+
+def test_short_toasts_are_collected(lint, tmp_path, monkeypatch) -> None:
+    """`toast('Rejected')` is 8 characters, and `rejected` is on the ban list."""
+    admin = tmp_path / "mammamiradio/web/templates/admin.html"
+    admin.parent.mkdir(parents=True)
+    admin.write_text("<script>\ntoast('Rejected');\n</script>\n", encoding="utf-8")
+    monkeypatch.setattr(lint, "ROOT", tmp_path)
+
+    refs = lint._extract_admin_tables()
+    assert "Rejected" in [ref.text for ref in refs]
+    assert any(v.rule == "tech_lingo" for v in lint.check_strings(refs))
+
+
+def test_each_surface_file_has_its_own_coverage_floor(lint) -> None:
+    """A shared group means a shared floor: one file can go dark under another's count."""
+    by_group: dict[str, set[str]] = {}
+    for ref in lint.collect_strings():
+        by_group.setdefault(lint.context_group(ref.context), set()).add(ref.file)
+    shared = {group: files for group, files in by_group.items() if len(files) > 1}
+    # ha_option is the deliberate exception: the two add-on translation files are
+    # generated copies of each other, so one going dark halves the count and trips.
+    assert set(shared) <= {"ha_option"}, f"these groups pool separate files under one floor: {shared}"
+
+
+def test_a_corrupt_baseline_names_its_cause_instead_of_raising(lint, tmp_path, monkeypatch, capsys) -> None:
+    """A Principle #5 guard owes its own operator a message with a way out, not a traceback."""
+    baseline_path = tmp_path / "baseline.json"
+    monkeypatch.setattr(lint, "BASELINE_PATH", baseline_path)
+    monkeypatch.setattr(lint, "collect_strings", lambda: [])
+    monkeypatch.setattr(lint, "check_coverage", lambda _refs: [])
+    monkeypatch.setattr(sys, "argv", ["ui_copy_lint.py"])
+
+    for content in (
+        "{not json",
+        json.dumps([]),
+        json.dumps({"violations": {}}),
+        json.dumps({"violations": [{"rule": "tech_lingo"}]}),
+        json.dumps({"violations": [{"rule": "x", "file": "f", "line": 1, "text": "t", "detail": "d", "note": "?"}]}),
+    ):
+        baseline_path.write_text(content, encoding="utf-8")
+        with pytest.raises(lint.BaselineError):
+            lint.load_baseline()
+        assert lint.main() == 2
+        err = capsys.readouterr().err
+        assert "baseline.json" in err
+        assert "--write-baseline" in err, "the printed remedy is the way out"
+
+
+def test_write_baseline_can_repair_a_corrupt_file(lint, tmp_path, monkeypatch, capsys) -> None:
+    """`--write-baseline` reads the old file first, so a corrupt one used to block its own repair."""
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text("{not json", encoding="utf-8")
+    ref = lint.StringRef("admin.html", 1, "No ready speaker was found. Try again.", "admin", "first_listen_error:x")
+    monkeypatch.setattr(lint, "BASELINE_PATH", baseline_path)
+    monkeypatch.setattr(lint, "collect_strings", lambda: [ref])
+    monkeypatch.setattr(lint, "check_coverage", lambda _refs: [])
+    monkeypatch.setattr(sys, "argv", ["ui_copy_lint.py", "--write-baseline"])
+
+    assert lint.main() == 0
+    written = json.loads(baseline_path.read_text(encoding="utf-8"))["violations"]
+    assert [row["rule"] for row in written] == ["stale_speaker_copy"]
+    assert set(written[0]) == {"rule", "file", "line", "text", "detail"}
+    # And the repaired file is now a clean pass for the same input.
+    monkeypatch.setattr(sys, "argv", ["ui_copy_lint.py"])
+    assert lint.main() == 0
+
+
+def test_write_baseline_records_only_blocking_violations(lint, tmp_path, monkeypatch) -> None:
+    """Grandfathering an advisory finding would make the baseline claim it is a violation."""
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps({"violations": []}), encoding="utf-8")
+    free_text = lint.StringRef("admin.html", 1, "That song is unavailable. Pick another one.", "admin", "toast")
+    monkeypatch.setattr(lint, "BASELINE_PATH", baseline_path)
+    monkeypatch.setattr(lint, "collect_strings", lambda: [free_text])
+    monkeypatch.setattr(lint, "check_coverage", lambda _refs: [])
+    monkeypatch.setattr(sys, "argv", ["ui_copy_lint.py", "--write-baseline"])
+
+    assert lint.main() == 0
+    assert json.loads(baseline_path.read_text(encoding="utf-8"))["violations"] == []
+
+
+def test_missing_baseline_asks_for_one_instead_of_passing(lint, tmp_path, monkeypatch, capsys) -> None:
+    """No baseline must not read as an empty baseline, which would pass everything."""
+    monkeypatch.setattr(lint, "BASELINE_PATH", tmp_path / "absent.json")
+    monkeypatch.setattr(lint, "collect_strings", lambda: [])
+    monkeypatch.setattr(lint, "check_coverage", lambda _refs: [])
+    monkeypatch.setattr(sys, "argv", ["ui_copy_lint.py"])
+
+    assert lint.load_baseline() is None
+    assert lint.main() == 2
+    assert "--write-baseline" in capsys.readouterr().err
+
+
+def test_a_partially_collapsed_extractor_fails(lint, monkeypatch) -> None:
+    """The floors exist to catch PARTIAL collapse; the zero case is the easy half."""
+    refs = lint.collect_strings()
+    survivors = [ref for ref in refs if lint.context_group(ref.context) != "ui_copy"]
+    kept = [ref for ref in refs if lint.context_group(ref.context) == "ui_copy"][:10]
+    gaps = lint.check_coverage(survivors + kept)
+    assert any(gap.startswith("ui_copy:") for gap in gaps), gaps

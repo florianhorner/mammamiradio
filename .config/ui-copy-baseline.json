@@ -4,44 +4,44 @@
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
-      "line": 389,
+      "line": 390,
       "text": "Home Assistant found more than one station. Keep one Mamma Mi Radio integration entry, then find speakers again. Review HA entries",
-      "detail": "pattern=\\bfind speakers again\\b"
+      "detail": "pattern=\\bfind\\ speakers\\ again\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
-      "line": 396,
+      "line": 397,
       "text": "No compatible-looking speaker is available. Turn on a Home Assistant media player, wait a moment, then search again. Find speakers again",
-      "detail": "pattern=\\bfind speakers again\\b"
+      "detail": "pattern=\\bfind\\ speakers\\ again\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
-      "line": 403,
+      "line": 404,
       "text": "That speaker is not available now. Choose another speaker or bring this one online, then retry. Choose a speaker",
-      "detail": "pattern=\\bthat speaker is not available\\b"
+      "detail": "pattern=\\bthat\\ speaker\\ is\\ not\\ available\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
-      "line": 431,
+      "line": 432,
       "text": "That unsaved listening check is no longer available. Nothing was replayed. Refresh Setup, then explicitly start the selected speaker once more. Start once more",
-      "detail": "pattern=\\bstart the selected speaker\\b"
+      "detail": "pattern=\\bstart\\ the\\ selected\\ speaker\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/templates/admin.html",
       "line": 2819,
       "text": "No ready speaker was found No other media player currently reports that it can play media. Bring a speaker online in Home Assistant, then try again.",
-      "detail": "pattern=\\bno ready speaker\\b"
+      "detail": "pattern=\\bno\\ ready\\ speaker\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/templates/admin.html",
       "line": 2820,
       "text": "That speaker is not available now The selected player changed or went offline. Choose an available target, then try again.",
-      "detail": "pattern=\\bthat speaker is not available\\b"
+      "detail": "pattern=\\bthat\\ speaker\\ is\\ not\\ available\\b"
     }
   ]
 }

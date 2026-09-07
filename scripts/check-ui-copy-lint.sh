@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # UI copy lint: Principle #5 guard for human-facing product strings.
 #
-# Scans listener ui_copy, admin operator tables, listener.js fallbacks, HA addon
-# option descriptions, and streamer setup errors. Fails on NEW violations outside
-# .config/ui-copy-baseline.json until the backlog is cleared.
+# Scans nine files: listener ui_copy, the listener / clip / admin templates,
+# listener.js and admin.js, both HA add-on option translations, and the streamer
+# setup errors. Fails on NEW violations outside .config/ui-copy-baseline.json
+# until the backlog is cleared.
 #
 # Run locally (every ui_copy_lint.py flag is forwarded):
 #   bash scripts/check-ui-copy-lint.sh                   # CI mode (baseline-aware)

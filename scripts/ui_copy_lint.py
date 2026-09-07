@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Audit and lint human-facing product copy (Leadership Principle #5).
 
-Surfaces: listener ui_copy, admin/listener templates, listener.js, HA addon
-translations, Jamendo/First Listen operator tables, streamer setup errors.
+Surfaces (all nine files `collect_strings` reads): listener `ui_copy`, the
+listener / clip / admin templates, `listener.js` and `admin.js`, both HA add-on
+`translations/en.yaml`, and the streamer setup-error tables.
 
 Run:
-  python3 scripts/ui_copy_lint.py --audit          # full report (step 1)
+  python3 scripts/ui_copy_lint.py --audit          # full report
   python3 scripts/ui_copy_lint.py                  # fail on violations outside baseline
   python3 scripts/ui_copy_lint.py --write-baseline # refresh baseline after fixes
 """
@@ -45,13 +46,17 @@ TECH_LINGO_LISTENER = (
 # Principle #5 holds admin/addon/server copy to the same no-lingo standard as the
 # listener — a warmer register, not a shorter banned list — so these are the
 # machine words specific to operator surfaces, ON TOP of every listener term.
-# The operator-specific half is aligned with test_jamendo_failure_code_contract.py.
+# Pinned to test_jamendo_failure_code_contract.py's list by
+# test_admin_only_terms_match_the_jamendo_hint_contract — the two drifted apart once
+# already, and the term that went missing here ("api") was reaching a live operator
+# string the sibling's narrower scan could not see.
 TECH_LINGO_ADMIN_ONLY = (
     "http",
     "ffmpeg",
     "ffprobe",
     "admission",
     "lease",
+    "api",
 )
 TECH_LINGO_ADMIN_HINTS = TECH_LINGO_LISTENER + TECH_LINGO_ADMIN_ONLY
 
@@ -79,7 +84,9 @@ _STALE_SPEAKER_PHRASES = (
     "bring a speaker online",
     "compatible-looking speaker",
 )
-STALE_SPEAKER_PATTERNS = tuple(re.compile(rf"\b{phrase}\b", re.I) for phrase in _STALE_SPEAKER_PHRASES)
+# Escaped: the next phrase containing a regex metacharacter would otherwise change
+# the rule's meaning silently, or raise re.error at import.
+STALE_SPEAKER_PATTERNS = tuple(re.compile(rf"\b{re.escape(phrase)}\b", re.I) for phrase in _STALE_SPEAKER_PHRASES)
 
 _WAY_OUT_RE = re.compile(
     r"(?:^|[.!?,;:—–]\s*|\b(?:and|or|then)\s+)(?:try|retry|check(?!\s+fail)|give|wait|press|tap|"
@@ -105,10 +112,14 @@ _FAILURE_KEY_RE = re.compile(
 # Rules allowed to fail CI.
 BLOCKING_RULES = ("tech_lingo", "stale_speaker_copy", "no_way_out")
 
-# `no_way_out` blocks only where copy is authored as a structured row. Those tables give
-# every failure its own action field, and the verb list reads them cleanly — all 75 rows
-# scanned today pass. Free-text toasts are where the check misjudges: it wants a remedy
-# verb from a fixed list right after the sentence break, so "Could not save that. Please
+# `no_way_out` blocks only where copy is authored as a structured table row, reviewed as
+# a set rather than written inline at a call site. Two of these groups give each failure
+# its own `action` field (`first_listen_error`, `setup_error`); the other two are single
+# authored sentences that carry their own remedy (`jamendo_hint`, `jamendo_form`). Every
+# row in all four passes today — `test_every_blocking_context_row_carries_a_way_out`
+# recomputes that rather than restating a count that rots. Free-text toasts are where the
+# check misjudges: it wants a remedy verb from a fixed list right after the sentence
+# break, so "Could not save that. Please
 # try again." reads as a dead end because "Please" is in the way, and "Pick another one."
 # reads as one because "pick" is not on the list. A verb list cannot enumerate English
 # imperatives, so on free text the rule never fails THIS lint — it is reported by --audit
@@ -184,6 +195,7 @@ MIN_STRINGS_PER_GROUP = {
     "html": 40,
     "_t": 45,
     "toast": 20,
+    "clip_template": 6,
     "jamendo_hint": 15,
     "setup_error": 15,
     "first_listen_error": 14,
@@ -191,7 +203,8 @@ MIN_STRINGS_PER_GROUP = {
     "jamendo_form": 5,
     "admin_copy": 3,
     "offline_suffix": 2,
-    "inline": 2,
+    "inline": 1,
+    "admin_inline": 1,
     "admin_helper": 2,
     "jamendo_form_message": 2,
 }
@@ -267,6 +280,28 @@ def _extract_ui_copy() -> list[StringRef]:
     return refs
 
 
+_YAML_BLOCK_SCALAR_RE = re.compile(r"^[|>][+-]?\d*$")
+
+
+def _yaml_block_scalar_body(lines: list[str], start: int, key_indent: int) -> tuple[str, int]:
+    """Join the indented body of a block scalar starting after ``lines[start]``.
+
+    A 400-character option description is normally rewritten as ``description: >``
+    with the prose on the following lines. Reading only the key's own line would
+    record the literal ``>`` as the copy and never see the prose — and because that
+    still counts as one collected ref, the coverage floors could not notice.
+    """
+    body: list[str] = []
+    index = start + 1
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() and len(line) - len(line.lstrip()) <= key_indent:
+            break
+        body.append(line.strip())
+        index += 1
+    return " ".join(part for part in body if part), index
+
+
 def _extract_yaml_descriptions() -> list[StringRef]:
     refs: list[StringRef] = []
     for rel in (
@@ -276,13 +311,24 @@ def _extract_yaml_descriptions() -> list[StringRef]:
         path = ROOT / rel
         if not path.is_file():
             continue
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            m = re.match(r"\s+(name|description):\s*(.+)$", line)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        rel_path = path.relative_to(ROOT).as_posix()
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            m = re.match(r"(\s+)(name|description):\s*(.*)$", line)
             if not m:
+                index += 1
                 continue
-            raw = m.group(2).strip().strip('"').strip("'")
+            lineno = index + 1
+            value = m.group(3).strip()
+            if _YAML_BLOCK_SCALAR_RE.match(value) or not value:
+                raw, index = _yaml_block_scalar_body(lines, index, len(m.group(1)))
+            else:
+                raw = value.strip('"').strip("'")
+                index += 1
             if raw:
-                refs.append(StringRef(path.relative_to(ROOT).as_posix(), lineno, raw, "addon", "ha_option"))
+                refs.append(StringRef(rel_path, lineno, raw, "addon", "ha_option"))
     return refs
 
 
@@ -291,9 +337,17 @@ _JS_STRING_LITERAL = r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')"""
 _JS_TEMPLATE_LITERAL = r"`(?:\\.|[^`\\])*`"
 _JS_INTERPOLATION_RE = re.compile(r"\$\{[^{}]*\}")
 _JS_COPY_LITERAL_RE = re.compile(rf"{_JS_STRING_LITERAL}|{_JS_TEMPLATE_LITERAL}")
-_JS_OBJECT_ROW_RE = re.compile(r"([a-z_]+)\s*:\s*\{([^{}]*)\}")
-_JS_OBJECT_FIELD_RE = re.compile(r"(title|message|action|label|detail)\s*:\s*['\"]([^'\"]+)['\"]")
-_JS_SCALAR_ROW_RE = re.compile(rf"([a-z_]+)\s*:\s*({_JS_STRING_LITERAL})\s*,?")
+# `${...}` holes must be part of the row body, not its terminator: a `${step}` in one
+# field used to make the whole authored row match nothing and vanish from the scan.
+_JS_OBJECT_ROW_RE = re.compile(r"([a-z_]+)\s*:\s*\{((?:[^{}]|\$\{[^{}]*\})*)\}")
+# The value is a full JS literal, not `[^'"]+`: a straight apostrophe inside a
+# double-quoted value ("We didn't hear it") truncated the sentence, which both hid
+# real machine words after the cut and destroyed the punctuation `_WAY_OUT_RE`
+# anchors on — turning correct copy into a blocking dead-end violation.
+_JS_OBJECT_FIELD_RE = re.compile(
+    rf"(title|message|action|label|detail)\s*:\s*({_JS_STRING_LITERAL}|{_JS_TEMPLATE_LITERAL})"
+)
+_JS_SCALAR_ROW_RE = re.compile(rf"([a-z_]+)\s*:\s*({_JS_STRING_LITERAL}|{_JS_TEMPLATE_LITERAL})\s*,?")
 
 
 def _decode_js_string_literal(literal: str) -> str | None:
@@ -393,7 +447,8 @@ def _parse_js_object_entries(content: str, name: str) -> list[tuple[int, str, st
     block, base_line = sliced
     entries: list[tuple[int, str, str]] = []
     for match in _JS_OBJECT_ROW_RE.finditer(block):
-        text = " ".join(field.group(2) for field in _JS_OBJECT_FIELD_RE.finditer(match.group(2)))
+        fields = (_decode_js_copy_literal(field.group(2)) for field in _JS_OBJECT_FIELD_RE.finditer(match.group(2)))
+        text = " ".join(field for field in fields if field)
         entries.append((base_line + block.count("\n", 0, match.start()), match.group(1), text))
     return entries
 
@@ -406,7 +461,7 @@ def _parse_js_scalar_entries(content: str, name: str) -> list[tuple[int, str, st
     block, base_line = sliced
     entries: list[tuple[int, str, str]] = []
     for match in _JS_SCALAR_ROW_RE.finditer(block):
-        value = _decode_js_string_literal(match.group(2))
+        value = _decode_js_copy_literal(match.group(2))
         if value is not None:
             entries.append((base_line + block.count("\n", 0, match.start()), match.group(1), value))
     return entries
@@ -424,12 +479,16 @@ def _extract_admin_tables() -> list[StringRef]:
     for line, key, text in _parse_js_scalar_entries(content, "JAMENDO_ERROR_COPY"):
         refs.append(StringRef(rel, line, text, "admin", f"jamendo_form:{key}"))
 
-    m = re.search(r"function\s+jamendoFailureHint\s*\([^)]*\)\s*\{.*?return\s*\{([^}]+)\}", content, re.DOTALL)
+    # Brace-matched, not `[^}]+`: one `${...}` in a hint used to cut the captured body
+    # short and drop every hint after it.
+    m = re.search(r"function\s+jamendoFailureHint\s*\([^)]*\)\s*\{.*?return\s*(\{)", content, re.DOTALL)
     if m:
-        body = m.group(1)
-        base = content.count("\n", 0, m.start(1)) + 1
+        open_index = m.start(1)
+        close_index = _matching_brace(content, open_index)
+        body = content[open_index:close_index] if close_index is not None else ""
+        base = content.count("\n", 0, open_index) + 1
         for match in _JS_SCALAR_ROW_RE.finditer(body):
-            hint = _decode_js_string_literal(match.group(2))
+            hint = _decode_js_copy_literal(match.group(2))
             if hint is None:
                 continue
             line = base + body.count("\n", 0, match.start())
@@ -464,10 +523,13 @@ def _extract_admin_tables() -> list[StringRef]:
         (rf"setJamendoFormMessage\(\s*({_JS_STRING_LITERAL}|{_JS_TEMPLATE_LITERAL})", "jamendo_form_message"),
         (rf"offlineMsg\(\)\s*\+\s*({_JS_STRING_LITERAL}|{_JS_TEMPLATE_LITERAL})", "offline_suffix"),
     )
+    # The floor matches `_extract_ui_copy`'s. At 12 the shortest machine words were the
+    # ones that escaped: `toast('Rejected')` is 8 characters and `rejected` is on the ban
+    # list, so the gate excluded exactly the copy the rule exists to catch.
     for pattern, ctx in call_patterns:
         for match in re.finditer(pattern, content):
             spoken_line = _decode_js_copy_literal(match.group(1))
-            if spoken_line and len(spoken_line) >= 12:
+            if spoken_line and len(spoken_line) >= 8:
                 refs.append(StringRef(rel, _line_no(content, match.start()), spoken_line, "admin", ctx))
 
     # Visible HTML labels (narrow: setup + first listen headings)
@@ -501,7 +563,7 @@ def _extract_listener_js() -> list[StringRef]:
     return refs
 
 
-def _extract_html_template(relative_path: str, surface: str) -> list[StringRef]:
+def _extract_html_template(relative_path: str, surface: str, context: str = "listener_template") -> list[StringRef]:
     path = ROOT / relative_path
     if not path.is_file():
         return []
@@ -533,7 +595,7 @@ def _extract_html_template(relative_path: str, surface: str) -> list[StringRef]:
                         _line_no(visible, block_start + literal_match.start()),
                         text,
                         surface,
-                        "listener_template",
+                        context,
                     )
                 )
     for match in re.finditer(
@@ -542,7 +604,7 @@ def _extract_html_template(relative_path: str, surface: str) -> list[StringRef]:
         value = re.sub(r"{{.*?}}|{%.*?%}|{#.*?#}", " ", match.group(2), flags=re.DOTALL)
         text = html.unescape(" ".join(value.split()))
         if text and re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", text):
-            refs.append(StringRef(rel, _line_no(visible, match.start()), text, surface, "listener_template"))
+            refs.append(StringRef(rel, _line_no(visible, match.start()), text, surface, context))
 
     visible = re.sub(r"{{.*?}}|{%.*?%}|{#.*?#}", _blank_preserving_lines, visible, flags=re.DOTALL)
     visible = re.sub(r"<[^>]*>", _blank_preserving_lines, visible, flags=re.DOTALL)
@@ -557,7 +619,7 @@ def _extract_html_template(relative_path: str, surface: str) -> list[StringRef]:
             run.append(text)
             continue
         if run:
-            refs.append(StringRef(rel, run_line, " ".join(run), surface, "listener_template"))
+            refs.append(StringRef(rel, run_line, " ".join(run), surface, context))
             run = []
     return refs
 
@@ -567,8 +629,13 @@ def _extract_listener_template() -> list[StringRef]:
 
 
 def _extract_clip_template() -> list[StringRef]:
-    """The share page a listener actually lands on, unauthenticated."""
-    return _extract_html_template("mammamiradio/web/templates/clip.html", "listener")
+    """The share page a listener actually lands on, unauthenticated.
+
+    Its own context group, not `listener_template`: sharing a group means sharing a
+    coverage floor, and listener.html's 66 strings alone clear a floor of 50 — so this
+    whole surface could go dark and the floor would still read as satisfied.
+    """
+    return _extract_html_template("mammamiradio/web/templates/clip.html", "listener", "clip_template")
 
 
 def _extract_admin_js() -> list[StringRef]:
@@ -585,7 +652,8 @@ def _extract_admin_js() -> list[StringRef]:
         for match in re.finditer(pattern, content):
             text = _decode_js_copy_literal(match.group(1))
             if text and re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", text):
-                refs.append(StringRef(rel, _line_no(content, match.start()), text, "admin", "inline"))
+                # `admin_inline`, not `inline`: see _extract_clip_template on shared floors.
+                refs.append(StringRef(rel, _line_no(content, match.start()), text, "admin", "admin_inline"))
     return refs
 
 
@@ -649,7 +717,9 @@ def _is_failure_copy(ref: StringRef) -> bool:
             "jamendo_form_message",
             "offline_suffix",
             "inline",
+            "admin_inline",
             "listener_template",
+            "clip_template",
             "admin_copy",
             "admin_helper",
         }
@@ -716,12 +786,48 @@ def check_coverage(refs: list[StringRef]) -> list[str]:
     ]
 
 
+def _display_path(path: Path) -> str:
+    """Repo-relative when it can be, absolute otherwise — never a ValueError in a message."""
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+class BaselineError(Exception):
+    """The baseline file exists but cannot be read as a list of violation rows."""
+
+
 def load_baseline() -> Counter[str] | None:
-    """Fingerprints are derived from the readable rows, so the file cannot disagree with itself."""
+    """Fingerprints are derived from the readable rows, so the file cannot disagree with itself.
+
+    A hand-edit raises `BaselineError` with the reason rather than a traceback. A guard
+    for Principle #5 owes its own operator the same courtesy it enforces: a stack trace
+    names no way out, and `--write-baseline` reads the file too, so an unhandled raise
+    here also blocked the documented repair path.
+    """
     if not BASELINE_PATH.is_file():
         return None
-    rows = json.loads(BASELINE_PATH.read_text(encoding="utf-8")).get("violations", [])
-    return Counter(Violation(**row).fingerprint for row in rows)
+    try:
+        payload = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise BaselineError(f"{BASELINE_PATH.name} is not valid JSON ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise BaselineError(f"{BASELINE_PATH.name} must hold an object with a 'violations' list")
+    rows = payload.get("violations", [])
+    if not isinstance(rows, list):
+        raise BaselineError(f"{BASELINE_PATH.name}: 'violations' must be a list")
+    fingerprints: list[str] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise BaselineError(f"{BASELINE_PATH.name}: violation {index} is not an object")
+        try:
+            fingerprints.append(Violation(**row).fingerprint)
+        except TypeError as exc:
+            raise BaselineError(
+                f"{BASELINE_PATH.name}: violation {index} needs exactly rule, file, line, text, detail ({exc})"
+            ) from exc
+    return Counter(fingerprints)
 
 
 def _compare_to_baseline(violations: list[Violation], baseline: Counter[str]) -> tuple[list[Violation], int]:
@@ -797,9 +903,14 @@ def main() -> int:
     gaps = check_coverage(refs)
 
     if args.write_baseline:
-        previous = load_baseline()
+        # A corrupt baseline must not block its own repair: name it, then rewrite.
+        try:
+            previous = load_baseline()
+        except BaselineError as exc:
+            print(f"Replacing an unreadable baseline: {exc}", file=sys.stderr)
+            previous = None
         write_baseline(blocking)
-        print(f"Wrote {len(blocking)} violations to {BASELINE_PATH.relative_to(ROOT)}")
+        print(f"Wrote {len(blocking)} violations to {_display_path(BASELINE_PATH)}")
         print_baseline_delta(blocking, previous)
         return 0
 
@@ -823,10 +934,19 @@ def main() -> int:
         )
         return 1
 
-    baseline = load_baseline()
+    try:
+        baseline = load_baseline()
+    except BaselineError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        print(
+            "Repair the file by hand, or run scripts/check-ui-copy-lint.sh --write-baseline "
+            "to regenerate it from the current violations.",
+            file=sys.stderr,
+        )
+        return 2
     if baseline is None:
         print(
-            f"No baseline at {BASELINE_PATH.relative_to(ROOT)}. Run with --audit first, then --write-baseline.",
+            f"No baseline at {_display_path(BASELINE_PATH)}. Run with --audit first, then --write-baseline.",
             file=sys.stderr,
         )
         return 2

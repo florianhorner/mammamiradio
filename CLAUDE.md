@@ -463,8 +463,11 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
   a human screen (`tech_lingo`) and copy still phrased around picking a speaker or room
   (`stale_speaker_copy`) always fail the lint. A stated failure with no next step
   (`no_way_out`) fails the lint only for copy authored as a structured table row
-  (`WAY_OUT_BLOCKING_CONTEXTS`, matched on the context group, not as a string prefix),
-  where every failure has its own action field and the check reads all 75 rows cleanly.
+  (`WAY_OUT_BLOCKING_CONTEXTS`, matched on the context group, not as a string prefix) —
+  copy reviewed as a set rather than written inline at a call site. Two of those groups
+  give each failure its own `action` field; the other two are single authored sentences
+  carrying their own remedy. That every row passes is recomputed by
+  `test_every_blocking_context_row_carries_a_way_out`, not restated as a count.
   In free-text toasts it never fails the lint, because a fixed verb list cannot enumerate
   English imperatives and would flag correct copy — it is reported by `--audit`, which
   labels every row blocking or advisory, and counted against `MAX_ADVISORY_VIOLATIONS`.
@@ -480,9 +483,14 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
     baseline may only shrink. `MAX_BASELINED_VIOLATIONS` and `MAX_ADVISORY_VIOLATIONS` in
     `tests/repo/test_ui_copy_lint.py` pin both ceilings, so advisory findings cannot pile up
     unwatched just because they do not fail the build.
-  - `MIN_STRINGS_PER_GROUP` is a per-extractor coverage floor. The lint scrapes copy out of
-    templates, so an extractor that stops matching after a reformat would otherwise collect
-    nothing, find no violations, and report "clean" — the floors make that a failure instead.
+  - `MIN_STRINGS_PER_GROUP` is a coverage floor per context group. The lint scrapes copy out
+    of templates, so an extractor that stops matching after a reformat would otherwise
+    collect nothing, find no violations, and report "clean" — the floors make that a failure
+    instead. A group is one surface, enforced by
+    `test_each_surface_file_has_its_own_coverage_floor`: two files sharing a group would
+    share a floor, and the larger file's count alone would keep the smaller one's collapse
+    invisible. The two add-on translation files are the one allowed exception, since they
+    are copies of each other.
   - Runs in `quality.yml` (`lint` job) beside the changelog and docs-safety lints.
     Local: `bash scripts/check-ui-copy-lint.sh` (add `--audit` for the full report; every
     flag is forwarded to `scripts/ui_copy_lint.py`).
