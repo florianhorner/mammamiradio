@@ -961,14 +961,13 @@ The preferred HA surface is the HACS integration under
 Repairs, and adds `media-source://mammamiradio/live` for casting.
 
 The add-on also pushes a basic `media_player.mammamiradio` plus sensor state
-after each segment transition. The media-player heartbeat starts every 30
-seconds for add-on-only setups. When an attempted entity write fails, the next
-heartbeat waits 30, then 60, 120, 240, and at most 300 seconds until a real
-successful attempt resets it to 30 seconds. A skipped heartbeat (debounced, or
-with no due entity writes) keeps the current interval. Immediate playback-selection
-and stop-transition pushes still run when those events happen; they are not gated
-on the heartbeat timer. Unchanged auxiliary sensor payloads are deduped between
-bounded recovery heartbeats to reduce HA Core REST churn. When the HACS
+after each segment transition. The media-player heartbeat waits 30 seconds
+before its first attempt; failures back off to 60, 120, 240, and at most
+300 seconds until a real successful attempt resets it to 30 seconds. Skipped
+heartbeats (debounced or with no due entity writes) keep the current interval.
+Immediate playback-selection and stop-transition pushes run immediately; they
+are not gated on the heartbeat timer. Unchanged auxiliary sensor payloads are
+deduped between bounded recovery heartbeats to reduce HA Core REST churn. When the HACS
 integration is installed, turn `ha_media_player_push` off so its registered
 `media_player.mammamiradio` owns the id instead of the REST-pushed ghost; the
 sensors keep flowing either way.

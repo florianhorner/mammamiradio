@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import mammamiradio.home.ha_context as ha
@@ -138,40 +139,36 @@ async def test_failed_purge_retries_next_push(monkeypatch):
     assert client.delete.call_count == 2
 
 
+@pytest.mark.parametrize(
+    "error, category",
+    [(RuntimeError("boom token=sekrit http://ha:8123"), "unexpected"), (httpx.ConnectError("nope"), "transport")],
+)
 @pytest.mark.asyncio
-async def test_failed_purge_does_not_log_exception_text(monkeypatch, caplog):
+async def test_failed_purge_does_not_log_exception_text(monkeypatch, caplog, error, category):
     import logging
 
     monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
     client = _mock_client()
-    client.delete.side_effect = RuntimeError("boom token=sekrit http://ha:8123")
+    client.delete.side_effect = error
     with (
         patch.object(ha, "_get_ha_client", return_value=client),
         caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
     ):
         await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
     text = caplog.text
-    assert "ghost media player cleanup failed (unexpected)" in text
-    assert "boom" not in text
-    assert "sekrit" not in text
-    assert "http://ha:8123" not in text
-    assert "RuntimeError" not in text
+    assert f"failing ({category})" in text
+    assert "ghost media player cleanup failed" not in text and str(error) not in text
 
 
 @pytest.mark.asyncio
-async def test_failed_purge_transport_logs_category(monkeypatch, caplog):
-    import logging
-
-    import httpx
-
+async def test_failed_purge_http_status_is_publish_failure(monkeypatch):
     monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
     client = _mock_client()
-    client.delete.side_effect = httpx.ConnectError("nope")
-    with (
-        patch.object(ha, "_get_ha_client", return_value=client),
-        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
-    ):
+    with patch.object(ha, "_get_ha_client", return_value=client):
         await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
-    assert "ghost media player cleanup failed (transport)" in caplog.text
-    assert "nope" not in caplog.text
-    assert "ConnectError" not in caplog.text
+        ha._last_ha_push, ha._media_player_ghost_purged = 0.0, False
+        client.delete.return_value = MagicMock(status_code=503)
+        result = await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
+    assert result is False
+    with ha._ha_publish_health_lock:
+        assert (ha._ha_publish_health.reason, ha._ha_publish_health.failure_streak) == ("http_error", 1)

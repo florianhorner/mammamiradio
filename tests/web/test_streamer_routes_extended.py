@@ -95,6 +95,15 @@ def _no_real_dotenv_writes():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_ha_publish_globals():
+    import mammamiradio.home.ha_context as ha
+
+    ha._last_ha_push = ha._last_ha_stop_push = 0.0
+    yield
+    ha._last_ha_push = ha._last_ha_stop_push = 0.0
+
+
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -182,6 +191,22 @@ async def test_healthz_returns_ok():
     assert "uptime_s" in body
     assert "runtime" in body
     assert "shadow_queue_in_sync" in body["runtime"]
+
+
+@pytest.mark.asyncio
+async def test_selected_playback_publishes_state_to_ha(tmp_path):
+    from mammamiradio.web import streamer as streamer_mod
+
+    app = _make_test_app()
+    config = app.state.config
+    config.homeassistant.enabled, config.homeassistant.url, config.ha_token = True, "http://ha.local:8123", "test-token"
+    segment = Segment(type=SegmentType.MUSIC, path=tmp_path / "selected.mp3", metadata={"title": "Selected song"})
+    tasks: set[asyncio.Task] = set()
+    with patch.object(streamer_mod, "push_state_to_ha", new_callable=AsyncMock) as push:
+        streamer_mod._start_stream_segment(app, app.state.station_state, config, segment, tasks)
+        await asyncio.gather(*tuple(tasks))
+    push.assert_awaited_once()
+    assert push.await_args.kwargs["now_streaming"]["label"] == "Selected song"
 
 
 @pytest.mark.asyncio

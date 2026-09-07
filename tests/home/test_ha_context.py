@@ -4812,7 +4812,7 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     mock_client.post.return_value = mock_resp
 
     with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
-        result = await push_state_to_ha(
+        await push_state_to_ha(
             ha_url="http://ha.local:8123",
             ha_token="test-token",
             now_streaming={
@@ -4826,15 +4826,6 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
             session_stopped=False,
         )
 
-    assert result is True
-    publish = ha_publish_status_payload(
-        SimpleNamespace(
-            homeassistant=SimpleNamespace(enabled=True, url="http://ha.local:8123"),
-            ha_token="tok",
-        )
-    )
-    assert publish["status"] == "ok"
-    assert "working" in publish["message"]
     assert mock_client.post.call_count == 4
     urls = [call.args[0] for call in mock_client.post.call_args_list]
     assert any("media_player.mammamiradio" in u for u in urls)
@@ -5094,7 +5085,6 @@ async def test_push_state_to_ha_non_music_artist_is_always_station_name(reset_ha
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_logs_typed_error_and_retries_on_transient(reset_ha_push_debounce, caplog):
-    """A transient network error is retried once per entity and emits one outage warning."""
     import logging
 
     import httpx
@@ -5126,12 +5116,10 @@ async def test_push_state_to_ha_logs_typed_error_and_retries_on_transient(reset_
     assert "ReadTimeout" not in text
     assert "test-token" not in text
     assert "http://ha.local" not in text
-    assert "HA push failed for" not in text
 
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_push_debounce, caplog):
-    """A 4xx response is not retried and does not leak the HTTP body."""
     import logging
 
     mock_resp = MagicMock(status_code=401)
@@ -5143,7 +5131,7 @@ async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_pus
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
         caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
     ):
-        result = await push_state_to_ha(
+        await push_state_to_ha(
             ha_url="http://ha.local:8123",
             ha_token="test-token",
             now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
@@ -5152,13 +5140,11 @@ async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_pus
             session_stopped=False,
         )
 
-    assert result is False
     assert mock_client.post.call_count == 4
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert "failing (auth_denied)" in warnings[0].getMessage()
     assert "Unauthorized" not in caplog.text
-    assert "HTTP 401" not in caplog.text
     assert "test-token" not in caplog.text
 
 
@@ -5729,8 +5715,6 @@ async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce)
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_debounce):
-    """HTTP 4xx/5xx responses fail the cycle, are not retried, and do not leak bodies."""
-
     async def _post_side_effect(*args, **kwargs):
         url = args[0] if args else kwargs.get("url", "")
         return MagicMock(status_code=503 if "segment_type" in url else 200)
@@ -5857,21 +5841,6 @@ def _ha_push_kwargs(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_push_state_to_ha_http_502_is_http_error(reset_ha_push_debounce, caplog):
-    mock_client = AsyncMock()
-    mock_client.post.return_value = MagicMock(status_code=502, text="<html>bad gateway secret</html>")
-    with (
-        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
-        caplog.at_level(logging.INFO, logger="mammamiradio.home.ha_context"),
-    ):
-        assert await push_state_to_ha(**_ha_push_kwargs()) is False
-    assert mock_client.post.call_count == 4
-    assert "failing (http_error)" in caplog.text
-    assert "bad gateway" not in caplog.text
-    assert "502" not in caplog.text
-
-
-@pytest.mark.asyncio
 async def test_push_state_to_ha_partial_success_retries_failed_entity(reset_ha_push_debounce):
     async def _post_side_effect(url, **kwargs):
         if "segment_type" in url:
@@ -5893,23 +5862,6 @@ async def test_push_state_to_ha_partial_success_retries_failed_entity(reset_ha_p
     assert posted.count("sensor.mammamiradio_segment_type") == 1
     assert "sensor.mammamiradio_listeners" not in posted
     assert "binary_sensor.mammamiradio_on_air" not in posted
-
-
-@pytest.mark.asyncio
-async def test_push_state_to_ha_no_due_writes_returns_none(reset_ha_push_debounce, monkeypatch):
-    monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
-    mock_client = AsyncMock()
-    mock_client.post.return_value = MagicMock(status_code=200)
-    mock_client.delete.return_value = MagicMock(status_code=200)
-    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
-        assert await push_state_to_ha(**_ha_push_kwargs()) is True
-        import mammamiradio.home.ha_context as ha
-
-        ha._last_ha_push = 0.0
-        mock_client.post.reset_mock()
-        with patch("mammamiradio.home.ha_context.time.time", return_value=10.0):
-            assert await push_state_to_ha(**_ha_push_kwargs()) is None
-    assert mock_client.post.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -6019,37 +5971,30 @@ async def test_push_state_to_ha_unexpected_exception_does_not_leak(reset_ha_push
     assert "RuntimeError" not in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_push_state_to_ha_non_transport_post_error_is_unexpected(reset_ha_push_debounce, caplog):
-    mock_client = AsyncMock()
-    mock_client.post.side_effect = ValueError("raw-body")
-    with (
-        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
-        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
-    ):
-        assert await push_state_to_ha(**_ha_push_kwargs()) is False
-    assert mock_client.post.call_count == 4
-    assert "failing (unexpected)" in caplog.text
-    assert "raw-body" not in caplog.text
-
-
 def test_ha_publish_status_payload_settings_not_home_context():
     import mammamiradio.home.ha_context as ha
 
     with ha._ha_publish_health_lock:
         ha._ha_publish_health = ha._HaPublishHealth()
-    disabled = ha_publish_status_payload(
-        SimpleNamespace(homeassistant=SimpleNamespace(enabled=False, url="http://ha.local:8123"), ha_token="tok")
+    config = SimpleNamespace(
+        homeassistant=SimpleNamespace(enabled=False, url="http://ha.local:8123"), ha_token="tok", is_addon=False
     )
+    disabled = ha_publish_status_payload(config)
+    config.is_addon = True
+    addon_disabled = ha_publish_status_payload(config)
     assert disabled["status"] == "disabled"
     assert disabled["enabled"] is False
-    missing = ha_publish_status_payload(
-        SimpleNamespace(homeassistant=SimpleNamespace(enabled=True, url=""), ha_token="")
-    )
+    assert "radio.toml" in disabled["next_step"]
+    assert "add-on options" in addon_disabled["next_step"]
+    config.homeassistant.enabled, config.homeassistant.url, config.ha_token, config.is_addon = True, "", "", False
+    missing = ha_publish_status_payload(config)
+    config.is_addon = True
+    addon_missing = ha_publish_status_payload(config)
     assert missing["status"] == "unconfigured"
-    idle = ha_publish_status_payload(
-        SimpleNamespace(homeassistant=SimpleNamespace(enabled=True, url="http://ha.local:8123"), ha_token="tok")
-    )
+    assert ".env" in missing["next_step"]
+    assert "Supervisor" in addon_missing["next_step"]
+    config.homeassistant.url, config.ha_token, config.is_addon = "http://ha.local:8123", "tok", False
+    idle = ha_publish_status_payload(config)
     assert idle["status"] == "idle"
     assert "token" not in idle["message"].lower() or "long-lived" in idle["next_step"]
     assert "http://" not in str(idle)

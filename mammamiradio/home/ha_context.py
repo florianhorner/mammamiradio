@@ -2913,11 +2913,11 @@ _HA_PUBLISH_REASON_RANK = {
 _HA_PUBLISH_COPY = {
     "disabled": (
         "Home Assistant publishing is turned off.",
-        "Turn on Home Assistant in add-on options if you want station entities.",
+        "Turn on Home Assistant publishing in radio.toml if you want station entities.",
     ),
     "unconfigured": (
         "Home Assistant publishing is not configured.",
-        "Set the Home Assistant URL and a long-lived token.",
+        "Set HA_URL and HA_TOKEN in .env, then restart the station.",
     ),
     "idle": (
         "The station has not tried to publish entities yet.",
@@ -2941,6 +2941,11 @@ _HA_PUBLISH_COPY = {
         "Home Assistant entity updates are failing.",
         "Wait for the next retry, then check Home Assistant if this continues.",
     ),
+}
+_HA_PUBLISH_ADDON_NEXT_STEPS = {
+    "disabled": "Turn on Home Assistant in add-on options if you want station entities.",
+    "unconfigured": "Check the add-on Home Assistant connection so Supervisor can provide its token.",
+    "auth_denied": "Check the add-on Home Assistant connection, then retry the station.",
 }
 
 
@@ -2975,12 +2980,14 @@ def _worse_ha_publish_reason(current: str, incoming: str) -> str:
     return current or incoming
 
 
-def next_ha_publish_heartbeat_interval(current: float, result: bool | None) -> float:
-    """Return the next heartbeat sleep from a real push result.
+def _ha_publish_copy(key: str, config: object | None) -> tuple[str, str]:
+    if getattr(config, "is_addon", False) and key in _HA_PUBLISH_ADDON_NEXT_STEPS:
+        return _HA_PUBLISH_COPY[key][0], _HA_PUBLISH_ADDON_NEXT_STEPS[key]
+    return _HA_PUBLISH_COPY[key]
 
-    ``True`` resets to 30s. ``None`` (debounce / no due writes) keeps the
-    current interval. ``False`` doubles 30 → 60 → 120 → 240 and caps at 300.
-    """
+
+def next_ha_publish_heartbeat_interval(current: float, result: bool | None) -> float:
+    """Return the next heartbeat sleep from a real push result."""
     baseline = current if current > 0 else HA_PUBLISH_HEARTBEAT_INITIAL_S
     if result is True:
         return HA_PUBLISH_HEARTBEAT_INITIAL_S
@@ -2996,7 +3003,7 @@ async def run_ha_publish_heartbeat(
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
     initial_interval: float = HA_PUBLISH_HEARTBEAT_INITIAL_S,
 ) -> None:
-    """Sleep, push, and back off from the push result until cancelled."""
+    """Sleep, push, and back off until cancelled."""
     interval = initial_interval if initial_interval > 0 else HA_PUBLISH_HEARTBEAT_INITIAL_S
     while True:
         await sleep(interval)
@@ -3045,7 +3052,7 @@ def _note_ha_publish_success() -> None:
 
 
 def ha_publish_status_payload(config: object | None = None) -> dict[str, object]:
-    """Operator-safe publishing health for authenticated ``/status`` only."""
+    """Return operator-safe publishing health for authenticated ``/status``."""
     ha = getattr(config, "homeassistant", None) if config is not None else None
     enabled_flag = bool(getattr(ha, "enabled", False))
     url = str(getattr(ha, "url", "") or "").strip()
@@ -3078,10 +3085,10 @@ def ha_publish_status_payload(config: object | None = None) -> dict[str, object]
         }
 
     if not enabled_flag:
-        message, next_step = _HA_PUBLISH_COPY["disabled"]
+        message, next_step = _ha_publish_copy("disabled", config)
         return _payload(enabled=False, status="disabled", reason="", message=message, next_step=next_step)
     if not publishing_ready:
-        message, next_step = _HA_PUBLISH_COPY["unconfigured"]
+        message, next_step = _ha_publish_copy("unconfigured", config)
         return _payload(enabled=False, status="unconfigured", reason="", message=message, next_step=next_step)
 
     last_success = health.last_success_at or None
@@ -3089,7 +3096,7 @@ def ha_publish_status_payload(config: object | None = None) -> dict[str, object]
     last_attempt = health.last_attempt_at or None
     if health.outage_active:
         copy_key = health.reason if health.reason in _HA_PUBLISH_COPY else "unexpected"
-        message, next_step = _HA_PUBLISH_COPY[copy_key]
+        message, next_step = _ha_publish_copy(copy_key, config)
         return _payload(
             enabled=True,
             status="degraded",
@@ -3160,20 +3167,12 @@ def _remember_ha_entity_write(eid: str, payload: dict, now: float) -> None:
 
 
 def _media_player_push_enabled() -> bool:
-    """Whether to push ``media_player.mammamiradio`` (default on).
-
-    Operators who install the HACS ``mammamiradio`` integration set the add-on's
-    ``ha_media_player_push`` option to false (-> ``MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH``).
-    The registered ``MediaPlayerEntity`` then owns the id; a 30s REST push to the
-    same id would clobber it (the HA state machine is last-writer-wins) and flap
-    the card between real and ghost state. The three sensor/binary_sensor pushes
-    have no registered backing and keep flowing regardless.
-    """
+    """Whether the REST push owns ``media_player.mammamiradio`` (default on)."""
     val = os.getenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "").strip().lower()
     return val not in ("0", "false", "no", "off")
 
 
-async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.AsyncClient) -> None:
+async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.AsyncClient) -> str | None:
     """Delete the stale ghost ``media_player.mammamiradio`` once.
 
     REST ``/api/states`` entries never expire, so when the push is turned off the
@@ -3184,23 +3183,27 @@ async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.
     """
     global _media_player_ghost_purged
     if _media_player_ghost_purged:
-        return
+        return None
     _media_player_ghost_purged = True
     try:
-        await client.delete(
+        response = await client.delete(
             f"{base_url}/api/states/{_GHOST_MEDIA_PLAYER_EID}",
             headers=headers,
             timeout=5.0,
         )
+        if response.status_code >= 400 and response.status_code != 404:
+            _media_player_ghost_purged = False
+            return _ha_publish_reason_for_status(response.status_code)
     except asyncio.CancelledError:
         _media_player_ghost_purged = False
         raise
     except httpx.TransportError:
-        _media_player_ghost_purged = False  # allow a retry on the next push
-        logger.warning("Home Assistant ghost media player cleanup failed (transport).")
+        _media_player_ghost_purged = False
+        return "transport"
     except Exception:
         _media_player_ghost_purged = False  # allow a retry on the next push
-        logger.warning("Home Assistant ghost media player cleanup failed (unexpected).")
+        return "unexpected"
+    return None
 
 
 async def push_state_to_ha(
@@ -3216,9 +3219,7 @@ async def push_state_to_ha(
 ) -> bool | None:
     """Push radio state to HA as media_player + sensor entities.
 
-    Returns ``True`` when every due write succeeded, ``False`` when any attempted
-    write failed, and ``None`` when the cycle was debounced or no entity writes
-    were due.
+    Returns True for all-success, False for any failure, or None when no write is due.
 
     ``station_name`` is the listener-facing name used for media_player/sensor
     friendly names and the station ``media_artist``. Entity IDs and the
@@ -3379,21 +3380,16 @@ async def _push_state_to_ha_locked(
             ),
         ]
 
-        # When the HACS integration owns media_player.mammamiradio, stop pushing
-        # it (last-writer-wins would clobber the real entity) and purge the stale
-        # ghost once. The sensors/binary_sensor keep flowing — no registered
-        # backing, no collision, and the integration doesn't provide them.
+        attempted = 0
+        worst_reason = ""
         if not _media_player_push_enabled():
             entities = [e for e in entities if e[0] != _GHOST_MEDIA_PLAYER_EID]
-            await _purge_ghost_media_player(base_url, headers, client)
+            attempted += int(not _media_player_ghost_purged)
+            purge_failure = await _purge_ghost_media_player(base_url, headers, client)
+            if purge_failure:
+                worst_reason = _worse_ha_publish_reason(worst_reason, purge_failure)
 
         async def _push_one(eid: str, p: dict) -> str | None:
-            # One bounded retry, transient network errors only. The whole push
-            # runs inside _get_ha_push_lock(), so a newer push cannot interleave
-            # and replay stale state behind this one. HTTP errors are not retried
-            # (they will not fix themselves within 5s); the heartbeat re-pushes.
-            # Failures are aggregated after the cycle — never log bodies, tokens,
-            # URLs, or exception text here.
             saw_transport = False
             for _attempt in range(2):
                 try:
@@ -3415,12 +3411,6 @@ async def _push_state_to_ha_locked(
                     return "unexpected"
             return "transport" if saw_transport else "unexpected"
 
-        # Keep state writes ordered. Supervisor's API proxy can report noisy
-        # request-body errors when all entity updates hit it at once during HA
-        # slowness; the outer push lock already serializes push cycles, so this
-        # preserves freshness while smoothing each cycle.
-        attempted = 0
-        worst_reason = ""
         for eid, payload in entities:
             if not _ha_entity_write_due(eid, payload, now):
                 continue
