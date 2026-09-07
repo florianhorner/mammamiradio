@@ -1491,8 +1491,9 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   padding: 24px 24px 72px;
 }
 .a-content.producer-main {
+  --mmr-producer-gap: 18px;
   padding: 0;
-  gap: 18px;
+  gap: var(--mmr-producer-gap, 18px);
 }
 .producer-header {
   display: flex;
@@ -1786,40 +1787,52 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 }
 /* ══════════ Producer Desk — Concept B: pinned console + tabbed work area ══════════ */
 .producer-desk .producer-main{max-width:1100px}
-/* Sticky deck — console + tab bar pin together (one sticky unit, never overlap).
-   The opaque backdrop is STATE-DRIVEN, never permanent. `html` carries the page
-   atmosphere (gold radial glow + grain + warm top gradient — the Sun Glow block
-   in docs/design/system.md), and the deck sits exactly where that atmosphere is
-   warmest. A flat var(--bg) fill painted here at rest stamps a hard-edged patch
-   over it: measured as a 17/255 step at the deck's bottom edge, which is the
-   band the screenshot showed. At scrollTop 0 nothing is behind the deck yet, so
-   it carries no fill at all; `.is-pinned` arms one only once panel chrome
-   actually passes underneath. The 16px below the deck is padding, not margin,
-   so the armed fill covers it without a second paint layer. */
+/* Sticky deck: console + tab bar pin together (one sticky unit, never overlap).
+   The opaque backdrop is state-driven. `html` carries the page atmosphere (gold
+   radial glow + grain + warm top gradient, the Sun Glow block in
+   docs/design/system.md), and the deck sits where that atmosphere is warmest. A
+   flat var(--bg) fill painted here at rest stamps a hard-edged patch over it,
+   measured as a 17/255 step at the deck's bottom edge. At scrollTop 0 nothing is
+   behind the deck yet, so it carries no fill; `.is-pinned` arms one once panel
+   chrome passes underneath. The 16px below the deck is padding, not margin, so
+   the armed fill covers it without a second paint layer. */
 .mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate;background:transparent;
   padding-top:8px;padding-bottom:16px;margin-bottom:0;
-  transition:background-color 180ms ease,box-shadow 180ms ease}
-@media (min-width:769px){
-  /* Elevation, not a rule: the tab bar already ends in its own --line-strong
-     border 16px up, so the design system's 1px sticky hairline (system.md
-     "Listener site composition") would read as a railroad track here. The
-     shadow says "content is passing under me" without a competing line. */
-  .mmr-deck.is-pinned{background:var(--bg);box-shadow:0 6px 16px -12px rgba(0,0,0,.85)}
-}
+  box-shadow:0 6px 16px -12px rgba(0,0,0,0);
+  transition:box-shadow 180ms ease}
+/* The tab bar already ends in its own --line-strong border 16px up, so the
+   design system's 1px sticky hairline (system.md "Listener site composition")
+   would read as a railroad track here. A shadow says "content is passing under
+   me" without a competing line.
+   The fill is absent from the transition. .mmr-tabbar carries no background of
+   its own, so during a cross-fade the page scrolls through the tab row and the
+   8/10/16px bands around it. That is the same bleed the permanent backdrop
+   existed to stop, narrowed to each pin crossing. The mask snaps; only the
+   elevation cue fades, which is why the resting shadow is the same geometry at
+   zero alpha (box-shadow does not interpolate from none).
+   Armed at every width where the deck is sticky, and disarmed inside the
+   max-width:768px block below rather than scoped to a min-width twin: a
+   768px/769px pair leaves fractional viewport widths (routine under browser
+   zoom) matching neither, and the deck would pin there with no fill. */
+.mmr-deck.is-pinned{background:var(--bg);box-shadow:0 6px 16px -12px rgba(0,0,0,.85)}
 /* 1px probe directly above the deck. While it is on screen the deck is at rest;
-   once it scrolls out, the deck is pinned. Cheaper and more honest than reading
-   scrollY, and it needs no threshold tuning. */
-.mmr-deck-sentinel{height:1px;margin:0;padding:0;pointer-events:none}
+   once it scrolls out, the deck is pinned. Cheaper than reading scrollY, and it
+   needs no threshold tuning.
+   It is an in-flow flex child of .producer-main, so the trailing margin cancels
+   the extra --mmr-producer-gap it would otherwise insert between header and deck.
+   A wrapper is unsafe: it would become the sticky containing block and the deck
+   could no longer pin. */
+.mmr-deck-sentinel{height:1px;margin:0 0 calc(-1px - var(--mmr-producer-gap, 18px));padding:0;pointer-events:none;overflow:hidden}
 @media (max-width:768px){
-  /* Static deck scrolls away with the page, so it is never pinned and never
-     arms a fill — the atmosphere stays continuous at every mobile width with
-     no mobile-specific backdrop rule. The .is-pinned treatment above is scoped
-     to min-width:769px, so the class is inert here even while the sentinel is
-     off screen. */
+  /* Static deck scrolls away with the page, so nothing passes underneath it and
+     the atmosphere stays continuous at every mobile width. The sentinel
+     still leaves the viewport, so the class can still be set; this is where it
+     is disarmed, so no viewport width is left both sticky and unmasked. */
   .mmr-deck{position:static;top:auto;z-index:auto}
+  .mmr-deck.is-pinned{background:transparent;box-shadow:0 6px 16px -12px rgba(0,0,0,0)}
 }
 @media (prefers-reduced-motion: reduce){
-  /* The state still flips instantly; only the fade is suppressed. */
+  /* The mask already snaps; this drops the elevation cue's fade too. */
   .mmr-deck{transition:none}
 }
 /* Pinned live console */
@@ -1861,7 +1874,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 /* Tab bar */
-/* position:relative stays — the active tab's ::after underline anchors to it.
+/* position:relative stays because the active tab's ::after underline anchors
+   to it.
    The z-index:1 that used to lift it over .mmr-deck::before is gone with that
    overlay. */
 .mmr-tabbar{position:relative;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
@@ -1986,7 +2000,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
     <div class="stopped-banner" id="stoppedBanner" role="status" aria-live="polite">&#9632; Station paused · press Start when you're ready.</div>
 
     <!-- ══ Sticky deck — console + tab bar pin together so the tabs never hide behind the console ══ -->
-    <!-- Probe for the deck's pinned state; see initDeckPinned(). Presentational only. -->
+    <!-- Probe for the deck's pinned state; see initDeckPinned(). -->
     <div class="mmr-deck-sentinel" aria-hidden="true"></div>
     <div class="mmr-deck">
 
@@ -3503,12 +3517,13 @@ function initOnAirSticky(){
 }
 initOnAirSticky();
 
-// The deck's opaque backdrop is armed only while the deck is actually pinned.
-// At scrollTop 0 nothing is behind it, and a fill there stamps a flat rectangle
-// over the page atmosphere that `html` carries. Note this is NOT the same signal
-// as data-sticky-onair above: that one watches the CONSOLE leave the viewport,
-// which on desktop never happens because the deck pins it in place — it is the
-// mobile compact-strip trigger. This watches the DECK leave its resting place.
+// The deck's opaque backdrop is armed only while the deck is pinned. At
+// scrollTop 0 nothing is behind it, and a fill there stamps a flat rectangle
+// over the page atmosphere that `html` carries. This is not the same signal as
+// data-sticky-onair above: that one watches the console leave the viewport,
+// which on desktop never happens because the deck pins it in place, so it is
+// the mobile compact-strip trigger. This one watches the deck leave its
+// resting place.
 //
 // scroll-padding-top is derived from the live deck height rather than hardcoded,
 // because the console collapses and expands with `is-idle`; a fixed number would
@@ -3530,11 +3545,11 @@ function initDeckPinned(){
   if(!sentinel||!('IntersectionObserver' in window))return;
   new IntersectionObserver(entries=>{
     const entry=entries[entries.length-1];
-    // Off-screen alone is not "pinned": the sentinel is also off-screen when it
-    // has not been REACHED yet, which is the state on load whenever the deck
+    // Off-screen alone does not mean pinned: the sentinel is also off-screen
+    // before it has been reached, which is the state on load whenever the deck
     // starts below the fold (short viewport, tall header, zoomed browser).
-    // Treating that as pinned would arm the opaque fill at rest — the exact
-    // band this change removes. Pinned means the sentinel left past the TOP.
+    // Treating that as pinned would arm the opaque fill at rest, which is the
+    // band this change removes. Pinned means the sentinel left past the top.
     deck.classList.toggle('is-pinned',!entry.isIntersecting&&entry.boundingClientRect.top<0);
   },{threshold:0}).observe(sentinel);
 }

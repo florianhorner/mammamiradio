@@ -46,27 +46,36 @@ On desktop, the **live deck** (`.mmr-deck`, containing `.mmr-console` + `.mmr-ta
 is pinned to the top and never scrolls away. It carries the whole live glance in
 one block:
 
-**The deck has two visual states, and the difference is deliberate.** At rest it
-paints no backdrop at all: the page atmosphere (Sun Glow, grain, warm top
-gradient — see `system.md`) runs straight through it, because at `scrollTop 0`
-there is nothing behind the deck to hide. Once it actually pins, a 1px sentinel
-above it (`.mmr-deck-sentinel`, watched by `initDeckPinned()`) adds `.is-pinned`,
-which arms the opaque `var(--bg)` fill plus a soft drop shadow. The shadow is the
-affordance: without it a pinned deck looks identical to an unpinned one and
-nothing tells the operator that content is passing underneath.
+The deck has two backdrop states. At rest it paints none at all: the page
+atmosphere (Sun Glow, grain, warm top gradient; see `system.md`) runs straight
+through it, because at `scrollTop 0` there is nothing behind the deck to hide.
+Once it pins, a 1px sentinel above it (`.mmr-deck-sentinel`, watched by
+`initDeckPinned()`) adds `.is-pinned`, which arms the opaque `var(--bg)` fill
+plus a soft drop shadow. The shadow is the affordance: without it a pinned deck
+looks identical to an unpinned one and nothing tells the operator that content
+is passing underneath.
 
-A permanent opaque backdrop is the bug this replaced — a flat fill over the
-warmest part of the atmosphere reads as a hard-edged rectangle stamped across the
-top of the control room. Do not reintroduce one; `test_admin_mobile_invariants.py`
-asserts the deck is transparent at rest.
+The fill snaps on; only the shadow fades. `.mmr-tabbar` carries no background of
+its own, so anything that cross-fades the fill lets the page scroll through the
+tab row for the length of the fade. `transition` therefore names `box-shadow`
+alone, and the resting shadow is the pinned geometry at zero alpha (`box-shadow`
+does not interpolate from `none`).
+
+A permanent opaque backdrop is the bug this replaced. A flat fill over the
+warmest part of the atmosphere reads as a hard-edged rectangle. Do not
+reintroduce one; `test_admin_mobile_invariants.py` asserts the deck is
+transparent at rest.
 
 `scroll-padding-top` is derived from the live deck height by the same function,
 not hardcoded, because the console collapses and expands with `is-idle`. Without
 it, tabbing into a scrolled panel parks the focused control underneath the deck.
 
 On mobile (`<=768px`) the deck is `position: static` and scrolls away with the
-page, so it never pins and never arms a backdrop; the `.is-pinned` rule is scoped
-to `min-width: 769px` and is inert there.
+page, so nothing passes underneath it. The sentinel still leaves the viewport
+there, so `.is-pinned` can still be set; the phone block disarms the fill rather
+than pairing the rule with a `min-width: 769px` twin. A 768/769 pair leaves
+fractional viewport widths (routine under browser zoom) matching neither block,
+and the deck pins at those widths with no fill.
 
 - **Left:** now-playing (segment type `.status-chip`, title, artist, progress),
   Skip / Stop, the compact token cost counter, and two context-sensitive controls:

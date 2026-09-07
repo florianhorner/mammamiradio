@@ -21,7 +21,6 @@ TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _STYLE_RE = re.compile(r"<style>\s*(.*?)</style>", re.DOTALL)
 _MEDIA_START_RE = re.compile(r"@media\s*\(\s*max-width\s*:\s*(\d+)px\s*\)\s*\{")
-_MEDIA_MIN_START_RE = re.compile(r"@media\s*\(\s*min-width\s*:\s*(\d+)px\s*\)\s*\{")
 _CSS_DECL_RE = re.compile(r"([\w-]+)\s*:\s*([^;]+)")
 _PX_RE = re.compile(r"(-?\d+(?:\.\d+)?)px")
 _CLASS_RE = re.compile(r"\.([\w-]+)")
@@ -50,18 +49,6 @@ def _phone_css() -> str:
     ]
     assert phone_blocks, "admin.html has no <=768px mobile breakpoint for tablet/phone layouts."
     return "\n".join(phone_blocks)
-
-
-def _desktop_css() -> str:
-    """Rules that apply only above the mobile breakpoint."""
-    text = _admin_css()
-    desktop_blocks = [
-        _read_balanced_block(text, match.end() - 1)
-        for match in _MEDIA_MIN_START_RE.finditer(text)
-        if int(match.group(1)) >= 769
-    ]
-    assert desktop_blocks, "admin.html has no >=769px desktop breakpoint."
-    return "\n".join(desktop_blocks)
 
 
 def _read_balanced_block(text: str, opening_brace: int) -> str:
@@ -696,12 +683,12 @@ def test_mobile_upper_deck_scrolls_away() -> None:
 def test_desktop_sticky_deck_masks_under_scrolled_panel_chrome() -> None:
     """The deck's backdrop is armed by state, not painted permanently.
 
-    Asserts the CONTRACT, not the mechanism. The previous version of this test
-    asserted that a `.mmr-deck::before` pseudo-layer existed with a specific
+    Asserts the contract rather than the mechanism. The previous version of this
+    test asserted that a `.mmr-deck::before` pseudo-layer existed with a specific
     `inset`, which pinned an implementation detail and let a proposed fix look
     correct against a green suite while changing nothing a user could see.
 
-    Two halves, and both matter:
+    Both halves:
 
     * At rest the deck must NOT paint an opaque fill. `html` carries the page
       atmosphere (gold radial glow + grain + warm top gradient), and the deck
@@ -733,22 +720,44 @@ def test_desktop_sticky_deck_masks_under_scrolled_panel_chrome() -> None:
         "The deck must not own a permanent pseudo-backdrop; the fill is state-driven."
     )
 
-    # Pinned: opaque, and scoped to the breakpoint where the deck is sticky.
-    desktop = _desktop_css()
-    pinned = _declarations_for_selector(desktop, ".mmr-deck.is-pinned")
+    # Pinned: opaque. The rule is unconditional so that no viewport width is
+    # left both sticky and unmasked. A `min-width:769px` twin of the 768px
+    # mobile block would leave fractional widths in between matching neither,
+    # and the deck pins there.
+    pinned = _declarations_for_selector(css, ".mmr-deck.is-pinned")
     assert pinned.get("background") == "var(--bg)", "A pinned deck must mask panel chrome scrolling underneath it."
     assert pinned.get("box-shadow"), "A pinned deck needs an elevation cue."
 
-    # The mobile deck is static, so it never pins and never arms the fill.
-    # The pinned rule must not leak below the breakpoint.
-    assert not re.search(r"\.mmr-deck\.is-pinned\s*\{", _phone_css()), (
-        "The pinned backdrop must not apply to the static mobile deck."
+    # The mobile deck is static, so nothing passes underneath it; the phone
+    # block must disarm the fill rather than rely on a breakpoint gap.
+    mobile_pinned = _declarations_for_selector(_phone_css(), ".mmr-deck.is-pinned")
+    assert mobile_pinned.get("background") == "transparent", (
+        "The static mobile deck must never arm the backdrop, even while the class is set."
     )
 
     # The sentinel that drives the state must exist in both markup and CSS.
     html = _read_admin_html()
     assert 'class="mmr-deck-sentinel"' in html
     assert re.search(r"\.mmr-deck-sentinel\s*\{", css)
+    # producer-main is a flex column with gap. An in-flow sibling would insert a
+    # second gap between header and deck unless the trailing margin cancels it.
+    # A wrapper is unsafe: it would become the sticky containing block.
+    producer = _declarations_for_selector(css, ".a-content.producer-main")
+    assert "--mmr-producer-gap" in (producer.get("gap") or "")
+    sentinel = _declarations_for_selector(css, ".mmr-deck-sentinel")
+    assert sentinel.get("height") == "1px"
+    # Assert the full value: the sentinel's own 1px and the gap it inserts both
+    # have to come back out, or the deck sits 1-19px too low.
+    assert sentinel.get("margin") == "0 0 calc(-1px - var(--mmr-producer-gap, 18px))", (
+        "The sentinel must cancel its own height plus the producer-main flex gap it adds."
+    )
+    first_listen = FIRST_LISTEN_CSS.read_text(encoding="utf-8")
+    assert re.search(r":is\(\.mmr-deck,\s*\.mmr-deck-sentinel\)", first_listen), (
+        "First Listen required-entry must hide the sentinel with the deck."
+    )
+    assert ".mmr-deck-sentinel" in first_listen.split('data-first-listen-entry="completing"')[1], (
+        "First Listen completing must hide the sentinel with the deck."
+    )
 
     panel_focus = re.search(r"\.mmr-tabpanel:focus-visible\s*\{([^}]*)\}", css, re.DOTALL)
     assert panel_focus, "Focusable tab panels need an internal focus ring."
@@ -757,11 +766,26 @@ def test_desktop_sticky_deck_masks_under_scrolled_panel_chrome() -> None:
     assert focus_declarations.get("box-shadow", "").startswith("inset 0 0 0 2px")
 
 
-def test_pinned_deck_fade_respects_reduced_motion() -> None:
-    """The pinned-state fade collapses under reduced motion; the state still flips."""
+def test_pinned_deck_mask_snaps_and_its_elevation_cue_respects_reduced_motion() -> None:
+    """The fill snaps on; only the elevation cue fades, and reduced motion drops that too.
+
+    `.mmr-tabbar` carries no background of its own, so anything that cross-fades
+    the deck's fill leaves the page scrolling through the tab row for the length
+    of the fade. That is the same bleed the permanent backdrop existed to stop,
+    narrowed to each pin crossing instead of removed.
+    """
     css = _admin_css()
     deck = _declarations_for_selector(css, ".mmr-deck")
-    assert "background-color" in deck.get("transition", ""), "Arming the backdrop should fade rather than snap."
+    transition = deck.get("transition", "")
+    assert "background" not in transition, (
+        "The mask must snap. Fading it lets content scroll through the transparent tab bar."
+    )
+    assert "box-shadow" in transition, "The elevation cue should fade in rather than snap."
+    # box-shadow does not interpolate from `none`, so the resting state needs
+    # the same geometry at zero alpha or the transition has nothing to animate.
+    assert "rgba(0,0,0,0)" in (deck.get("box-shadow") or "").replace(" ", ""), (
+        "The resting shadow must be the pinned geometry at zero alpha, or it cannot animate."
+    )
 
     reduced_blocks = [
         _read_balanced_block(css, match.end() - 1)
@@ -787,8 +811,7 @@ def test_admin_reserves_scroll_padding_for_the_pinned_deck() -> None:
         "top, underneath the sticky deck, unless scroll padding is reserved."
     )
     assert "getComputedStyle(deck).position==='sticky'" in html, (
-        "Scroll padding must only be reserved while the deck is actually sticky, "
-        "so the mobile breakpoint stays owned by CSS."
+        "Scroll padding must only be reserved while the deck is sticky, so the mobile breakpoint stays owned by CSS."
     )
 
 

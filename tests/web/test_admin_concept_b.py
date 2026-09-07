@@ -94,10 +94,10 @@ def test_console_and_tabbar_share_one_sticky_deck() -> None:
     html = _html()
     assert 'class="mmr-deck"' in html
     assert ".mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate" in html
-    # The deck's backdrop is armed by state, never painted permanently: `html`
-    # carries the page atmosphere and a standing opaque fill stamps a
-    # hard-edged rectangle over it. See the matching contract test in
-    # test_admin_mobile_invariants.py for the full rationale.
+    # The deck's backdrop is armed by state: `html` carries the page atmosphere
+    # and a standing opaque fill stamps a hard-edged rectangle over it. See the
+    # matching contract test in test_admin_mobile_invariants.py for the full
+    # rationale.
     assert ".mmr-deck::before{" not in html
     assert 'class="mmr-deck-sentinel"' in html
     assert ".mmr-deck.is-pinned{background:var(--bg)" in html
