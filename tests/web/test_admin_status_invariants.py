@@ -629,6 +629,24 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "openaiLine=statusInline('blocked','key not working'" in block
     assert "openaiLine=statusInline('ready','available')" in block
     assert "OpenAI: '+openaiLine" in block
+    assert "'Voices: '+voicesLine" in block
+    assert "statusInline('idle','Edge only')" in block
+    assert "['openai_speech','OpenAI']" in block
+    assert "p.quota_exhausted" in block
+    assert "statusInline('blocked','quota exhausted'" in block
+    assert "p.cooldown" in block
+    assert "statusInline('degraded','retrying'" in block
+    assert "p.failed_voices>0" in block
+    assert "voiceCount" in block
+    assert "statusInline('idle','configured'" in block
+    assert "p.last_error" not in block
+    assert "Temporary provider trouble; will retry automatically" in block
+    assert "First Listen → Change AI services → Voice providers" in block
+    assert "Check the configured provider voice, model, and region settings" in block
+    assert 'data-tab="setup">First Listen' in _read_admin_html()
+    assert ">Change AI services</button>" in _read_admin_html()
+    assert "<summary>Voice providers</summary>" in _read_admin_html()
+    assert "restart the add-on" not in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
 
 

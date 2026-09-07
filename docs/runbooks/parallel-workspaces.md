@@ -315,7 +315,7 @@ hands entirely and stalls the head, for when you mean to land that one by seat.
 | State | Meaning |
 |---|---|
 | `READY` | Gates pass and no required check is red. Also covers `UNSTABLE` (only non-required checks red) and `HAS_HOOKS` |
-| `READY_BEHIND` | Gates pass but the base moved; needs integrate + reattest |
+| `READY_BEHIND` | Gates pass but the base moved; needs integrate + push |
 | `CI_PENDING` | A merge state GitHub has not settled: required checks, thread resolution, or mergeability not yet computed |
 | `BLOCKED_BOT` | Unresolved Major/Critical/P0/P1 bot thread |
 | `BLOCKED_EVIDENCE` | No committed v2 receipt covers this head |
@@ -341,7 +341,7 @@ off; the human dashboard is unaffected.
 **It is not live, and cannot be flipped live from a feature seat.** Doing that
 needs a GitHub App installed on the repo with `contents:write` +
 `pull-requests:write`. `GITHUB_TOKEN` is specifically not enough: commits it
-pushes do not trigger `push`/`pull_request` workflows, so a reattest commit
+pushes do not trigger `push`/`pull_request` workflows, so an integrate commit
 pushed with it would land with no CI and the queue would arm a head that no
 check ever ran against. The header comment in `land-queue.yml` lists the full
 set of preconditions.
@@ -363,9 +363,18 @@ Do not resolve either path from a third workspace.
 Dependabot is the automated exception to the human and feature landing path.
 Patch and minor Python PRs may use
 `.github/workflows/dependabot-automerge.yml`. Stale PR handling follows
-`docs/agents.md`: rejected or behind PRs park for an authenticated maintainer,
-including manual major-Action landings through `scripts/land-pr.sh`. Do not
-attach Dependabot branches to Conductor feature slots.
+`docs/agents.md`: rejected or behind PRs park for an authenticated maintainer.
+The workflow adds `cut-window-hold` to PRs it disarms during a release cut.
+The sweep only disarms. After publication, a fresh PR event with verified
+Dependabot metadata may re-arm patch/minor updates. Major GitHub Actions
+updates still use `scripts/land-pr.sh`. Before a cut, the release operator runs
+`GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze`: disable new runs, drain existing runs, then
+disarm PRs. Stable-version changes require that verified freeze at landing.
+Keep human landings paused through both architecture promotions and resume
+explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`. The report-only queue covers ordinary
+review/proof readiness; its READY result does not establish cut admission. See
+`docs/runbooks/ha-addon.md`, "The cut window". Do not attach Dependabot branches
+to Conductor feature slots.
 
 ## Explicitly out of scope
 

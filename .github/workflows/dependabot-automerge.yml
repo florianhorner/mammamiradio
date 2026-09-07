@@ -1,5 +1,20 @@
 name: Dependabot Automerge
 
+# Enable auto-merge for Dependabot patch and minor updates after checking GHCR.
+# During a release cut, main advertises a version before both images exist.
+# GITHUB_TOKEN merges trigger no push workflows, so a Dependabot merge during
+# that window leaves main without CI or a :sha image for the edge soak.
+#
+# scripts/check-advertised-version.sh checks image availability. Missing images
+# disable auto-merge and add cut-window-hold to affected PRs. The sweep runs on
+# config.yaml pushes to main, hourly, and on demand to catch PRs already armed.
+# It only disarms; arming requires verified metadata from a fresh PR event.
+# Major updates need manual landing.
+#
+# Before a cut, the release operator disables this workflow, drains existing
+# runs and disarms PRs via dependabot-window-hold.sh freeze. land-pr.sh verifies
+# that barrier for stable-version changes. Resume explicitly after publication.
+
 on:
   pull_request_target:
     types:
@@ -9,18 +24,51 @@ on:
       - labeled
       - unlabeled
       - ready_for_review
+  push:
+    branches: [main]
+    paths:
+      - ha-addon/mammamiradio/config.yaml
+  schedule:
+    - cron: "45 * * * *"
+  workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
 
+concurrency:
+  group: dependabot-automerge
+  cancel-in-progress: false
+
 jobs:
   enable-automerge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.draft == false
+    if: github.repository == 'florianhorner/mammamiradio' && github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
+      # Read current main so queued events check the version advertised now.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          persist-credentials: false
+
+      # Capture the verdict even when the script exits 1 under bash -e.
+      # This uses the same parser as advertised-version.yml; the gate test
+      # executes both verdict steps below.
+      - name: Read the advertised-version verdict
+        id: advertised
+        run: |
+          set +e
+          OUTPUT="$(bash scripts/check-advertised-version.sh 2>&1)"
+          set -e
+          echo "$OUTPUT"
+          VERDICT="$(printf '%s\n' "$OUTPUT" | sed -n 's/^VERDICT: //p' | tail -1)"
+          [ -n "$VERDICT" ] || VERDICT="unknown"
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+
       - name: Fetch Dependabot metadata
         id: metadata
+        if: steps.advertised.outputs.verdict == 'pass'
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -31,8 +79,54 @@ jobs:
       # is sufficient.
 
       - name: Enable automerge for patch and minor updates
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: gh pr merge --squash --auto "${{ github.event.pull_request.number }}"
+        if: >-
+          steps.advertised.outputs.verdict == 'pass' &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: bash scripts/dependabot-window-hold.sh arm "$PR_NUMBER" "$PR_HEAD_SHA" "$(git rev-parse HEAD)"
+
+      - name: Disarm automerge while the cut window is open
+        if: steps.advertised.outputs.verdict == 'fail'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/dependabot-window-hold.sh disarm "$PR_NUMBER"
+
+      - name: Leave state unchanged when the registry cannot be reached
+        if: steps.advertised.outputs.verdict == 'unknown'
+        run: echo "::notice::advertised-version check returned unknown (registry unreachable); auto-merge state left as is."
+
+  # Check PRs already armed before the cut, without waiting for a PR event.
+  sweep:
+    if: github.repository == 'florianhorner/mammamiradio' && github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Read the advertised-version verdict
+        id: advertised
+        run: |
+          set +e
+          OUTPUT="$(bash scripts/check-advertised-version.sh 2>&1)"
+          set -e
+          echo "$OUTPUT"
+          VERDICT="$(printf '%s\n' "$OUTPUT" | sed -n 's/^VERDICT: //p' | tail -1)"
+          [ -n "$VERDICT" ] || VERDICT="unknown"
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile open Dependabot PRs with the cut window
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERDICT: ${{ steps.advertised.outputs.verdict }}
+        run: bash scripts/dependabot-window-hold.sh sweep "$VERDICT"

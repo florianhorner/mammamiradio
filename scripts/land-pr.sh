@@ -8,7 +8,8 @@
 # merge signal, this wrapper:
 #
 #   1. refuses a behind branch without mutating it, directing the feature
-#      workspace to integrate main and reattest the resulting content;
+#      workspace to integrate main and push (a clean integrate keeps the
+#      existing v2 receipt valid; no reattest is needed);
 #   2. verifies committed v2 pre-ship evidence on the PR head (portable proof —
 #      works from cloud agents and CI once the receipt is on the branch);
 #   3. when a local gstack ledger is present, also accepts a squad entry that
@@ -93,15 +94,37 @@ land_one() {
 
   if [ "$merge_state" = "BEHIND" ]; then
     say "land-pr: PR #$pr is behind its base — refusing to change the branch from the landing seat."
-    say "         In the feature workspace, merge origin/main and run:"
-    say "           scripts/emit-review-evidence.sh --reattest --base origin/main"
-    say "         Commit and push the receipt swap, wait for CI, then land again."
+    say "         In the feature workspace: git merge origin/main && git push."
+    say "         A clean integrate keeps the existing v2 receipt valid — no reattest needed."
+    say "         Wait for CI, then land again. A conflicted or hand-edited merge fails the"
+    say "         evidence closed and needs a fresh squad run."
     return 1
   fi
 
+  # The base is only trusted if it is landed in origin/main; a stale local ref
+  # would refuse GitHub's real base. Refresh only if the local ref does not
+  # already cover it — a seat with complete history never fetches.
+  refresh_landed_ref "$base"
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
+  # Evidence and cut admission both need the verified base and its ancestry.
+  if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+    git fetch -q --no-tags --unshallow origin "$head" "$base" 2>/dev/null \
+      || die "PR #$pr needs full history; could not fetch head $head and base $base. Check origin and retry."
+  fi
+  if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+    git fetch -q --no-tags origin "$base" 2>/dev/null \
+      || die "PR #$pr base $base could not be fetched. Check origin and retry."
+  fi
+  git cat-file -e "${base}^{commit}" 2>/dev/null \
+    || die "PR #$pr base $base is unavailable locally; cannot verify landing gates."
   verify_head "$pr" "$head" "$base" "$last_push_epoch" || return 1
+
+  # A stable-version change must not race an earlier Dependabot arming run.
+  # This is read-only admission; freeze/thaw remain explicit release actions.
+  local slug
+  slug="$(_repo_slug)" || return 1
+  GH_REPO="$slug" bash "$SCRIPT_DIR/dependabot-window-hold.sh" check-cut "$base" "$head" || return 1
 
   # Pin the merge to the exact head verified above. If anything pushes to the
   # branch after this, GitHub refuses the merge instead of landing unseen code.

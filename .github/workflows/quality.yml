@@ -183,6 +183,10 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_squad_gate.sh
 
+      - name: Dependabot auto-merge gate self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_dependabot_automerge_gate.sh
+
       - name: Pre-ship evidence self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_evidence.sh

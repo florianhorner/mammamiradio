@@ -97,7 +97,12 @@ _failed_cloud_voices: set[tuple[str, str, str, str]] = set()
 _CLOUD_ROUTE_COOLDOWN_SECONDS = 30.0
 _ROUTE_PROBE_IN_FLIGHT = math.inf
 _failed_cloud_routes: dict[tuple[str, str, str, str], float | None] = {}
+# Detailed route/voice disable reasons for logs, later skips, and the admin.
+_cloud_route_disable_reasons: dict[tuple[str, str, str, str], str] = {}
+_failed_cloud_voice_reasons: dict[tuple[str, str, str, str], str] = {}
 _cloud_voice_attempt_locks: dict[tuple[str, str, str, str], asyncio.Lock] = {}
+# Credential saves advance generations to fence already-running requests.
+_cloud_engine_generations: dict[str, int] = {}
 _cloud_voice_state_lock = threading.Lock()
 
 # Cap concurrent TTS + FFmpeg jobs to avoid CPU/thermal spikes on constrained hardware
@@ -186,12 +191,63 @@ def _configured_openai_tts_model() -> str | None:
 
 
 def reset_voice_failures() -> None:
-    """Clear memoized voice and route failures. Used by tests."""
+    """Clear memoized voice and route failures (tests, and a credential save)."""
     _failed_edge_voices.clear()
     with _cloud_voice_state_lock:
         _failed_cloud_voices.clear()
         _failed_cloud_routes.clear()
+        _cloud_route_disable_reasons.clear()
+        _failed_cloud_voice_reasons.clear()
         _cloud_voice_attempt_locks.clear()
+        for engine in ("openai", "azure", "elevenlabs"):
+            _cloud_engine_generations[engine] = _cloud_engine_generations.get(engine, 0) + 1
+
+
+def reset_cloud_engine_failures(engine: str) -> None:
+    """Forget one engine's failures when its credential is saved."""
+    engine = engine.strip().lower()
+    with _cloud_voice_state_lock:
+        _cloud_engine_generations[engine] = _cloud_engine_generations.get(engine, 0) + 1
+        for key in [k for k in _failed_cloud_routes if k[0] == engine]:
+            _failed_cloud_routes.pop(key, None)
+            _cloud_route_disable_reasons.pop(key, None)
+        for key in [k for k in _failed_cloud_voices if k[0] == engine]:
+            _failed_cloud_voices.discard(key)
+            _failed_cloud_voice_reasons.pop(key, None)
+        # Detach old-generation locks so a fresh request can start immediately.
+        for key in [k for k in _cloud_voice_attempt_locks if k[0] == engine]:
+            _cloud_voice_attempt_locks.pop(key, None)
+    logger.info("%s TTS route re-armed after a credential save", engine)
+
+
+def _cloud_engine_generation(engine: str) -> int:
+    with _cloud_voice_state_lock:
+        return _cloud_engine_generations.get(engine.strip().lower(), 0)
+
+
+def cloud_tts_health() -> dict[str, dict[str, object]]:
+    """Per-engine breaker state for operator status. Never raises."""
+    health: dict[str, dict[str, object]] = {}
+
+    def _entry(engine: str) -> dict[str, object]:
+        return health.setdefault(engine, {"disabled": False, "cooldown": False, "reason": "", "failed_voices": 0})
+
+    with _cloud_voice_state_lock:
+        for key, retry_at in _failed_cloud_routes.items():
+            entry = _entry(key[0])
+            if retry_at is None:
+                entry["disabled"] = True
+                entry["reason"] = _cloud_route_disable_reasons.get(key, "") or "auth/config error"
+            else:
+                # Stay degraded until the permitted half-open probe succeeds.
+                entry["cooldown"] = True
+        for key in _failed_cloud_voices:
+            entry = _entry(key[0])
+            failed = entry.get("failed_voices", 0)
+            entry["failed_voices"] = (failed if isinstance(failed, int) else 0) + 1
+            if not entry["reason"]:
+                entry["reason"] = _failed_cloud_voice_reasons.get(key, "")
+    return health
 
 
 def _secret_fingerprint(value: str) -> str:
@@ -227,9 +283,19 @@ def _cloud_voice_failed(cloud_key: tuple[str, str, str, str]) -> bool:
         return cloud_key in _failed_cloud_voices
 
 
-def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str, str]) -> None:
+def _memoize_failed_cloud_voice(
+    cloud_key: tuple[str, str, str, str],
+    reason: str = "",
+    *,
+    expected_generation: int | None = None,
+) -> bool:
     with _cloud_voice_state_lock:
+        if expected_generation is not None and _cloud_engine_generations.get(cloud_key[0], 0) != expected_generation:
+            return False
         _failed_cloud_voices.add(cloud_key)
+        if reason:
+            _failed_cloud_voice_reasons[cloud_key] = reason
+    return True
 
 
 def _cloud_route_key(engine: str, *, elevenlabs_model: str = "") -> tuple[str, str, str, str]:
@@ -254,7 +320,11 @@ def _cloud_route_key(engine: str, *, elevenlabs_model: str = "") -> tuple[str, s
     return (engine, "", "", "")
 
 
-def _claim_cloud_route(route_key: tuple[str, str, str, str]) -> str:
+def _claim_cloud_route(
+    route_key: tuple[str, str, str, str],
+    *,
+    expected_generation: int | None = None,
+) -> str:
     """Return the route breaker state, claiming the half-open probe when due.
 
     Returns one of:
@@ -265,12 +335,15 @@ def _claim_cloud_route(route_key: tuple[str, str, str, str]) -> str:
         ``_resolve_unfinished_cloud_route_probe`` sweeps anything else).
       - ``"cooldown"`` — cooling down, or another caller's probe is in flight.
       - ``"permanent"`` — disabled for the session (auth/config failure).
+      - ``"stale"`` — credentials were saved after this attempt started.
 
     Only the probe is single-flight. Healthy traffic is deliberately never
     serialized: Marco and Giulia share one ElevenLabs route, so a route-wide
     mutex would halve dialogue render throughput on every break.
     """
     with _cloud_voice_state_lock:
+        if expected_generation is not None and _cloud_engine_generations.get(route_key[0], 0) != expected_generation:
+            return "stale"
         if route_key not in _failed_cloud_routes:
             return "ok"
         retry_at = _failed_cloud_routes[route_key]
@@ -282,7 +355,11 @@ def _claim_cloud_route(route_key: tuple[str, str, str, str]) -> str:
         return "probe"
 
 
-def _resolve_unfinished_cloud_route_probe(route_key: tuple[str, str, str, str]) -> None:
+def _resolve_unfinished_cloud_route_probe(
+    route_key: tuple[str, str, str, str],
+    *,
+    expected_generation: int | None = None,
+) -> None:
     """Clear a probe claim that no outcome overwrote.
 
     A probe that succeeded, or failed with a voice-specific error (the provider
@@ -292,27 +369,55 @@ def _resolve_unfinished_cloud_route_probe(route_key: tuple[str, str, str, str]) 
     so this is a no-op there.
     """
     with _cloud_voice_state_lock:
+        if expected_generation is not None and _cloud_engine_generations.get(route_key[0], 0) != expected_generation:
+            return
         if _failed_cloud_routes.get(route_key) == _ROUTE_PROBE_IN_FLIGHT:
             del _failed_cloud_routes[route_key]
 
 
-def _clear_cloud_route(route_key: tuple[str, str, str, str]) -> None:
+def _clear_cloud_route(
+    route_key: tuple[str, str, str, str],
+    *,
+    expected_generation: int | None = None,
+) -> None:
     """Reopen a route after a successful probe — fresher evidence than any
     stale failure a straggler call recorded while the probe was in flight."""
     with _cloud_voice_state_lock:
+        if expected_generation is not None and _cloud_engine_generations.get(route_key[0], 0) != expected_generation:
+            return
         _failed_cloud_routes.pop(route_key, None)
+        _cloud_route_disable_reasons.pop(route_key, None)
 
 
-def _memoize_failed_cloud_route(route_key: tuple[str, str, str, str], *, retryable: bool) -> None:
+def _memoize_failed_cloud_route(
+    route_key: tuple[str, str, str, str],
+    *,
+    retryable: bool,
+    reason: str = "",
+    expected_generation: int | None = None,
+) -> bool:
     """Block a route permanently for auth/config errors or briefly for outages."""
     retry_at = time.monotonic() + _CLOUD_ROUTE_COOLDOWN_SECONDS if retryable else None
     with _cloud_voice_state_lock:
+        if expected_generation is not None and _cloud_engine_generations.get(route_key[0], 0) != expected_generation:
+            return False
         # A session disable (revoked key) is never downgraded to a cooldown by
         # a straggler timeout — that would resume doomed probes against a key
         # already known to be rejected.
         if retryable and route_key in _failed_cloud_routes and _failed_cloud_routes[route_key] is None:
-            return
+            return True
+        already_permanent = _failed_cloud_routes.get(route_key, 0) is None
         _failed_cloud_routes[route_key] = retry_at
+        if not retryable:
+            _cloud_route_disable_reasons[route_key] = reason
+    if not retryable and not already_permanent:
+        logger.warning(
+            "%s TTS route disabled for this session after %s. Cloud voices stay on Edge "
+            "until a working key is saved under First Listen → Change AI services → Voice providers.",
+            route_key[0],
+            reason or "an auth/config error",
+        )
+    return True
 
 
 def _should_disable_cloud_route(exc: Exception) -> bool:
@@ -344,14 +449,26 @@ def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str, str]) -> asyncio.L
         return lock
 
 
-def _route_skip_reason(claimed: str) -> str:
-    return "provider_cooldown" if claimed == "cooldown" else "provider_disabled_session"
+def _route_skip_reason(claimed: str, route_key: tuple[str, str, str, str]) -> str:
+    if claimed == "cooldown":
+        return "provider_cooldown"
+    with _cloud_voice_state_lock:
+        detail = _cloud_route_disable_reasons.get(route_key, "")
+    return f"provider_disabled_session:{detail}" if detail else "provider_disabled_session"
+
+
+def _voice_skip_reason(cloud_key: tuple[str, str, str, str]) -> str:
+    with _cloud_voice_state_lock:
+        detail = _failed_cloud_voice_reasons.get(cloud_key, "")
+    return f"provider_disabled_session:{detail}" if detail else "provider_disabled_session"
 
 
 async def _run_cloud_route_attempt(
     route_key: tuple[str, str, str, str],
     provider_call: Callable[[], Awaitable[Path]],
     engine_label: str,
+    generation: int,
+    redaction_secrets: tuple[str, ...] = (),
 ) -> tuple[Path | None, str]:
     """Run one provider call under the route circuit breaker.
 
@@ -365,30 +482,49 @@ async def _run_cloud_route_attempt(
     re-check each would fire its own doomed 30-second call as a slot freed —
     a 4-voice ad would stack three timeout waves instead of one.
     """
-    claimed = _claim_cloud_route(route_key)
+    claimed = _claim_cloud_route(route_key, expected_generation=generation)
+    if claimed == "stale":
+        logger.info("Skipping stale %s TTS attempt after a credential save", engine_label)
+        return None, "provider_error:credential_changed_during_attempt"
     if claimed in ("cooldown", "permanent"):
         logger.info("%s TTS route %s; using edge fallback", engine_label, claimed)
-        return None, _route_skip_reason(claimed)
+        return None, _route_skip_reason(claimed, route_key)
     probing = claimed == "probe"
     try:
         async with _HEAVY_SEM:
+            if _cloud_engine_generation(route_key[0]) != generation:
+                logger.info("Skipping stale %s TTS attempt after a credential save", engine_label)
+                return None, "provider_error:credential_changed_during_attempt"
             if not probing:
-                claimed = _claim_cloud_route(route_key)
+                claimed = _claim_cloud_route(route_key, expected_generation=generation)
+                if claimed == "stale":
+                    logger.info("Skipping stale %s TTS attempt after a credential save", engine_label)
+                    return None, "provider_error:credential_changed_during_attempt"
                 if claimed in ("cooldown", "permanent"):
                     logger.info("%s TTS route %s; using edge fallback", engine_label, claimed)
-                    return None, _route_skip_reason(claimed)
+                    return None, _route_skip_reason(claimed, route_key)
                 probing = claimed == "probe"
             result = await provider_call()
             if probing:
-                _clear_cloud_route(route_key)
+                _clear_cloud_route(route_key, expected_generation=generation)
             return result, ""
     except Exception as e:
         if _should_disable_cloud_route(e):
-            _memoize_failed_cloud_route(route_key, retryable=not bool(_non_retryable_cloud_tts_error(e)))
+            non_retryable = _non_retryable_cloud_tts_error(e)
+            body = _cloud_error_body(e, *redaction_secrets)
+            recorded = _memoize_failed_cloud_route(
+                route_key,
+                retryable=not bool(non_retryable),
+                reason=f"{non_retryable} — {body}" if body else non_retryable,
+                expected_generation=generation,
+            )
+            if not recorded:
+                logger.info("Ignoring stale %s TTS failure after a credential save", engine_label)
+                return None, "provider_error:credential_changed_during_attempt"
         raise
     finally:
         if probing:
-            _resolve_unfinished_cloud_route_probe(route_key)
+            _resolve_unfinished_cloud_route_probe(route_key, expected_generation=generation)
 
 
 def _record_tts_runtime_state(
@@ -504,6 +640,34 @@ def _cloud_http_status(exc: Exception) -> int | None:
     return None
 
 
+def _cloud_error_body(exc: Exception, *attempt_secrets: str) -> str:
+    """Return the first 200 redacted characters of a provider error."""
+    response = getattr(exc, "response", None)
+    raw = getattr(response, "text", "") if response is not None else ""
+    if not raw:
+        raw = str(getattr(exc, "message", "") or getattr(exc, "body", "") or exc)
+    redacted = " ".join(str(raw).split())
+    secrets = {
+        os.getenv("OPENAI_API_KEY", ""),
+        os.getenv("AZURE_SPEECH_KEY", ""),
+        os.getenv("ELEVENLABS_API_KEY", ""),
+        *attempt_secrets,
+    }
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            redacted = redacted.replace(secret, "[redacted]")
+    return redacted[:200]
+
+
+_CLOUD_TTS_QUOTA_ERROR_MARKERS = (
+    "quota_exceeded",
+    "insufficient_quota",
+    "credit_balance_exhausted",
+    "credit balance",
+    "usage limit",
+)
+
+
 def _non_retryable_cloud_tts_error(exc: Exception) -> str:
     """Return a compact reason for auth/config failures that should not repeat."""
     status = _cloud_http_status(exc)
@@ -511,6 +675,10 @@ def _non_retryable_cloud_tts_error(exc: Exception) -> str:
         return ""
     if status in {401, 403, 404}:
         return f"HTTP {status}"
+    if status == 429:
+        body = _cloud_error_body(exc).lower()
+        if any(marker in body for marker in _CLOUD_TTS_QUOTA_ERROR_MARKERS):
+            return f"HTTP {status}"
     if status == 400:
         body = getattr(getattr(exc, "response", None), "text", "") or str(getattr(exc, "message", "") or "")
         if "invalid" in body.lower() or "voice" in body.lower():
@@ -670,10 +838,11 @@ async def synthesize_openai(
     instructions: str = "",
     loudnorm: bool = True,
     model: str | None = None,
+    api_key: str = "",
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with the registry-selected OpenAI speech model."""
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    api_key = api_key or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set")
     model = model or _configured_openai_tts_model()
@@ -719,11 +888,13 @@ async def synthesize_azure(
     rate: str | None = None,
     pitch: str | None = None,
     loudnorm: bool = True,
+    api_key: str = "",
+    region: str = "",
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with Azure Speech TTS REST API, then normalize to station settings."""
-    api_key = os.getenv("AZURE_SPEECH_KEY", "")
-    region = os.getenv("AZURE_SPEECH_REGION", "")
+    api_key = api_key or os.getenv("AZURE_SPEECH_KEY", "")
+    region = region or os.getenv("AZURE_SPEECH_REGION", "")
     if not api_key or not region:
         raise RuntimeError("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set")
 
@@ -862,6 +1033,7 @@ async def synthesize_elevenlabs(
     delivery_cue: str = "neutral",
     delivery_profile: str = "none",
     host_name: str = "",
+    api_key: str = "",
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with ElevenLabs TTS REST API, then normalize to station settings.
@@ -871,7 +1043,7 @@ async def synthesize_elevenlabs(
     house defaults apply. V3 accepts only stability and renders an allowlisted
     semantic delivery cue at this final provider boundary.
     """
-    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    api_key = api_key or os.getenv("ELEVENLABS_API_KEY", "")
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY not set")
 
@@ -997,11 +1169,12 @@ async def synthesize(
                 pass
 
     if engine == "openai":
-        if os.getenv("OPENAI_API_KEY", ""):
+        if openai_api_key := os.getenv("OPENAI_API_KEY", ""):
+            generation = _cloud_engine_generation(engine)
             cloud_key = _cloud_failure_key(engine, voice)
             route_key = _cloud_route_key(engine)
             if _cloud_voice_failed(cloud_key):
-                fallback_reason = "provider_disabled_session"
+                fallback_reason = _voice_skip_reason(cloud_key)
                 logger.debug("OpenAI TTS voice '%s' previously failed this session; using edge fallback", voice)
             else:
                 try:
@@ -1014,9 +1187,12 @@ async def synthesize(
                             output_path,
                             instructions=openai_instructions,
                             loudnorm=loudnorm,
+                            api_key=openai_api_key,
                             on_paid_provider_success=_bill_tts,
                         ),
                         "OpenAI",
+                        generation,
+                        (openai_api_key,),
                     )
                     if result is not None:
                         _record_tts_runtime_state(
@@ -1030,28 +1206,46 @@ async def synthesize(
                 except Exception as e:
                     reason = _non_retryable_cloud_tts_error(e)
                     if reason:
-                        _memoize_failed_cloud_voice(cloud_key)
-                        fallback_reason = f"provider_disabled:{reason}"
-                        logger.warning(
-                            "OpenAI TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
-                            voice,
-                            reason,
+                        body = _cloud_error_body(e, openai_api_key)
+                        detail = f"{reason} — {body}" if body else reason
+                        recorded = _memoize_failed_cloud_voice(
+                            cloud_key,
+                            reason=detail,
+                            expected_generation=generation,
                         )
+                        if recorded:
+                            fallback_reason = f"provider_disabled:{detail}"
+                            if not _should_disable_cloud_route(e):
+                                logger.warning(
+                                    "OpenAI TTS disabled for voice '%s' this session after %s; "
+                                    "falling back to edge-tts",
+                                    voice,
+                                    detail,
+                                )
+                        else:
+                            fallback_reason = "provider_error:credential_changed_during_attempt"
+                            logger.info("Ignoring stale OpenAI TTS failure after a credential save")
                     else:
                         fallback_reason = f"provider_error:{type(e).__name__}"
-                        logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
+                        logger.warning(
+                            "OpenAI TTS failed, falling back to edge-tts: %s",
+                            _cloud_error_body(e, openai_api_key) or type(e).__name__,
+                        )
         else:
             fallback_reason = "missing_credentials"
             logger.warning("OpenAI TTS requested but OPENAI_API_KEY not set, using edge-tts")
         # Use edge fallback voice when falling back from OpenAI
         voice = fallback_voice
     elif engine == "azure":
-        if os.getenv("AZURE_SPEECH_KEY", "") and os.getenv("AZURE_SPEECH_REGION", ""):
+        if (azure_api_key := os.getenv("AZURE_SPEECH_KEY", "")) and (
+            azure_region := os.getenv("AZURE_SPEECH_REGION", "")
+        ):
+            generation = _cloud_engine_generation(engine)
             cloud_key = _cloud_failure_key(engine, voice)
             route_key = _cloud_route_key(engine)
             async with _cloud_voice_attempt_lock(cloud_key):
                 if _cloud_voice_failed(cloud_key):
-                    fallback_reason = "provider_disabled_session"
+                    fallback_reason = _voice_skip_reason(cloud_key)
                     logger.debug("Azure TTS voice '%s' previously failed this session; using edge fallback", voice)
                 else:
                     try:
@@ -1065,9 +1259,13 @@ async def synthesize(
                                 rate=rate,
                                 pitch=pitch,
                                 loudnorm=loudnorm,
+                                api_key=azure_api_key,
+                                region=azure_region,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "Azure",
+                            generation,
+                            (azure_api_key,),
                         )
                         if result is not None:
                             _record_tts_runtime_state(
@@ -1081,27 +1279,43 @@ async def synthesize(
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
-                            _memoize_failed_cloud_voice(cloud_key)
-                            fallback_reason = f"provider_disabled:{reason}"
-                            logger.warning(
-                                "Azure TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
-                                voice,
-                                reason,
+                            body = _cloud_error_body(e, azure_api_key)
+                            detail = f"{reason} — {body}" if body else reason
+                            recorded = _memoize_failed_cloud_voice(
+                                cloud_key,
+                                reason=detail,
+                                expected_generation=generation,
                             )
+                            if recorded:
+                                fallback_reason = f"provider_disabled:{detail}"
+                                if not _should_disable_cloud_route(e):
+                                    logger.warning(
+                                        "Azure TTS disabled for voice '%s' this session after %s; "
+                                        "falling back to edge-tts",
+                                        voice,
+                                        detail,
+                                    )
+                            else:
+                                fallback_reason = "provider_error:credential_changed_during_attempt"
+                                logger.info("Ignoring stale Azure TTS failure after a credential save")
                         else:
                             fallback_reason = f"provider_error:{type(e).__name__}"
-                            logger.warning("Azure TTS failed, falling back to edge-tts: %s", e)
+                            logger.warning(
+                                "Azure TTS failed, falling back to edge-tts: %s",
+                                _cloud_error_body(e, azure_api_key) or type(e).__name__,
+                            )
         else:
             fallback_reason = "missing_credentials"
             logger.warning("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
         voice = fallback_voice
     elif engine == "elevenlabs":
-        if os.getenv("ELEVENLABS_API_KEY", ""):
+        if elevenlabs_api_key := os.getenv("ELEVENLABS_API_KEY", ""):
+            generation = _cloud_engine_generation(engine)
             cloud_key = _cloud_failure_key(engine, voice, elevenlabs_model=elevenlabs_model)
             route_key = _cloud_route_key(engine, elevenlabs_model=elevenlabs_model)
             async with _cloud_voice_attempt_lock(cloud_key):
                 if _cloud_voice_failed(cloud_key):
-                    fallback_reason = "provider_disabled_session"
+                    fallback_reason = _voice_skip_reason(cloud_key)
                     logger.debug(
                         "ElevenLabs TTS voice '%s' model '%s' previously failed this session; using edge fallback",
                         voice,
@@ -1122,9 +1336,12 @@ async def synthesize(
                                 delivery_cue=delivery_cue,
                                 delivery_profile=delivery_profile,
                                 host_name=host_name,
+                                api_key=elevenlabs_api_key,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "ElevenLabs",
+                            generation,
+                            (elevenlabs_api_key,),
                         )
                         if result is not None:
                             _record_tts_runtime_state(
@@ -1138,21 +1355,32 @@ async def synthesize(
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
-                            _memoize_failed_cloud_voice(cloud_key)
-                            fallback_reason = f"provider_disabled:{reason}"
-                            logger.warning(
-                                "ElevenLabs TTS disabled for voice '%s' model '%s' this session after %s; "
-                                "falling back to edge-tts",
-                                voice,
-                                elevenlabs_model,
-                                reason,
+                            body = _cloud_error_body(e, elevenlabs_api_key)
+                            detail = f"{reason} — {body}" if body else reason
+                            recorded = _memoize_failed_cloud_voice(
+                                cloud_key,
+                                reason=detail,
+                                expected_generation=generation,
                             )
+                            if recorded:
+                                fallback_reason = f"provider_disabled:{detail}"
+                                if not _should_disable_cloud_route(e):
+                                    logger.warning(
+                                        "ElevenLabs TTS disabled for voice '%s' model '%s' this session after %s; "
+                                        "falling back to edge-tts",
+                                        voice,
+                                        elevenlabs_model,
+                                        detail,
+                                    )
+                            else:
+                                fallback_reason = "provider_error:credential_changed_during_attempt"
+                                logger.info("Ignoring stale ElevenLabs TTS failure after a credential save")
                         else:
                             fallback_reason = f"provider_error:{type(e).__name__}"
                             logger.warning(
                                 "ElevenLabs TTS model '%s' failed, falling back to edge-tts: %s",
                                 elevenlabs_model,
-                                e,
+                                _cloud_error_body(e, elevenlabs_api_key) or type(e).__name__,
                             )
         else:
             fallback_reason = "missing_credentials"
