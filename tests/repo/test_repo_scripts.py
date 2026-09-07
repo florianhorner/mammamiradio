@@ -586,6 +586,73 @@ def test_pre_release_check_rejects_browser_narration_hash_drift(
     assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
 
 
+@pytest.mark.parametrize("fallback", ["venv", "python3.11"])
+@pytest.mark.parametrize("changed_asset", [None, "packaged", "browser"])
+def test_pre_release_check_validates_spoken_assets_through_resolved_interpreter(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+    fallback: str,
+    changed_asset: str | None,
+) -> None:
+    """Both Python fallbacks validate good assets and reject changed assets."""
+    _write_release_check_repo(tmp_path)
+
+    real_python3 = shutil.which("python3")
+    assert real_python3, "a real python3 must be on PATH for this test to shadow"
+
+    fake_bin = tmp_path / ".fake-old-python-bin"
+    _write(
+        fake_bin / "python3",
+        "#!/usr/bin/env bash\n"
+        # Simulate an old system Python to force interpreter selection.
+        'if [ "$1" = "-c" ] && [[ "$2" == *version_info* ]]; then\n'
+        "  exit 1\n"
+        "fi\n"
+        # Catch either validator bypassing the selected interpreter.
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        "    *validate-spoken-assets.py)\n"
+        '      echo "bare python3 was invoked instead of \\$MEDIA_PYTHON" >&2\n'
+        "      exit 1\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        # Keep the fixture's ffmpeg and ffprobe stubs working.
+        f'exec "{real_python3}" "$@"\n',
+    )
+    (fake_bin / "python3").chmod(0o755)
+
+    fallback_python = tmp_path / ".venv/bin/python" if fallback == "venv" else fake_bin / fallback
+    _write(fallback_python, f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
+    fallback_python.chmod(0o755)
+
+    if changed_asset == "packaged":
+        asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
+        asset.write_bytes(asset.read_bytes() + b"tampered")
+    elif changed_asset == "browser":
+        asset = tmp_path / "mammamiradio/web/static/audio/first_listen/welcome.mp3"
+        asset.write_bytes(asset.read_bytes() + b"tampered")
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=env)
+
+    assert "bare python3 was invoked" not in result.stderr
+    if changed_asset == "packaged":
+        assert result.returncode != 0
+        assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
+        assert "recovery/emergency_tone.mp3 sha256 does not match" in result.stderr
+    elif changed_asset == "browser":
+        assert result.returncode != 0
+        assert "browser narration asset/admin manifest validation failed" in result.stdout
+        assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
+    else:
+        assert result.returncode == 0
+        assert "packaged spoken assets are manifest/hash/transcript approved" in result.stdout
+        assert "browser narration assets and admin metadata match the release manifest" in result.stdout
+
+
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     body = HA_GREEN_PERF_SMOKE.read_text()
 
@@ -1345,6 +1412,10 @@ def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
     import re
 
     workflow = (ROOT / ".github" / "workflows" / "addon-build.yml").read_text()
+    # IMAGE_PATHS lives in the library both edge consumers read — the manual cut
+    # (cut-edge-release.sh) and the shadow land queue (land-queue-plan.sh) — so
+    # the parity contract is asserted against the one place it is declared.
+    library = (ROOT / "scripts" / "edge-select.sh").read_text()
     script = (ROOT / "scripts" / "cut-edge-release.sh").read_text()
 
     trigger_section_match = re.search(r"\bon:\s*\n(.*?)(?=\njobs:)", workflow, re.DOTALL)
@@ -1354,11 +1425,134 @@ def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
         for line in trigger_section_match.group(0).splitlines()
         if line.lstrip().startswith("- ")
     }
-    image_paths_match = re.search(r'^IMAGE_PATHS="([^"]+)"$', script, re.MULTILINE)
-    assert image_paths_match, "scripts/cut-edge-release.sh must declare IMAGE_PATHS"
+    image_paths_match = re.search(r'^IMAGE_PATHS="([^"]+)"$', library, re.MULTILINE)
+    assert image_paths_match, "scripts/edge-select.sh must declare IMAGE_PATHS"
     image_paths = set(image_paths_match.group(1).split())
 
     assert image_paths == trigger_paths
+    content_match = re.search(r'^IMAGE_CONTENT_PATHS="([^"]+)"$', library, re.MULTILINE)
+    assert content_match
+    assert {"ha-addon/mammamiradio", "ha-addon/mammamiradio-edge"} <= set(content_match.group(1).split())
+
+    # One declaration, not two: a re-inlined copy in the cut script is how the
+    # two consumers drift apart while this test keeps passing.
+    assert not re.search(r'^IMAGE(_CONTENT)?_PATHS="', script, re.MULTILINE), (
+        "scripts/cut-edge-release.sh must source IMAGE_PATHS and IMAGE_CONTENT_PATHS from scripts/edge-select.sh"
+    )
+    planner = (ROOT / "scripts" / "land-queue-plan.sh").read_text()
+    assert not re.search(r'^IMAGE(_CONTENT)?_PATHS="', planner, re.MULTILINE), (
+        "scripts/land-queue-plan.sh must source IMAGE_PATHS and IMAGE_CONTENT_PATHS from scripts/edge-select.sh"
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "version",
+        "quoted_version",
+        "field",
+        "nested_version",
+        "apparmor",
+        "translation",
+        "new_file",
+        "deleted_file",
+        "deleted_config",
+        "renamed_config",
+        "mode",
+        "symlink",
+        "malformed",
+        "duplicate",
+        "missing_version",
+        "multiline_version",
+        "old_malformed",
+        "trailing_newline",
+        "missing_final_newline",
+        "nul",
+        "late_nul",
+        "old_nul",
+    ],
+)
+@pytest.mark.parametrize("subdirectory", [False, True])
+def test_edge_drift_exempts_only_valid_version_changes(tmp_path: Path, change: str, subdirectory: bool) -> None:
+    _init_git_repo(tmp_path)
+    edge = tmp_path / "ha-addon/mammamiradio-edge"
+    config = edge / "config.yaml"
+    original = "version: aaa1111\nhomeassistant_api: true\noptions:\n  version: one\n"
+    if change == "late_nul":
+        original += "#" * 8192 + "\n"
+    _write(config, original.replace("aaa1111", "bad") if change == "old_malformed" else original)
+    if change == "old_nul":
+        config.write_bytes(original.replace("true", "tr\x00ue").encode())
+    _write(edge / "apparmor.txt", "policy\n")
+    _write(edge / "translations/en.yaml", "name: Radio\n")
+    assert _run(["git", "add", "."], cwd=tmp_path).returncode == 0
+    assert _run(["git", "commit", "-qm", "chore: fixture baseline"], cwd=tmp_path).returncode == 0
+    target = _run(["git", "rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    updated = original.replace("aaa1111", "bbb2222")
+    config.write_text(updated)
+    if change == "quoted_version":
+        config.write_text(updated.replace("bbb2222", '"bbb2222"'))
+    elif change == "field":
+        config.write_text(updated.replace("true", "false"))
+    elif change == "nested_version":
+        config.write_text(updated.replace("version: one", "version: two"))
+    elif change == "apparmor":
+        (edge / "apparmor.txt").write_text("new policy\n")
+    elif change == "translation":
+        (edge / "translations/en.yaml").write_text("name: Changed\n")
+    elif change == "new_file":
+        (edge / "new.txt").write_text("new\n")
+    elif change == "deleted_file":
+        (edge / "apparmor.txt").unlink()
+    elif change == "deleted_config":
+        config.unlink()
+    elif change == "renamed_config":
+        config.rename(edge / "renamed.yaml")
+    elif change == "mode":
+        assert _run(["git", "config", "core.fileMode", "false"], cwd=tmp_path).returncode == 0
+    elif change == "symlink":
+        config.unlink()
+        config.symlink_to("apparmor.txt")
+    elif change == "malformed":
+        config.write_text(updated.replace("bbb2222", "bad"))
+    elif change == "duplicate":
+        config.write_text(updated + "version: ccc3333\n")
+    elif change == "missing_version":
+        config.write_text(updated.removeprefix("version: bbb2222\n"))
+    elif change == "multiline_version":
+        config.write_text(updated.replace("version: bbb2222", "version: |\n  bbb2222"))
+    elif change == "trailing_newline":
+        config.write_text(updated + "\n")
+    elif change == "missing_final_newline":
+        config.write_text(updated.rstrip("\n"))
+    elif change == "nul":
+        config.write_bytes(updated.replace("true", "tr\x00ue").encode())
+    elif change == "late_nul":
+        config.write_bytes(updated.encode() + b"\x00")
+    assert _run(["git", "add", "-A"], cwd=tmp_path).returncode == 0
+    if change == "mode":
+        # Set the committed mode even when Git ignores working-tree mode changes.
+        assert _run(["git", "update-index", "--chmod=+x", str(config)], cwd=tmp_path).returncode == 0
+    assert _run(["git", "commit", "-qm", "chore: fixture change"], cwd=tmp_path).returncode == 0
+    cwd = tmp_path / "scripts" if subdirectory else tmp_path
+    cwd.mkdir(exist_ok=True)
+    result = _run(
+        [
+            "bash",
+            "-c",
+            'set -euo pipefail; source "$1"; edge_image_drift "$2" HEAD',
+            "edge-test",
+            str(ROOT / "scripts/edge-select.sh"),
+            target,
+        ],
+        cwd=cwd,
+    )
+    if change in {"version", "quoted_version"}:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+    else:
+        assert result.returncode == 1, result.stderr
+        assert "ha-addon/mammamiradio-edge/" in result.stdout
 
 
 def test_validate_addon_allows_service_worker_rewrite(tmp_path: Path) -> None:

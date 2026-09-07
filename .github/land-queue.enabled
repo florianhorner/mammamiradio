@@ -1,0 +1,3 @@
+Presence of this file enables the shadow land queue.
+Delete it (or set repository variable LAND_QUEUE=0) to switch it off.
+See docs/runbooks/parallel-workspaces.md -> Shadow land queue.

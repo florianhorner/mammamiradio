@@ -21,13 +21,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/cut-edge-release.sh"
+# Selection, IMAGE_PATHS and the drift check moved into a library shared with the
+# shadow land queue. The release contract assertions below follow the code there;
+# the behavioural cases still drive cut-edge-release.sh end to end.
+SELECT_LIB="$REPO_ROOT/scripts/edge-select.sh"
 cd "$REPO_ROOT"
 
 [[ -x "$SCRIPT" ]] || chmod +x "$SCRIPT"
+[[ -r "$SELECT_LIB" ]] || { echo "FAIL: edge selection library missing at $SELECT_LIB" >&2; exit 1; }
 BASH_BIN="$(command -v bash)"   # absolute, so the restricted-PATH cases still find bash
 
+PASS_COUNT=0
 fail() { echo "FAIL: $1" >&2; exit 1; }
-pass() { echo "PASS: $1"; }
+pass() { PASS_COUNT=$((PASS_COUNT + 1)); echo "PASS: $1"; }
 
 # The drift guard and workflow trigger are one release contract. Normalise the
 # workflow's directory globs to git pathspec directories before comparing.
@@ -38,7 +44,7 @@ WORKFLOW_IMAGE_PATHS="$(
     | sort
 )"
 SCRIPT_IMAGE_PATHS="$(
-  sed -n 's/^IMAGE_PATHS="\([^"]*\)"$/\1/p' "$SCRIPT" \
+  sed -n 's/^IMAGE_PATHS="\([^"]*\)"$/\1/p' "$SELECT_LIB" \
     | tr ' ' '\n' \
     | sort
 )"
@@ -51,17 +57,64 @@ SCRIPT_IMAGE_PATHS="$(
 }
 pass "cut-edge IMAGE_PATHS matches the add-on build trigger paths"
 
+# The drift check reads IMAGE_CONTENT_PATHS (files that enter the image or its
+# metadata). Every entry must also be a build trigger, or a content change could
+# land without an image being built for it.
+CONTENT_PATHS="$(sed -n 's/^IMAGE_CONTENT_PATHS="\([^"]*\)"$/\1/p' "$SELECT_LIB")"
+[ -n "$CONTENT_PATHS" ] || fail "scripts/edge-select.sh must declare IMAGE_CONTENT_PATHS"
+for _p in $CONTENT_PATHS; do
+  _covered=""
+  for _t in $SCRIPT_IMAGE_PATHS; do
+    case "$_p" in "$_t"|"$_t"/*) _covered=1; break ;; esac
+  done
+  [ -n "$_covered" ] || fail "IMAGE_CONTENT_PATHS entry '$_p' is not under a build trigger in IMAGE_PATHS"
+done
+pass "IMAGE_CONTENT_PATHS is a subset of the build trigger paths"
+
+# Reverse direction: every source addon-build.yml stages into the build context must
+# be a content path, or a change to it could pin a stale image without the drift
+# check noticing.
+STAGED_SOURCES="$(sed -n 's/^ *cp \(-r \)\{0,1\}\([^ ]*\) ha-addon\/mammamiradio\/.*/\2/p' .github/workflows/addon-build.yml | sed 's:/$::' | sort -u)"
+[ -n "$STAGED_SOURCES" ] || fail "could not read the staged sources from addon-build.yml"
+for _src in $STAGED_SOURCES; do
+  # shellcheck disable=SC2086  # CONTENT_PATHS intentionally word-splits into one path per line
+  printf '%s\n' $CONTENT_PATHS | grep -qxF "$_src" \
+    || fail "addon-build.yml stages '$_src' into the image but IMAGE_CONTENT_PATHS does not list it"
+done
+# shellcheck disable=SC2086  # same intentional word-split
+printf '%s\n' $CONTENT_PATHS | grep -qxF "ha-addon/mammamiradio" \
+  || fail "IMAGE_CONTENT_PATHS must cover the stable add-on directory (Dockerfile, rootfs, config.yaml)"
+# shellcheck disable=SC2086
+printf '%s\n' $CONTENT_PATHS | grep -qxF "ha-addon/mammamiradio-edge" \
+  || fail "IMAGE_CONTENT_PATHS must cover edge metadata and access policy"
+pass "every staged image source is a content path"
+
 # The exact-target lookup must filter server-side. Counting successes client-side
 # over a capped page reintroduces the window bug one level down: enough newer
 # failed reruns on the same commit would push the successful run out of the page.
 # Strip comments first: the rationale comment above the command names these same
 # flags, so a whole-file grep would pass even after the real invocation lost them.
-SCRIPT_CODE="$(grep -v '^[[:space:]]*#' "$SCRIPT")"
+SCRIPT_CODE="$(grep -v '^[[:space:]]*#' "$SELECT_LIB")"
 printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--status success' \
   || fail "--target-sha lookup must pass --status success so the result cannot be windowed out"
-printf '%s\n' "$SCRIPT_CODE" | grep -q -- "--commit \"\$TARGET_FULL\"" \
+# shellcheck disable=SC2016  # assert the literal shell source
+printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--commit "\$target"' \
   || fail "--target-sha lookup must query the target commit directly, not the recent-runs list"
 pass "exact-target lookup filters server-side (no run-history cutoff)"
+
+# One implementation, not two: a re-inlined IMAGE_PATHS or gh run query in the cut
+# script is how the two consumers drift apart and how a soft-pass comes back.
+grep -Eq '^IMAGE(_CONTENT)?_PATHS=' "$SCRIPT" \
+  && fail "cut-edge-release.sh must source IMAGE_PATHS / IMAGE_CONTENT_PATHS from scripts/edge-select.sh, not redefine them"
+grep -Eq '^IMAGE(_CONTENT)?_PATHS=' scripts/land-queue-plan.sh \
+  && fail "land-queue-plan.sh must source IMAGE_PATHS / IMAGE_CONTENT_PATHS from scripts/edge-select.sh, not redefine them"
+grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'gh run list --workflow' \
+  && fail "cut-edge-release.sh must query green builds through scripts/edge-select.sh"
+grep -v '^[[:space:]]*#' "$SCRIPT" | grep -q 'rev-list --topo-order' \
+  && fail "cut-edge-release.sh must select through edge_newest_built_sha, not its own topology walk"
+grep -q '^# shellcheck source=scripts/edge-select.sh$' "$SCRIPT" \
+  || fail "cut-edge-release.sh must source scripts/edge-select.sh"
+pass "edge selection has exactly one implementation"
 
 TMPDIR_T="$(mktemp -d)"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
@@ -103,10 +156,44 @@ case "$1 $2" in
     # The real query passes `--status success`, so the server returns only
     # successful runs; membership in GH_MOCK_COMMIT_OK models exactly that, and
     # the count is unaffected by how many failed reruns the commit also has.
-    _want=""; _prev=""
-    for _a in "$@"; do [ "$_prev" = "--commit" ] && _want="$_a"; _prev="$_a"; done
+    _want=""; _prev=""; _status=""; _branch=""; _query=""; _limit=1
+    for _a in "$@"; do
+      [ "$_prev" = "--commit" ] && _want="$_a"
+      [ "$_prev" = "--status" ] && _status="$_a"
+      [ "$_prev" = "--branch" ] && _branch="$_a"
+      [ "$_prev" = "-q" ] && _query="$_a"
+      [ "$_prev" = "--limit" ] && _limit="$_a"
+      _prev="$_a"
+    done
     if [ -n "$_want" ]; then
-      if printf '%s\n' "${GH_MOCK_COMMIT_OK:-}" | grep -qxF "$_want"; then echo 1; else echo 0; fi
+      [ "$_branch" = main ] || { echo 1; exit 0; } # off-main dispatch success
+      if [ "$_want" = "$GIT_MOCK_MAIN_FULL" ]; then
+        case "${GH_MOCK_NEWER_BUILD:-none}" in
+          query-error) exit 1 ;;
+          malformed) echo unknown; exit 0 ;;
+        esac
+      fi
+      if [ "$_status" = success ]; then
+        _runs='[]'
+        if printf '%s\n' "${GH_MOCK_COMMIT_OK:-}" | grep -qxF "$_want"; then _runs='[{"conclusion":"success"}]'; fi
+        printf '%s' "${GH_MOCK_SUCCESS_RESPONSE:-$_runs}" | jq -r "$_query"
+        exit $?
+      else
+        _state=none
+        [ "$_want" != "$GIT_MOCK_MAIN_FULL" ] || _state="${GH_MOCK_NEWER_BUILD:-none}"
+        case "$_state" in
+          none) _runs='[]' ;;
+          object) _runs='{}' ;;
+          missing-status) _runs='[{"conclusion":"skipped"}]' ;;
+          missing-conclusion) _runs='[{"status":"completed"}]' ;;
+          in_progress) _runs='[{"status":"in_progress","conclusion":""}]' ;;
+          skipped-after-failure) _runs='[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"failure"}]' ;;
+          full-skipped-page) _runs="$(jq -cn '[range(100) | {status:"completed",conclusion:"skipped"}]')" ;;
+          *) _runs="$(jq -cn --arg state "$_state" '[{status:"completed",conclusion:$state}]')" ;;
+        esac
+        printf '%s' "$_runs" | jq --argjson limit "$_limit" 'if type == "array" then .[:$limit] else . end' | jq -r "$_query"
+        exit $?
+      fi
       exit 0
     fi
     printf '%s\n' "${GH_MOCK_RUN_SHAS:-}" ;;
@@ -145,7 +232,10 @@ case "$1" in
   rev-parse)
     _last=""; for _a in "$@"; do _last="$_a"; done
     case "$_last" in
-      --show-toplevel) echo "${GIT_MOCK_TOPLEVEL:-$PWD}" ;;
+      --show-toplevel)
+        echo root >> "$GIT_MOCK_ROOT_LOG"
+        if [ -n "${GIT_MOCK_ROOT_FAIL:-}" ] && [ "$(wc -l < "$GIT_MOCK_ROOT_LOG")" -gt 1 ]; then exit 1; fi
+        echo "${GIT_MOCK_TOPLEVEL:-$PWD}" ;;
       origin/main)     echo "${GIT_MOCK_MAIN_SHORT:-0000000}" ;;
       # `rev-parse --verify <sha>^{commit}` resolves a --target-sha. Known commits
       # (those in GIT_MOCK_REVLIST) resolve to their full SHA; anything else exits 1
@@ -163,9 +253,35 @@ case "$1" in
   merge-base) [ -n "${GIT_MOCK_NOT_ANCESTOR:-}" ] && exit 1; exit 0 ;;
   status)   [ -n "${GIT_MOCK_DIRTY:-}" ] && echo " M somefile" || echo "" ;;
   fetch)    : ;;
-  rev-list) printf '%s\n' "${GIT_MOCK_REVLIST:-}" ;;
-  show)     echo "version: ${GIT_MOCK_SHOW_VERSION:-aeafa99}" ;;   # origin/main:edge-config
-  diff)     [ -n "${GIT_MOCK_DIFF_FAIL:-}" ] && exit 1; printf '%s\n' "${GIT_MOCK_DIFF:-}" ;;
+  rev-list)
+    case "$2" in
+      "$GIT_MOCK_MAIN_FULL..origin/main") : ;;
+      *..*) printf '%s\n' "$GIT_MOCK_MAIN_FULL" ;;
+      *) printf '%s\n' "${GIT_MOCK_REVLIST:-}" ;;
+    esac ;;
+  ls-tree) printf '100644 blob abcdef\t%s\n' 'ha-addon/mammamiradio-edge/config.yaml' ;;
+  hash-object) cat >/dev/null; echo abcdef ;;
+  show)
+    echo "version: ${GIT_MOCK_SHOW_VERSION:-aeafa99}"
+    if [ "$2" = "origin/main:ha-addon/mammamiradio-edge/config.yaml" ] && [ -n "${GIT_MOCK_EDGE_BODY:-}" ]; then
+      printf '%s\n' "$GIT_MOCK_EDGE_BODY"
+    fi ;;
+  # Pathspec-aware: only GIT_MOCK_DIFF entries under one of the pathspecs after
+  # `--` are reported, the way real `git diff -- <paths>` behaves, so a test can
+  # tell a trigger-only change from one that enters the image.
+  diff)
+    [ -n "${GIT_MOCK_DIFF_FAIL:-}" ] && exit 1
+    _specs=""; _seen=""
+    for _a in "$@"; do
+      if [ -n "$_seen" ]; then _specs="$_specs $_a"; elif [ "$_a" = "--" ]; then _seen=1; fi
+    done
+    [ -z "$_specs" ] && { printf '%s\n' "${GIT_MOCK_DIFF:-}"; exit 0; }
+    printf '%s\n' "${GIT_MOCK_DIFF:-}" | while IFS= read -r _f; do
+      [ -n "$_f" ] || continue
+      for _s in $_specs; do
+        case "$_f" in "$_s"|"$_s"/*) echo "$_f"; break ;; esac
+      done
+    done ;;
   remote)   echo "https://github.com/florianhorner/mammamiradio.git" ;;
   checkout|add|commit|push) echo "$*" >> "$GIT_MOCK_LOG" ;;
   *) echo "MOCK git: unexpected verb '$1' (args: $*) — would have run real git" >&2; exit 99 ;;
@@ -190,10 +306,12 @@ run_cut() {
   GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
   GIT_MOCK_LOG="$TMPDIR_T/git.log"; : > "$GIT_MOCK_LOG"
   PYTHON_MOCK_LOG="$TMPDIR_T/python.log"; : > "$PYTHON_MOCK_LOG"
+  GIT_MOCK_ROOT_LOG="$TMPDIR_T/root.log"; : > "$GIT_MOCK_ROOT_LOG"
   RUN_RC=0
   RUN_OUT="$(env PATH="${_PATH_OVERRIDE:-$MOCK_BIN:$PATH}" \
       GH_MOCK_LOG="$GH_MOCK_LOG" GIT_MOCK_LOG="$GIT_MOCK_LOG" \
       PYTHON_MOCK_LOG="$PYTHON_MOCK_LOG" \
+      GIT_MOCK_ROOT_LOG="$GIT_MOCK_ROOT_LOG" GIT_MOCK_MAIN_FULL="$MAIN_FULL" \
       GIT_MOCK_TOPLEVEL="$REPO_ROOT" GIT_MOCK_MAIN_SHORT="$MAIN_SHORT" \
       GIT_MOCK_REVLIST="$REVLIST" \
       "$@" "$BASH_BIN" "$SCRIPT" ${CUT_ARGS[@]+"${CUT_ARGS[@]}"} 2>&1)" || RUN_RC=$?
@@ -250,6 +368,51 @@ never_pushed         || fail "image-drift must not push"
 printf '%s' "$RUN_OUT" | grep -q "image files changed" || fail "image-drift message should name the drift"
 pass "image-affecting drift since built commit hard-fails (no stale-image pin)"
 
+# Case 4b: a build TRIGGER changed since the built commit but nothing that enters
+# the image (a dev lockfile bump) => the pin proceeds. This is the Dependabot
+# deadlock of 2026-09-02: requirements-dev.txt moved on main with no build for the
+# new commit, and both selection modes refused every candidate.
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_DIFF="requirements-dev.txt"
+[ "$RUN_RC" -eq 0 ]  || fail "trigger-only drift must not block the pin (got $RUN_RC: $RUN_OUT)"
+created_pr           || fail "trigger-only drift should still open the edge PR"
+[ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "trigger-only drift should pin the built SHA (got $WROTE_VERSION)"
+printf '%s' "$RUN_OUT" | grep -q "image files changed" && fail "trigger-only drift must not be reported as image drift"
+pass "trigger-only drift (dev lockfile) does not block the edge pin"
+
+# A failed proof must not disappear behind the green-candidate filter, including
+# when an exact target sits outside that window. All refusal paths precede writes.
+for mode in default exact; do
+  for state in failure cancelled in_progress skipped-after-failure full-skipped-page query-error malformed object missing-status missing-conclusion; do
+    [ "$mode" != exact ] || CUT_ARGS=(--target-sha "$OLDER_FULL")
+    run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" \
+      GH_MOCK_NEWER_BUILD="$state" GIT_MOCK_DIFF="scripts/media-proof.py"
+    [ "$RUN_RC" -ne 0 ] || fail "$mode must refuse newer $state build: $RUN_OUT"
+    if ! (never_created_pr && never_committed && never_pushed); then fail "$mode $state wrote"; fi
+    ! grep -q '^checkout' "$GIT_MOCK_LOG" || fail "$mode $state checked out a branch"
+    pass "$mode refuses newer $state build without writes"
+  done
+done
+CUT_ARGS=(--target-sha "$OLDER_FULL")
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL"$'\n'"$MAIN_FULL" \
+  GH_MOCK_NEWER_BUILD=failure GIT_MOCK_DIFF="requirements-dev.txt"
+[ "$RUN_RC" -eq 0 ] || fail "a successful retry must clear newer failed proof: $RUN_OUT"
+created_pr || fail "verified retry should permit the exact pin"
+pass "a successful main retry clears an earlier failed run"
+
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GH_MOCK_NEWER_BUILD=skipped \
+  GIT_MOCK_SHOW_VERSION="$OLDER_SHORT" GIT_MOCK_DIFF="ha-addon/mammamiradio-edge/config.yaml"
+[ "$RUN_RC" -eq 0 ] || fail "deliberately skipped edge-cut build must allow the no-op: $RUN_OUT"
+printf '%s' "$RUN_OUT" | grep -q "already at" || fail "skipped edge-cut build lost its no-op"
+if ! (never_created_pr && never_committed && never_pushed); then fail "post-cut no-op wrote"; fi
+pass "a completed skipped edge-version build preserves the post-cut no-op"
+
+for path in ha-addon/mammamiradio-edge/config.yaml ha-addon/mammamiradio-edge/apparmor.txt; do
+  run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_DIFF="$path" GIT_MOCK_EDGE_BODY="homeassistant_api: false"
+  [ "$RUN_RC" -ne 0 ] || fail "edge metadata must block the pin: $path"
+  if ! (never_created_pr && never_committed && never_pushed); then fail "edge metadata refusal wrote"; fi
+  pass "edge metadata drift refuses $path"
+done
+
 # Case 5: no successful build run anywhere => HARD-fail, no PR.
 run_cut GH_MOCK_RUN_SHAS=""
 [ "$RUN_RC" -ne 0 ]  || fail "no-build must hard-fail (got $RUN_RC)"
@@ -305,6 +468,16 @@ never_pushed         || fail "idempotent case must not push"
 printf '%s' "$RUN_OUT" | grep -q "already at" || fail "idempotent message should say 'already at'"
 pass "edge already at target SHA (read from origin/main) is a clean no-op"
 
+# Case 10b: the state real history reaches right after an edge cut: origin/main's
+# newest commit is the chore(edge) cut itself, so the only diff since the built SHA
+# is the edge add-on's own version line. Only that line is exempt, so this
+# must reach the "already at" no-op, not an "image files changed" refusal.
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_SHOW_VERSION="$OLDER_SHORT" GIT_MOCK_DIFF="ha-addon/mammamiradio-edge/config.yaml"
+[ "$RUN_RC" -eq 0 ]  || fail "post-edge-cut state should be a no-op (got $RUN_RC): $RUN_OUT"
+never_created_pr     || fail "post-edge-cut state must not open a PR"
+printf '%s' "$RUN_OUT" | grep -q "already at" || fail "post-edge-cut state should say 'already at', not refuse as drift"
+pass "the edge add-on's own version bump is not image drift (post-cut no-op)"
+
 # Case 11: an edge PR for the target is already open => no-op exit 0, no commit/PR.
 run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_PR_URL="https://github.com/florianhorner/mammamiradio/pull/999"
 [ "$RUN_RC" -eq 0 ]  || fail "existing-PR case should exit 0 (got $RUN_RC): $RUN_OUT"
@@ -324,6 +497,14 @@ never_committed      || fail "drift-check failure must not commit"
 never_pushed         || fail "drift-check failure must not push"
 printf '%s' "$RUN_OUT" | grep -q "could not verify" || fail "drift-check-fail message should say so"
 pass "unverifiable drift check hard-fails, never soft-passes"
+
+run_cut GH_MOCK_RUN_SHAS="$OLDER_FULL" GIT_MOCK_ROOT_FAIL=1
+[ "$RUN_RC" -ne 0 ] || fail "library root lookup failure must refuse"
+[ "$(wc -l < "$GIT_MOCK_ROOT_LOG")" -eq 2 ] || fail "must reach the library root lookup"
+printf '%s' "$RUN_OUT" | grep -q "could not verify" || fail "missing root lookup failure message"
+if ! (never_created_pr && never_committed && never_pushed); then fail "root lookup failure wrote"; fi
+! grep -q '^checkout' "$GIT_MOCK_LOG" || fail "root lookup failure checked out a branch"
+pass "library root lookup failure refuses before writes"
 
 # Case 13: release-beat target validation fails => HARD-fail after branch prep,
 # before commit/push/PR.
@@ -371,6 +552,14 @@ run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_D
 [ "$RUN_RC" -eq 0 ]                   || fail "--target-sha outside the run window should still pin: $RUN_OUT"
 [ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "should pin $OLDER_SHORT, wrote '$WROTE_VERSION'"
 pass "--target-sha is not limited by the recent-runs window"
+
+for response in '{"fake":"success"}' '[{"conclusion":"failure"}]'; do
+  CUT_ARGS=(--target-sha "$OLDER_FULL")
+  run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_SUCCESS_RESPONSE="$response"
+  [ "$RUN_RC" -ne 0 ] || fail "exact target must reject malformed successful-run data"
+  never_created_pr || fail "malformed target proof must not open a PR"
+  pass "--target-sha rejects invalid successful-run response $response"
+done
 
 # Case: an unresolvable commit-ish is refused before anything is written.
 CUT_ARGS=(--target-sha deadbeefdeadbeefdeadbeefdeadbeefdeadbeef)
@@ -433,4 +622,4 @@ diff -q "$EDGE_CONFIG" "$EDGE_ORIG" >/dev/null             || fail "test left th
 pass "real repo / branch / edge config untouched"
 
 echo
-echo "All 22 cut-edge-release cases passed."
+echo "All $PASS_COUNT cut-edge-release checks passed."

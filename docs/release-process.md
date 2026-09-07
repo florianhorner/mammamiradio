@@ -33,9 +33,12 @@ fix is one shared model, stated below.
 5. **A failed release gets reverted before it gets debugged.** The window where `main`
    names an unpublished version opens when the cut commit merges and closes when both
    architecture `promote` jobs finish. If any stage of `addon-release.yml` fails, land
-   `git revert <cut-sha>` first. Revert the commit rather than hand-editing the version
-   files back: the cut also folded both changelogs, and a version-only revert is refused
-   by `check-changelog-sync.sh` locally and by `pre-release-check.sh` in CI.
+   the revert first: `git revert --no-commit <cut-sha>`, then
+   `git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit. Revert the
+   complete cut: it also folded both
+   changelogs, and a version-only revert is refused by `check-changelog-sync.sh` locally
+   and by `pre-release-check.sh` in CI. Keep the receipt directory because the evidence
+   checker refuses a PR whose base receipt was deleted or modified.
 6. **Physical proof binds complete cut content.** Finalize version, changelogs, and the V2 preship receipt before HA runs; its hardware-neutral digest survives squash and rejects all other drift, while `source_commit` remains provenance.
 
 ```
@@ -88,18 +91,27 @@ Mechanically, feature work may merge to `main` at any time — the only *hard* c
 is "`main` never advertises a version that has no image, outside the cut window." But
 there is a real discipline on top of it:
 
-- **Freeze image-affecting merges between the cut commit and the tag.** The window is
-  short (one build plus a tag), but a merge landing inside it means the commit you soak
-  and the commit you tag are not the same one. Pin the soak explicitly with
+- **Acquire the freeze before the cut and keep it through publication.** One release
+  operator owns freeze, cut and resume; follow the add-on runbook's "The cut window".
+  `land-pr.sh` requires a verified freeze for stable-version changes. Pause human
+  image-affecting merges until both architecture promotions succeed and the
+  advertised-version check passes. A merge inside this window can change the commit
+  between soak and tag. Pin the soak explicitly with
   `make edge-release ARGS="--target-sha <cut-sha>"` so the selection cannot silently
   drift to a newer commit.
 
-  Note what `--target-sha` can and cannot do: it refuses to pin *anything but* that
-  commit, but it cannot rescue a cut once an image-affecting commit has already landed
-  on top. The edge branch takes its metadata from `origin/main`, so pinning an older
-  image would advertise options the image does not implement — `cut-edge-release.sh`
-  correctly refuses. If that happens, cut a fresh release from current `main`. The flag
-  prevents drift; it does not undo it.
+  `--target-sha` pins that exact commit. It refuses the cut if newer image content
+  (`ha-addon/mammamiradio/`, `ha-addon/mammamiradio-edge/`, `mammamiradio/`,
+  `pyproject.toml`, `radio.toml`, `model_registry.toml`, the build workflow)
+  has landed on top. Only a valid top-level edge `version:` change is exempt.
+  The edge branch takes its metadata from `origin/main`, so an older image would
+  advertise options it does not implement. A commit that only
+  re-triggers the build (a dev-dependency bump, a validator script, a test) does not
+  make the image stale. If that newer commit has an attempted main build, it needs
+  a successful run; failed, cancelled or unfinished runs block the pin until a
+  retry succeeds. No run, or only completed skipped runs, is allowed when image
+  content is unchanged. The workflow deliberately skips edge-version cuts.
+  If real content landed, cut a fresh release from current `main`.
 - **Don't merge a large off-theme PR into a cut you're about to make.** It joins that
   version's changelog whether or not it soaked. Cut first, then merge the big work so it
   soaks as the *next* version's content.

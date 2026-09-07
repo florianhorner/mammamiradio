@@ -1,0 +1,36 @@
+Pre-release spoken-asset interpreter checks
+Date: 2026-09-06
+
+Invariant: both spoken-asset validators use the selected Python interpreter.
+A usable fallback accepts valid assets and continues to reject changed assets.
+
+Repository script tests:
+  .venv/bin/pytest tests/repo/test_repo_scripts.py -q --no-cov -p no:cacheprovider
+  146 passed in 37.79s
+
+The fallback regression test covers six cases:
+  .venv/bin/python: valid, packaged hash drift, browser hash drift
+  python3.11 on PATH: valid, packaged hash drift, browser hash drift
+The system-Python stand-in fails the version probe and rejects direct validator
+calls. Other fixture tools delegate to the real interpreter. These are simulated
+old-system-Python tests, not a run on an older operating-system image.
+
+Counterexamples, run separately against the six-case regression test:
+  Packaged validator temporarily changed back to bare python3: 6 failed.
+  Browser validator temporarily changed back to bare python3: 6 failed.
+  Both failures included the direct-interpreter marker. The script was restored.
+
+Additional checks:
+  .venv/bin/ruff check tests/repo/test_repo_scripts.py: passed
+  .venv/bin/ruff format --check tests/repo/test_repo_scripts.py: passed
+  .venv/bin/mypy tests/repo/test_repo_scripts.py: passed
+  bash -n scripts/pre-release-check.sh: passed
+  shellcheck scripts/pre-release-check.sh: passed
+  ./scripts/validate-addon.sh: passed
+
+Sibling check: scripts/check-release-invariants.sh already uses MEDIA_PYTHON
+for spoken-asset validation. Existing default-interpreter tests still cover
+valid assets, hash drift, unsafe transcripts and non-audio payloads.
+
+Scope: release tooling only. No Player/Admin QA, live pre-release run, Docker
+build, physical audio check, deployment or Home Assistant restart was performed.

@@ -127,6 +127,8 @@ You built the sensors. You wrote the automations. Now somebody finally notices.
 
 ## See it
 
+**[Watch Studio B Transmissions](https://florianhorner.github.io/mammamiradio/shorts/)**
+
 <p align="center">
   <img src="docs/screenshots/listener.png" width="480" alt="Listener page: la radio che ascolta la tua casa">
 </p>

@@ -162,12 +162,186 @@ async (page) => {
   // producer desk, so open it the way the operator does — through the page's
   // own tab navigation (render-free, exactly like initTabs' landing call).
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
+  const stationCategoryRow = await page.evaluate(() => {
+    document.body.removeAttribute('data-stopped');
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-station-id',
+        type: 'station_id',
+        label: 'Station ID',
+        metadata: {},
+        source: 'rendered_queue',
+        duration_ms: 7000,
+      }],
+      current_source: { kind: 'demo', label: 'Demo Radio' },
+      playlist_source: { kind: 'demo', label: 'Demo Radio' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      badge: row?.cells[1]?.textContent.trim() || '',
+      title: row?.cells[2]?.textContent.trim() || '',
+      rowText: row?.textContent.trim() || '',
+    };
+  });
+  const stationCategoryCount = (stationCategoryRow.rowText.match(/station id/gi) || []).length;
+  assert(
+    stationCategoryRow.badge.toLowerCase().includes('station id')
+      && stationCategoryRow.title === ''
+      && stationCategoryCount === 1,
+    `station category labels are not duplicated: ${JSON.stringify(stationCategoryRow)}`,
+  );
+  const localQueueRow = await page.evaluate(() => {
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-local-track',
+        type: 'music',
+        label: ' – Salvatore On Everything',
+        source_kind: 'local',
+        source: 'rendered_queue',
+        duration_ms: 240000,
+      }],
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      title: row?.cells[2]?.firstChild?.textContent.trim() || '',
+      source: row?.cells[3]?.textContent.trim() || '',
+    };
+  });
+  assert(
+    localQueueRow.title === 'Salvatore On Everything' && localQueueRow.source === 'local',
+    `local queue metadata was not rendered title-only: ${JSON.stringify(localQueueRow)}`,
+  );
   await exerciseListenerSongFailureRows();
   const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Music','ready','Ready'],['Sources','checking','Checking'],['Hosts','waiting_ai','Waiting for AI'],['Setup','blocked','Blocked'],['AI','not_configured','Optional']].map(([label,status,display_status])=>({label,status,display_status,shape:'BAD'}))}}};
   const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent,name:el.getAttribute('aria-label')}))},setupStatusFixture);
   assert(setupChips.map(({state})=>state).join('|')==='ready|working|degraded|blocked|idle'&&setupChips.every(({children,text,name})=>children===0&&!text.includes('BAD')&&name===null)&&setupChips[2].text==='Hosts: Waiting for AI'&&setupChips[4].text==='AI: Optional',`setup status chips lost semantic mapping or accessible names: ${JSON.stringify(setupChips)}`);
   await page.emulateMedia({forcedColors:'active'});const forcedGlyphs=await page.evaluate(()=>[...setupStripChips.children].map((el)=>getComputedStyle(el,'::before').content));assert(forcedGlyphs.every((glyph)=>!['none','normal','""'].includes(glyph)),`forced colors hid setup status glyphs: ${JSON.stringify(forcedGlyphs)}`);
   await page.emulateMedia({forcedColors:'none'});await page.evaluate(()=>renderGuidedSetupStrip({}));
+
+  const adminTypeMetrics = await page.evaluate(() => {
+    const probe = document.createElement('p');
+    probe.className = 'host-style';
+    probe.textContent = 'A long host description should read like body copy.';
+    document.body.appendChild(probe);
+    const style = getComputedStyle(probe);
+    const metrics = {
+      colorScheme: getComputedStyle(document.documentElement).colorScheme,
+      fontSize: parseFloat(style.fontSize),
+      lineHeight: parseFloat(style.lineHeight),
+    };
+    probe.remove();
+    return metrics;
+  });
+  assert(adminTypeMetrics.colorScheme === 'dark', `admin native controls did not declare dark color scheme: ${JSON.stringify(adminTypeMetrics)}`);
+  assert(
+    adminTypeMetrics.fontSize >= 14 && adminTypeMetrics.lineHeight >= 21,
+    `host descriptions stayed below readable body size: ${JSON.stringify(adminTypeMetrics)}`,
+  );
+
+  const privacyReceiptStates = await page.evaluate(() => ({
+    untouched: firstListenPendingPrivacyChoice({
+      heard: false,
+      privacyReviewed: false,
+      privacy: { choice_explicit: true },
+      privacyEnabled: true,
+    }, null),
+    recovered: firstListenPendingPrivacyChoice({
+      heard: true,
+      privacyReviewed: false,
+      privacy: { choice_explicit: true },
+      privacyEnabled: true,
+    }, null),
+    failedPrivateSave: firstListenPendingPrivacyChoice({
+      heard: false,
+      privacyReviewed: false,
+      privacy: { choice_explicit: false },
+      privacyEnabled: true,
+    }, false),
+  }));
+  assert(privacyReceiptStates.untouched === null, `untouched privacy default looked unsaved: ${JSON.stringify(privacyReceiptStates)}`);
+  assert(privacyReceiptStates.recovered === true, `heard-session privacy recovery disappeared: ${JSON.stringify(privacyReceiptStates)}`);
+  assert(privacyReceiptStates.failedPrivateSave === false, `same-page privacy save failure disappeared: ${JSON.stringify(privacyReceiptStates)}`);
+
+  const hostPipelineStates = await page.evaluate(() => {
+    const status = {
+      runtime_status: { station_on_air: false, health_state: 'ready' },
+      golden_path: { blocking: false },
+    };
+    const cases = {
+      demo: { script_llm: false, anthropic_key: false, openai: false },
+      valid: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', openai: false },
+      checking: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'unverified' },
+      backup: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: false },
+      rejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'rejected', openai: false },
+      rejectedDegraded: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'rejected',
+        anthropic_degraded: true,
+        openai: false,
+      },
+      rejectedChecking: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'rejected',
+        anthropic_degraded: true,
+        openai: true,
+        openai_key_status: 'unverified',
+      },
+      backupWithRejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: true, openai_key_status: 'rejected' },
+      degradedUnverified: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'unverified',
+        anthropic_degraded: true,
+        openai: false,
+      },
+      degradedMaskedByUnrelatedProbe: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'valid',
+        anthropic_degraded: true,
+        openai: true,
+        openai_key_status: 'unverified',
+      },
+      fallback: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'rejected',
+        openai: true,
+        openai_key_status: 'valid',
+      },
+    };
+    return Object.fromEntries(Object.entries(cases).map(([name, capabilities]) => {
+      updatePipelineStatus({ capabilities, golden_path: status.golden_path }, status);
+      const chip = document.querySelector('#pipelineStatus .srow:first-child .status-chip');
+      return [name, { state: chip?.classList[1] || '', text: chip?.textContent.trim() || '' }];
+    }));
+  });
+  assert(
+    hostPipelineStates.demo.state === 'ready' && hostPipelineStates.demo.text.includes('Demo Radio'),
+    `Demo Radio provider state was not ready: ${JSON.stringify(hostPipelineStates.demo)}`,
+  );
+  assert(hostPipelineStates.valid.state === 'ready', `valid AI provider was not ready: ${JSON.stringify(hostPipelineStates.valid)}`);
+  assert(hostPipelineStates.checking.state === 'working', `unverified AI provider was not checking: ${JSON.stringify(hostPipelineStates.checking)}`);
+  assert(hostPipelineStates.backup.state === 'degraded', `backed-up AI provider lost degraded truth: ${JSON.stringify(hostPipelineStates.backup)}`);
+  assert(hostPipelineStates.rejected.state === 'blocked', `rejected AI provider was not blocked: ${JSON.stringify(hostPipelineStates.rejected)}`);
+  assert(hostPipelineStates.rejectedDegraded.state === 'blocked', `rejected AI provider was masked by cooldown: ${JSON.stringify(hostPipelineStates.rejectedDegraded)}`);
+  assert(hostPipelineStates.rejectedChecking.state === 'working', `unverified fallback provider was masked by rejection: ${JSON.stringify(hostPipelineStates.rejectedChecking)}`);
+  assert(hostPipelineStates.backupWithRejected.state === 'degraded', `valid provider cooldown was masked by rejected fallback: ${JSON.stringify(hostPipelineStates.backupWithRejected)}`);
+  assert(
+    hostPipelineStates.degradedUnverified.state === 'degraded',
+    `circuit-breaker cooldown was masked by an inconclusive probe stuck at unverified: ${JSON.stringify(hostPipelineStates.degradedUnverified)}`,
+  );
+  assert(
+    hostPipelineStates.degradedMaskedByUnrelatedProbe.state === 'degraded',
+    `known-degraded provider was masked by an unrelated provider's own still-checking probe: ${JSON.stringify(hostPipelineStates.degradedMaskedByUnrelatedProbe)}`,
+  );
+  assert(hostPipelineStates.fallback.state === 'ready', `valid fallback provider did not keep AI hosts ready: ${JSON.stringify(hostPipelineStates.fallback)}`);
 
   const jamendoControls=await page.evaluate(async()=>{const status=(source,shared,enabled=true,acknowledged=true)=>({enabled,noncommercial_acknowledged:acknowledged,client_id_configured:Boolean(source),client_id_source:source,shared_access_available:shared}),view=()=>({label:jamendoSecretLabel.textContent,action:jamendoOwnClientIdAction.textContent,fieldHidden:jamendoClientField.hidden,clearHidden:jamendoClearClientId.hidden,help:jamendoAccessHelp.textContent});
     let confirmations=0,requests=[],responseStatus=status('bundled',true);const originalConfirm=window.confirm,originalRequest=window.mediaSourceRequest;window.confirm=()=>{confirmations+=1;return true};window.mediaSourceRequest=async(method,path,payload)=>{requests.push({method,path,payload});return{ok:true,status:200,data:{ok:true,status:responseStatus}}};

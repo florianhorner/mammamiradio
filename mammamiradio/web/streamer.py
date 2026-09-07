@@ -67,6 +67,7 @@ from mammamiradio.audio.normalizer import (
     probe_duration_sec,
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
+from mammamiradio.audio.tts import cloud_tts_health
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.config import (
     DEFAULT_STATION_NAME,
@@ -864,6 +865,13 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 # After an ad/banter ends we keep its snapshot briefly, so a listener who taps
 # Share a moment too late (music already playing again) still gets the whole bit.
 CLIP_LOOKBACK_SECONDS = 15
+# Upper bound on a duration we are willing to print on the public share page.
+# Nothing shareable comes close: voice segments are capped at
+# CLIP_MAX_SEGMENT_SECONDS and the longest bundled starter track is under ten
+# minutes. Finiteness alone is not proof — 1e308 and a 300-digit integer are
+# both finite and both nonsense — so a value past this ceiling is treated as
+# corrupt metadata and no duration is claimed at all.
+CLIP_MAX_PROVABLE_DURATION_SECONDS = 3600
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 STREAM_MAX_PACKET_SECONDS = 0.125
@@ -1103,6 +1111,7 @@ def _validated_starter_share_snapshot(segment: Segment) -> dict[str, Any] | None
         "type": "starter",
         "title": entry.title,
         "artist": entry.artist,
+        "duration_seconds": entry.duration_seconds,
         "provider_track_id": entry.isrc,
         "attribution": safe_attribution,
     }
@@ -2413,6 +2422,26 @@ def _apply_ban(
     if removed or pin_cleared:
         state.playlist_revision += 1
 
+    # Quarantine the norm-cache artifact of every banned LOCAL file. A local
+    # track's cache key is path-derived, so re-labelling a file does not move its
+    # cache entry, and the sidecar is only rewritten when the track next plays.
+    # A file banned before it plays again therefore keeps a sidecar carrying its
+    # PRE-ban identity, while the ban is stored under the new one — and the
+    # rescue gate reads the sidecar. Without this, banning a song straight after
+    # the metadata upgrade left the old cache file airable forever. Same reason
+    # the external-download path quarantines its artifact on ban.
+    import contextlib
+
+    from mammamiradio.playlist.downloader import reject_cached_download as _reject_cached_download
+
+    for track in tracks:
+        if getattr(track, "local_path", None) is None:
+            continue
+        cache_key = getattr(track, "cache_key", "")
+        if cache_key:
+            with contextlib.suppress(Exception):
+                _reject_cached_download(config.cache_dir, cache_key, "operator_blocklist")
+
     def _matches_blocklist(segment: Segment) -> bool:
         # Use the shared segment identity so missing artist metadata is
         # normalized consistently at mutation and playback gates.
@@ -2476,9 +2505,13 @@ def _normalize_preference_key(raw_key: object) -> tuple[tuple[str, str], str] | 
     title_raw = str(raw_key[1] or "").strip()
     artist = artist_raw.lower()
     title = title_raw.lower()
-    if not (artist and title):
+    # Title-only is a real key, same rule as _now_playing_music_track and the
+    # blocklist. Requiring an artist here made an untagged local song
+    # un-likeable from the rotation list — and un-CLEARABLE, since a preference
+    # migrated onto ("", title) renders as pressed and the clear press 422s.
+    if not title:
         return None
-    display = f"{artist_raw} - {title_raw}"
+    display = f"{artist_raw} - {title_raw}" if artist_raw else title_raw
     return (artist, title), display
 
 
@@ -2516,11 +2549,20 @@ def _now_playing_music_track(now_seg: object) -> Track | None:
                 title = left
             else:
                 title = raw_title
-    if not (artist and title):
+    if not title:
+        # Only reach for the label when the metadata gave us no title at all.
+        # A title-only song legitimately has artist == "" (an untagged local
+        # file), and splitting its label here would invent an artist out of a
+        # song title that merely contains a dash.
+        #
+        # Deliberately NOT falling back to a bare unsplittable label: the norm-
+        # cache rescue path leaves `title_only` unset precisely because a
+        # humanized filename is not a trustworthy bare title, and a ban is
+        # durable — persisting a junk key is worse than refusing the action.
         parsed_label = _split_artist_title_label(now_seg.get("label"))
         if parsed_label is not None:
             artist, title = parsed_label
-    if not (artist and title):
+    if not title:
         return None
     return Track(title=title, artist=artist, duration_ms=0)
 
@@ -2547,6 +2589,17 @@ def _resolve_preference_target(state: StationState, body: dict) -> tuple[tuple[s
     if body.get("now_playing") is True or legacy_now_playing:
         target = _now_playing_preference_target(state)
         if target is None:
+            # Two different situations, two different ways out. Saying "nothing
+            # musical is on air" while a song is audibly playing is a message
+            # that lies to the operator (leadership #5).
+            now_seg = state.now_streaming or {}
+            if isinstance(now_seg, dict) and now_seg.get("type") == "music":
+                return JSONResponse(
+                    content={
+                        "ok": False,
+                        "error": "I can’t tell which song this is to mark it. Mark it from the rotation list instead.",
+                    }
+                )
             return JSONResponse(
                 content={"ok": False, "error": "Only a song can be marked — nothing musical is on air right now."}
             )
@@ -2979,27 +3032,56 @@ _ACTION_REQUIRED_FALLBACK_REASONS = {
 
 
 _TTS_RUNTIME_FALLBACK_PREFIX = "Runtime TTS fallback: "
+_TTS_QUOTA_REASON_MARKERS = (
+    "quota_exceeded",
+    "insufficient_quota",
+    "credit_balance_exhausted",
+    "quota exceeded",
+    "credit balance",
+    "usage limit",
+)
+
+
+def _tts_reason_is_quota(reason: str) -> bool:
+    normalized = reason.strip().lower()
+    return any(marker in normalized for marker in _TTS_QUOTA_REASON_MARKERS)
 
 
 def _tts_single_reason_label(reason: str) -> str:
-    """Translate ONE engine's raw TTS fallback reason token into operator copy."""
+    """Translate one engine's raw reason and action into operator copy."""
     normalized = reason.strip().lower()
     if not normalized:
         return ""
     if "missing_credentials" in normalized:
-        return "A cloud voice key is missing; Edge voice is carrying the show. Add the key and restart the station."
-    if "provider_disabled:http 401" in normalized or "provider_disabled:http 403" in normalized:
-        return "A cloud voice key was not accepted; check the saved key and restart the station."
-    if "provider_disabled:http 404" in normalized:
-        return "A cloud voice route is not available; check the selected voice and restart the station."
+        return (
+            "A cloud voice key is missing; Edge voice is carrying the show. "
+            "Add the key under First Listen → Change AI services → Voice providers."
+        )
+    if _tts_reason_is_quota(normalized):
+        return (
+            "The voice provider quota is exhausted, so its cloud voices are off for this session. "
+            "Restore quota or credits, then save the key under First Listen → Change AI services → Voice providers "
+            "to retry. Edge voice is carrying the show."
+        )
+    if "http 401" in normalized or "http 403" in normalized:
+        return (
+            "The saved voice key was rejected by the provider, so its cloud voices are off for this session. "
+            "Save a working key under First Listen → Change AI services → Voice providers to retry. "
+            "Edge voice is carrying the show."
+        )
+    if "http 400" in normalized or "http 404" in normalized:
+        return (
+            "The provider rejected one configured cloud voice route; check its voice, model, and region settings, "
+            "then restart the station. Edge voice is carrying the show."
+        )
     if "cloud tts route rendered successfully" in normalized or "primary_success" in normalized:
         return "Cloud voice route is working."
     if "provider_cooldown" in normalized or "provider_error" in normalized:
         return "A cloud voice route had trouble; Edge voice is carrying the show and will retry automatically."
     if "provider_disabled_session" in normalized:
         return (
-            "A cloud voice route is temporarily unavailable; Edge voice is carrying the show and will retry "
-            "automatically."
+            "A cloud voice route is switched off for this session after a provider error; Edge voice is carrying "
+            "the show. Save the key again under First Listen → Change AI services → Voice providers to retry."
         )
     if "edge_voice_failure" in normalized:
         return "The configured voice was unavailable; the station is trying its house voice."
@@ -3032,7 +3114,7 @@ def _tts_runtime_reason_label(reason: str) -> str:
             engine = engine.strip()
             label = _tts_single_reason_label(token) if token else ""
             if engine and label:
-                labeled.append(f"{engine}: {label}")
+                labeled.append(f"{_runtime_provider_label(engine)}: {label}")
             elif label:
                 labeled.append(label)
         if labeled:
@@ -3316,6 +3398,8 @@ def _tts_provider_status(config, state: StationState, *, use_runtime_observation
     # synthesis boundary records the route that actually produced audio; use
     # that live state when it says a mixed/cloud route degraded to Edge.
     runtime_tts = state.runtime_provider_state.get("tts_provider", {}) if use_runtime_observation else {}
+    if runtime_tts.get("invalidated_by_credential_save"):
+        runtime_tts = {}
     if runtime_tts and runtime_tts.get("fallback_active"):
         current = str(runtime_tts.get("current_provider") or "edge")
         fallback_active = True
@@ -4440,9 +4524,43 @@ def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> 
     return _runtime_monotonic() - state.last_air_monotonic > SILENCE_FAILURE_SECONDS
 
 
+def _voice_provider_health(
+    engine: str,
+    configured: bool,
+    voice_health: dict[str, dict[str, object]],
+    *,
+    key_rejected: bool = False,
+) -> dict:
+    """Same shape as the Anthropic entry so the admin can render voices the same way."""
+    health = voice_health.get(engine, {})
+    reason = str(health.get("reason") or "")
+    disabled = bool(health.get("disabled"))
+    cooldown = bool(health.get("cooldown"))
+    quota_exhausted = disabled and _tts_reason_is_quota(reason)
+    rejected = key_rejected or (disabled and not quota_exhausted and ("HTTP 401" in reason or "HTTP 403" in reason))
+    if not configured:
+        key_status = "missing"
+    elif rejected:
+        key_status = "rejected"
+    else:
+        key_status = "unverified"
+    raw_failed = health.get("failed_voices") or 0
+    failed_voices = raw_failed if isinstance(raw_failed, int) else 0
+    return {
+        "configured": configured,
+        "disabled": disabled,
+        "cooldown": cooldown,
+        "quota_exhausted": quota_exhausted,
+        "last_error": reason if disabled or cooldown or failed_voices else "",
+        "key_status": key_status,
+        "failed_voices": failed_voices,
+    }
+
+
 def _provider_health_snapshot(config, state: StationState) -> dict:
     """Return current provider degradation state for admin diagnostics."""
     now = time.time()
+    voice_health = cloud_tts_health()
     anthropic_configured = bool(config.anthropic_api_key)
     anthropic_degraded = anthropic_configured and state.anthropic_disabled_until > now
     retry_after = max(0, int(state.anthropic_disabled_until - now)) if anthropic_degraded else 0
@@ -4455,16 +4573,21 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "auth_failures": state.anthropic_auth_failures,
             "key_status": state.anthropic_key_status,
         },
+        # Keep OpenAI script-key and speech-breaker verdicts separate.
         "openai": {
             "configured": bool(config.openai_api_key),
             "key_status": state.openai_key_status,
         },
-        "azure_speech": {
-            "configured": bool(config.azure_speech_key and config.azure_speech_region),
-        },
-        "elevenlabs": {
-            "configured": bool(config.elevenlabs_api_key),
-        },
+        "openai_speech": _voice_provider_health(
+            "openai",
+            bool(config.openai_api_key and config.models.tts_model("openai")),
+            voice_health,
+            key_rejected=state.openai_key_status == "rejected",
+        ),
+        "azure_speech": _voice_provider_health(
+            "azure", bool(config.azure_speech_key and config.azure_speech_region), voice_health
+        ),
+        "elevenlabs": _voice_provider_health("elevenlabs", bool(config.elevenlabs_api_key), voice_health),
         "chaos": {
             "enabled": state.chaos_mode_active,
             "pending": state.chaos_pending.value if state.chaos_pending else "",
@@ -6671,10 +6794,16 @@ def _resolve_static_file(filename: str) -> Path | None:
     if filename.startswith("/") or ".." in Path(filename).parts:
         return None
 
-    static_root = _STATIC_DIR.resolve()
     try:
+        # Both resolutions sit inside the guard. Leaving the root outside it
+        # meant a broken install answered 500 to every static request.
+        # RuntimeError is a symlink cycle on Python 3.12 and earlier;
+        # ValueError is an embedded null byte, which a request path can carry.
+        # Uncaught, either left this unauthenticated route raising instead of
+        # answering the 404 it already returns for any name it cannot resolve.
+        static_root = _STATIC_DIR.resolve()
         candidate = (static_root / filename).resolve()
-    except OSError:
+    except (OSError, RuntimeError, ValueError):
         return None
 
     if not candidate.is_relative_to(static_root) or not candidate.is_file():
@@ -11197,6 +11326,18 @@ async def create_clip(request: Request):
         "track_artist": track_artist,
         "created_at": int(time.time()),
     }
+    # The starter catalog guarantees a positive duration_seconds for every
+    # entry, but this only claims one if the snapshot actually proves it —
+    # never guess from clip_data's byte length, which is the raw starter
+    # file at its own encode rate, not config.audio.bitrate.
+    snap_duration = snap.get("duration_seconds")
+    if (
+        isinstance(snap_duration, int | float)
+        and not isinstance(snap_duration, bool)
+        and math.isfinite(snap_duration)
+        and snap_duration > 0
+    ):
+        sidecar["duration_seconds"] = round(float(snap_duration), 3)
     if clip_attribution_override is not None:
         sidecar["music_attribution"] = clip_attribution_override
     try:
@@ -11390,6 +11531,7 @@ async def keep_this(request: Request, _: None = Depends(require_admin_access)):
         "station_name": config.display_station_name,
         "track_title": kept_title,
         "track_artist": "",
+        "duration_seconds": round(len(clip_data) / bytes_per_sec, 3),
         "segment_type": kept_type,
         "source": source,
         "created_at": int(now),
@@ -11657,6 +11799,16 @@ async def clip_landing(clip_id: str, request: Request):
     station_name = sidecar.get("station_name") or config.display_station_name
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
+    clip_duration_seconds = None
+    raw_duration = sidecar.get("duration_seconds")
+    if raw_duration is not None and not isinstance(raw_duration, bool):
+        try:
+            parsed_duration = float(raw_duration)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        else:
+            if math.isfinite(parsed_duration) and 0 < parsed_duration <= CLIP_MAX_PROVABLE_DURATION_SECONDS:
+                clip_duration_seconds = max(1, round(parsed_duration))
 
     return _TEMPLATES.TemplateResponse(
         request,
@@ -11667,6 +11819,7 @@ async def clip_landing(clip_id: str, request: Request):
             "station_name": station_name,
             "track_title": track_title,
             "track_artist": track_artist,
+            "clip_duration_seconds": clip_duration_seconds,
             "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
             "og_image_url": f"{public_base_url}/og-card.png",
             "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",

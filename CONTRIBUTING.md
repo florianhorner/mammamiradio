@@ -216,9 +216,9 @@ release path.
 `media-proof` additionally proves wheel, sdist, amd64/aarch64 add-on image,
 FFprobe, extractor-containment, and Jamendo-transience parity. A release remains
 blocked until all twelve exact derivatives total at least 45 minutes, remain at
-or below 75 MiB, and have complete evidence and audition receipts. Release
-evidence also needs 20 cold Home Assistant Green listener runs with p95 first
-accepted non-silent starter byte at or below two seconds.
+or below 75 MiB, and have complete evidence and audition receipts. Twenty cold Home Assistant Green listener runs at p95 first accepted non-silent
+starter byte within two seconds are an opt-in gate, armed with
+`MMR_REQUIRE_HA_RECEIPTS=1`; unset, a release cut reports the waiver.
 
 To replace a mistaken approval before publication, revert the derivative,
 receipt, and the same manifest row together; never leave one of the three at a

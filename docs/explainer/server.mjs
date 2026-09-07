@@ -8,7 +8,7 @@ const port = Number(process.env.PORT || 4187);
 // .mjs must be a JavaScript MIME type: module scripts enforce strict MIME
 // checking, so serving it as octet-stream silently kills the whole page.
 // GitHub Pages already maps .mjs correctly; this map is for local preview.
-const mimeTypes = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".mp3": "audio/mpeg" };
+const mimeTypes = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".mp3": "audio/mpeg" };
 const server = createServer(async (request, response) => {
   let rawPath;
   try {
@@ -19,7 +19,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Bad request");
     return;
   }
-  const requested = rawPath === "/" ? "/index.html" : rawPath;
+  const requested = rawPath.endsWith("/") ? `${rawPath}index.html` : rawPath;
   const filePath = resolve(join(root, normalize(requested)));
   // Not startsWith: that also accepts a sibling whose name merely begins with
   // the root's, and join(root, "../explainer-secrets/x") resolves to exactly

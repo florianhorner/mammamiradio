@@ -156,6 +156,10 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_issue_body_lint.sh
 
+      - name: Receipt-gate opt-in self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_receipt_gate_optin.sh
+
       - name: Cut-edge-release self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_cut_edge_release.sh
@@ -176,6 +180,10 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_squad_gate.sh
 
+      - name: Dependabot auto-merge gate self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_dependabot_automerge_gate.sh
+
       - name: Pre-ship evidence self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_evidence.sh
@@ -190,6 +198,10 @@ jobs:
       - name: Landing wrapper self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_land_pr.sh
+
+      - name: Shadow land-queue self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_land_queue.sh
 
       - name: Dependabot automation guard
         if: needs.changes.outputs.workflows == 'true'

@@ -243,15 +243,35 @@
     return true;
   }
 
+  function musicLabelParts(seg) {
+    const metadata = (seg && seg.metadata) || {};
+    const sourceKind = String(metadata.source_kind || (seg && seg.source_kind) || '').trim().toLowerCase();
+    const metadataArtist = String(metadata.artist || '').trim();
+    const artist = sourceKind === 'local' && metadataArtist.toLowerCase() === 'unknown' ? '' : metadataArtist;
+    const titleOnly = String(metadata.title_only || '').trim();
+    if (titleOnly) return { title: titleOnly, artist };
+
+    const label = String((seg && seg.label) || '').trim();
+    for (const sep of [' \u2014 ', ' \u2013 ', ' - ']) {
+      const idx = label.indexOf(sep);
+      if (idx < 0) continue;
+      const labelArtist = label.slice(0, idx).trim();
+      return {
+        title: label.slice(idx + sep.length).trim(),
+        artist: artist || (sourceKind === 'local' && labelArtist.toLowerCase() === 'unknown' ? '' : labelArtist),
+      };
+    }
+    return { title: label, artist };
+  }
+
   function nowPlayingIdentity(np) {
     const metadata = (np && np.metadata) || {};
-    const label = (np && np.label) || '';
-    const splitAt = label.indexOf(' \u2014 ');
-    const fallbackArtist = splitAt > 0 ? label.slice(0, splitAt) : '';
-    const fallbackTitle = splitAt > 0 ? label.slice(splitAt + 3) : label;
+    const parts = musicLabelParts(np);
+    const metadataTitle = String(metadata.title || '').trim();
+    const label = String((np && np.label) || '').trim();
     return {
-      title: String(metadata.title_only || metadata.title || fallbackTitle || '').slice(0, 300),
-      artist: String(metadata.artist || fallbackArtist || '').slice(0, 300),
+      title: String(metadata.title_only || (metadataTitle && metadataTitle !== label ? metadataTitle : parts.title) || '').slice(0, 300),
+      artist: String(parts.artist || '').slice(0, 300),
     };
   }
 
@@ -600,9 +620,9 @@
     let title, artist;
     const label = np.label || '';
     if (np.type === 'music') {
-      const parts = label.split(' \u2014 ');
-      if (parts.length === 2) { artist = parts[0]; title = parts[1]; }
-      else { artist = stationName; title = label || _t('np_on_air', 'On Air'); }
+      const parts = musicLabelParts(np);
+      artist = parts.artist || stationName;
+      title = parts.title || label || _t('np_on_air', 'On Air');
     } else if (np.type === 'banter') {
       artist = label || 'Marco & Giulia';
       title = _t('np_live', 'Live') + ' \u2014 ' + _t('seg_banter', 'Banter');
@@ -658,14 +678,9 @@
       trackEl.textContent = _t('np_paused', 'Fermo');
       artistEl.textContent = '';
     } else if (np.type === 'music') {
-      const parts = label.split(' \u2014 ');
-      if (parts.length === 2) {
-        trackEl.textContent = parts[1];
-        artistEl.textContent = parts[0];
-      } else {
-        trackEl.textContent = label || _t('np_on_air', 'On Air');
-        artistEl.textContent = '';
-      }
+      const parts = musicLabelParts(np);
+      trackEl.textContent = parts.title || _t('np_on_air', 'On Air');
+      artistEl.textContent = parts.artist || '';
     } else if (np.type === 'banter') {
       trackEl.textContent = label ? label + ' ' + _t('np_banter_strip', 'in conversation') : _t('np_banter_idle', 'The hosts are on air');
       artistEl.textContent = _t('seg_banter', 'Banter');
@@ -926,15 +941,11 @@
   // label in slot-title AND the artist again in slot-host doubles the artist.
   // Split the label for music, fall back to raw label + hostLine otherwise.
   function splitMusicLabel(seg) {
-    const label = (seg && seg.label) || '';
     if (seg && seg.type === 'music') {
-      const sep = ' \u2014 ';
-      const idx = label.indexOf(sep);
-      if (idx > 0) {
-        return { title: label.slice(idx + sep.length), host: escHtml(label.slice(0, idx)) };
-      }
+      const parts = musicLabelParts(seg);
+      return { title: parts.title, host: escHtml(parts.artist) };
     }
-    return { title: label, host: hostLine(seg) };
+    return { title: (seg && seg.label) || '', host: hostLine(seg) };
   }
 
   function renderDediche(requests) {
@@ -1087,6 +1098,11 @@
 
   /* ── Toast helper (used by clip sharing) ── */
   let _toastTimer = null;
+  // 2.4s suits a short confirmation. A recovery message that tells the listener
+  // what to do next needs longer, so those call sites pass TOAST_MS_LONG
+  // explicitly (leadership principle #5: a way out you cannot finish reading
+  // is not a way out).
+  const TOAST_MS_LONG = 6000;
   function _showToast(msg, durationMs = 2400) {
     let el = document.getElementById('mmr-toast');
     if (!el) {
@@ -1132,13 +1148,13 @@
           msg = _t('clip_rate_limited', 'The tape decks need a moment — give them {s}s and tap again.')
             .replace('{s}', data.retry_after);
         } else if (data && data.error_code === 'music_share_unavailable') {
-          msg = _t('music_share_unavailable', 'A complete included track has to finish before it can be shared.');
+          msg = _t('music_share_unavailable', 'Only included tracks can be shared. Keep the radio playing, and tap Share right after the next included track ends.');
         } else if (data && data.reason === 'no_audio') {
           msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
         } else {
           msg = _t('clip_error', "That clip didn't take — give it a moment and tap Share again.");
         }
-        _showToast(msg);
+        _showToast(msg, TOAST_MS_LONG);
         return;
       }
       const shareUrl = window.location.origin + _base + (data.share_url || data.url);

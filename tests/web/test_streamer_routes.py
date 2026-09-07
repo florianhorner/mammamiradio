@@ -1260,12 +1260,31 @@ async def test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next(tmp_pat
             await asyncio.gather(task, return_exceptions=True)
 
     queued_at_boundary = observed["queue"]
-    assert observed == {
-        "active": None,
-        "accepted": True,
-        "queue": [successor, forced],
-    }
-    assert queued_at_boundary == [successor, forced]
+    assert isinstance(queued_at_boundary, list)
+    assert observed["active"] is None
+    assert observed["accepted"] is True
+
+    # The guarantee is ordering, not queue contents at one exact tick. The
+    # snapshot is taken from a call_soon callback racing the playback loop's
+    # own queue.get(), so whether the successor is still queued depends on
+    # event-loop dispatch order:
+    #
+    #   3.11   queue == [successor, forced]   successor not yet taken
+    #   3.14   queue == [forced]              successor already taken
+    # (measured at those two points; the exact interpreter where dispatch
+    #  order changes was not pinned down, which is why neither shape is
+    #  asserted as the expected one.)
+    #
+    # Both satisfy "successor ahead of air-next" -- already dequeued is further
+    # ahead, not behind. Pin the invariant, and let the listener assertions
+    # below prove the order actually reached air.
+    # Assert on both shapes, not just the one this interpreter happens to
+    # produce. A bare `if successor in queue` guard is vacuous exactly on
+    # 3.14, where the successor is already dequeued.
+    assert queued_at_boundary[-1] is forced, "air-next must land behind whatever is still queued, never ahead of it"
+    if successor in queued_at_boundary:
+        assert queued_at_boundary.index(successor) < queued_at_boundary.index(forced)
+
     assert listener_queue.get_nowait() == b"head-audio"
     assert listener_queue.get_nowait() == b"speech-audio"
     assert sum(segment is music for segment in emitted) == 1
@@ -5040,6 +5059,67 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     assert app.state.station_state.listeners_active == 0
     assert approval_threads and approval_threads[0] != event_loop_thread
     assert read_threads and read_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_first_listen_receipt_completion_keeps_the_connected_live_stream(tmp_path):
+    """Heard/privacy receipts never terminate or replay an attached stream."""
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"authored-mini-show")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True) as show_required,
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch(
+            "mammamiradio.web.streamer.iter_first_listen_show_chunks",
+            return_value=iter([b"authored-mini-show"]),
+        ) as show_chunks,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        assert await anext(generator) == b"authored-mini-show"
+
+        before_receipt = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("First Listen did not attach to the live hub")
+            await asyncio.sleep(0)
+        await app.state.stream_hub.broadcast(b"live-before-receipt")
+        assert await asyncio.wait_for(before_receipt, timeout=1.0) == b"live-before-receipt"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+        )
+        after_heard = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-heard")
+        assert await asyncio.wait_for(after_heard, timeout=1.0) == b"live-after-heard"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+            privacy_reviewed_at=102.0,
+        )
+        after_privacy = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-privacy")
+        assert await asyncio.wait_for(after_privacy, timeout=1.0) == b"live-after-privacy"
+        assert app.state.station_state.listeners_active == 1
+        await generator.aclose()
+
+    assert app.state.station_state.listeners_active == 0
+    show_required.assert_called_once_with(app.state)
+    show_chunks.assert_called_once_with(show)
 
 
 @pytest.mark.asyncio
@@ -13578,3 +13658,148 @@ async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
     # Only the clean track counts; the banned queued segment (which the playback
     # loop discards before its first byte) must not inflate the honest readout.
     assert admin_status["buffered_audio_sec"] == 180.0
+
+
+def _voice_health_config(*, openai="", azure="", region="", elevenlabs="", model=None, host_engine=""):
+    return SimpleNamespace(
+        anthropic_api_key="",
+        openai_api_key=openai,
+        azure_speech_key=azure,
+        azure_speech_region=region,
+        elevenlabs_api_key=elevenlabs,
+        models=SimpleNamespace(tts_model=lambda _engine: model),
+        hosts=[SimpleNamespace(engine=host_engine)] if host_engine else [],
+        ads=SimpleNamespace(voices=[]),
+        sonic_brand=SimpleNamespace(sweeper_voice="", sweeper_engine="edge"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "key_status", "quota_exhausted"),
+    [
+        ("HTTP 401 — quota_exceeded", "unverified", True),
+        ("HTTP 401 — invalid_api_key", "rejected", False),
+    ],
+)
+def test_provider_health_distinguishes_quota_401_from_rejected_key(reason, key_status, quota_exhausted):
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_route(
+        ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
+        retryable=False,
+        reason=reason,
+    )
+    health = _provider_health_snapshot(_voice_health_config(elevenlabs="x"), StationState())["elevenlabs"]
+    assert health["configured"] is health["disabled"] is True
+    assert health["cooldown"] is False
+    assert health["quota_exhausted"] is quota_exhausted
+    assert health["key_status"] == key_status
+    assert health["last_error"] == reason
+
+
+def test_provider_health_marks_voice_cooldown_separately_from_session_disable():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_route(("azure", "westeurope", "fp", ""), retryable=True)
+    config = _voice_health_config(openai="sk", azure="az", region="westeurope", model="gpt-4o-mini-tts")
+    health = _provider_health_snapshot(config, StationState())
+    azure = health["azure_speech"]
+    assert azure["configured"] is azure["cooldown"] is True
+    assert azure["key_status"] == "unverified"
+    assert health["openai_speech"]["configured"] is True
+
+
+def test_provider_health_surfaces_one_failed_voice_without_disabling_route():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_voice
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_voice(
+        ("azure", "bad-voice", "westeurope:fp", ""),
+        reason="HTTP 404 — voice not found",
+    )
+    health = _provider_health_snapshot(_voice_health_config(azure="az", region="westeurope"), StationState())[
+        "azure_speech"
+    ]
+    assert health["disabled"] is False
+    assert health["failed_voices"] == 1
+    assert health["last_error"] == "HTTP 404 — voice not found"
+
+
+def test_provider_health_openai_speech_requires_model_and_inherits_key_rejection():
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    config = _voice_health_config(openai="sk")
+    state = StationState()
+    assert _provider_health_snapshot(config, state)["openai_speech"]["configured"] is False
+
+    config.models = SimpleNamespace(tts_model=lambda _engine: "gpt-4o-mini-tts")
+    state.openai_key_status = "rejected"
+    health = _provider_health_snapshot(config, state)["openai_speech"]
+    assert health["configured"] is True
+    assert health["key_status"] == "rejected"
+
+
+def test_tts_reason_copy_never_promises_a_retry_for_a_session_disable():
+    from mammamiradio.web.streamer import _tts_single_reason_label
+
+    for token in (
+        "provider_disabled_session",
+        "provider_disabled_session:HTTP 401 — x",
+        "provider_disabled:HTTP 401",
+        "provider_disabled_session:HTTP 401 — quota_exceeded",
+    ):
+        label = _tts_single_reason_label(token)
+        assert "temporarily" not in label.lower()
+        assert "will retry" not in label.lower()
+        assert "restart the add-on" not in label.lower()
+        assert "first listen → change ai services → voice providers" in label.lower()
+        if "quota" in token:
+            assert "quota" in label.lower() and "rejected" not in label.lower()
+
+
+def test_tts_runtime_reason_keeps_each_mixed_provider_remedy():
+    from mammamiradio.web.streamer import _tts_runtime_reason_label
+
+    reason = (
+        "Runtime TTS fallback: azure=provider_disabled:HTTP 401 — invalid_api_key; "
+        "elevenlabs=provider_disabled_session:HTTP 429 — insufficient_quota"
+    )
+
+    label = _tts_runtime_reason_label(reason)
+
+    assert "Azure Speech:" in label
+    assert "Save a working key" in label
+    assert "ElevenLabs:" in label
+    assert "quota or credits" in label
+
+
+def test_tts_reason_copy_does_not_assume_every_404_is_a_voice_id():
+    from mammamiradio.web.streamer import _tts_single_reason_label
+
+    reason = "provider_disabled:HTTP 404 — model_not_found"
+    label = _tts_single_reason_label(reason).lower()
+
+    assert "voice id was not found" not in label
+    assert "one configured cloud voice route" in label
+    for setting in ("voice", "model", "region"):
+        assert setting in label
+
+
+def test_tts_provider_status_does_not_duplicate_reason_as_action_guidance():
+    from mammamiradio.web.streamer import _tts_provider_status
+
+    config = _voice_health_config(elevenlabs="x", host_engine="elevenlabs")
+    state = StationState()
+    state.runtime_provider_state["tts_provider"] = {
+        "fallback_active": True,
+        "current_provider": "edge",
+        "reason": "Runtime TTS fallback: elevenlabs=provider_disabled_session:HTTP 401",
+    }
+    status = _tts_provider_status(config, state)
+    assert "Save a working key" in status["current_reason"]
+    assert status["action_guidance"] == ""
+
+    state.runtime_provider_state["tts_provider"]["invalidated_by_credential_save"] = True
+    assert _tts_provider_status(config, state)["fallback_active"] is False

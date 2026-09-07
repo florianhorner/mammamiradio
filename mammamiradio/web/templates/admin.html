@@ -22,6 +22,7 @@
    and the drift we just fixed would re-open. See docs/design/system.md. */
 
 html {
+  color-scheme: dark;
   font-size: 16px; -webkit-font-smoothing: antialiased; min-height: 100vh;
   background:
     radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
@@ -285,7 +286,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .host-block { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .host-block:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
 .host-name { font-weight: 700; font-size: 13px; }
-.host-style { font-size: 10px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.4; }
+.host-style { max-width: 72ch; font-size: 14px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.5; }
 .host-presets-label { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .host-presets { display: flex; gap: 7px; margin-bottom: 14px; }
 .host-preset {
@@ -2455,7 +2456,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <p class="guide-audio-copy" id="guideWelcomeNote"><strong>16 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
                   <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. <strong>Giulia:</strong> Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.</p></details>
                 </div>
-                <p class="progress-line" id="firstListenProgressLine">Step 1 of 4. Next: play it on this device.</p>
+                <p class="progress-line" id="firstListenProgressLine">Checking your next step…</p>
               </header>
 
               <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
@@ -2490,7 +2491,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review playback</button>
                 </div>
                 <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 2 of 4</strong><span>Next: check the sound</span></div>
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
                   <p class="use-copy">The station plays on this device. Choose headphones, Bluetooth, or this device’s speaker. Hearing it here is enough to finish setup.</p>
                   <details class="guide-transcript" id="firstListenHomeAssistantGuide">
@@ -2516,7 +2516,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="first-listen-review" data-review-step="verify" aria-expanded="false" aria-controls="firstListenVerifyBody" onclick="toggleFirstListenReview('verify',this)" hidden>Review sound check</button>
                 </div>
                 <div class="first-listen-body" id="firstListenVerifyBody" role="region" aria-labelledby="firstListenVerifyHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 3 of 4</strong><span>Next: choose whether the hosts can use Home details</span></div>
                   <h4 class="benefit-heading">Can you hear Marco and Giulia?</h4>
                   <div class="semantic-visual evidence-line" aria-label="Station playback and human sound check">
                     <div class="evidence-stage"><span class="evidence-icon" aria-hidden="true">✓</span><strong>Sent</strong><span id="firstListenEvidenceSpeaker">This device</span></div>
@@ -2574,7 +2573,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="first-listen-review" data-review-step="privacy" aria-expanded="false" aria-controls="firstListenPrivacyBody" onclick="toggleFirstListenReview('privacy',this)" hidden>Review privacy choice</button>
                 </div>
                 <div class="first-listen-body" id="firstListenPrivacyBody" role="region" aria-labelledby="firstListenPrivacyHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 4 of 4</strong><span>Last required step</span></div>
                     <div class="first-listen-lock" id="firstListenPrivacyLock"><span class="first-listen-lock-shape" aria-hidden="true">○</span>Confirm that you heard the station first.</div>
                   <div class="setup-home-preview-section" id="homeContextPreviewSection">
                     <h4 class="benefit-heading">The hosts can mention weather or an active timer.</h4>
@@ -2916,7 +2914,7 @@ function resetFirstListenGuideSource(audio){
   audio.removeAttribute('src');
   audio.load();
 }
-function stopFirstListenGuide({reset=true}={}){
+function stopFirstListenGuide({reset=true,resumeStation=true}={}){
   if(_firstListenGuideWatchdog){clearTimeout(_firstListenGuideWatchdog);_firstListenGuideWatchdog=null;}
   const audio=firstListenGuideAudio();
   const button=_firstListenUi.guideButton;
@@ -2934,7 +2932,7 @@ function stopFirstListenGuide({reset=true}={}){
   if(_firstListenUi.stationPausedForGuide){
     _firstListenUi.stationPausedForGuide=false;
     const stationAudio=firstListenStationAudio();
-    if(stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
+    if(resumeStation&&stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
   }
 }
 async function toggleFirstListenGuide(key,button){
@@ -3335,12 +3333,18 @@ function adminTabsForNav(){
 function finalizeFirstListenCompletion(){
   if(document.body.dataset.firstListenEntry!=='completing')return false;
   _firstListenUi.showSuccess=false;
-  stopFirstListenGuide();
-  stopFirstListenStationAudio();
   updateFirstListenSuccess();
   document.body.dataset.firstListenEntry='complete';
   syncFirstListenSetupMount();
   return true;
+}
+function exitFirstListenFlow(){
+  // Music-source setup replaces the journey without changing tabs. Suppress
+  // the ordinary guide-resume handoff because this same-tab exit releases the
+  // station itself; tab-away teardown remains owned by showAdminTab().
+  finalizeFirstListenCompletion();
+  stopFirstListenGuide({resumeStation:false});
+  stopFirstListenStationAudio();
 }
 function showAdminTab(name,{render=true,persist=true}={}){
   const setupContext=document.getElementById('firstListenSetupContext');
@@ -3956,12 +3960,14 @@ function updateNow(ns){
   const titleEl=document.getElementById('nowTitle');
   const artistEl=document.getElementById('nowArtist');
   let title=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
-  if(typeKey==='music'&&ns.metadata?.artist){
-    artistEl.textContent=ns.metadata.artist;
-  }else if(typeKey==='music'&&ns.label){
-    const parts=ns.label.split(/\s[—–-]\s/);
-    if(parts.length>1){title=parts[0];artistEl.textContent=parts[1];}
-    else{artistEl.textContent='';}
+  if(typeKey==='music'){
+    if(ns.label && ns.label !== ns.type){
+      const parts=splitTrackLabel({...ns,type:'music'});
+      title=parts.title||'Preparing...';
+      artistEl.textContent=parts.artist||'';
+    }else{
+      artistEl.textContent='';
+    }
   }else{
     artistEl.textContent='';
   }
@@ -4022,15 +4028,36 @@ function setProgrammeFilter(filter, btn){
 // ── Scaletta (forward-only live queue) ──
 let _lastLogHash='';
 // Music segments carry labels as "Artist \u2014 Title" AND metadata.artist.
-// Rendering both doubles the artist on screen. Split for music, keep raw otherwise.
+// Rendering both doubles the artist on screen. Split all supported dash forms
+// for music, keep raw otherwise.
+// `source_kind` sits at the top level on queue rows but under `metadata` on
+// now_streaming. Read both, or the legacy-`Unknown` suppression silently does
+// nothing for the song actually on air.
+function segmentSourceKind(seg){
+  const metadata=seg&&seg.metadata&&typeof seg.metadata==='object'?seg.metadata:{};
+  return String(metadata.source_kind||(seg&&seg.source_kind)||'').trim().toLowerCase();
+}
 function splitTrackLabel(seg){
   const label=(seg&&seg.label)||'';
+  const sourceKind=segmentSourceKind(seg);
   if(seg&&seg.type==='music'){
-    const sep=' \u2014 ';
-    const idx=label.indexOf(sep);
-    if(idx>0) return {title:label.slice(idx+sep.length),artist:label.slice(0,idx)};
+    const metadata=seg.metadata&&typeof seg.metadata==='object'?seg.metadata:{};
+    const metadataTitle=String(metadata.title_only||'').trim();
+    const metadataArtist=String(metadata.artist||'').trim();
+    const cleanArtist=sourceKind==='local'&&metadataArtist.toLowerCase()==='unknown'?'':metadataArtist;
+    if(metadataTitle)return {title:metadataTitle,artist:cleanArtist};
+    for(const sep of [' \u2014 ',' \u2013 ',' - ']){
+      const idx=label.indexOf(sep);
+      if(idx<0)continue;
+      const artist=label.slice(0,idx).trim();
+      return {title:label.slice(idx+sep.length).trim(),artist:sourceKind==='local'&&artist.toLowerCase()==='unknown'?'':artist};
+    }
   }
-  return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
+  const metadataArtist=String(seg&&seg.metadata&&seg.metadata.artist||'').trim();
+  return {title:label,artist:sourceKind==='local'&&metadataArtist.toLowerCase()==='unknown'?'':metadataArtist};
+}
+function normaliseSegmentLabel(value){
+  return String(value||'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');
 }
 // Subtitle line shown under the NEXT row's title: artist·source / hosts / brand / category.
 // Surfaces the "what is it" detail even on narrow viewports where the Fonte column hides.
@@ -4244,7 +4271,9 @@ function renderProgramme(st){
     const parts=splitTrackLabel(it);
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
-    const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
+    const bareSegmentLabel=normaliseSegmentLabel(segmentText(typeKey));
+    const titleIsBareSegment=typeKey!=='music'&&normaliseSegmentLabel(parts.title)===bareSegmentLabel;
+    const titleText=parts.title&&!titleIsBareSegment?parts.title:'';
     const source=it.source||'rendered_queue';
     const actionable=source==='rendered_queue';
     const rowClass=[it._queueIndex===0?'next':'', actionable?'rendered-queue':'predicted'].filter(Boolean).join(' ');
@@ -4254,8 +4283,8 @@ function renderProgramme(st){
     const action=actionable
       ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" data-queue-remove-id="${esc(it.id||'')}"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
-    const subtitle=it._queueIndex===0?buildSubtitle(it,typeKey,parts):'';
-    const titleCell=`${esc(titleText||segmentText(typeKey))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
+    const subtitle=it._queueIndex===0&&!titleIsBareSegment?buildSubtitle(it,typeKey,parts):'';
+    const titleCell=`${esc(titleText||(typeKey==='music'?segmentText(typeKey):''))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
     rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${titleCell}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });
 
@@ -4362,6 +4391,56 @@ function stationRuntimeVerdict(st,caps){
 function pipelineStreamStatus(st,caps){
   return stationRuntimeVerdict(st,caps);
 }
+function pipelineHostStatus(c){
+  const checkingAiHosts={state:'working',label:'Checking AI hosts',detail:'Checking the saved AI key.'};
+  const anthropicConfigured=Boolean(c?.anthropic_key);
+  const openaiConfigured=Boolean(c?.openai);
+  if(!anthropicConfigured&&!openaiConfigured){
+    return{
+      state:'ready',
+      label:'Demo Radio · ready',
+      detail:'Included host clips are ready. Add an AI key only if you want new conversations.',
+    };
+  }
+  const anthropicStatus=anthropicConfigured?c.anthropic_key_status:null;
+  const openaiStatus=openaiConfigured?c.openai_key_status:null;
+  const statuses=[anthropicStatus,openaiStatus].filter(Boolean);
+  const usableOpenAi=openaiConfigured&&openaiStatus==='valid';
+  const usableAnthropic=anthropicConfigured&&anthropicStatus==='valid'&&!c.anthropic_degraded;
+  if(usableOpenAi||usableAnthropic){
+    return{state:'ready',label:'AI hosts · ready',detail:'New conversations are available.'};
+  }
+  // A known-degraded, non-rejected Anthropic (circuit breaker tripped, backup content
+  // actually airing right now) must win outright before any pending-probe check below —
+  // otherwise an UNRELATED provider's own still-resolving probe (e.g. OpenAI sitting at
+  // 'unverified' because it hasn't been checked yet) masks a fact we already know.
+  if(anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected'){
+    return{
+      state:'degraded',
+      label:'AI hosts · backup active',
+      detail:'Included host clips keep the show moving while the AI service recovers.',
+    };
+  }
+  // A provider's own probe still pending (never resolved to valid/rejected) means the
+  // outcome could still improve, so "checking" wins — UNLESS that provider is the one
+  // already known to be degraded (circuit breaker tripped): an inconclusive probe never
+  // overwrites the prior status (see provider_verdict.py), so anthropic can sit at its
+  // default 'unverified' indefinitely while backup content is actually airing right now.
+  // That known fact must not be masked by a status that never really resolves.
+  const anthropicPendingUnresolved=anthropicStatus==='unverified'&&!c.anthropic_degraded;
+  const openaiPendingUnresolved=openaiStatus==='unverified';
+  if(anthropicPendingUnresolved||openaiPendingUnresolved){
+    return checkingAiHosts;
+  }
+  if(statuses.includes('rejected')&&!statuses.includes('valid')){
+    return{
+      state:'blocked',
+      label:'AI key needs attention',
+      detail:'Open Settings and replace the key to restore new conversations.',
+    };
+  }
+  return checkingAiHosts;
+}
 function updatePipelineStatus(caps,st){
   const el=document.getElementById('pipelineStatus');
   if(!el)return;
@@ -4374,10 +4453,8 @@ function updatePipelineStatus(caps,st){
     html+=statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail)+'</div>';
     el.innerHTML=html; return;
   }
-  if(c.anthropic_key&&c.anthropic_key_status==='rejected'){ html+=statusChip('blocked','Anthropic'); }
-  else if(c.anthropic_key&&c.anthropic_degraded){ html+=statusChip('degraded','Anthropic'); }
-  else if(c.anthropic_key){ html+=statusChip('ready','Anthropic'); }
-  else { html+=statusChip('blocked','Anthropic'); }
+  const hosts=pipelineHostStatus(c);
+  html+=statusChip(hosts.state,hosts.label,hosts.detail);
   html+=statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail);
   html+='</div><div class="srow">';
   if(c.ha){ html+=statusChip('ready','Home Assistant'); }
@@ -4654,11 +4731,6 @@ function setupRow(label, detail, status){
   return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div>${statusChip(pill.state,pill.label)}</div>`;
 }
 function openListener(){
-  // The First Listen element is `hidden`, which is display:none and does NOT
-  // pause media. Without this the admin tab keeps its own hub subscription
-  // while /listen opens a second one, and the operator hears two
-  // unsynchronized copies of the same live stream at the celebration moment.
-  stopFirstListenStationAudio();
   window.open((_base||'')+'/listen','_blank','noopener');
 }
 let _lastJamendoAnnouncementKey='';
@@ -5023,13 +5095,15 @@ async function turnOffJamendo(){
 }
 function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
-  finalizeFirstListenCompletion();
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
     updateFirstListenSuccess();
     document.body.dataset.firstListenFocus='source';
   }
   const firstListenRequired=document.body.dataset.firstListenEntry==='required';
+  // Music-source setup replaces the required journey without changing tabs.
+  // Treat that same-tab route as an explicit exit before hiding its player.
+  if(focus==='music-sources'&&firstListenRequired)exitFirstListenFlow();
   showAdminTab(firstListenRequired?'setup':'motore',{render:true,persist:true});
   if(focus==='music-sources')document.body.dataset.firstListenSetupView='music-sources';else delete document.body.dataset.firstListenSetupView;
   setFirstListenSetupView(focus);
@@ -5569,6 +5643,13 @@ function firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable}){
   if(recoveryAvailable)return 'Listen for Marco and Giulia. Backup music is ready while the main music needs attention.';
   return 'Listen for Marco and Giulia. The opening may end before music because the music needs attention.';
 }
+function firstListenPendingPrivacyChoice(projection,localChoice=_firstListenUi.privacyReceiptChoice){
+  if(localChoice!==null)return Boolean(localChoice);
+  if(projection.heard&&!projection.privacyReviewed&&projection.privacy?.choice_explicit===true){
+    return Boolean(projection.privacyEnabled);
+  }
+  return null;
+}
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
   const sourceState=firstListenSourceState(projection);
@@ -5725,11 +5806,7 @@ function renderFirstListenProgress(){
   const enableBtn=document.getElementById('firstListenEnableContextBtn');
   const previewBox=document.getElementById('haContextPreview');
   const permissionPrimer=document.querySelector('#firstListenPrivacyBody .permission-primer');
-  const pendingPrivacyChoice=_firstListenUi.privacyReceiptChoice!==null
-    ? Boolean(_firstListenUi.privacyReceiptChoice)
-    : !projection.privacyReviewed&&projection.privacy.choice_explicit===true
-    ? Boolean(projection.privacyEnabled)
-    : null;
+  const pendingPrivacyChoice=firstListenPendingPrivacyChoice(projection);
   if(previewBtn){
     previewBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';
     previewBtn.hidden=_firstListenUi.privacyPreviewValid;
@@ -7033,6 +7110,13 @@ function sourceChip(source){
   const chip=SOURCE_CHIPS[source]||SOURCE_CHIPS.local;
   return `<span class="pl-src ${chip.cls}">${esc(chip.label)}</span>`;
 }
+function trackDisplayLabel(track){
+  const rawArtist=String(track&&track.artist||'').trim();
+  const artist=track&&track.source==='local'&&rawArtist.toLowerCase()==='unknown'?'':rawArtist;
+  const title=String(track&&track.title||'').trim();
+  if(artist&&title)return `${artist} – ${title}`;
+  return title||String(track&&track.display||'').trim()||'?';
+}
 // Selection survives the 3s poll re-render: track chosen songs by a stable key
 // (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
 let _plSelected=new Set();
@@ -7090,7 +7174,7 @@ function updatePl(tracks,page,force){
     const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
     const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
     const rowTitle=huntMatch?` title="${huntTitle}"`:'';
-    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(trackDisplayLabel(t))}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -8106,10 +8190,34 @@ function updateEngineRoom(st,caps){
     }else{
       openaiLine=statusInline('ready','available');
     }
+    // Voices use breaker evidence. A configured key alone is not connectivity proof.
+    // openai_speech is the TTS breaker (LLM OpenAI key status stays on the OpenAI line).
+    const ph=caps.provider_health||{};
+    const voiceLines=[];
+    for(const [key,label] of [['elevenlabs','ElevenLabs'],['azure_speech','Azure'],['openai_speech','OpenAI']]){
+      const p=ph[key]||{};
+      if(!p.configured)continue;
+      if(p.quota_exhausted){
+        voiceLines.push(label+' '+statusInline('blocked','quota exhausted','Restore provider quota or credits, then save the key under First Listen → Change AI services → Voice providers'));
+      }else if(p.key_status==='rejected'){
+        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key under First Listen → Change AI services → Voice providers'));
+      }else if(p.cooldown){
+        voiceLines.push(label+' '+statusInline('degraded','retrying','Temporary provider trouble; will retry automatically'));
+      }else if(p.disabled){
+        voiceLines.push(label+' '+statusInline('degraded','off this session','Save the key again under First Listen → Change AI services → Voice providers to retry'));
+      }else if(p.failed_voices>0){
+        const voiceCount=p.failed_voices+' voice'+(p.failed_voices===1?'':'s')+' on Edge';
+        voiceLines.push(label+' '+statusInline('degraded',voiceCount,'Check the configured provider voice, model, and region settings, then restart the station'));
+      }else{
+        voiceLines.push(label+' '+statusInline('idle','configured','No cloud voice failure is currently recorded'));
+      }
+    }
+    const voicesLine=voiceLines.length?voiceLines.join(' · '):statusInline('idle','Edge only');
     ce.innerHTML=[
       'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
       'Anthropic: '+anthropicLine,
       'OpenAI: '+openaiLine,
+      'Voices: '+voicesLine,
       'Home Assistant: '+statusInline(c.ha?'ready':'idle',c.ha?'connected':'disabled'),
     ].join('<br>');
   }

@@ -570,6 +570,28 @@ async def test_the_share_page_renders_a_keepsake_after_clips_is_wiped(tmp_path):
     assert "passato" not in page.text, "a keepsake rendered as expired"
 
 
+@pytest.mark.asyncio
+async def test_the_share_page_states_the_keepsakes_recorded_duration(tmp_path):
+    """The public page must describe the bytes it serves, not a fixed guess."""
+    app = _make_app(tmp_path)
+    app.state.clip_ring_buffer = _ring()
+    # One playback chunk is 0.125s at the configured bitrate: 334 = 41.75s.
+    _on_air(app, "banter", title="the longer conversation", chunks=334)
+
+    body = (await _keep(app)).json()
+    sidecar_path = tmp_path / "keepsakes" / f"{body['keepsake_id']}.json"
+    sidecar = json.loads(sidecar_path.read_text())
+    assert sidecar["duration_seconds"] == pytest.approx(41.75)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        page = await client.get(body["share_url"])
+
+    assert page.status_code == 200
+    assert "Questo momento è durato 42 secondi · Mamma Mi Radio" in page.text
+    assert "30 secondi" not in page.text
+
+
 # --------------------------------------------------------------------------
 # Taking one back off the shelf
 # --------------------------------------------------------------------------
