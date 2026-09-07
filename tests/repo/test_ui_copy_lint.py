@@ -163,6 +163,20 @@ def test_listener_template_static_copy_is_collected(lint, tmp_path: Path, monkey
     assert any(violation.rule == "tech_lingo" for violation in lint.check_strings(refs))
 
 
+def test_short_ui_copy_value_is_extracted_and_linted(lint, tmp_path: Path, monkeypatch) -> None:
+    ui_copy = tmp_path / "mammamiradio/web/ui_copy.py"
+    ui_copy.parent.mkdir(parents=True)
+    ui_copy.write_text(
+        'COPY: dict[str, dict[str, str]] = {"en": {"status": "null"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(lint, "ROOT", tmp_path)
+
+    refs = lint._extract_ui_copy()
+    assert [ref.text for ref in refs] == ["null"]
+    assert {violation.rule for violation in lint.check_strings(refs)} == {"tech_lingo"}
+
+
 def test_all_advertised_copy_sources_are_collected(lint) -> None:
     refs = lint.collect_strings()
     assert {ref.file for ref in refs} == {

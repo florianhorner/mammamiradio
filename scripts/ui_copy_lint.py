@@ -275,7 +275,7 @@ def _extract_ui_copy() -> list[StringRef]:
                     text = ast.literal_eval(text_node)
                 except (ValueError, TypeError):
                     continue
-                if isinstance(text, str) and len(text) >= 8:
+                if isinstance(text, str):
                     refs.append(StringRef(rel, text_node.lineno, text, "listener", f"ui_copy:{language}:{key}"))
     return refs
 
