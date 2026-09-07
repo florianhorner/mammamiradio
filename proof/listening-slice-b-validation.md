@@ -1,11 +1,11 @@
 # Listening Slice B — validation
 
 Path A to `main`. Workspace `tegucigalpa`. Branch `florianhorner/feat/listening-slice-b`.
-Assigned base `7829fb728611cd99e9fc79d39f1a3164a7e36142`.
+Review merge base: `7829fb728611cd99e9fc79d39f1a3164a7e36142`; final HEAD: `b0b00c27fb8673d676525abdcc397213472e64dd`.
 
 ## Write-set
 
-Assigned (product + tests):
+Assigned product/test paths:
 - `mammamiradio/home/ha_context.py`
 - `mammamiradio/scheduling/producer.py`
 - `mammamiradio/web/streamer.py`
@@ -17,34 +17,31 @@ Assigned (product + tests):
 - `tests/web/test_streamer_routes_extended.py`
 - `tests/web/test_public_status_contract.py`
 - `tests/web/test_admin_status_invariants.py`
+Allowed evidence: `proof/listening-slice-b-validation.md` and `proof/preship-reviews/v2/**`.
+No extra XSS file remains in the final diff. No integrator-only files changed.
 
-Extra (within ~30%): `tests/web/test_xss_regression.py`.
-Allowed extras: this file and `proof/preship-reviews/v2/**`.
+## Review remediation
 
-No integrator-only files. Changelog remains an integrator note.
+- Ghost DELETE HTTP/transport/unexpected failures now join canonical failure aggregation, including when sensors are deduped.
+- Streamer status tests reset HA push globals; producer tests invoke and assert the real heartbeat result callback.
+- The playback-selection immediate push has a regression test.
+- Admin next steps select standalone versus add-on guidance from `config.is_addon`.
+- Operations docs describe 30-second first wait, then 60/120/240/300-second failure backoff.
 
-## Commands
+## Validation
 
-Focused HA / producer / public-contract / Admin invariant tests: 432 passed.
-`make check`: 8816 passed, 4 skipped, 49 deselected. Coverage 92.56% (floor 92%). All module floors held.
+- Focused purge/XSS regression tests: `29 passed`.
+- `make check`: `8815 passed, 4 skipped, 49 deselected, 1 warning`; 92.56% coverage, 93% ratchet; media proof, Ruff, format, mypy, vulture, and coverage floors passed.
+- Real Admin browser guard: `1 passed in 8.12s` via `ADMIN_BROWSER_SMOKE_URL=http://127.0.0.1:8000`.
+- Manual local `/admin`: HTTP 200, Home Assistant publishing panel rendered disabled state, no console errors, same-origin API/static requests succeeded. Existing fixture evidence: `.context/plans/ha-publish-admin-qa.html` and its three PNGs.
+- Final merge-base diff: 13 files, 867 insertions, 132 deletions (999 changed lines); no push, PR, or external publication.
 
-Isolated Admin QA: fixture-injected states in `.context/plans/ha-publish-admin-qa.html` (gitignored). Screenshots:
-- `.context/plans/ha-publish-failure.png` — failing/retrying, XSS payload stays escaped text
-- `.context/plans/ha-publish-recovery.png` — recovered after a successful attempt
-- `.context/plans/ha-publish-admin-qa-all.png` — disabled, unconfigured, not-yet-tested, failure, recovery
+## Boundaries
 
-Player QA: not applicable. Listener audio paths and public contracts are unchanged; `ha_publish` is admin-only.
-
-Live Home Assistant: not used.
-
-## Reviews (read-only)
-
-Correctness / sibling-path: heartbeat sleeps from real `push_state_to_ha` results (`True` reset 30s, `None` keep interval, `False` 30→60→120→240→300). Playback-selection and stop-transition still push immediately. HACS exclusion, sequential writes, retry limits, auxiliary dedup, and cancellation propagation are unchanged. `/status` copies `runtime_health` then adds `ha_publish`; `_runtime_health_snapshot`, `/public-status`, `/healthz`, and `/readyz` stay on the snapshot.
-
-Privacy: one aggregate outage warning and one recovery INFO. No HTTP bodies, exception text, tokens, or URLs in push or ghost-purge logs. Authenticated `ha_publish` omits URL and token. Admin copy uses `esc()`.
-
-Copy: disabled / unconfigured / not tested yet / retrying / recovered / working, with next steps. `docs/operations.md` documents bounded backoff without claiming every immediate notification follows the timer.
+No live Home Assistant or physical/audible player validation was performed. The implementation is locally verified; live HA credentials, deployment, and release metadata remain integrator-owned follow-up.
 
 ## Integrator note
 
-Unreleased changelog (do not edit here): under the current Unreleased heading in `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`, add a Fixed bullet that failed Home Assistant entity updates back off the heartbeat and recover without leaking HA bodies or tokens in logs or `/status`.
+Under the current Unreleased heading in `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`, add a Fixed bullet that failed Home Assistant entity updates back off the heartbeat and recover without leaking HA bodies or tokens in logs or `/status`.
+
+Immutable receipt: `proof/preship-reviews/v2/129b9fe35da707a1e4e92d57e6978a0005e501a21035c446cdf10c87785ffcc9/5daf7addd9c9c99171bb0f01dcfaad662f8dbc95113c046a4c2109f4bb13784c.json`.
