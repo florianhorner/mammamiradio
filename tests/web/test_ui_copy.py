@@ -411,8 +411,16 @@ def test_listener_moment_receipts_stay_private_and_readable():
     assert "casa_moment_stale" in html
 
 
-# Also consumed by scripts/ui_copy_lint.py, which applies a stricter matcher to the
-# same terms. test_ui_copy_lint.py holds the two lists to this one definition.
+# This list is the single source of truth for the listener ban list, but nothing imports
+# it at runtime: scripts/ui_copy_lint.py declares its own copy of the same tuple, and
+# tests/repo/test_ui_copy_lint.py::test_tech_lingo_listener_terms_match_the_copy_guard
+# asserts the two are equal. Edit this one; that test fails until the other matches.
+#
+# The two guards then apply DIFFERENT matchers to the terms, neither strictly stronger.
+# The check below is a plain substring scan, so it catches "rebuffering" and a bare "500".
+# The lint uses word boundaries with an inflection suffix, so it catches "Buffering" but
+# not "rebuffering", and it only counts a digit in a status-code context. Between them
+# the coverage is wider than either alone, which is why both exist.
 TECH_LINGO_LISTENER = (
     "rate limit",
     "429",
