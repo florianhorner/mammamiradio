@@ -1,7 +1,7 @@
 # Listening Slice B — validation
 
 Path A to `main`. Workspace `tegucigalpa`. Branch `florianhorner/feat/listening-slice-b`.
-Review merge base: `7829fb728611cd99e9fc79d39f1a3164a7e36142`; final HEAD: `b0b00c27fb8673d676525abdcc397213472e64dd`.
+Review merge base: `7829fb728611cd99e9fc79d39f1a3164a7e36142`; final HEAD: `6613ca673db0a283d763031ee3254c4c59b83e5a`.
 
 ## Write-set
 
@@ -34,7 +34,7 @@ No extra XSS file remains in the final diff. No integrator-only files changed.
 - `make check`: `8815 passed, 4 skipped, 49 deselected, 1 warning`; 92.56% coverage, 93% ratchet; media proof, Ruff, format, mypy, vulture, and coverage floors passed.
 - Real Admin browser guard: `1 passed in 8.12s` via `ADMIN_BROWSER_SMOKE_URL=http://127.0.0.1:8000`.
 - Manual local `/admin`: HTTP 200, Home Assistant publishing panel rendered disabled state, no console errors, same-origin API/static requests succeeded. Existing fixture evidence: `.context/plans/ha-publish-admin-qa.html` and its three PNGs.
-- Final merge-base diff: 13 files, 867 insertions, 132 deletions (999 changed lines); no push, PR, or external publication.
+- Final merge-base diff: 13 files, 864 insertions, 132 deletions (996 changed lines); no push, PR, or external publication.
 
 ## Boundaries
 
