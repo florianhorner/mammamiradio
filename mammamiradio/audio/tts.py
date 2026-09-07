@@ -97,14 +97,11 @@ _failed_cloud_voices: set[tuple[str, str, str, str]] = set()
 _CLOUD_ROUTE_COOLDOWN_SECONDS = 30.0
 _ROUTE_PROBE_IN_FLIGHT = math.inf
 _failed_cloud_routes: dict[tuple[str, str, str, str], float | None] = {}
-# Why a route/voice was disabled for the session ("HTTP 401 — <provider body>"),
-# keyed like the entries above, so later skips and the admin can name the cause
-# instead of the bare "provider_disabled_session" token.
+# Detailed route/voice disable reasons for logs, later skips, and the admin.
 _cloud_route_disable_reasons: dict[tuple[str, str, str, str], str] = {}
 _failed_cloud_voice_reasons: dict[tuple[str, str, str, str], str] = {}
 _cloud_voice_attempt_locks: dict[tuple[str, str, str, str], asyncio.Lock] = {}
-# Credential saves advance this generation so failures from already-running
-# requests cannot repopulate breaker state after the operator re-arms a route.
+# Credential saves advance generations to fence already-running requests.
 _cloud_engine_generations: dict[str, int] = {}
 _cloud_voice_state_lock = threading.Lock()
 
@@ -207,12 +204,7 @@ def reset_voice_failures() -> None:
 
 
 def reset_cloud_engine_failures(engine: str) -> None:
-    """Forget every memoized failure for one cloud engine (called on a key save).
-
-    The memo keys embed a fingerprint of the key, so saving a *different* key
-    already re-armed the route; saving the *same* key (quota reset, re-enabled
-    key) did nothing until this existed.
-    """
+    """Forget one engine's failures when its credential is saved."""
     engine = engine.strip().lower()
     with _cloud_voice_state_lock:
         _cloud_engine_generations[engine] = _cloud_engine_generations.get(engine, 0) + 1
@@ -222,17 +214,13 @@ def reset_cloud_engine_failures(engine: str) -> None:
         for key in [k for k in _failed_cloud_voices if k[0] == engine]:
             _failed_cloud_voices.discard(key)
             _failed_cloud_voice_reasons.pop(key, None)
-        # An in-flight attempt may hold a lock before it has recorded a voice
-        # failure. Detach every old-generation lock so saving credentials lets
-        # a fresh request start immediately instead of waiting for that stale
-        # provider call to time out.
+        # Detach old-generation locks so a fresh request can start immediately.
         for key in [k for k in _cloud_voice_attempt_locks if k[0] == engine]:
             _cloud_voice_attempt_locks.pop(key, None)
     logger.info("%s TTS route re-armed after a credential save", engine)
 
 
 def _cloud_engine_generation(engine: str) -> int:
-    """Return the credential generation that owns new breaker writes."""
     with _cloud_voice_state_lock:
         return _cloud_engine_generations.get(engine.strip().lower(), 0)
 
@@ -251,9 +239,7 @@ def cloud_tts_health() -> dict[str, dict[str, object]]:
                 entry["disabled"] = True
                 entry["reason"] = _cloud_route_disable_reasons.get(key, "") or "auth/config error"
             else:
-                # A finite deadline becoming due only permits one half-open
-                # probe; it is not recovery evidence. Stay degraded until that
-                # probe succeeds and _clear_cloud_route removes the entry.
+                # Stay degraded until the permitted half-open probe succeeds.
                 entry["cooldown"] = True
         for key in _failed_cloud_voices:
             entry = _entry(key[0])
@@ -425,8 +411,6 @@ def _memoize_failed_cloud_route(
         if not retryable:
             _cloud_route_disable_reasons[route_key] = reason
     if not retryable and not already_permanent:
-        # The transition itself was never logged before; the only WARNING was
-        # per voice and dropped the provider body.
         logger.warning(
             "%s TTS route disabled for this session after %s. Cloud voices stay on Edge "
             "until a working key is saved under First Listen → Change AI services → Voice providers.",
@@ -484,6 +468,7 @@ async def _run_cloud_route_attempt(
     provider_call: Callable[[], Awaitable[Path]],
     engine_label: str,
     generation: int,
+    redaction_secrets: tuple[str, ...] = (),
 ) -> tuple[Path | None, str]:
     """Run one provider call under the route circuit breaker.
 
@@ -526,7 +511,7 @@ async def _run_cloud_route_attempt(
     except Exception as e:
         if _should_disable_cloud_route(e):
             non_retryable = _non_retryable_cloud_tts_error(e)
-            body = _cloud_error_body(e)
+            body = _cloud_error_body(e, *redaction_secrets)
             recorded = _memoize_failed_cloud_route(
                 route_key,
                 retryable=not bool(non_retryable),
@@ -655,12 +640,8 @@ def _cloud_http_status(exc: Exception) -> int | None:
     return None
 
 
-def _cloud_error_body(exc: Exception) -> str:
-    """First 200 redacted chars of a provider error body for logs and status.
-
-    ElevenLabs answers HTTP 401 for both a rejected key and an exhausted quota;
-    only the body says which. Losing it left an operator guessing for 8 days.
-    """
+def _cloud_error_body(exc: Exception, *attempt_secrets: str) -> str:
+    """Return the first 200 redacted characters of a provider error."""
     response = getattr(exc, "response", None)
     raw = getattr(response, "text", "") if response is not None else ""
     if not raw:
@@ -670,6 +651,7 @@ def _cloud_error_body(exc: Exception) -> str:
         os.getenv("OPENAI_API_KEY", ""),
         os.getenv("AZURE_SPEECH_KEY", ""),
         os.getenv("ELEVENLABS_API_KEY", ""),
+        *attempt_secrets,
     }
     for secret in sorted(secrets, key=len, reverse=True):
         if secret:
@@ -856,10 +838,11 @@ async def synthesize_openai(
     instructions: str = "",
     loudnorm: bool = True,
     model: str | None = None,
+    api_key: str = "",
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with the registry-selected OpenAI speech model."""
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    api_key = api_key or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set")
     model = model or _configured_openai_tts_model()
@@ -905,11 +888,13 @@ async def synthesize_azure(
     rate: str | None = None,
     pitch: str | None = None,
     loudnorm: bool = True,
+    api_key: str = "",
+    region: str = "",
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with Azure Speech TTS REST API, then normalize to station settings."""
-    api_key = os.getenv("AZURE_SPEECH_KEY", "")
-    region = os.getenv("AZURE_SPEECH_REGION", "")
+    api_key = api_key or os.getenv("AZURE_SPEECH_KEY", "")
+    region = region or os.getenv("AZURE_SPEECH_REGION", "")
     if not api_key or not region:
         raise RuntimeError("AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set")
 
@@ -1048,6 +1033,7 @@ async def synthesize_elevenlabs(
     delivery_cue: str = "neutral",
     delivery_profile: str = "none",
     host_name: str = "",
+    api_key: str = "",
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with ElevenLabs TTS REST API, then normalize to station settings.
@@ -1057,7 +1043,7 @@ async def synthesize_elevenlabs(
     house defaults apply. V3 accepts only stability and renders an allowlisted
     semantic delivery cue at this final provider boundary.
     """
-    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    api_key = api_key or os.getenv("ELEVENLABS_API_KEY", "")
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY not set")
 
@@ -1183,7 +1169,7 @@ async def synthesize(
                 pass
 
     if engine == "openai":
-        if os.getenv("OPENAI_API_KEY", ""):
+        if openai_api_key := os.getenv("OPENAI_API_KEY", ""):
             generation = _cloud_engine_generation(engine)
             cloud_key = _cloud_failure_key(engine, voice)
             route_key = _cloud_route_key(engine)
@@ -1201,10 +1187,12 @@ async def synthesize(
                             output_path,
                             instructions=openai_instructions,
                             loudnorm=loudnorm,
+                            api_key=openai_api_key,
                             on_paid_provider_success=_bill_tts,
                         ),
                         "OpenAI",
                         generation,
+                        (openai_api_key,),
                     )
                     if result is not None:
                         _record_tts_runtime_state(
@@ -1218,7 +1206,7 @@ async def synthesize(
                 except Exception as e:
                     reason = _non_retryable_cloud_tts_error(e)
                     if reason:
-                        body = _cloud_error_body(e)
+                        body = _cloud_error_body(e, openai_api_key)
                         detail = f"{reason} — {body}" if body else reason
                         recorded = _memoize_failed_cloud_voice(
                             cloud_key,
@@ -1241,7 +1229,7 @@ async def synthesize(
                         fallback_reason = f"provider_error:{type(e).__name__}"
                         logger.warning(
                             "OpenAI TTS failed, falling back to edge-tts: %s",
-                            _cloud_error_body(e) or type(e).__name__,
+                            _cloud_error_body(e, openai_api_key) or type(e).__name__,
                         )
         else:
             fallback_reason = "missing_credentials"
@@ -1249,7 +1237,9 @@ async def synthesize(
         # Use edge fallback voice when falling back from OpenAI
         voice = fallback_voice
     elif engine == "azure":
-        if os.getenv("AZURE_SPEECH_KEY", "") and os.getenv("AZURE_SPEECH_REGION", ""):
+        if (azure_api_key := os.getenv("AZURE_SPEECH_KEY", "")) and (
+            azure_region := os.getenv("AZURE_SPEECH_REGION", "")
+        ):
             generation = _cloud_engine_generation(engine)
             cloud_key = _cloud_failure_key(engine, voice)
             route_key = _cloud_route_key(engine)
@@ -1269,10 +1259,13 @@ async def synthesize(
                                 rate=rate,
                                 pitch=pitch,
                                 loudnorm=loudnorm,
+                                api_key=azure_api_key,
+                                region=azure_region,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "Azure",
                             generation,
+                            (azure_api_key,),
                         )
                         if result is not None:
                             _record_tts_runtime_state(
@@ -1286,7 +1279,7 @@ async def synthesize(
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
-                            body = _cloud_error_body(e)
+                            body = _cloud_error_body(e, azure_api_key)
                             detail = f"{reason} — {body}" if body else reason
                             recorded = _memoize_failed_cloud_voice(
                                 cloud_key,
@@ -1309,14 +1302,14 @@ async def synthesize(
                             fallback_reason = f"provider_error:{type(e).__name__}"
                             logger.warning(
                                 "Azure TTS failed, falling back to edge-tts: %s",
-                                _cloud_error_body(e) or type(e).__name__,
+                                _cloud_error_body(e, azure_api_key) or type(e).__name__,
                             )
         else:
             fallback_reason = "missing_credentials"
             logger.warning("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
         voice = fallback_voice
     elif engine == "elevenlabs":
-        if os.getenv("ELEVENLABS_API_KEY", ""):
+        if elevenlabs_api_key := os.getenv("ELEVENLABS_API_KEY", ""):
             generation = _cloud_engine_generation(engine)
             cloud_key = _cloud_failure_key(engine, voice, elevenlabs_model=elevenlabs_model)
             route_key = _cloud_route_key(engine, elevenlabs_model=elevenlabs_model)
@@ -1343,10 +1336,12 @@ async def synthesize(
                                 delivery_cue=delivery_cue,
                                 delivery_profile=delivery_profile,
                                 host_name=host_name,
+                                api_key=elevenlabs_api_key,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "ElevenLabs",
                             generation,
+                            (elevenlabs_api_key,),
                         )
                         if result is not None:
                             _record_tts_runtime_state(
@@ -1360,7 +1355,7 @@ async def synthesize(
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
-                            body = _cloud_error_body(e)
+                            body = _cloud_error_body(e, elevenlabs_api_key)
                             detail = f"{reason} — {body}" if body else reason
                             recorded = _memoize_failed_cloud_voice(
                                 cloud_key,
@@ -1385,7 +1380,7 @@ async def synthesize(
                             logger.warning(
                                 "ElevenLabs TTS model '%s' failed, falling back to edge-tts: %s",
                                 elevenlabs_model,
-                                _cloud_error_body(e) or type(e).__name__,
+                                _cloud_error_body(e, elevenlabs_api_key) or type(e).__name__,
                             )
         else:
             fallback_reason = "missing_credentials"

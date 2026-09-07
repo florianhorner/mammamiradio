@@ -4573,9 +4573,7 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "auth_failures": state.anthropic_auth_failures,
             "key_status": state.anthropic_key_status,
         },
-        # LLM OpenAI key probe (Engine Room "OpenAI:" line). TTS breaker state for
-        # the same key lives under openai_speech so Voices can show session-off /
-        # cooldown without colliding with the script-provider verdict.
+        # Keep OpenAI script-key and speech-breaker verdicts separate.
         "openai": {
             "configured": bool(config.openai_api_key),
             "key_status": state.openai_key_status,

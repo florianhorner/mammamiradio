@@ -570,6 +570,7 @@ async def test_synthesize_openai_route_retries_after_transient_cooldown(_mock_al
     async def _fake_openai(text, voice, output_path, **kwargs):
         calls["cloud"] += 1
         if calls["cloud"] == 1:
+            monkeypatch.setenv("OPENAI_API_KEY", "sk-rotated-key")
             request = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
             response = httpx.Response(500, content=b"provider echoed sk-cooldown-key", request=request)
             raise httpx.HTTPStatusError("server echoed sk-cooldown-key", request=request, response=response)
@@ -578,6 +579,7 @@ async def test_synthesize_openai_route_retries_after_transient_cooldown(_mock_al
     monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_openai)
 
     first = await synthesize("Prima", "onyx", tmp_path / "openai_cooldown_first.mp3", engine="openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-cooldown-key")
     second = await synthesize("Seconda", "nova", tmp_path / "openai_cooldown_second.mp3", engine="openai")
 
     assert first.exists() and second.exists()

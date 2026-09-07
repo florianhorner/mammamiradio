@@ -104,8 +104,7 @@ def _fsync_parent_directory(path: Path) -> None:
 
 
 def _rearm_cloud_voice_engine(state: StationState, engine: str) -> None:
-    # Mirrors the Anthropic branch's reset_provider_backoff(): a saved key is the
-    # operator's retry signal, so the session breaker must not outlive it.
+    # A saved key is the operator's retry signal, like Anthropic's backoff reset.
     from mammamiradio.audio.tts import reset_cloud_engine_failures
 
     reset_cloud_engine_failures(engine)
@@ -118,8 +117,7 @@ def _rearm_cloud_voice_engine(state: StationState, engine: str) -> None:
     aggregate = runtime_state.get("tts_provider")
     if not isinstance(aggregate, dict):
         return
-    # Keep last-audible history, but invalidate current evidence made with the
-    # old key. The next synthesis replaces it through observe_runtime_provider().
+    # Keep history, but invalidate current evidence made with the old key.
     aggregate_reason = str(aggregate.get("reason") or "").lower()
     aggregate_providers = {
         str(aggregate.get("current_provider") or "").lower(),
