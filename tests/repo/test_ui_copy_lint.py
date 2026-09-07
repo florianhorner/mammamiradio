@@ -392,18 +392,51 @@ def test_dead_end_in_an_authored_table_fails_the_build(lint, tmp_path, monkeypat
     assert _main_exit(lint, monkeypatch, tmp_path, [ref]) == 1
 
 
-def test_dead_end_in_free_text_is_advisory_not_a_build_failure(lint, tmp_path, monkeypatch) -> None:
-    """The verb list misjudges free text, so it may report but never fail."""
+def test_dead_end_in_free_text_is_advisory_not_a_lint_failure(lint, tmp_path, monkeypatch) -> None:
+    """The verb list misjudges free text, so it may report but never fail the lint."""
     ref = lint.StringRef("admin.html", 1, "That song is unavailable. Pick another one.", "admin", "toast")
     assert _main_exit(lint, monkeypatch, tmp_path, [ref]) == 0
     assert any(v.rule == "no_way_out" for v in lint.check_strings([ref]))
 
 
+def test_free_text_context_is_not_pulled_in_by_a_table_name_prefix(lint) -> None:
+    """`jamendo_form_message` is a free-text call site, not a row of `jamendo_form`.
+
+    A `startswith` over the blocking tuple matched it, so misjudged copy at those
+    twelve `setJamendoFormMessage` sites would have failed the build with
+    "grandfather it in the baseline" as the printed remedy.
+    """
+    dead_end = lint.Violation("no_way_out", "admin.html", 1, "Saving that failed.", "dead-end")
+    assert lint.is_blocking(dead_end, "jamendo_form:jamendo_invalid_request")
+    assert not lint.is_blocking(dead_end, "jamendo_form_message")
+    assert not lint.is_blocking(dead_end, "first_listen_status")
+    assert lint.is_blocking(dead_end, "first_listen_error:no_players")
+
+
+def test_audit_labels_each_row_blocking_or_advisory(lint, capsys) -> None:
+    """A rule-level label cannot say which `no_way_out` rows actually gate a build."""
+    table = lint.Violation("no_way_out", "admin.html", 1, "It broke.", "dead-end")
+    free = lint.Violation("no_way_out", "admin.html", 2, "It broke too.", "dead-end")
+    lint.print_audit([table], [free], [])
+
+    out = capsys.readouterr().out
+    assert "## no_way_out (2: 1 blocking, 1 advisory)" in out
+    assert "[blocking] admin.html:1" in out
+    assert "[advisory] admin.html:2" in out
+
+
 def test_advisory_backlog_only_shrinks(lint) -> None:
-    """Nothing else bounds advisory violations, so they could balloon unseen."""
+    """Nothing else bounds advisory violations, so they could balloon unseen.
+
+    This assertion is the only build failure free-text `no_way_out` can cause, so it
+    names the offending strings: "advisory grew to 3" sends an author hunting, and the
+    honest remedies are to fix the copy or to raise the ceiling on purpose.
+    """
     _blocking, advisory = lint.split_blocking(lint.collect_strings())
+    named = "\n".join(f"  {v.file}:{v.line} [{v.rule}] {v.text[:100]}" for v in advisory)
     assert len(advisory) <= MAX_ADVISORY_VIOLATIONS, (
-        f"advisory copy grew to {len(advisory)}; fix it or raise MAX_ADVISORY_VIOLATIONS on purpose"
+        f"advisory copy grew to {len(advisory)} (ceiling {MAX_ADVISORY_VIOLATIONS}):\n{named}\n"
+        "Give each one a next step, or raise MAX_ADVISORY_VIOLATIONS if the check misjudged it."
     )
 
 

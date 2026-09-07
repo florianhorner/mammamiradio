@@ -457,11 +457,16 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
   strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,
   HA add-on option descriptions, and the streamer setup errors. Three rules: machine words on
   a human screen (`tech_lingo`) and copy still phrased around picking a speaker or room
-  (`stale_speaker_copy`) always fail CI. A stated failure with no next step (`no_way_out`)
-  fails CI only for copy authored as a structured table row (`WAY_OUT_BLOCKING_CONTEXTS`),
-  where every failure has its own action field and the check reads all 75 rows cleanly; in
-  free-text toasts it is advisory, reported by `--audit`, because a fixed verb list cannot
-  enumerate English imperatives and would flag correct copy.
+  (`stale_speaker_copy`) always fail the lint. A stated failure with no next step
+  (`no_way_out`) fails the lint only for copy authored as a structured table row
+  (`WAY_OUT_BLOCKING_CONTEXTS`, matched on the context group, not as a string prefix),
+  where every failure has its own action field and the check reads all 75 rows cleanly.
+  In free-text toasts it never fails the lint, because a fixed verb list cannot enumerate
+  English imperatives and would flag correct copy — it is reported by `--audit`, which
+  labels every row blocking or advisory, and counted against `MAX_ADVISORY_VIOLATIONS`.
+  That ceiling does fail CI: free text is bounded, not unwatched. Raising it is the
+  deliberate edit that says the check misjudged a string, which keeps good copy out of
+  the baseline where it would look like a real violation.
   Admin/addon/server copy is held to the same banned-word list as the listener — a warmer
   register, not a shorter list.
   - Known violations are grandfathered by fingerprint in `.config/ui-copy-baseline.json`;

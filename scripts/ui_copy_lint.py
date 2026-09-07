@@ -111,9 +111,16 @@ BLOCKING_RULES = ("tech_lingo", "stale_speaker_copy", "no_way_out")
 # verb from a fixed list right after the sentence break, so "Could not save that. Please
 # try again." reads as a dead end because "Please" is in the way, and "Pick another one."
 # reads as one because "pick" is not on the list. A verb list cannot enumerate English
-# imperatives, so on free text the rule stays advisory — visible in --audit for a human,
-# never a build failure that pushes an author to grandfather good copy.
-WAY_OUT_BLOCKING_CONTEXTS = ("first_listen_error", "setup_error", "jamendo_hint", "jamendo_form")
+# imperatives, so on free text the rule never fails THIS lint — it is reported by --audit
+# and counted against MAX_ADVISORY_VIOLATIONS in tests/repo/test_ui_copy_lint.py, which
+# does fail. That ceiling is the deliberate-edit gate: raising it says "this string is
+# fine and the check is wrong", which is a reviewable line in a diff. What it avoids is
+# the baseline, where grandfathering good copy would look like fixing a violation.
+#
+# Matched on the context GROUP (the part before the first ':'), the same key
+# check_coverage groups by — not as a string prefix. `jamendo_form_message` is a free-text
+# call site that a prefix match on `jamendo_form` silently pulled into the blocking set.
+WAY_OUT_BLOCKING_CONTEXTS = frozenset({"first_listen_error", "setup_error", "jamendo_hint", "jamendo_form"})
 
 # Admin helpers whose whole job is producing failure copy. Each must hold literals of its
 # own, so a name here that collects nothing means the scan broke. `transportFailureCopy` is
@@ -675,12 +682,17 @@ def check_strings(refs: list[StringRef]) -> list[Violation]:
     return violations
 
 
+def context_group(context: str) -> str:
+    """The extractor group a context belongs to — `jamendo_form:x` is `jamendo_form`."""
+    return context.split(":", 1)[0]
+
+
 def is_blocking(violation: Violation, context: str) -> bool:
-    """Whether this violation may fail the build (see BLOCKING_RULES)."""
+    """Whether this violation may fail the lint (see BLOCKING_RULES)."""
     if violation.rule not in BLOCKING_RULES:
         return False
     if violation.rule == "no_way_out":
-        return context.startswith(WAY_OUT_BLOCKING_CONTEXTS)
+        return context_group(context) in WAY_OUT_BLOCKING_CONTEXTS
     return True
 
 
@@ -696,7 +708,7 @@ def split_blocking(refs: list[StringRef]) -> tuple[list[Violation], list[Violati
 
 def check_coverage(refs: list[StringRef]) -> list[str]:
     """Report every extractor group that collected less than its floor."""
-    collected = Counter(ref.context.split(":")[0] for ref in refs)
+    collected = Counter(context_group(ref.context) for ref in refs)
     return [
         f"{group}: collected {collected[group]}, floor {floor}"
         for group, floor in sorted(MIN_STRINGS_PER_GROUP.items())
@@ -750,21 +762,27 @@ def print_baseline_delta(violations: list[Violation], previous: Counter[str] | N
         print("Check every '+' line is copy you meant to grandfather, not a regression you just wrote.")
 
 
-def print_audit(violations: list[Violation], refs: list[StringRef]) -> None:
-    by_rule: dict[str, list[Violation]] = {}
-    for v in violations:
-        by_rule.setdefault(v.rule, []).append(v)
+def print_audit(blocking: list[Violation], advisory: list[Violation], refs: list[StringRef]) -> None:
+    """Report every violation, each row labelled with whether it can fail the lint.
+
+    Per-row, not per-rule: `no_way_out` splits by context, so a rule-level label would
+    leave a reader unable to tell which of the listed rows actually gates a build.
+    """
+    by_rule: dict[str, list[tuple[Violation, str]]] = {}
+    for violation in blocking:
+        by_rule.setdefault(violation.rule, []).append((violation, "blocking"))
+    for violation in advisory:
+        by_rule.setdefault(violation.rule, []).append((violation, "advisory"))
+    total = len(blocking) + len(advisory)
     print(f"Scanned {len(refs)} curated human-facing strings across {len({r.file for r in refs})} files.")
-    print(f"Found {len(violations)} violations in {len(by_rule)} rule classes.\n")
+    print(f"Found {total} violations in {len(by_rule)} rule classes.\n")
     for rule in sorted(by_rule):
         items = by_rule[rule]
-        blocks = "blocking" if rule in BLOCKING_RULES else "advisory"
-        if rule == "no_way_out":
-            blocks = "blocking in authored tables, advisory in free text"
-        print(f"## {rule} ({len(items)}, {blocks})")
-        for v in items:
-            print(f"  {v.file}:{v.line}  [{v.detail}]")
-            print(f"    {v.text[:120]}{'…' if len(v.text) > 120 else ''}")
+        blocks = sum(1 for _violation, label in items if label == "blocking")
+        print(f"## {rule} ({len(items)}: {blocks} blocking, {len(items) - blocks} advisory)")
+        for violation, label in sorted(items, key=lambda row: (row[0].file, row[0].line)):
+            print(f"  [{label}] {violation.file}:{violation.line}  [{violation.detail}]")
+            print(f"    {violation.text[:120]}{'…' if len(violation.text) > 120 else ''}")
         print()
 
 
@@ -775,7 +793,6 @@ def main() -> int:
     args = parser.parse_args()
 
     refs = collect_strings()
-    violations = check_strings(refs)
     blocking, advisory = split_blocking(refs)
     gaps = check_coverage(refs)
 
@@ -787,7 +804,7 @@ def main() -> int:
         return 0
 
     if args.audit:
-        print_audit(violations, refs)
+        print_audit(blocking, advisory, refs)
         for gap in gaps:
             print(f"COVERAGE GAP {gap}")
         return 0
