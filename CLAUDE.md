@@ -455,9 +455,11 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on PRs that touch workflow/script paths, and on every push to `main`). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
 - **UI copy lint** (`scripts/check-ui-copy-lint.sh`): Principle #5 guard over human-facing
   strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,
-  HA add-on option descriptions, and the streamer setup errors. Four rules: machine words on
-  a human screen (`tech_lingo`), a stated failure with no next step (`no_way_out`), copy still
-  phrased around picking a speaker or room (`stale_speaker_copy`), and brand misspelling.
+  HA add-on option descriptions, and the streamer setup errors. Three rules: machine words on
+  a human screen (`tech_lingo`) and copy still phrased around picking a speaker or room
+  (`stale_speaker_copy`) both fail CI; a stated failure with no next step (`no_way_out`) is
+  advisory only, reported by `--audit` for a human to read, because the verb-list check behind
+  it flags correct copy. `BLOCKING_RULES` in the script is the list that can fail a build.
   Admin/addon/server copy is held to the same banned-word list as the listener — a warmer
   register, not a shorter list.
   - Known violations are grandfathered by fingerprint in `.config/ui-copy-baseline.json`;

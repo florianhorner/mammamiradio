@@ -197,8 +197,8 @@ def test_empty_baseline_is_valid(lint, tmp_path: Path, monkeypatch) -> None:
 
 # The backlog may only shrink. Raising this is a deliberate edit that says
 # "we grandfathered more copy", which is exactly the moment worth reviewing.
-MAX_BASELINED_VIOLATIONS = 9
-KNOWN_RULES = {"no_way_out", "stale_speaker_copy", "tech_lingo", "brand_misspell"}
+MAX_BASELINED_VIOLATIONS = 6
+KNOWN_RULES = {"stale_speaker_copy", "tech_lingo"}
 
 
 def test_baseline_backlog_only_shrinks() -> None:
@@ -311,10 +311,15 @@ def test_block_slicing_survives_reformatting_and_new_neighbours(lint) -> None:
     )
     assert len(lint._parse_js_object_entries(spaced, "FIRST_LISTEN_ERRORS")) == baseline_rows
 
+    # JAMENDO_ERROR_COPY is what a renamed neighbour used to swallow: its block ran to
+    # EOF when the declaration after it stopped matching the old three-shape heuristic.
     renamed = admin.replace("function jamendoFailureHint(code){", "const jamendoFailureHint = (code) => {")
-    assert len(lint._parse_js_scalar_entries(renamed, "JAMENDO_ERROR_COPY")) == len(
-        lint._parse_js_scalar_entries(admin, "JAMENDO_ERROR_COPY")
-    )
+    before = lint._parse_js_scalar_entries(admin, "JAMENDO_ERROR_COPY")
+    assert len(lint._parse_js_scalar_entries(renamed, "JAMENDO_ERROR_COPY")) == len(before)
+
+    # The same block, reached through the marker rather than its neighbour.
+    respaced = admin.replace("const JAMENDO_ERROR_COPY={", "const JAMENDO_ERROR_COPY = {\n")
+    assert len(lint._parse_js_scalar_entries(respaced, "JAMENDO_ERROR_COPY")) == len(before)
 
 
 def test_multi_line_copy_is_graded_as_one_sentence(lint, tmp_path, monkeypatch) -> None:

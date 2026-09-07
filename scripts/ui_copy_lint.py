@@ -102,6 +102,14 @@ _FAILURE_KEY_RE = re.compile(
     r"(?:error|failed|declined|unavailable|not_|no_|lost|expired|required|rate_limited|queue_full)"
 )
 
+# Rules allowed to fail CI. `no_way_out` is deliberately absent: deciding whether a
+# sentence offers a remedy needs understanding, and this module approximates it with a
+# verb list, which flags correct copy ("Could not save that. Please try again." reads as
+# a dead end only because "Please" sits between the full stop and the verb). Blocking on
+# it would train authors to grandfather good copy. It still shows up in --audit, where a
+# human reads it. Promote it once the check earns it.
+BLOCKING_RULES = ("tech_lingo", "stale_speaker_copy")
+
 # Admin helpers whose whole job is producing failure copy.
 ADMIN_COPY_FUNCTIONS = ("wayOut", "offlineMsg", "metadataOnlyMutationCopy", "transportFailureCopy")
 
@@ -724,7 +732,8 @@ def print_audit(violations: list[Violation], refs: list[StringRef]) -> None:
     print(f"Found {len(violations)} violations in {len(by_rule)} rule classes.\n")
     for rule in sorted(by_rule):
         items = by_rule[rule]
-        print(f"## {rule} ({len(items)})")
+        blocks = "blocking" if rule in BLOCKING_RULES else "advisory only"
+        print(f"## {rule} ({len(items)}, {blocks})")
         for v in items:
             print(f"  {v.file}:{v.line}  [{v.detail}]")
             print(f"    {v.text[:120]}{'…' if len(v.text) > 120 else ''}")
@@ -739,13 +748,14 @@ def main() -> int:
 
     refs = collect_strings()
     violations = check_strings(refs)
+    blocking = [violation for violation in violations if violation.rule in BLOCKING_RULES]
     gaps = check_coverage(refs)
 
     if args.write_baseline:
         previous = load_baseline()
-        write_baseline(violations)
-        print(f"Wrote {len(violations)} violations to {BASELINE_PATH.relative_to(ROOT)}")
-        print_baseline_delta(violations, previous)
+        write_baseline(blocking)
+        print(f"Wrote {len(blocking)} violations to {BASELINE_PATH.relative_to(ROOT)}")
+        print_baseline_delta(blocking, previous)
         return 0
 
     if args.audit:
@@ -776,7 +786,7 @@ def main() -> int:
         )
         return 2
 
-    new, fixed = _compare_to_baseline(violations, baseline)
+    new, fixed = _compare_to_baseline(blocking, baseline)
     if new:
         print(f"FAIL: {len(new)} new UI copy violation(s) outside baseline:", file=sys.stderr)
         for v in new:
@@ -794,7 +804,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"UI copy lint clean ({len(violations)} known violations baselined).")
+    advisory = len(violations) - len(blocking)
+    note = f"; {advisory} advisory, see --audit" if advisory else ""
+    print(f"UI copy lint clean ({len(blocking)} known violations baselined{note}).")
     return 0
 
 
