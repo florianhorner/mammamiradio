@@ -3109,7 +3109,7 @@ def ha_publish_status_payload(config: object | None = None) -> dict[str, object]
             last_attempt_at=last_attempt,
         )
     if last_success and last_failure and last_success >= last_failure:
-        message, next_step = _HA_PUBLISH_COPY["recovered"]
+        message, next_step = _ha_publish_copy("recovered", config)
         return _payload(
             enabled=True,
             status="ok",
@@ -3121,7 +3121,7 @@ def ha_publish_status_payload(config: object | None = None) -> dict[str, object]
             last_attempt_at=last_attempt,
         )
     if last_success:
-        message, next_step = _HA_PUBLISH_COPY["ok"]
+        message, next_step = _ha_publish_copy("ok", config)
         return _payload(
             enabled=True,
             status="ok",
@@ -3132,7 +3132,7 @@ def ha_publish_status_payload(config: object | None = None) -> dict[str, object]
             last_failure_at=last_failure,
             last_attempt_at=last_attempt,
         )
-    message, next_step = _HA_PUBLISH_COPY["idle"]
+    message, next_step = _ha_publish_copy("idle", config)
     return _payload(enabled=True, status="idle", reason="", message=message, next_step=next_step)
 
 
@@ -3200,8 +3200,12 @@ async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.
     except httpx.TransportError:
         _media_player_ghost_purged = False
         return "transport"
-    except Exception:
+    except Exception as exc:
         _media_player_ghost_purged = False  # allow a retry on the next push
+        # Exception class name only — never str(exc)/repr(exc), which could
+        # carry a response body, URL, or token. See push_state_to_ha's own
+        # sanitization boundary tests.
+        logger.debug("HA ghost media_player purge failed unexpectedly: %s", type(exc).__name__)
         return "unexpected"
     return None
 
@@ -3246,7 +3250,11 @@ async def push_state_to_ha(
         )
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        # Exception class name only — see the docstring above and the
+        # ha_publish log-sanitization tests for why the message/repr never
+        # gets logged here.
+        logger.debug("HA publish saw an unexpected exception type: %s", type(exc).__name__)
         _note_ha_publish_failure("unexpected")
         return False
 
@@ -3407,7 +3415,8 @@ async def _push_state_to_ha_locked(
                 except httpx.TransportError:
                     saw_transport = True
                     continue
-                except Exception:
+                except Exception as exc:
+                    logger.debug("HA entity push saw an unexpected exception type: %s", type(exc).__name__)
                     return "unexpected"
             return "transport" if saw_transport else "unexpected"
 

@@ -972,6 +972,24 @@ integration is installed, turn `ha_media_player_push` off so its registered
 `media_player.mammamiradio` owns the id instead of the REST-pushed ghost; the
 sensors keep flowing either way.
 
+**Publishing health (admin-only diagnostics):** the authenticated `GET /status`
+response carries `runtime_health.ha_publish`, an operator-safe summary of the
+heartbeat above. It is never present on `/public-status`, `/healthz`, or
+`/readyz`. Shape:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `enabled` | bool | Home Assistant is turned on in config |
+| `status` | string | `disabled` / `unconfigured` / `idle` / `ok` / `degraded` |
+| `reason` | string | `""` outside `degraded`, otherwise one of `transport` / `http_error` / `auth_denied` / `unexpected` |
+| `failure_streak` | int | consecutive failed heartbeat/push cycles |
+| `last_success_at` / `last_failure_at` / `last_attempt_at` | float \| null | unix timestamps |
+| `message` / `next_step` | string | operator-safe copy and a concrete recovery action, worded for standalone vs. add-on installs |
+
+The fields are always sanitized: no raw Home Assistant response body,
+exception text, token, or credential-bearing URL ever reaches this payload or
+the logs behind it — only the fixed reason/copy vocabulary above.
+
 These entities answer a much looser question than the control room does.
 `binary_sensor.mammamiradio_on_air` reports only "has the operator stopped the
 station" — it derives from the persisted stop marker alone, so it stays `on`

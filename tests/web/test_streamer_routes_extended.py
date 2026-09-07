@@ -95,13 +95,19 @@ def _no_real_dotenv_writes():
         yield
 
 
-@pytest.fixture(autouse=True)
-def _reset_ha_publish_globals():
+def _reset_ha_publish_state() -> None:
     import mammamiradio.home.ha_context as ha
 
     ha._last_ha_push = ha._last_ha_stop_push = 0.0
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
+
+
+@pytest.fixture(autouse=True)
+def _reset_ha_publish_globals():
+    _reset_ha_publish_state()
     yield
-    ha._last_ha_push = ha._last_ha_stop_push = 0.0
+    _reset_ha_publish_state()
 
 
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
@@ -8302,10 +8308,6 @@ async def test_admin_status_ha_details_absent_when_no_ha_context():
 
 @pytest.mark.asyncio
 async def test_admin_status_ha_publish_is_private_and_settings_driven():
-    import mammamiradio.home.ha_context as ha
-
-    with ha._ha_publish_health_lock:
-        ha._ha_publish_health = ha._HaPublishHealth()
     app = _make_test_app(admin_token="secret-tok")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     headers = {"Authorization": "Bearer secret-tok"}
@@ -8337,8 +8339,6 @@ async def test_admin_status_ha_publish_is_private_and_settings_driven():
 async def test_admin_status_ha_publish_failure_and_recovery():
     import mammamiradio.home.ha_context as ha
 
-    with ha._ha_publish_health_lock:
-        ha._ha_publish_health = ha._HaPublishHealth()
     fail = MagicMock(status_code=502, text="gateway secret")
     ok = MagicMock(status_code=200)
     mock_client = AsyncMock()
