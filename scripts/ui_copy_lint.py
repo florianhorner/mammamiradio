@@ -189,11 +189,11 @@ _INFO_COPY_OK = frozenset(
 # and reports "clean". Set below today's counts so deleting copy is fine, but a
 # collapsed extractor is not. Raise a floor when a group grows a lot.
 MIN_STRINGS_PER_GROUP = {
-    "ui_copy": 120,
+    "ui_copy": 150,
     "listener_template": 50,
     "ha_option": 48,
     "html": 40,
-    "_t": 45,
+    "_t": 70,
     "toast": 20,
     "clip_template": 6,
     "jamendo_hint": 15,
@@ -276,6 +276,9 @@ def _extract_ui_copy() -> list[StringRef]:
                 except (ValueError, TypeError):
                     continue
                 if isinstance(text, str):
+                    # No length gate: every value in COPY is human-facing by construction,
+                    # and a `>= 8` gate excluded exactly the short machine words the rule
+                    # exists to catch. Same reasoning as the call-site gate below.
                     refs.append(StringRef(rel, text_node.lineno, text, "listener", f"ui_copy:{language}:{key}"))
     return refs
 
@@ -547,10 +550,14 @@ def _extract_listener_js() -> list[StringRef]:
     content = path.read_text(encoding="utf-8")
     rel = path.relative_to(ROOT).as_posix()
     refs: list[StringRef] = []
+    # No length gate, for the same reason `_extract_ui_copy` has none: `_t(key, text)`
+    # is a curated fallback table, so every value is human-facing by construction, and
+    # the shortest banned words are the ones a length gate would exclude — "null" is
+    # four characters, "buffer" six, "timeout" seven.
     for match in re.finditer(rf"_t\(\s*({_JS_STRING_LITERAL})\s*,\s*({_JS_STRING_LITERAL})\s*,?\s*\)", content):
         key = _decode_js_string_literal(match.group(1))
         text = _decode_js_string_literal(match.group(2))
-        if key and text and len(text) >= 8:
+        if key and text:
             refs.append(StringRef(rel, _line_no(content, match.start()), text, "listener", f"_t:{key}"))
     for pattern in (
         rf"_showToast\(\s*({_JS_STRING_LITERAL})",

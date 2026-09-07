@@ -670,3 +670,32 @@ def test_a_partially_collapsed_extractor_fails(lint, monkeypatch) -> None:
     kept = [ref for ref in refs if lint.context_group(ref.context) == "ui_copy"][:10]
     gaps = lint.check_coverage(survivors + kept)
     assert any(gap.startswith("ui_copy:") for gap in gaps), gaps
+
+
+def test_short_listener_js_fallback_is_extracted_and_linted(lint, tmp_path: Path, monkeypatch) -> None:
+    """`_t(key, text)` is a curated table like COPY, so it carries no length gate either.
+
+    Sibling of `test_short_ui_copy_value_is_extracted_and_linted`. The banned words a
+    length gate hides are the short ones: "null" is four characters, "buffer" six.
+    """
+    listener_js = tmp_path / "mammamiradio/web/static/listener.js"
+    listener_js.parent.mkdir(parents=True)
+    listener_js.write_text("_t('np_state', 'Buffer');\n", encoding="utf-8")
+    monkeypatch.setattr(lint, "ROOT", tmp_path)
+
+    refs = lint._extract_listener_js()
+    assert [ref.text for ref in refs] == ["Buffer"]
+    assert {violation.rule for violation in lint.check_strings(refs)} == {"tech_lingo"}
+
+
+def test_no_curated_table_extractor_carries_a_length_gate(lint) -> None:
+    """A length gate on a curated table is the bug Copilot found; keep it from returning.
+
+    Free-text call sites (`toast(...)`, `.textContent = ...`) legitimately keep a floor,
+    because they also match identifiers and CSS strings. The curated tables do not.
+    """
+    source = LINT.read_text(encoding="utf-8")
+    ui_copy = source.split("def _extract_ui_copy")[1].split("\ndef ")[0]
+    t_table = source.split("def _extract_listener_js")[1].split("for pattern in")[0]
+    for name, body in (("_extract_ui_copy", ui_copy), ("_extract_listener_js/_t", t_table)):
+        assert "len(text) >=" not in body, f"{name} regrew a length gate"
