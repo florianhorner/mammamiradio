@@ -1,7 +1,7 @@
 # Listening Slice B — validation
 
 Path A to `main`. Workspace `tegucigalpa`. Branch `florianhorner/feat/listening-slice-b`.
-Review merge base: `7829fb728611cd99e9fc79d39f1a3164a7e36142`; final HEAD: `6613ca673db0a283d763031ee3254c4c59b83e5a`.
+Review merge base: `7829fb728611cd99e9fc79d39f1a3164a7e36142`; implementation commit: `b0b00c27fb8673d676525abdcc397213472e64dd`.
 
 ## Write-set
 
