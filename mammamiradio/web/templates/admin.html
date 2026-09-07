@@ -2465,7 +2465,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               the way a real broadcast sounds versus a clean studio file. It is deliberately understated — on
               good speakers you may not hear any difference at all; it is most noticeable on small or phone
               speakers. Toggling it does not change the track that is playing now: it takes effect on the next
-              few tracks as the buffered queue cycles through, so give it a moment before you judge the change.
+              few tracks, so give it a moment before you judge the change.
             </div>
           </div>
         </div>
@@ -4826,7 +4826,7 @@ const JAMENDO_ERROR_COPY={
   jamendo_client_id_invalid:'Enter a valid Jamendo client ID.',
   jamendo_client_id_conflict:'Replace or clear the client ID, not both.',
   jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
-  jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
+  jamendo_ack_required:'Confirm non-commercial use before enabling Jamendo.',
   jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
   jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check that the station storage has free space and is writable, then try again.',
 };
@@ -4844,7 +4844,7 @@ const JAMENDO_ERROR_COPY={
 // on the add-on that advice would name a step the reader cannot take.
 function jamendoFailureHint(code){
   return {
-    api_auth_failed:"Jamendo rejected the current access — check setup: use your own client ID, or replace the one you added.",
+    api_auth_failed:"Jamendo did not accept the current access — check setup: use your own client ID, or replace the one you added.",
     rate_limited:"Jamendo asked the station to pause — retrying automatically. No action needed.",
     temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
     api_failed:"Jamendo didn't respond — retrying automatically.",
@@ -6690,7 +6690,7 @@ async function copySetupSnippet(){
     await navigator.clipboard.writeText(txt);
     toast('Snippet copied');
   }catch(_){
-    toast('Clipboard unavailable');
+    toast('Your browser would not let us copy it — select the snippet above and copy it by hand.');
   }
 }
 
