@@ -34,6 +34,9 @@ async (page) => {
   let privacyResponseGate = null;
   let setupResponseGate = null;
   let nextSetupStatusError = null;
+  let nextSetupFailure = '';
+  let timeoutSetupGate = null;
+  let failCapabilities = false;
   let smokeStage = 'bootstrap';
   function responseGate(){let arrive,release;return{arrived:new Promise((resolve)=>{arrive=resolve;}),wait:new Promise((resolve)=>{release=resolve;}),arrive,release};}
   const initialCapabilitiesGate = responseGate();
@@ -495,13 +498,35 @@ async (page) => {
     await fulfillJson(route, { ok: true });
   });
   await page.route('**/api/setup/status', async (route) => {
+    const failure=nextSetupFailure;nextSetupFailure='';
+    if(failure==='timeout'){const gate=timeoutSetupGate;await gate.wait;await route.abort().catch(()=>{});return;}
+    if(failure==='network'){await route.abort('failed');return;}
+    if(failure==='http-json'){await fulfillJson(route,{},503);return;}
+    if(failure==='invalid-json'||failure==='http'){await route.fulfill({status:failure==='http'?503:200,contentType:'text/html',body:'Unavailable'});return;}
+    if(failure==='empty'||failure==='malformed'){await fulfillJson(route,failure==='empty'?{}:{guided_setup:{first_listen:{audio_complete:'yes'}}});return;}
+    if(failure==='render-error'){await fulfillJson(route,{...setupStatusProjection,available_modes:{}});return;}
+
     if(setupResponseGate){const gate=setupResponseGate;setupResponseGate=null;gate.arrive();await gate.wait;}
     if(nextSetupStatusError){const payload=nextSetupStatusError;nextSetupStatusError=null;await fulfillJson(route,payload,403);return;}
     await fulfillJson(route, setupStatusProjection);
   });
   await page.route('**/api/capabilities', async (route) => {
+    if(failCapabilities){await route.abort('failed');return;}
     if(capabilitiesResponseGate){const gate=capabilitiesResponseGate;capabilitiesResponseGate=null;gate.arrive();await gate.wait;}
     await fulfillJson(route, { capabilities: {}, golden_path: {} });
+  });
+  await page.route(`${baseUrl}/admin`, async (route) => {
+    const response = await route.fetch();
+    const html = await response.text();
+    const bodyTag = /(<\/head>\s*<body\b)([^>]*)(>)/i;
+    const entryAttribute = /\bdata-first-listen-entry="(?:pending|required|complete)"/g;
+    const body = html.match(bodyTag);
+    assert(body && (body[2].match(entryAttribute) || []).length === 1, 'admin bootstrap fixture drifted');
+    // Match the fresh API fixture before initTabs reads the server bootstrap.
+    // The host instance may already contain the operator's completed receipts.
+    await route.fulfill({ response, body: html.replace(bodyTag, (_, open, attributes, close) => (
+      open + attributes.replace(entryAttribute, 'data-first-listen-entry="required"') + close
+    )) });
   });
 
   page.setDefaultTimeout(5000);
@@ -792,6 +817,51 @@ async (page) => {
       await assertUnfinished('firstListenVerifyStep', 'firstListenHeardBtn');
     };
 
+    await resetUi(setupProjection({sources:false}));
+    await page.evaluate(()=>_firstListenUi.projection=null);nextSetupFailure='network';
+    await page.evaluate(()=>refreshSlow());
+    assert(await page.evaluate(()=>!firstListenProjection().legacy&&journeySurface.dataset.currentStep==='1'&&firstListenPlayBtn.disabled&&firstListenPrivacyBody.inert&&!setupAccessError.hidden),'first polling failure fabricated saved progress');
+    for(const failure of ['network','timeout','invalid-json','http','http-json','empty','malformed','render-error']){
+      setupStatusProjection=setupProjection({audio:true});
+      await resetUi(setupStatusProjection,audioReadyOverrides());
+      await page.evaluate(()=>refreshSlow());
+      await page.locator('#firstListenKeepOffBtn').focus();
+      const before=await page.evaluate(()=>JSON.stringify({projection:_firstListenUi.projection,progress:firstListenProgressLine.textContent,focus:document.activeElement?.id}));
+      nextSetupFailure=failure;
+      if(failure==='timeout')timeoutSetupGate=responseGate();
+      try{
+        await page.evaluate(async(failure)=>{
+          const original=window.setTimeout;
+          window.setTimeout=(fn,ms,...args)=>original(fn,failure==='timeout'&&ms===SLOW_POLL_DEADLINE_MS?50:ms,...args);
+          try{await refreshSlow();}finally{window.setTimeout=original;}
+        },failure);
+      }finally{timeoutSetupGate?.release();timeoutSetupGate=null;}
+      assert(await page.locator('#setupAccessError').isVisible(), `${failure} polling failure was silent`);
+      if(failure==='render-error'){nextSetupFailure=failure;await page.evaluate(()=>refreshSlow());assert(await page.locator('#setupAccessError').isVisible(),'repeated malformed setup response hid its error');}
+      assert((await page.locator('#setupAccessError').innerText()).includes('reload this page'), `${failure} polling failure lost concrete recovery action`);
+      assert((await page.locator('#firstListenSourceChip').innerText()) === 'COULDN’T CHECK MUSIC', `${failure} polling failure kept stale readiness`);
+      assert((await page.locator('#firstListenSourceSummary').textContent()).includes('last music details'), `${failure} still promised music from stale source details`);
+      assert(before===await page.evaluate(()=>JSON.stringify({projection:_firstListenUi.projection,progress:firstListenProgressLine.textContent,focus:document.activeElement?.id})), `${failure} polling failure changed saved progress or focus`);
+      failCapabilities=true;
+      try{await page.evaluate(()=>refreshSlow());}finally{failCapabilities=false;}
+      assert(await page.locator('#setupAccessError').isHidden(), `${failure} successful polling kept stale error`);
+      assert((await page.locator('#firstListenSourceChip').innerText()) === 'OPENING READY', `${failure} unchanged setup response failed to restore readiness`);
+      assert(!(await page.locator('#firstListenSourceSummary').textContent()).includes('last music details'), `${failure} recovery kept stale source copy`);
+    }
+
+    for(const kind of ['preview','privacy']){
+      await resetUi(setupProjection({audio:true}),audioReadyOverrides());
+      await page.evaluate(async(kind)=>{
+        const fetchOriginal=window.fetch,timerOriginal=window.setTimeout;
+        window.setTimeout=(fn,ms,...args)=>timerOriginal(fn,ms===FIRST_LISTEN_TIMEOUTS[kind]?25:ms,...args);
+        window.fetch=(url,options)=>String(url).includes(kind==='preview'?'home-context-preview':'home-context-choice')?new Promise((resolve,reject)=>options.signal?.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')))):fetchOriginal(url,options);
+        try{if(kind==='preview')await loadHomeContextPreview();else await chooseFirstListenPrivacy(false);}finally{window.fetch=fetchOriginal;window.setTimeout=timerOriginal;}
+      },kind);
+      assert(await page.evaluate(()=>!_firstListenUi.privacySaving&&_firstListenUi.privacyPreview!=='previewing'&&!_firstListenUi.showSuccess),'hung privacy request froze the journey');
+      assert(await page.locator('#firstListenPrivacyStatus').getAttribute('data-tone')==='blocked','privacy deadline lost its recovery message');
+      await assertUnfinished('firstListenPrivacyStep','firstListenKeepOffBtn');
+    }
+
     const initialJourneyProjection = setupProjection();
     initialJourneyProjection.guided_setup.source_readiness.advanced = {
       kind: 'custom_rotation', label: 'Custom rotation', status: 'configured_unchecked',
@@ -995,6 +1065,56 @@ async (page) => {
         && sourceFallbackMatrixCopy.recoveryLabel === 'Not included',
       `source fallback matrix lost its plain-language copy: ${JSON.stringify(sourceFallbackMatrixCopy)}`,
     );
+
+    const originalRejectEnable=rejectNextEnable;rejectNextEnable=false;
+    for(const [pendingSave,enabled] of [[true,false],[true,true],[false,false]]){
+      smokeStage=`completion-poll-${pendingSave}-${enabled}`;
+      const checkpoint=await prepareOwnedStation();
+      const gate=responseGate();
+      if(pendingSave){
+        if(enabled){await page.locator('#firstListenPreviewBtn').click();await page.waitForFunction(()=>_firstListenUi.privacyPreviewValid);}
+        privacyResponseGate=gate;
+        await page.locator(enabled?'#firstListenEnableContextBtn':'#firstListenKeepOffBtn').click();await gate.arrived;
+        const requests=privacyRequests.length;
+        await page.evaluate(enabled=>chooseFirstListenPrivacy(enabled),enabled);
+        assert(privacyRequests.length===requests,'pending privacy choice submitted twice');
+        const resumes=resumeRequests.length;
+        await page.locator('[data-review-step="verify"]').click();
+        assert(await page.locator('#firstListenRetestBtn').isDisabled(),'pending privacy save allowed a retest');
+        await page.evaluate(async()=>{retestFirstListenSpeaker();await startFirstListen();});
+        assert(resumeRequests.length===resumes&&await page.evaluate(()=>!_firstListenUi.retestPending&&firstListenProjection().heard),'pending privacy save invalidated hearing proof');
+      }else await page.locator('#tab-setup').focus();
+      const focus=await page.evaluate(()=>document.activeElement?.id);
+      setupStatusProjection=setupProjection({audio:true,privacy:true,privacyEnabled:enabled});
+      await page.evaluate(()=>refreshSlow());
+      assert(await page.evaluate(()=>_activeTab==='setup'),'completion polling navigated away from the show');
+      assert(await page.evaluate(()=>document.activeElement?.id)===focus,`completion polling moved keyboard focus (pending save: ${pendingSave})`);
+      await assertStationPreserved(checkpoint,'completion polling');
+      if(pendingSave){
+        gate.release();
+        await page.waitForFunction(()=>_firstListenUi.showSuccess&&!_firstListenUi.privacySaving);
+        await assertStationPreserved(checkpoint,'privacy response after completion polling');
+      }
+    }
+    rejectNextEnable=originalRejectEnable;
+
+    for(const completedPoll of [false,true]){smokeStage=`repair-completion-${completedPoll}`;
+      await prepareOwnedStation({sourceOptions:{primary:'unavailable',recovery:'cover_only'}});
+      const gate=responseGate();privacyResponseGate=gate;
+      await page.locator('#firstListenKeepOffBtn').click();await gate.arrived;
+      await sourceReview.click();
+      await page.locator('#firstListenRepairMusicBtn').click();
+      await page.waitForFunction(()=>document.activeElement?.id==='jamendoSetupHeading');
+      await page.locator('#jamendoEnabled').focus();
+      if(completedPoll){setupStatusProjection=setupProjection({audio:true,privacy:true,primary:'unavailable'});await page.evaluate(()=>refreshSlow());}
+      assert(await page.locator('#setupMusicSources').isVisible(),'completion poll swallowed the music repair view');
+      assert(await page.evaluate(()=>document.activeElement?.id)==='jamendoEnabled','completion poll moved focus in music repair');
+      gate.release();await page.waitForFunction(()=>!_firstListenUi.privacySaving);
+      assert(await page.locator('#setupMusicSources').isVisible()&&await page.locator('#firstListenSuccess').isHidden(),'late privacy response swallowed the music repair view');
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      assert(await page.evaluate(()=>document.activeElement?.id)==='jamendoEnabled','late privacy response moved focus in music repair');
+      assert(await page.evaluate(()=>!window.__firstListenStationMedia.playing&&!document.getElementById('firstListenStationAudio').getAttribute('src')),'music repair completion restarted the station');
+    }
 
     const assertEarlyCompletionExit=async(beforeSave)=>{
       const ready=setupProjection({audio:true}),gate=responseGate();await resetUi(ready,audioReadyOverrides());
@@ -1480,14 +1600,23 @@ async (page) => {
     await page.waitForFunction(() => _firstListenUi.privacyChoice === false && _firstListenUi.privacyReceiptChoice === null && !_firstListenUi.privacySaving);
     assert(privacyRequests.length === privateReceiptBaseline + 2, 'private receipt repair did not retry exactly once');
 
-    await resetUi(setupProjection({
-      audio: true,
-      privacyEnabled: true,
-      privacyChoiceExplicit: true,
-    }));
-    const reloadedPrivacyChip = await page.locator('#firstListenPrivacyChip').innerText();
-    assert(reloadedPrivacyChip.toLowerCase() === 'review not saved', `reloaded active choice lost receipt recovery: ${reloadedPrivacyChip}`);
-    assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context is on'), 'reloaded active choice lost live privacy truth');
+    for (const enabled of [false, true]) {
+      const beforeChoice = privacyRequests.length;
+      await resetUi(setupProjection({ audio: true, privacyEnabled: enabled, privacyChoiceExplicit: true }));
+      assert((await page.locator('#firstListenPrivacyChip').innerText()).toLowerCase() === 'review', 'an initial configured privacy choice was labelled a failed save');
+      assert((await page.locator('#firstListenKeepOffBtn').innerText()) === (enabled ? 'Switch to private' : 'Keep Home private'), 'initial privacy action implies an earlier save attempt');
+      if (enabled) {
+        assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context is on'), 'reloaded active choice lost live privacy truth');
+        await page.locator('#firstListenPreviewBtn').click();
+        await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+        assert(await page.getByRole('button', { name: 'Save shared choice', exact: true }).isEnabled(), 'configured sharing could not save its first review');
+      }
+      assert(privacyRequests.length === beforeChoice, 'configured privacy submitted consent without a click');
+      await page.locator(enabled ? '#firstListenEnableContextBtn' : '#firstListenKeepOffBtn').click();
+      await page.waitForFunction(choice => _firstListenUi.privacyChoice === choice && !_firstListenUi.privacySaving, enabled);
+      assert(privacyRequests.length === beforeChoice + 1, 'configured privacy did not save exactly once');
+      assert(await page.locator('#firstListenSuccess').isVisible(), 'configured privacy did not complete after acknowledgement');
+    }
 
     ambientOnlyPreview = true;
     await resetUi(setupProjection({ audio: true }), audioReadyOverrides());

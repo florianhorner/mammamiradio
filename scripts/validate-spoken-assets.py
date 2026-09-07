@@ -103,6 +103,7 @@ DEMO_BANTER_MIN_LUFS = -19.5
 DEMO_BANTER_MAX_LUFS = -14.0
 DEMO_BANTER_MAX_TRUE_PEAK_DBTP = -1.0
 DEMO_BANTER_MAX_BYTES = 40 * 1024 * 1024
+ADMIN_STATION_OPENING_PATH = "first_listen/first_listen_admin_show.mp3"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -365,6 +366,26 @@ def validate_demo_spoken_assets(
     if not banter_entries:
         errors.append("demo banter inventory is empty")
         return errors
+    openings = [
+        entry for entry in raw_assets if isinstance(entry, dict) and entry.get("path") == ADMIN_STATION_OPENING_PATH
+    ]
+    if _is_demo_assets_root(root) and len(openings) != 1:
+        errors.append("demo inventory must contain the English Admin station opening")
+    for entry in openings:
+        if (
+            entry.get("kind") != "speech"
+            or entry.get("language") != "en"
+            or entry.get("speakers") != ["Marco", "Giulia", "Marco", "Giulia"]
+        ):
+            errors.append("Admin station opening must retain its English Marco/Giulia dialogue")
+        try:
+            expected_receipt = _canonical_render_receipt(RADIO_CONFIG_PATH)
+        except (OSError, ValueError) as exc:
+            errors.append(f"cannot derive station opening canonical receipt: {exc}")
+        else:
+            if entry.get("canonical_render_receipt") != expected_receipt:
+                errors.append("Admin station opening canonical_render_receipt does not match radio.toml")
+    banter_entries.extend(openings)
 
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
@@ -427,13 +448,21 @@ def validate_demo_spoken_assets(
             if normalized != expected:
                 errors.append(f"{relative_path} {field} must be {expected!r}; got {actual!r}")
         duration = _number(format_data.get("duration"))
+        is_opening = relative_path == ADMIN_STATION_OPENING_PATH
+        minimum = 15.0 if is_opening else DEMO_BANTER_MIN_DURATION_SECONDS
+        maximum = 20.0 if is_opening else DEMO_BANTER_MAX_DURATION_SECONDS
         if duration is None:
             errors.append(f"{relative_path} ffprobe duration is missing or invalid")
-        elif not DEMO_BANTER_MIN_DURATION_SECONDS <= duration <= DEMO_BANTER_MAX_DURATION_SECONDS:
-            errors.append(
-                f"{relative_path} duration {duration:.3f}s is outside "
-                f"{DEMO_BANTER_MIN_DURATION_SECONDS:.1f}-{DEMO_BANTER_MAX_DURATION_SECONDS:.1f}s"
-            )
+        elif not minimum <= duration <= maximum:
+            errors.append(f"{relative_path} duration {duration:.3f}s is outside {minimum:.1f}-{maximum:.1f}s")
+        if is_opening:
+            declared_duration = _number(entry.get("duration_seconds"))
+            if (
+                declared_duration is None
+                or duration is None
+                or abs(declared_duration - duration) > BROWSER_GUIDE_DURATION_TOLERANCE_SECONDS
+            ):
+                errors.append(f"{relative_path} declared duration does not match ffprobe")
         if ffmpeg is not None:
             loudness, loudness_error = _measure_loudness(asset_path, ffmpeg=ffmpeg)
             if loudness_error is not None:
@@ -677,8 +706,9 @@ def validate_browser_narration_pack(
     static_root: Path = STATIC_ROOT,
     radio_config_path: Path = RADIO_CONFIG_PATH,
     admin_template_path: Path = ADMIN_TEMPLATE_PATH,
+    staged_render: bool = False,
 ) -> list[str]:
-    """Validate the exact, bounded First Listen narration pack served to browsers."""
+    """Validate the pack; renders omit only bindings to the not-yet-updated UI."""
 
     root = Path(assets_root)
     errors = validate_spoken_asset_manifest(assets_root=root)
@@ -700,7 +730,8 @@ def validate_browser_narration_pack(
     raw_assets = manifest.get("assets")
     if not isinstance(raw_assets, list):
         return errors
-    errors.extend(_validate_admin_guide_metadata(manifest, admin_template_path=admin_template_path))
+    if not staged_render:
+        errors.extend(_validate_admin_guide_metadata(manifest, admin_template_path=admin_template_path))
 
     entries_by_path: dict[str, dict[str, object]] = {}
     for raw_entry in raw_assets:
@@ -743,9 +774,10 @@ def validate_browser_narration_pack(
         except OSError:
             pass  # The shared manifest validator reports missing or unreadable files.
 
-        route_error = _browser_route_error(asset_path, relative_path=relative_path, static_root=Path(static_root))
-        if route_error is not None:
-            errors.append(f"{relative_path} {route_error}")
+        if not staged_render:
+            route_error = _browser_route_error(asset_path, relative_path=relative_path, static_root=Path(static_root))
+            if route_error is not None:
+                errors.append(f"{relative_path} {route_error}")
         if ffprobe is not None and asset_path.is_file():
             media, probe_error = _probe_audio(asset_path, ffprobe=ffprobe)
             if probe_error is not None:

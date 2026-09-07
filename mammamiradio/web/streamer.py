@@ -6587,7 +6587,7 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
     if first_listen_show_required(request.app.state):
         try:
             show_path = await asyncio.wait_for(
-                asyncio.to_thread(approved_first_listen_show_path),
+                asyncio.to_thread(approved_first_listen_show_path, english=first_listen),
                 timeout=FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS,
             )
         except TimeoutError:

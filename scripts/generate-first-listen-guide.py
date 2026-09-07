@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import sys
 import tempfile
@@ -30,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "mammamiradio" / "web" / "static" / "audio"
+STATION_OUTPUT_ROOT = REPO_ROOT / "mammamiradio" / "assets" / "demo"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 MANIFEST_FILENAME = "spoken_assets.json"
 CANONICAL_HOST_NAMES = ("Marco", "Giulia")
@@ -46,10 +48,28 @@ class GuideClip:
     clip_id: str
     lines: tuple[GuideLine, ...]
     station_sting: bool = False
+    sustained_bed: bool = False
+    pause_ms: int = 280
 
     @property
     def transcript(self) -> str:
         return " ".join(f"{line.host}: {line.text}" for line in self.lines)
+
+
+STATION_OPENING_CLIP = GuideClip(
+    "first_listen_admin_show",
+    (
+        GuideLine(
+            "Marco", "Mamma Mi Radio, live from Studio B. The coffee is back where it belongs. Everyone’s happy."
+        ),
+        GuideLine("Giulia", "The coffee’s happy. I’m reserving judgment."),
+        GuideLine("Marco", "Our newest regular deserves a proper welcome."),
+        GuideLine("Giulia", "Then put a record on, Marco."),
+    ),
+    station_sting=True,
+    sustained_bed=True,
+    pause_ms=600,
+)
 
 
 GUIDE_CLIPS = (
@@ -138,9 +158,16 @@ GUIDE_CLIPS = (
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--output-root", type=Path)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
-    return parser.parse_args()
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--clip", choices=("welcome",), help="replace only the welcome in an intact canonical pack")
+    selection.add_argument(
+        "--station-opening", action="store_true", help="render only the English Admin station opening"
+    )
+    args = parser.parse_args()
+    args.output_root = args.output_root or (STATION_OUTPUT_ROOT if args.station_opening else DEFAULT_OUTPUT_ROOT)
+    return args
 
 
 def _sha256(path: Path) -> str:
@@ -188,6 +215,32 @@ def _publish_staged_file(staged: Path, destination: Path) -> None:
     """Publish a render even when OS temp and --output-root use different filesystems."""
 
     shutil.move(str(staged), destination)
+
+
+def _load_pack_validator():
+    """Share release media limits without importing runtime before env selection."""
+
+    return runpy.run_path(str(REPO_ROOT / "scripts" / "validate-spoken-assets.py"))["validate_browser_narration_pack"]
+
+
+def _validated_pack(root: Path, canonical_receipt: dict[str, object]) -> dict[str, object]:
+    """Refuse incomplete, modified, or incompatible packs before reuse/publication."""
+
+    errors = _load_pack_validator()(assets_root=root, radio_config_path=REPO_ROOT / "radio.toml", staged_render=True)
+    if errors:
+        raise RuntimeError("invalid guide pack: " + "; ".join(errors))
+    manifest = json.loads((root / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    if manifest.get("canonical_render_receipt") != canonical_receipt:
+        raise RuntimeError("guide pack canonical voice receipt does not match radio.toml")
+    clips = {f"first_listen/{clip.clip_id}.mp3": clip for clip in GUIDE_CLIPS}
+    for entry in manifest["assets"]:
+        if (
+            entry["kind"] != "speech"
+            or entry["language"] != "en"
+            or entry.get("speakers") != [line.host for line in clips[entry["path"]].lines]
+        ):
+            raise RuntimeError(f"{entry['path']} must retain its English canonical host dialogue")
+    return manifest
 
 
 def _canonical_voice_settings(host: HostPersonality) -> dict[str, object] | None:
@@ -281,21 +334,22 @@ async def _render_clip(
         lambda: concat_files(
             line_paths,
             dialogue_path,
-            silence_ms=280,
+            silence_ms=clip.pause_ms,
             loudnorm=not clip.station_sting,
             strict_duration=True,
         ),
     )
     if clip.station_sting:
         sting_path = work_dir / f"{clip.clip_id}-sting.mp3"
-        await loop.run_in_executor(None, lambda: generate_station_id_bed(sting_path, 3.0, motif_notes))
+        bed_duration = (probe_duration_sec(dialogue_path) or 0) + 0.4 if clip.sustained_bed else 3.0
+        await loop.run_in_executor(None, lambda: generate_station_id_bed(sting_path, bed_duration, motif_notes))
         await loop.run_in_executor(None, lambda: mix_voice_with_sting(dialogue_path, sting_path, destination))
     else:
         shutil.move(dialogue_path, destination)
 
     duration = probe_duration_sec(destination)
-    if duration is None or duration <= 0:
-        raise RuntimeError(f"could not prove audio duration for {destination.name}")
+    if duration is None or not 4.0 <= duration <= 20.0:
+        raise RuntimeError(f"audio duration for {destination.name} must be between 4 and 20 seconds")
     return {
         "path": f"first_listen/{destination.name}",
         "sha256": _sha256(destination),
@@ -305,6 +359,44 @@ async def _render_clip(
         "duration_seconds": round(duration, 3),
         "speakers": [line.host for line in clip.lines],
     }
+
+
+async def _render_station_opening(output_root, hosts, canonical_receipt, motif_notes) -> None:
+    """Retain both inventories, stage one paid render, and validate before publication."""
+
+    validator = runpy.run_path(str(REPO_ROOT / "scripts" / "validate-spoken-assets.py"))
+    _validated_pack(DEFAULT_OUTPUT_ROOT, canonical_receipt)
+    errors = validator["validate_spoken_asset_manifest"](assets_root=output_root)
+    if errors:
+        raise RuntimeError("invalid station pack: " + "; ".join(errors))
+    manifest = json.loads((output_root / MANIFEST_FILENAME).read_text())
+    shipped = json.loads((STATION_OUTPUT_ROOT / MANIFEST_FILENAME).read_text())
+    relative = f"first_listen/{STATION_OPENING_CLIP.clip_id}.mp3"
+
+    def retained(pack):
+        return {entry["path"] for entry in pack["assets"] if entry["path"] != relative}
+
+    if retained(manifest) != retained(shipped):
+        raise RuntimeError("station pack retained inventory does not match the shipped pack")
+    for entry in manifest["assets"]:
+        if entry["path"] == relative and entry.get("canonical_render_receipt") != canonical_receipt:
+            raise RuntimeError("station opening canonical voice receipt does not match radio.toml")
+    with _temporary_work_directory() as raw_work_dir:
+        work_dir = Path(raw_work_dir)
+        staging = work_dir / "staging"
+        shutil.copytree(output_root, staging)
+        destination = staging / relative
+        entry = await _render_clip(STATION_OPENING_CLIP, hosts, work_dir, destination, motif_notes=motif_notes)
+        entry["canonical_render_receipt"] = canonical_receipt
+        manifest["assets"] = [old for old in manifest["assets"] if old["path"] != relative] + [entry]
+        staged_manifest = staging / MANIFEST_FILENAME
+        staged_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        errors = validator["validate_demo_spoken_assets"](assets_root=staging, package_assets_root=staging)
+        if errors:
+            raise RuntimeError("invalid station render: " + "; ".join(errors))
+        _publish_staged_file(destination, output_root / relative)
+        _publish_staged_file(staged_manifest, output_root / MANIFEST_FILENAME)
+        print(f"rendered station opening: {entry['duration_seconds']}s; wrote {_display_path(output_root / relative)}")
 
 
 async def _run(args: argparse.Namespace) -> None:
@@ -319,41 +411,54 @@ async def _run(args: argparse.Namespace) -> None:
     canonical_receipt = _canonical_render_receipt(hosts)
 
     output_root = args.output_root.resolve()
-    output_dir = output_root / "first_listen"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_root.mkdir(parents=True, exist_ok=True)
+    if getattr(args, "station_opening", False):
+        await _render_station_opening(output_root, hosts, canonical_receipt, config.sonic_brand.motif_notes)
+        return
+    selected_clip = args.clip
+    # Validation happens before rendering: partial generation must never silently
+    # turn six missing or incompatible clips into a mixed-provider release pack.
+    manifest = (
+        _validated_pack(output_root, canonical_receipt)
+        if selected_clip
+        else {
+            "schema_version": 1,
+            "bundle": "first-listen-guide",
+            "render_provider": "canonical",
+            "canonical_render_receipt": canonical_receipt,
+            "assets": [],
+        }
+    )
 
     with _temporary_work_directory() as raw_work_dir:
         work_dir = Path(raw_work_dir)
         staging_dir = work_dir / "staging"
-        staging_dir.mkdir()
-        entries = []
-        for clip in GUIDE_CLIPS:
-            destination = staging_dir / f"{clip.clip_id}.mp3"
-            entries.append(
-                await _render_clip(
-                    clip,
-                    hosts,
-                    work_dir,
-                    destination,
-                    motif_notes=config.sonic_brand.motif_notes,
-                )
+        (staging_dir / "first_listen").mkdir(parents=True)
+        if selected_clip:
+            for entry in manifest["assets"]:
+                shutil.copyfile(output_root / entry["path"], staging_dir / entry["path"])
+        clips = [clip for clip in GUIDE_CLIPS if not selected_clip or clip.clip_id == selected_clip]
+        for clip in clips:
+            destination = staging_dir / "first_listen" / f"{clip.clip_id}.mp3"
+            entry = await _render_clip(clip, hosts, work_dir, destination, motif_notes=config.sonic_brand.motif_notes)
+            if selected_clip:
+                manifest["assets"] = [entry if old["path"] == entry["path"] else old for old in manifest["assets"]]
+            else:
+                manifest["assets"].append(entry)
+            print(f"rendered {clip.clip_id}: {entry['duration_seconds']}s")
+
+        staged_manifest = staging_dir / MANIFEST_FILENAME
+        staged_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _validated_pack(staging_dir, canonical_receipt)
+        # No destination is touched until every selected render and the complete
+        # staged manifest pass. Retained clips are never republished.
+        output_dir = output_root / "first_listen"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for clip in clips:
+            _publish_staged_file(
+                staging_dir / "first_listen" / f"{clip.clip_id}.mp3", output_dir / f"{clip.clip_id}.mp3"
             )
-            print(f"rendered {clip.clip_id}: {entries[-1]['duration_seconds']}s")
-
-        for staged in sorted(staging_dir.glob("*.mp3")):
-            _publish_staged_file(staged, output_dir / staged.name)
-
-    manifest = {
-        "schema_version": 1,
-        "bundle": "first-listen-guide",
-        "render_provider": "canonical",
-        "canonical_render_receipt": canonical_receipt,
-        "assets": entries,
-    }
-    manifest_path = output_root / MANIFEST_FILENAME
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {_display_path(manifest_path)}")
+        _publish_staged_file(staged_manifest, output_root / MANIFEST_FILENAME)
+        print(f"wrote {_display_path(output_root / MANIFEST_FILENAME)}")
 
 
 def main() -> int:

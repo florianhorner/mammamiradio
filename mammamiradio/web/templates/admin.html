@@ -2836,7 +2836,7 @@ const FIRST_LISTEN_ERRORS={
 // hydrate from the server while _firstListenUi.busy is set — so a request that
 // never settles used to freeze the whole journey until the operator reloaded,
 // with nothing on screen saying so.
-const FIRST_LISTEN_TIMEOUTS={play:30000,receipt:15000,verify:15000};
+const FIRST_LISTEN_TIMEOUTS={play:30000,receipt:15000,verify:15000,preview:30000,privacy:15000};
 function firstListenTimedOut(error){return Boolean(error&&error.name==='AbortError')}
 const _firstListenUi={
   projection:null,
@@ -5093,7 +5093,9 @@ async function turnOffJamendo(){
     applyJamendoResponse(result,'Jamendo turned off. Starter and local music continue.');
   }catch(_){setJamendoFormMessage(offlineMsg()+' The saved setting was not changed.','degraded');}
 }
-function openSetupPanel(focus=''){
+function openSetupPanel(focus='',{preserveFocus=false}={}){
+  const focused=preserveFocus&&document.getElementById('setupMusicSources')?.contains(document.activeElement)?document.activeElement:null;
+  if(preserveFocus)syncFirstListenSetupMount();
   _adminTabUserInteracted=true;
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
@@ -5109,6 +5111,7 @@ function openSetupPanel(focus=''){
   setFirstListenSetupView(focus);
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
+  if(focused?.isConnected){focused.focus();return;}
   const summary=details?.querySelector('summary');
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
@@ -5155,8 +5158,9 @@ function resolveFirstListenLanding(setup){
   if(first.bootstrap_ready!==true)return;
   const required=firstListenEntryRequired(setup);
   const previous=document.body.dataset.firstListenEntry;
-  const preserveSuccess=!required&&(
-    previous==='completing'||(previous==='required'&&_activeTab==='setup'&&_firstListenUi.showSuccess)
+  const musicSources=document.body.dataset.firstListenSetupView==='music-sources';
+  const preserveSuccess=!required&&!musicSources&&(
+    previous==='completing'||(previous==='required'&&_activeTab==='setup')
   );
   if(required&&previous==='completing'){
     _firstListenUi.showSuccess=false;
@@ -5165,9 +5169,11 @@ function resolveFirstListenLanding(setup){
     setTimeout(()=>focusCurrentFirstListenStep(),0);
   }
   document.body.dataset.firstListenEntry=preserveSuccess?'completing':required?'required':'complete';
-  syncFirstListenSetupMount();
-  if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess){
-    showAdminTab('scaletta',{render:true,persist:true});
+  if(previous==='required'&&!required&&_activeTab==='setup'&&musicSources){
+    openSetupPanel('music-sources',{preserveFocus:true});
+  }else{
+    syncFirstListenSetupMount();
+    if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess)showAdminTab('scaletta',{render:true,persist:true});
   }
   if(_firstListenLandingResolved)return;
   _firstListenLandingResolved=true;
@@ -5248,7 +5254,8 @@ function firstListenErrorMessage(response){
   return `${copy.title}. ${copy.message} ${copy.action}`;
 }
 function showSetupRequestError(response=null){
-  const el=document.getElementById('setupAccessError');if(!el)return;el.hidden=!response;el.textContent=response?firstListenErrorMessage(response).replace(/First Listen/g,'Setup'):'';
+  const el=document.getElementById('setupAccessError');if(!el)return;const recovering=!el.hidden&&!response;el.hidden=!response;el.textContent=response?firstListenErrorMessage(response).replace(/First Listen/g,'Setup'):'';
+  if(response||recovering)renderFirstListenProgress();
 }
 const FIRST_LISTEN_STEP_KEYS={
   firstListenSourceStep:'source',
@@ -5280,7 +5287,7 @@ function firstListenSetStep(id,state){
   const body=step.querySelector(':scope > .first-listen-body');
   if(body){
     const anotherExpansion=Boolean(_firstListenUi.reviewStep||_firstListenUi.optionalStep);
-    const visible=reviewing||optionalOpen||(current&&!anotherExpansion);
+    const visible=reviewing||optionalOpen||(current&&!anotherExpansion)||(key==='privacy'&&_firstListenUi.privacySaving);
     body.hidden=!visible;
     body.setAttribute('aria-hidden',visible?'false':'true');
     body.toggleAttribute('inert',!visible);
@@ -5421,7 +5428,7 @@ function firstListenProjection(){
   const first=guided.first_listen||{};
   const verification=guided.verification||{};
   const privacy=guided.privacy||{};
-  const legacy=!Object.keys(first).length;
+  const legacy=Boolean(_firstListenUi.projection)&&!Object.keys(first).length;
   const serverSelection=String(first.selected_entity_id||guided.speaker?.selected_entity_id||'');
   const serverAttempt=String(first.accepted_attempt_id||verification.attempt_id||'');
   const localAttemptMatches=!_firstListenUi.attemptId||!serverAttempt||_firstListenUi.attemptId===serverAttempt;
@@ -5715,6 +5722,11 @@ function renderFirstListenProgress(){
       ?'The welcome can still play, but there is no audio ready afterward. We’re checking which music-source repair is available.'
       :`The welcome can still play, but there is no audio ready afterward. ${sourceAction.button} to continue.`;
   }
+  // A later capabilities refresh must not overwrite an unresolved setup error.
+  if(document.getElementById('setupAccessError')?.hidden===false){
+    firstListenSetChip('firstListenSourceChip','degraded','Couldn’t check music');
+    if(sourceSummary)sourceSummary.textContent=(sourceKnown?'These are the last music details we received. ':'We couldn’t check music yet. ')+'Check your connection, then reload this page or wait for the next check.';
+  }
   const sourceActions=document.getElementById('firstListenSourceActions');
   if(sourceActions)sourceActions.hidden=!sourceKnown||healthy;
   const sourceActionButton=document.getElementById('firstListenRepairMusicBtn');
@@ -5727,7 +5739,7 @@ function renderFirstListenProgress(){
   const retryBtn=document.getElementById('firstListenRetryBtn');
   const saveAttemptBtn=document.getElementById('firstListenSaveAttemptBtn');
   const speakerSummary=document.getElementById('firstListenSpeakerSummary');
-  const speakerBusy=_firstListenUi.dispatch==='starting'||_firstListenUi.receiptSaving;
+  const speakerBusy=_firstListenUi.dispatch==='starting'||_firstListenUi.receiptSaving||_firstListenUi.privacySaving;
   const browserGuidePlaying=firstListenGuideLocksRoomProof();
   const deliberateRetry=_firstListenUi.verification==='not_yet'&&!listenComplete;
   if(playBtn){
@@ -5776,7 +5788,7 @@ function renderFirstListenProgress(){
   const retestWrap=document.getElementById('firstListenRetestWrap');
   const retestBtn=document.getElementById('firstListenRetestBtn');
   if(retestWrap)retestWrap.hidden=!(_firstListenUi.reviewStep==='verify'&&listenComplete);
-  if(retestBtn)retestBtn.hidden=false;
+  if(retestBtn){retestBtn.hidden=false;retestBtn.disabled=speakerBusy||_firstListenUi.busy;}
   const verifyStep=document.getElementById('firstListenVerifyStep');
   if(verifyStep)verifyStep.setAttribute('aria-busy',_firstListenUi.receiptSaving?'true':'false');
   const verifySummary=document.getElementById('firstListenVerifySummary');
@@ -5807,21 +5819,24 @@ function renderFirstListenProgress(){
   const previewBox=document.getElementById('haContextPreview');
   const permissionPrimer=document.querySelector('#firstListenPrivacyBody .permission-primer');
   const pendingPrivacyChoice=firstListenPendingPrivacyChoice(projection);
+  const privacyReceiptFailed=_firstListenUi.privacyReceiptChoice!==null;
   if(previewBtn){
     previewBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';
     previewBtn.hidden=_firstListenUi.privacyPreviewValid;
-    previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Preparing preview…':pendingPrivacyChoice===true?'See what the hosts would receive again':'See what the hosts would receive';
+    previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Preparing preview…':privacyReceiptFailed&&pendingPrivacyChoice===true?'See what the hosts would receive again':'See what the hosts would receive';
   }
   if(keepOffBtn){
-    keepOffBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving;
-    keepOffBtn.textContent=pendingPrivacyChoice===false?'Save private choice again':projection.privacyReviewed&&projection.privacyEnabled?'Switch to private':'Keep Home private';
+    keepOffBtn.disabled=!projection.privacyUnlocked;
+    keepOffBtn.setAttribute('aria-disabled',_firstListenUi.privacySaving?'true':'false');
+    keepOffBtn.textContent=privacyReceiptFailed&&pendingPrivacyChoice===false?'Save private choice again':projection.privacyEnabled?'Switch to private':'Keep Home private';
     firstListenSetActionTone(keepOffBtn,!_firstListenUi.privacyPreviewValid);
   }
   if(enableBtn){
     const receiptRetry=pendingPrivacyChoice===true;
     enableBtn.hidden=!_firstListenUi.privacyPreviewValid;
-    enableBtn.disabled=!projection.privacyUnlocked||!_firstListenUi.privacyPreviewValid||_firstListenUi.privacySaving||(projection.privacyEnabled&&!receiptRetry);
-    enableBtn.textContent=receiptRetry?'Save shared choice again':_firstListenUi.privacyPreview==='ambient_only'?'Let the hosts use daylight only':'Let Marco and Giulia use these details';
+    enableBtn.disabled=!projection.privacyUnlocked||!_firstListenUi.privacyPreviewValid||(projection.privacyEnabled&&!receiptRetry&&!_firstListenUi.privacySaving);
+    enableBtn.setAttribute('aria-disabled',_firstListenUi.privacySaving?'true':'false');
+    enableBtn.textContent=receiptRetry?(privacyReceiptFailed?'Save shared choice again':'Save shared choice'):_firstListenUi.privacyPreview==='ambient_only'?'Let the hosts use daylight only':'Let Marco and Giulia use these details';
     firstListenSetActionTone(enableBtn,true);
   }
   const previewVisible=_firstListenUi.privacyPreview!=='untouched';
@@ -5830,7 +5845,7 @@ function renderFirstListenProgress(){
   const privacyStep=document.getElementById('firstListenPrivacyStep');
   if(privacyStep)privacyStep.setAttribute('aria-busy',_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing'?'true':'false');
   const privacySummary=document.getElementById('firstListenPrivacySummary');
-  if(pendingPrivacyChoice!==null){
+  if(privacyReceiptFailed){
     firstListenSetChip('firstListenPrivacyChip','degraded','Review not saved');
     if(privacySummary)privacySummary.textContent=pendingPrivacyChoice?'Home context is on, but First Listen did not save this step. Show your Home details again, then save the choice.':'Home context stays off, but First Listen did not save this step. Save the private choice again.';
   }else if(projection.privacyReviewed&&projection.privacyEnabled){
@@ -5839,6 +5854,9 @@ function renderFirstListenProgress(){
   }else if(projection.privacyReviewed){
     firstListenSetChip('firstListenPrivacyChip','ready','Stays off');
     if(privacySummary)privacySummary.textContent='Home stays private. The station keeps playing with Marco and Giulia.';
+  }else if(pendingPrivacyChoice===true){
+    firstListenSetChip('firstListenPrivacyChip','working','Review');
+    if(privacySummary)privacySummary.textContent='Home context is on. See what the hosts would receive, then save your choice.';
   }else if(projection.privacyUnlocked){
     if(_firstListenUi.privacyPreview==='ambient_only'){
       firstListenSetChip('firstListenPrivacyChip','degraded','Nothing useful yet');
@@ -6040,7 +6058,7 @@ function initFirstListenStationAudio(){
   });
 }
 function retestFirstListenSpeaker(el){
-  if(_firstListenUi.busy||_firstListenUi.receiptSaving)return;
+  if(_firstListenUi.busy||_firstListenUi.receiptSaving||_firstListenUi.privacySaving)return;
   _firstListenUi.selectionDirty=true;
   _firstListenUi.retestPending=true;
   _firstListenUi.attemptId='';
@@ -6053,7 +6071,7 @@ function retestFirstListenSpeaker(el){
   startFirstListen(el);
 }
 async function startFirstListen(el){
-  if(_firstListenUi.busy||_firstListenUi.receiptSaving)return;
+  if(_firstListenUi.busy||_firstListenUi.receiptSaving||_firstListenUi.privacySaving)return;
   stopFirstListenGuide();
   const audio=firstListenStationAudio();
   if(!audio)return;
@@ -6195,7 +6213,7 @@ async function verifyFirstListen(heard,el){
 }
 async function loadHomeContextPreview(el){
   const projection=firstListenProjection();
-  if(!projection.privacyUnlocked||_firstListenUi.privacyPreview==='previewing')return;
+  if(!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing')return;
   _firstListenUi.privacyPreview='previewing';
   _firstListenUi.privacyPreviewValid=false;
   _firstListenUi.privacyPreviewUseful=false;
@@ -6203,7 +6221,7 @@ async function loadHomeContextPreview(el){
   if(el)el.setAttribute('aria-busy','true');
   firstListenSetStatus('firstListenPrivacyStatus','Preparing a fresh preview of your Home details…');
   try{
-    const {response,payload}=await apiResponse('POST','/api/setup/home-context-preview',{});
+    const {response,payload}=await apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview);
     const resp=payload&&typeof payload==='object'?payload:{};
     const detachedPreview=response.ok===true&&resp?.ok===true&&resp?.fresh===true&&Array.isArray(resp?.sent_now)&&resp.sent_now.length===0&&['useful','ambient_only','empty'].includes(resp?.context_value);
     if(!detachedPreview){
@@ -6265,7 +6283,7 @@ async function chooseFirstListenPrivacy(enabled,el){
   if(el)el.setAttribute('aria-busy','true');
   firstListenSetStatus('firstListenPrivacyStatus','Saving your choice…');
   try{
-    const {response,payload}=await apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled});
+    const {response,payload}=await apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy);
     const resp=payload&&typeof payload==='object'?payload:{};
     const code=String(resp?.error?.code||'');
     const enabledMatches=typeof resp?.enabled==='boolean'&&resp.enabled===requestedEnabled;
@@ -6301,8 +6319,10 @@ async function chooseFirstListenPrivacy(enabled,el){
     _firstListenUi.reviewStep='';
     _firstListenUi.optionalStep='';
     _firstListenUi.reviewTrigger=null;
-    const showCelebration=celebrate&&_activeTab==='setup';
-    if(celebrate){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';syncFirstListenSetupMount();}
+    const current=firstListenProjection(),musicSources=document.body.dataset.firstListenSetupView==='music-sources';
+    const canComplete=celebrate&&current.heard&&!current.proofPending&&firstListenSourceState(current).continuityAvailable;
+    const showCelebration=canComplete&&_activeTab==='setup'&&!musicSources;
+    if(canComplete){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';if(musicSources&&_activeTab==='setup')openSetupPanel('music-sources',{preserveFocus:true});syncFirstListenSetupMount();}
     _firstListenUi.showSuccess=showCelebration;
     firstListenSetStatus('firstListenPrivacyStatus',requestedEnabled?'Marco and Giulia may use the Home details you approved.':'Home stays private.','ready');
     renderFirstListenProgress();
@@ -6366,7 +6386,7 @@ function renderFirstListen(setup,modeLabel,stationLabel){
   if(!_firstListenUi.firstUnresolvedRenderedAt&&!first.audio_complete){
     _firstListenUi.firstUnresolvedRenderedAt=performance.now();
   }
-  if(!_firstListenUi.busy&&!_firstListenUi.receiptSaving){
+  if(!_firstListenUi.busy&&!_firstListenUi.receiptSaving&&!_firstListenUi.privacySaving){
     const selected=String(first.selected_entity_id||speaker.selected_entity_id||'');
     if(selected&&!_firstListenUi.selectionDirty&&!_firstListenUi.selectedEntityId){
       _firstListenUi.selectedEntityId=selected;
@@ -6442,7 +6462,6 @@ function renderSetup(setup){
   if(!setup) return;
   const _json=JSON.stringify(setup);
   if(_json===_lastSetupJson) return;
-  _lastSetupJson=_json;
   renderGuidedSetupStrip(setup);
   resolveFirstListenLanding(setup);
   const mode=setup.available_modes?.find(m=>m.id===setup.detected_mode);
@@ -6533,6 +6552,7 @@ function renderSetup(setup){
   // collapse only when viewed later from another operator surface.
   if(typeof window.motoreSetupAutoCollapse==='function')window.motoreSetupAutoCollapse(!needsAction&&_activeTab!=='setup');
   renderHomeContextPreviewGate(setup);
+  _lastSetupJson=_json;
 }
 async function setupRecheck(el){
   flash(el);
@@ -8434,6 +8454,10 @@ async function fetchSlowJson(path,deadlineMs=SLOW_POLL_DEADLINE_MS){
     const payload=await response.json().catch(()=>null);
     if(!response.ok){const error=new Error(`${path} returned ${response.status}`);error.payload=payload;throw error;}
     if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
+    if(path==='/api/setup/status'){
+      const first=payload.guided_setup?.first_listen;
+      if(!first||!['bootstrap_ready','audio_complete','privacy_complete','continuity_available'].every(key=>typeof first[key]==='boolean')||!Array.isArray(payload.guided_setup?.source_readiness?.rows))throw new Error('Station check returned incomplete setup status');
+    }
     return payload;
   }finally{clearTimeout(deadline);}
 }
@@ -8464,11 +8488,14 @@ async function refreshSlow(){
   const setupPromise=fetchSlowJson('/api/setup/status')
     .then(setup=>{
       if(generation!==_slowPollGeneration)return;
-      showSetupRequestError();renderSetup(setup);
+      renderSetup(setup);showSetupRequestError();
     })
     .catch(e=>{
       if(generation!==_slowPollGeneration)return;
-      if(e.payload)showSetupRequestError(e.payload);
+      const detail=e.payload?.detail;
+      const code=e.payload?.error?.code||e.payload?.code||detail?.code;
+      const hasRecovery=detail?.title&&detail?.message&&detail?.action||typeof FIRST_LISTEN_ERRORS[code]?.action==='string';
+      showSetupRequestError(hasRecovery?e.payload:{detail:{title:'We couldn’t check your station',message:'Your saved choices are unchanged.',action:'Check your connection, then reload this page or wait for the next check.'}});
       console.error('refreshSlow setup',e);
     });
   await Promise.all([capabilitiesPromise,setupPromise]);
