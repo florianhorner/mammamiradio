@@ -961,9 +961,14 @@ The preferred HA surface is the HACS integration under
 Repairs, and adds `media-source://mammamiradio/live` for casting.
 
 The add-on also pushes a basic `media_player.mammamiradio` plus sensor state
-after each segment transition. The media-player heartbeat continues every 30
-seconds for add-on-only setups; unchanged auxiliary sensor payloads are deduped
-between bounded recovery heartbeats to reduce HA Core REST churn. When the HACS
+after each segment transition. The media-player heartbeat starts every 30
+seconds for add-on-only setups. When an attempted entity write fails, the next
+heartbeat waits 30, then 60, 120, 240, and at most 300 seconds until a real
+successful attempt resets it to 30 seconds. A skipped heartbeat (debounced, or
+with no due entity writes) keeps the current interval. Immediate playback-selection
+and stop-transition pushes still run when those events happen; they are not gated
+on the heartbeat timer. Unchanged auxiliary sensor payloads are deduped between
+bounded recovery heartbeats to reduce HA Core REST churn. When the HACS
 integration is installed, turn `ha_media_player_push` off so its registered
 `media_player.mammamiradio` owns the id instead of the REST-pushed ghost; the
 sensors keep flowing either way.
@@ -974,7 +979,8 @@ station" — it derives from the persisted stop marker alone, so it stays `on`
 through queue starvation, a dead playback task, and even prolonged silence with
 listeners connected. `media_player.mammamiradio` is nearly as loose: its state
 derives from the stop marker plus a sticky `now_streaming` row that survives the
-end of a segment, republished by a 30-second heartbeat. The control room's
+end of a segment, republished by the heartbeat (and immediately on playback
+selection or a stop transition). The control room's
 `station_on_air` requires a listener to have actually accepted audio (see
 "Diagnosing provider fallbacks" above), so the entity and the admin header can
 disagree for as long as a failure lasts, not just for a moment. For automations
@@ -993,7 +999,7 @@ All four entities are labelled with the resolved station identity (`Mamma Mi Rad
 
 `entity_picture` is always an absolute image URL: the real album cover while a track plays, and the station logo for host talk, ads, and idle. The logo fallback matters because the HA media card keeps the last cover when `entity_picture` is removed — so without it the previous track's art would linger through a news flash. Override the logo per station with `artwork_url` under `[brand]` in `radio.toml` (must be an absolute `http(s)` URL; a relative path is rejected because HA resolves `entity_picture` against its own origin). Blank uses the bundled station logo.
 
-**Cold-start note:** after a HA or addon restart, the media player reappears within 30 seconds via the heartbeat. Unchanged auxiliary sensors are republished by the bounded recovery heartbeat, or sooner when their state changes. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
+**Cold-start note:** after a HA or addon restart, the media player reappears on the next successful heartbeat (30 seconds when publishing is healthy). Unchanged auxiliary sensors are republished by the bounded recovery heartbeat, or sooner when their state changes. Automations triggering on `state_changed` may miss the first segment after restart — add an `initial_state: playing` guard if needed.
 
 **Lovelace media card:**
 

@@ -465,7 +465,11 @@ async def test_admin_listener_facts_agree():
     assert admin["capabilities"] == public["capabilities"]
     assert admin["upcoming"] == public["upcoming"]
     assert admin["upcoming_mode"] == public["upcoming_mode"]
-    assert admin["runtime_health"] == public["runtime_health"]
+    admin_health = dict(admin["runtime_health"])
+    ha_publish = admin_health.pop("ha_publish", None)
+    assert ha_publish is not None
+    assert "ha_publish" not in public["runtime_health"]
+    assert admin_health == public["runtime_health"]
     assert admin["playback_actions"] == public["playback_actions"]
     assert admin.get("ha_moments") == public.get("ha_moments")
 

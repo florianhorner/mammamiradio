@@ -39,6 +39,8 @@ def _reset_push_globals():
     ha._media_player_ghost_purged = False
     ha._ha_entity_payload_fingerprints.clear()
     ha._ha_entity_last_push_at.clear()
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
     yield
 
 
@@ -134,3 +136,42 @@ async def test_failed_purge_retries_next_push(monkeypatch):
         await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
     # First delete failed -> the purge flag was reset -> retried on the next push.
     assert client.delete.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_purge_does_not_log_exception_text(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
+    client = _mock_client()
+    client.delete.side_effect = RuntimeError("boom token=sekrit http://ha:8123")
+    with (
+        patch.object(ha, "_get_ha_client", return_value=client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
+    text = caplog.text
+    assert "ghost media player cleanup failed (unexpected)" in text
+    assert "boom" not in text
+    assert "sekrit" not in text
+    assert "http://ha:8123" not in text
+    assert "RuntimeError" not in text
+
+
+@pytest.mark.asyncio
+async def test_failed_purge_transport_logs_category(monkeypatch, caplog):
+    import logging
+
+    import httpx
+
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
+    client = _mock_client()
+    client.delete.side_effect = httpx.ConnectError("nope")
+    with (
+        patch.object(ha, "_get_ha_client", return_value=client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
+    assert "ghost media player cleanup failed (transport)" in caplog.text
+    assert "nope" not in caplog.text
+    assert "ConnectError" not in caplog.text

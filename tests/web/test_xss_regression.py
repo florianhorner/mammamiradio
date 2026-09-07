@@ -44,6 +44,8 @@ def test_admin_ha_fields_use_esc() -> None:
             f"HA field '{field}' is not wrapped with esc() before innerHTML assignment. "
             "This is an XSS vulnerability — HA entity state values are attacker-influenced."
         )
+    assert "esc(publish.detail)" in html
+    assert "esc(publish.nextStep)" in html
 
 
 def test_admin_events_summary_esc_before_replace() -> None:

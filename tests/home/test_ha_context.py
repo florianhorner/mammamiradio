@@ -65,11 +65,14 @@ from mammamiradio.home.ha_context import (
     fetch_home_context_preview,
     fetch_weather_forecast,
     get_cached_home_context,
+    ha_publish_status_payload,
     invalidate_all_home_context,
     invalidate_home_context_entity_baselines,
+    next_ha_publish_heartbeat_interval,
     push_state_to_ha,
     revalidate_home_context_mutes,
     revalidate_home_context_outcome_mutes,
+    run_ha_publish_heartbeat,
 )
 
 
@@ -4787,6 +4790,8 @@ def reset_ha_push_debounce():
     _hc._ha_push_lock = None
     _hc._ha_entity_payload_fingerprints.clear()
     _hc._ha_entity_last_push_at.clear()
+    with _hc._ha_publish_health_lock:
+        _hc._ha_publish_health = _hc._HaPublishHealth()
     yield
     _hc._last_ha_push = original
     _hc._last_ha_stop_push = original_stop
@@ -4795,6 +4800,8 @@ def reset_ha_push_debounce():
     _hc._ha_entity_payload_fingerprints.update(original_fingerprints)
     _hc._ha_entity_last_push_at.clear()
     _hc._ha_entity_last_push_at.update(original_push_times)
+    with _hc._ha_publish_health_lock:
+        _hc._ha_publish_health = _hc._HaPublishHealth()
 
 
 @pytest.mark.asyncio
@@ -4805,7 +4812,7 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
     mock_client.post.return_value = mock_resp
 
     with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
-        await push_state_to_ha(
+        result = await push_state_to_ha(
             ha_url="http://ha.local:8123",
             ha_token="test-token",
             now_streaming={
@@ -4819,6 +4826,15 @@ async def test_push_state_to_ha_normal(reset_ha_push_debounce):
             session_stopped=False,
         )
 
+    assert result is True
+    publish = ha_publish_status_payload(
+        SimpleNamespace(
+            homeassistant=SimpleNamespace(enabled=True, url="http://ha.local:8123"),
+            ha_token="tok",
+        )
+    )
+    assert publish["status"] == "ok"
+    assert "working" in publish["message"]
     assert mock_client.post.call_count == 4
     urls = [call.args[0] for call in mock_client.post.call_args_list]
     assert any("media_player.mammamiradio" in u for u in urls)
@@ -5078,8 +5094,7 @@ async def test_push_state_to_ha_non_music_artist_is_always_station_name(reset_ha
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_logs_typed_error_and_retries_on_transient(reset_ha_push_debounce, caplog):
-    """A transient network error logs the exception TYPE + repr (never blank) and
-    is retried exactly once per entity (4 entities x 2 attempts = 8 POSTs)."""
+    """A transient network error is retried once per entity and emits one outage warning."""
     import logging
 
     import httpx
@@ -5091,7 +5106,7 @@ async def test_push_state_to_ha_logs_typed_error_and_retries_on_transient(reset_
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
         caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
     ):
-        await push_state_to_ha(
+        result = await push_state_to_ha(
             ha_url="http://ha.local:8123",
             ha_token="test-token",
             now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
@@ -5101,16 +5116,22 @@ async def test_push_state_to_ha_logs_typed_error_and_retries_on_transient(reset_
         )
 
     # 4 entities, one bounded retry each → 8 POST attempts.
+    assert result is False
     assert mock_client.post.call_count == 8
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "failing (transport)" in warnings[0].getMessage()
     text = caplog.text
-    assert "after retry" in text
-    assert "ReadTimeout" in text  # typed, never the old blank string
-    assert "HA push failed for" in text
+    assert "timed out" not in text
+    assert "ReadTimeout" not in text
+    assert "test-token" not in text
+    assert "http://ha.local" not in text
+    assert "HA push failed for" not in text
 
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_push_debounce, caplog):
-    """A 4xx response logs the status AND the body, and is NOT retried."""
+    """A 4xx response is not retried and does not leak the HTTP body."""
     import logging
 
     mock_resp = MagicMock(status_code=401)
@@ -5122,7 +5143,7 @@ async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_pus
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
         caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
     ):
-        await push_state_to_ha(
+        result = await push_state_to_ha(
             ha_url="http://ha.local:8123",
             ha_token="test-token",
             now_streaming={"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
@@ -5131,10 +5152,14 @@ async def test_push_state_to_ha_logs_http_body_on_4xx_without_retry(reset_ha_pus
             session_stopped=False,
         )
 
-    # 4 entities, no retry on HTTP errors → exactly 4 POSTs.
+    assert result is False
     assert mock_client.post.call_count == 4
-    assert "HTTP 401" in caplog.text
-    assert "Unauthorized" in caplog.text
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "failing (auth_denied)" in warnings[0].getMessage()
+    assert "Unauthorized" not in caplog.text
+    assert "HTTP 401" not in caplog.text
+    assert "test-token" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -5696,13 +5721,15 @@ async def test_push_state_to_ha_ha_unreachable_continues(reset_ha_push_debounce)
     # media_player retried once (2 attempts) + 3 healthy entities = 5 POSTs.
     assert mock_client.post.call_count == 5
     mock_logger.warning.assert_called_once()
-    assert mock_logger.warning.call_args.args[1] == "media_player.mammamiradio"
-    assert "after retry" in mock_logger.warning.call_args.args[0]
+    assert mock_logger.warning.call_args.args[1] == "transport"
+    assert "media_player.mammamiradio" not in str(mock_logger.warning.call_args)
+    assert "unreachable" not in str(mock_logger.warning.call_args)
+    assert "ConnectError" not in str(mock_logger.warning.call_args)
 
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_debounce):
-    """HTTP 4xx/5xx responses are logged per entity (with body slot) and NOT retried."""
+    """HTTP 4xx/5xx responses fail the cycle, are not retried, and do not leak bodies."""
 
     async def _post_side_effect(*args, **kwargs):
         url = args[0] if args else kwargs.get("url", "")
@@ -5726,12 +5753,10 @@ async def test_push_state_to_ha_http_error_warns_and_continues(reset_ha_push_deb
 
     # HTTP errors are not retried → exactly 4 POSTs.
     assert mock_client.post.call_count == 4
-    mock_logger.warning.assert_called_once_with(
-        "HA push failed for %s: HTTP %d%s",
-        "sensor.mammamiradio_segment_type",
-        503,
-        "",
-    )
+    mock_logger.warning.assert_called_once()
+    assert mock_logger.warning.call_args.args[1] == "http_error"
+    assert "sensor.mammamiradio_segment_type" not in str(mock_logger.warning.call_args)
+    assert "503" not in str(mock_logger.warning.call_args)
 
 
 @pytest.mark.asyncio
@@ -5768,7 +5793,7 @@ async def test_push_state_to_ha_debounce(reset_ha_push_debounce):
     mock_client.post.return_value = MagicMock(status_code=200)
 
     with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
-        await push_state_to_ha(
+        first = await push_state_to_ha(
             ha_url="http://ha.local:8123",
             ha_token="test-token",
             now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
@@ -5777,7 +5802,7 @@ async def test_push_state_to_ha_debounce(reset_ha_push_debounce):
             session_stopped=False,
         )
         # Second call immediately after — should be debounced
-        await push_state_to_ha(
+        second = await push_state_to_ha(
             ha_url="http://ha.local:8123",
             ha_token="test-token",
             now_streaming={"type": "music", "label": "Song", "started": time.time(), "metadata": {}},
@@ -5786,6 +5811,8 @@ async def test_push_state_to_ha_debounce(reset_ha_push_debounce):
             session_stopped=False,
         )
 
+    assert first is True
+    assert second is None
     assert mock_client.post.call_count == 4  # only first call's 4 POSTs
 
 
@@ -5814,6 +5841,218 @@ async def test_push_state_to_ha_stopped_debounce(reset_ha_push_debounce):
         )
 
     assert mock_client.post.call_count == 4  # only first stopped push's 4 POSTs
+
+
+def _ha_push_kwargs(**overrides):
+    payload = {
+        "ha_url": "http://ha.local:8123",
+        "ha_token": "test-token",
+        "now_streaming": {"type": "music", "label": "Volare", "metadata": {"title": "Volare"}},
+        "current_track": None,
+        "listeners_active": 1,
+        "session_stopped": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_http_502_is_http_error(reset_ha_push_debounce, caplog):
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=502, text="<html>bad gateway secret</html>")
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.INFO, logger="mammamiradio.home.ha_context"),
+    ):
+        assert await push_state_to_ha(**_ha_push_kwargs()) is False
+    assert mock_client.post.call_count == 4
+    assert "failing (http_error)" in caplog.text
+    assert "bad gateway" not in caplog.text
+    assert "502" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_partial_success_retries_failed_entity(reset_ha_push_debounce):
+    async def _post_side_effect(url, **kwargs):
+        if "segment_type" in url:
+            return MagicMock(status_code=502, text="nope")
+        return MagicMock(status_code=200)
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = _post_side_effect
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        assert await push_state_to_ha(**_ha_push_kwargs()) is False
+        import mammamiradio.home.ha_context as ha
+
+        ha._last_ha_push = 0.0
+        mock_client.post.reset_mock()
+        mock_client.post.side_effect = _post_side_effect
+        assert await push_state_to_ha(**_ha_push_kwargs()) is False
+    posted = [call.args[0].rsplit("/api/states/", 1)[-1] for call in mock_client.post.call_args_list]
+    assert "media_player.mammamiradio" in posted
+    assert posted.count("sensor.mammamiradio_segment_type") == 1
+    assert "sensor.mammamiradio_listeners" not in posted
+    assert "binary_sensor.mammamiradio_on_air" not in posted
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_no_due_writes_returns_none(reset_ha_push_debounce, monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    mock_client.delete.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        assert await push_state_to_ha(**_ha_push_kwargs()) is True
+        import mammamiradio.home.ha_context as ha
+
+        ha._last_ha_push = 0.0
+        mock_client.post.reset_mock()
+        with patch("mammamiradio.home.ha_context.time.time", return_value=10.0):
+            assert await push_state_to_ha(**_ha_push_kwargs()) is None
+    assert mock_client.post.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_one_outage_and_one_recovery(reset_ha_push_debounce, caplog):
+    fail = MagicMock(status_code=502, text="raw-body")
+    ok = MagicMock(status_code=200)
+    mock_client = AsyncMock()
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.INFO, logger="mammamiradio.home.ha_context"),
+    ):
+        import mammamiradio.home.ha_context as ha
+
+        mock_client.post.return_value = fail
+        assert await push_state_to_ha(**_ha_push_kwargs()) is False
+        ha._last_ha_push = 0.0
+        assert await push_state_to_ha(**_ha_push_kwargs()) is False
+        ha._last_ha_push = 0.0
+        mock_client.post.return_value = ok
+        assert await push_state_to_ha(**_ha_push_kwargs()) is True
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert len(warnings) == 1
+    assert len(infos) == 1
+    assert "recovered" in infos[0]
+    assert "raw-body" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_propagates_cancellation(reset_ha_push_debounce):
+    started = asyncio.Event()
+
+    async def _hang(*_args, **_kwargs):
+        started.set()
+        await asyncio.sleep(30)
+        return MagicMock(status_code=200)
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = _hang
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        task = asyncio.create_task(push_state_to_ha(**_ha_push_kwargs()))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    payload = ha_publish_status_payload(
+        SimpleNamespace(homeassistant=SimpleNamespace(enabled=True, url="http://ha.local:8123"), ha_token="tok")
+    )
+    assert payload["status"] == "idle"
+    assert payload["failure_streak"] == 0
+
+
+def test_next_ha_publish_heartbeat_interval_sequence():
+    interval = 30.0
+    expected = [60.0, 120.0, 240.0, 300.0, 300.0]
+    for target in expected:
+        interval = next_ha_publish_heartbeat_interval(interval, False)
+        assert interval == target
+    assert next_ha_publish_heartbeat_interval(300.0, True) == 30.0
+    assert next_ha_publish_heartbeat_interval(120.0, None) == 120.0
+
+
+@pytest.mark.asyncio
+async def test_run_ha_publish_heartbeat_sleeps_from_push_results():
+    sleeps: list[float] = []
+    results: list[bool | None] = [False, False, False, False, True, None, False]
+
+    async def fake_sleep(interval: float) -> None:
+        sleeps.append(interval)
+        if len(sleeps) > len(results):
+            raise asyncio.CancelledError
+
+    push = AsyncMock(side_effect=results)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_ha_publish_heartbeat(push, lambda: True, sleep=fake_sleep)
+    assert sleeps[:7] == [30.0, 60.0, 120.0, 240.0, 300.0, 30.0, 30.0]
+    assert push.await_count == 7
+
+
+@pytest.mark.asyncio
+async def test_run_ha_publish_heartbeat_skips_when_disabled_and_treats_raise_as_failure():
+    sleeps: list[float] = []
+
+    async def fake_sleep(interval: float) -> None:
+        sleeps.append(interval)
+        if len(sleeps) >= 3:
+            raise asyncio.CancelledError
+
+    push = AsyncMock(side_effect=[RuntimeError("secret-token"), True])
+    enabled = iter([False, True, True])
+    with pytest.raises(asyncio.CancelledError):
+        await run_ha_publish_heartbeat(push, lambda: next(enabled), sleep=fake_sleep)
+    assert sleeps[:3] == [30.0, 30.0, 60.0]
+    assert push.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_unexpected_exception_does_not_leak(reset_ha_push_debounce, caplog):
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", side_effect=RuntimeError("secret-token")),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        assert await push_state_to_ha(**_ha_push_kwargs()) is False
+    assert "failing (unexpected)" in caplog.text
+    assert "secret-token" not in caplog.text
+    assert "RuntimeError" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_push_state_to_ha_non_transport_post_error_is_unexpected(reset_ha_push_debounce, caplog):
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = ValueError("raw-body")
+    with (
+        patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        assert await push_state_to_ha(**_ha_push_kwargs()) is False
+    assert mock_client.post.call_count == 4
+    assert "failing (unexpected)" in caplog.text
+    assert "raw-body" not in caplog.text
+
+
+def test_ha_publish_status_payload_settings_not_home_context():
+    import mammamiradio.home.ha_context as ha
+
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
+    disabled = ha_publish_status_payload(
+        SimpleNamespace(homeassistant=SimpleNamespace(enabled=False, url="http://ha.local:8123"), ha_token="tok")
+    )
+    assert disabled["status"] == "disabled"
+    assert disabled["enabled"] is False
+    missing = ha_publish_status_payload(
+        SimpleNamespace(homeassistant=SimpleNamespace(enabled=True, url=""), ha_token="")
+    )
+    assert missing["status"] == "unconfigured"
+    idle = ha_publish_status_payload(
+        SimpleNamespace(homeassistant=SimpleNamespace(enabled=True, url="http://ha.local:8123"), ha_token="tok")
+    )
+    assert idle["status"] == "idle"
+    assert "token" not in idle["message"].lower() or "long-lived" in idle["next_step"]
+    assert "http://" not in str(idle)
 
 
 @pytest.mark.asyncio
@@ -5967,8 +6206,10 @@ async def test_push_state_to_ha_partial_failure_continues(reset_ha_push_debounce
     # segment_type retried once (2 attempts) + 3 healthy entities = 5 POSTs.
     assert mock_client.post.call_count == 5
     mock_logger.warning.assert_called_once()
-    assert mock_logger.warning.call_args.args[1] == "sensor.mammamiradio_segment_type"
-    assert "after retry" in mock_logger.warning.call_args.args[0]
+    assert mock_logger.warning.call_args.args[1] == "transport"
+    assert "sensor.mammamiradio_segment_type" not in str(mock_logger.warning.call_args)
+    assert "timeout" not in str(mock_logger.warning.call_args)
+    assert "TimeoutException" not in str(mock_logger.warning.call_args)
 
 
 # ---------------------------------------------------------------------------

@@ -8276,6 +8276,89 @@ async def test_admin_status_ha_details_absent_when_no_ha_context():
 
 
 @pytest.mark.asyncio
+async def test_admin_status_ha_publish_is_private_and_settings_driven():
+    import mammamiradio.home.ha_context as ha
+
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
+    app = _make_test_app(admin_token="secret-tok")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    headers = {"Authorization": "Bearer secret-tok"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        disabled = (await client.get("/status", headers=headers)).json()
+        public = (await client.get("/public-status")).json()
+        healthz = (await client.get("/healthz")).json()
+        readyz = (await client.get("/readyz")).json()
+        app.state.config.homeassistant.enabled = True
+        app.state.config.homeassistant.url = ""
+        app.state.config.ha_token = ""
+        unconfigured = (await client.get("/status", headers=headers)).json()
+        app.state.config.homeassistant.url = "http://ha.local:8123"
+        app.state.config.ha_token = "test-token"
+        idle = (await client.get("/status", headers=headers)).json()
+
+    assert disabled["runtime_health"]["ha_publish"]["status"] == "disabled"
+    assert unconfigured["runtime_health"]["ha_publish"]["status"] == "unconfigured"
+    assert idle["runtime_health"]["ha_publish"]["status"] == "idle"
+    assert idle["ha_details"] is None
+    assert "ha_publish" not in public["runtime_health"]
+    assert "ha_publish" not in healthz.get("runtime", {})
+    assert "ha_publish" not in (readyz.get("runtime") or {})
+    assert "test-token" not in json.dumps(idle["runtime_health"]["ha_publish"])
+    assert "http://ha.local" not in json.dumps(idle["runtime_health"]["ha_publish"])
+
+
+@pytest.mark.asyncio
+async def test_admin_status_ha_publish_failure_and_recovery():
+    import mammamiradio.home.ha_context as ha
+
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
+    fail = MagicMock(status_code=502, text="gateway secret")
+    ok = MagicMock(status_code=200)
+    mock_client = AsyncMock()
+    mock_client.post.return_value = fail
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await ha.push_state_to_ha(
+            "http://ha.local:8123",
+            "test-token",
+            {"type": "music", "metadata": {"title": "X"}},
+            None,
+            1,
+            False,
+        )
+        app = _make_test_app(admin_token="secret-tok")
+        app.state.config.homeassistant.enabled = True
+        app.state.config.homeassistant.url = "http://ha.local:8123"
+        app.state.config.ha_token = "test-token"
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        headers = {"Authorization": "Bearer secret-tok"}
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            failing = (await client.get("/status", headers=headers)).json()["runtime_health"]["ha_publish"]
+            mock_client.post.return_value = ok
+            ha._last_ha_push = 0.0
+            await ha.push_state_to_ha(
+                "http://ha.local:8123",
+                "test-token",
+                {"type": "music", "metadata": {"title": "X"}},
+                None,
+                1,
+                False,
+            )
+            recovered = (await client.get("/status", headers=headers)).json()["runtime_health"]["ha_publish"]
+            app.state.config.homeassistant.enabled = False
+            later_off = (await client.get("/status", headers=headers)).json()["runtime_health"]["ha_publish"]
+
+    assert failing["status"] == "degraded"
+    assert failing["reason"] == "http_error"
+    assert "gateway secret" not in json.dumps(failing)
+    assert recovered["status"] == "ok"
+    assert recovered["message"].endswith("recovered.")
+    assert later_off["status"] == "disabled"
+    assert later_off["failure_streak"] == 0
+
+
+@pytest.mark.asyncio
 async def test_admin_status_ha_details_present_with_full_context():
     """ha_details carries mood, weather_arc, events_summary, and event counts."""
     app = _make_test_app(admin_token="secret-tok")

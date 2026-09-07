@@ -3145,6 +3145,23 @@ function formatHomeSnapshotTimestamp(ts){
   if(Number.isNaN(d.getTime()))return'—';
   return d.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'});
 }
+function homePublishPresentation(p){
+  const pub=p||{};
+  const status=String(pub.status||'');
+  const reason=String(pub.reason||'');
+  const message=String(pub.message||'');
+  const nextStep=String(pub.next_step||'');
+  if(status==='disabled')return{state:'idle',label:'off',detail:message,nextStep};
+  if(status==='unconfigured')return{state:'idle',label:'not configured',detail:message,nextStep};
+  if(status==='idle')return{state:'idle',label:'not tested yet',detail:message,nextStep};
+  if(status==='ok'){
+    if(pub.last_failure_at)return{state:'ready',label:'recovered',detail:message,nextStep};
+    return{state:'ready',label:'working',detail:message,nextStep};
+  }
+  if(reason==='auth_denied')return{state:'blocked',label:'token rejected',detail:message,nextStep};
+  if(status==='degraded')return{state:'degraded',label:'retrying',detail:message,nextStep};
+  return{state:'idle',label:'not tested yet',detail:message,nextStep};
+}
 function homeSnapshotPresentation(refresh){
   const r=refresh||{};
   const age=formatHomeSnapshotAge(r.age_seconds);
@@ -8225,9 +8242,16 @@ function updateEngineRoom(st,caps){
   const haCard=document.getElementById('ha-details-card');
   const haEl=document.getElementById('haDetails');
   const hd=st.ha_details;
-  if(hd){
+  const pub=st.runtime_health&&st.runtime_health.ha_publish;
+  if(pub||hd){
     haCard.style.display='';
     const lines=[];
+    if(pub){
+      const publish=homePublishPresentation(pub);
+      lines.push('Publishing: '+statusInline(publish.state,publish.label)+' '+esc(publish.detail));
+      if(publish.nextStep)lines.push(esc(publish.nextStep));
+    }
+    if(hd){
     const refresh=hd.refresh||{};
     const snapshot=homeSnapshotPresentation(refresh);
     lines.push('Home snapshot: '+statusInline(snapshot.state,snapshot.label)+' '+snapshot.detail);
@@ -8264,6 +8288,7 @@ function updateEngineRoom(st,caps){
       lines.push('Filtered for privacy:<br>'+denied.join('<br>'));
     }
     if(hd.catalog_hit_rate!=null)lines.push('Label catalog: <strong>'+Math.round(Number(hd.catalog_hit_rate||0)*100)+'%</strong>');
+    }
     haEl.innerHTML=lines.join('<br>')||'No HA data';
   }else{
     haCard.style.display='none';
