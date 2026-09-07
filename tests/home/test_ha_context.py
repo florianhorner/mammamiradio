@@ -5891,6 +5891,38 @@ async def test_push_state_to_ha_one_outage_and_one_recovery(reset_ha_push_deboun
 
 
 @pytest.mark.asyncio
+async def test_push_state_to_ha_worst_reason_wins_across_mixed_failures(reset_ha_push_debounce):
+    """When entities fail for different reasons in one cycle, the more specific/
+    actionable reason wins the reported category — regardless of encounter
+    order. media_player (posted first) fails with a transport error; the
+    segment_type sensor (posted second) fails with a 403. The overall reason
+    must upgrade to auth_denied, not freeze on the first-seen transport error,
+    since auth_denied is the one with an operator-actionable fix.
+    """
+
+    async def _post_side_effect(url, **kwargs):
+        if "media_player" in url:
+            raise httpx.ConnectError("unreachable")
+        if "segment_type" in url:
+            return MagicMock(status_code=403, text="forbidden")
+        return MagicMock(status_code=200)
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = _post_side_effect
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        result = await push_state_to_ha(**_ha_push_kwargs())
+
+    assert result is False
+    posted = [call.args[0].rsplit("/api/states/", 1)[-1] for call in mock_client.post.call_args_list]
+    assert posted.count("media_player.mammamiradio") == 2  # transport error retried once
+    assert posted.count("sensor.mammamiradio_segment_type") == 1  # HTTP status, not retried
+    import mammamiradio.home.ha_context as ha
+
+    with ha._ha_publish_health_lock:
+        assert ha._ha_publish_health.reason == "auth_denied"
+
+
+@pytest.mark.asyncio
 async def test_push_state_to_ha_propagates_cancellation(reset_ha_push_debounce):
     started = asyncio.Event()
 
@@ -5998,6 +6030,59 @@ def test_ha_publish_status_payload_settings_not_home_context():
     assert idle["status"] == "idle"
     assert "token" not in idle["message"].lower() or "long-lived" in idle["next_step"]
     assert "http://" not in str(idle)
+
+
+def test_ha_publish_status_payload_addon_auth_denied_copy():
+    """An add-on operator cannot act on the standalone 'save the token again'
+    instruction (Supervisor owns the token) — the add-on's auth_denied
+    next_step must point at the Supervisor connection instead."""
+    import mammamiradio.home.ha_context as ha
+
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth(
+            outage_active=True, reason="auth_denied", failure_streak=1, last_failure_at=1.0, last_attempt_at=1.0
+        )
+    config = SimpleNamespace(
+        homeassistant=SimpleNamespace(enabled=True, url="http://ha.local:8123"),
+        ha_token="tok",
+        is_addon=True,
+    )
+    addon_payload = ha_publish_status_payload(config)
+    config.is_addon = False
+    standalone_payload = ha_publish_status_payload(config)
+
+    assert addon_payload["status"] == "degraded"
+    assert addon_payload["reason"] == "auth_denied"
+    assert "add-on Home Assistant connection" in addon_payload["next_step"]
+    assert "long-lived token" not in addon_payload["next_step"]
+    assert "long-lived token" in standalone_payload["next_step"]
+    assert standalone_payload["next_step"] != addon_payload["next_step"]
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
+
+
+@pytest.mark.asyncio
+async def test_ha_publish_status_payload_ok_without_prior_failure_is_not_worded_as_recovered(
+    reset_ha_push_debounce,
+):
+    """The most common steady state — the first-ever push succeeds and nothing
+    has failed yet — must read as plain 'working', not 'recovered.' Conflating
+    the two would tell an operator who never had a problem that something was
+    just fixed. Only the state transition (success recorded) was previously
+    exercised; the rendered payload for this specific branch was not.
+    """
+    mock_client = AsyncMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        result = await push_state_to_ha(**_ha_push_kwargs())
+    assert result is True
+
+    config = SimpleNamespace(homeassistant=SimpleNamespace(enabled=True, url="http://ha.local:8123"), ha_token="tok")
+    payload = ha_publish_status_payload(config)
+    assert payload["status"] == "ok"
+    assert payload["failure_streak"] == 0
+    assert "recovered" not in payload["message"].lower()
+    assert payload["message"] == "Home Assistant entity updates are working."
 
 
 @pytest.mark.asyncio
