@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -634,6 +635,89 @@ def test_catalog_persistence_has_no_fallible_step_after_replace(tmp_path):
         assert catalog._atomic_write_json(destination, {"entries": {}})
     assert destination.stat().st_mode & 0o777 == 0o600
     assert json.loads(destination.read_text()) == {"entries": {}}
+
+
+def test_catalog_temp_file_is_created_owner_only(tmp_path):
+    """Creating the temp file under the process umask and chmod-ing afterwards left
+    household labels readable by other local users for the length of the write.
+    Assert the mode the file is *created* with, not the mode it ends up with."""
+    import mammamiradio.home.catalog as catalog
+
+    destination = tmp_path / CATALOG_FILENAME
+    modes: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        modes.append(os.stat(name).st_mode & 0o777)
+        return fd, name
+
+    previous_umask = os.umask(0o000)
+    try:
+        with patch("mammamiradio.home.catalog.tempfile.mkstemp", side_effect=recording_mkstemp):
+            assert catalog._atomic_write_json(destination, {"entries": {}})
+    finally:
+        os.umask(previous_umask)
+
+    assert modes == [0o600]
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_label_client_disables_sdk_retries(tmp_path, monkeypatch):
+    """anthropic's default max_retries=2 multiplies the per-request timeout, and the
+    whole call runs while _CATALOG_LOCK is held."""
+    constructed: list[dict] = []
+    create = AsyncMock(return_value=_label_response([]))
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+
+    def factory(**kwargs):
+        constructed.append(kwargs)
+        return SimpleNamespace(with_options=lambda **opts: client)
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", factory)
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
+
+    await generate_label_catalog({"light.counter": _state("Counter light")}, cache_dir=tmp_path, config=config)
+
+    assert constructed
+    assert constructed[0].get("max_retries") == 0
+
+
+@pytest.mark.asyncio
+async def test_stalled_provider_cannot_hold_the_catalog_lock_open_ended(tmp_path, monkeypatch):
+    """A hung provider must hit the refresh budget, release the lock, and leave the
+    previous catalog intact rather than blocking every later refresh."""
+    import mammamiradio.home.catalog as catalog
+
+    async def never_answers(**kwargs):
+        await asyncio.sleep(3600)
+
+    client = SimpleNamespace(messages=SimpleNamespace(create=never_answers))
+    monkeypatch.setattr(
+        "anthropic.AsyncAnthropic", lambda **kwargs: SimpleNamespace(with_options=lambda **opts: client)
+    )
+    monkeypatch.setattr(catalog, "_LABEL_REQUEST_BUDGET_SECONDS", 0.05)
+
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
+    entity_id = "light.counter"
+    state = _state("Counter light")
+    save_catalog(
+        tmp_path,
+        {
+            "entries": {
+                entity_id: {"hash": compute_hash(entity_id, state), "label_it": "Vecchia luce", "label_en": "Old light"}
+            }
+        },
+    )
+
+    result = await asyncio.wait_for(
+        generate_label_catalog({entity_id: state}, cache_dir=tmp_path, config=config, force=True),
+        timeout=5,
+    )
+
+    assert result["entries"][entity_id]["label_it"] == "Vecchia luce"
+    assert not catalog._CATALOG_LOCK.locked()
 
 
 def test_catalog_directory_failure_is_fail_soft(tmp_path, caplog):

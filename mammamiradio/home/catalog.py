@@ -16,8 +16,8 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -332,20 +332,30 @@ def load_catalog(cache_dir: Path | None) -> dict:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> bool:
-    """Write JSON to a unique temp file then atomically replace; owner-only perms. Returns success."""
-    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    """Write JSON to a unique temp file then atomically replace; owner-only perms. Returns success.
+
+    The temp file is opened by :func:`tempfile.mkstemp`, which creates it 0600 before
+    any household label reaches the disk. Creating it under the process umask and
+    chmod-ing afterwards left the catalog readable by other local users for the
+    length of the write. Same pattern as ``home/migration.py``.
+    """
+    tmp_path: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
         os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, path)
         return True
     except OSError:
         logger.warning("Failed to write HA label catalog; preserving existing data")
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         return False
 
 
@@ -626,6 +636,11 @@ async def generate_label_catalog(
         return updated
 
 
+# Hard wall-clock ceiling for one label refresh. _CATALOG_LOCK is held for the
+# whole call, so this is the longest one refresh can block the next.
+_LABEL_REQUEST_BUDGET_SECONDS = 45.0
+
+
 def _label_output_budget(candidate_count: int) -> int:
     return max(1200, min(4000, 200 + 80 * max(1, candidate_count)))
 
@@ -643,35 +658,42 @@ async def _call_anthropic_labels(
     model = _resolve_anthropic_fast_model(config)
     if not model:
         return []
-    client = AsyncAnthropic(api_key=config.anthropic_api_key)
+    # SDK retries would multiply the per-request timeout below, and the whole call
+    # runs while _CATALOG_LOCK is held: anthropic's default max_retries=2 lets one
+    # messages.create run about three timeouts long. Drop them and put one
+    # wall-clock ceiling around both attempts instead. A transient provider failure
+    # now costs one poll interval, because the caller keeps the existing catalog.
+    client = AsyncAnthropic(api_key=config.anthropic_api_key, max_retries=0)
     batch = candidates
-    for attempt in range(2):
-        prompt = (
-            "Generate concise home-automation labels for an Italian radio host prompt. "
-            "Return only JSON with a labels array. Each item must contain entity_id, "
-            "label_it, and label_en. Do not include raw entity IDs in labels.\n\n"
-            + json.dumps({"entities": [c.metadata for c in batch]}, ensure_ascii=False, sort_keys=True)
-        )
-        # Every submission, including a smaller retry, belongs to the original
-        # privacy generation. A late result must never restore permission.
-        if policy_epoch != _generation_policy_epoch:
-            return []
-        # Keep the background request bounded without changing SDK retries.
-        response = await client.with_options(timeout=45.0).messages.create(
-            model=model,
-            max_tokens=_label_output_budget(len(batch)),
-            system="You label Home Assistant entities safely and concisely.",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        if policy_epoch != _generation_policy_epoch:
-            return []
-        if getattr(response, "stop_reason", None) != "max_tokens":
-            return _parse_label_payload(_response_text(response))
-        logger.warning("HA label output truncated: attempt=%d candidates=%d", attempt + 1, len(batch))
-        if attempt == 0 and len(batch) > 1:
-            batch = batch[: len(batch) // 2]
-        else:
-            return []
+    async with asyncio.timeout(_LABEL_REQUEST_BUDGET_SECONDS):
+        for attempt in range(2):
+            prompt = (
+                "Generate concise home-automation labels for an Italian radio host prompt. "
+                "Return only JSON with a labels array. Each item must contain entity_id, "
+                "label_it, and label_en. Do not include raw entity IDs in labels.\n\n"
+                + json.dumps({"entities": [c.metadata for c in batch]}, ensure_ascii=False, sort_keys=True)
+            )
+            # Every submission, including a smaller retry, belongs to the original
+            # privacy generation. A late result must never restore permission.
+            if policy_epoch != _generation_policy_epoch:
+                return []
+            # Bound the single request too, so one stalled attempt cannot eat the
+            # whole budget and starve the half-batch retry.
+            response = await client.with_options(timeout=_LABEL_REQUEST_BUDGET_SECONDS).messages.create(
+                model=model,
+                max_tokens=_label_output_budget(len(batch)),
+                system="You label Home Assistant entities safely and concisely.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            if policy_epoch != _generation_policy_epoch:
+                return []
+            if getattr(response, "stop_reason", None) != "max_tokens":
+                return _parse_label_payload(_response_text(response))
+            logger.warning("HA label output truncated: attempt=%d candidates=%d", attempt + 1, len(batch))
+            if attempt == 0 and len(batch) > 1:
+                batch = batch[: len(batch) // 2]
+            else:
+                return []
     return []
 
 
