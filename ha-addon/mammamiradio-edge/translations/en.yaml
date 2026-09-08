@@ -19,7 +19,7 @@ configuration:
     description: "Premium: best hosts, highest cost. Balanced: great hosts at sensible cost (recommended). Economy: cheapest, lighter hosts. Picks the right model per task automatically — no model names to track."
   admin_token:
     name: Admin Token
-    description: "Set a token to require admin sign-in for the admin API. Leave it empty to trust your home network — any device on your local network can open the admin panel, and changes are still protected against cross-site requests. Set a value to require the token even on your local network, for example when automations need a stable credential."
+    description: "Set a token to require admin sign-in for the control panel. Leave it empty to trust your home network — any device on your local network can open the admin panel, and changes are still protected against cross-site requests. Set a value to require the token even on your local network, for example when automations need a stable credential."
   super_italian_mode:
     name: Super Italian Mode
     description: "Off (default): listener UI uses English utility copy with Italian station-feel words intact, and AI hosts target about 75% English with real Italian moments. On: listener UI is Italian and the hosts speak fully in Italian."
@@ -31,7 +31,7 @@ configuration:
     description: "Turns your station into a theatrical music competition. Hosts announce songs as fictional Italian regional delegations, assign dramatic points, and call drinking game triggers. Toggleable live from the admin panel without a restart."
   broadcast_chain:
     name: On-Air Sound
-    description: "Off (default): studio-clean output. On: every song, host break, and ad gets a very subtle on-air colouring — a gentle high-frequency softening and band-limit, the character of an FM broadcast versus a clean studio file. It is deliberately understated and often imperceptible on good speakers (most noticeable on small or phone speakers). Takes effect on the next few tracks as the buffered queue cycles through, not the one playing now."
+    description: "Off (default): studio-clean output. On: every song, host break, and ad gets a very subtle on-air colouring — a gentle high-frequency softening and band-limit, the character of an FM broadcast versus a clean studio file. It is deliberately understated and often imperceptible on good speakers (most noticeable on small or phone speakers). Takes effect over the next few tracks, not the one playing now."
   guest_host:
     name: Guest host
     description: "On (default): the rotating guest host joins the line-up and drops in for occasional guest-star breaks. Turn this Off to keep the show to your regular hosts only. Takes effect after the add-on restarts."

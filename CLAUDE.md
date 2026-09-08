@@ -457,6 +457,43 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on PRs that touch workflow/script paths, and on every push to `main`). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
+- **UI copy lint** (`scripts/check-ui-copy-lint.sh`): Principle #5 guard over human-facing
+  strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,
+  HA add-on option descriptions, and the streamer setup errors. Three rules: machine words on
+  a human screen (`tech_lingo`) and copy still phrased around picking a speaker or room
+  (`stale_speaker_copy`) always fail the lint. A stated failure with no next step
+  (`no_way_out`) fails the lint only for copy authored as a structured table row
+  (`WAY_OUT_BLOCKING_CONTEXTS`, matched on the context group, not as a string prefix) —
+  copy reviewed as a set rather than written inline at a call site. Two of those groups
+  give each failure its own `action` field; the other two are single authored sentences
+  carrying their own remedy. That every row passes is recomputed by
+  `test_every_blocking_context_row_carries_a_way_out`, not restated as a count.
+  In free-text toasts it never fails the lint, because a fixed verb list cannot enumerate
+  English imperatives and would flag correct copy — it is reported by `--audit`, which
+  labels every row blocking or advisory, and counted against `MAX_ADVISORY_VIOLATIONS`.
+  That ceiling does fail CI: free text is bounded, not unwatched. Raising it is the
+  deliberate edit that says the check misjudged a string, which keeps good copy out of
+  the baseline where it would look like a real violation.
+  Admin/addon/server copy is held to the same banned-word list as the listener — a warmer
+  register, not a shorter list.
+  - Known violations are grandfathered by fingerprint in `.config/ui-copy-baseline.json`;
+    CI fails on NEW ones. Refresh with `bash scripts/check-ui-copy-lint.sh --write-baseline`,
+    which prints every violation it newly accepts so a refresh cannot silently absorb a
+    regression. A baselined violation that no longer reproduces is also a failure — the
+    baseline may only shrink. `MAX_BASELINED_VIOLATIONS` and `MAX_ADVISORY_VIOLATIONS` in
+    `tests/repo/test_ui_copy_lint.py` pin both ceilings, so advisory findings cannot pile up
+    unwatched just because they do not fail the build.
+  - `MIN_STRINGS_PER_GROUP` is a coverage floor per context group. The lint scrapes copy out
+    of templates, so an extractor that stops matching after a reformat would otherwise
+    collect nothing, find no violations, and report "clean" — the floors make that a failure
+    instead. A group is one surface, enforced by
+    `test_each_surface_file_has_its_own_coverage_floor`: two files sharing a group would
+    share a floor, and the larger file's count alone would keep the smaller one's collapse
+    invisible. The two add-on translation files are the one allowed exception, since they
+    are copies of each other.
+  - Runs in `quality.yml` (`lint` job) beside the changelog and docs-safety lints.
+    Local: `bash scripts/check-ui-copy-lint.sh` (add `--audit` for the full report; every
+    flag is forwarded to `scripts/ui_copy_lint.py`).
 - **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) either required recovery asset (`continuity_1.mp3`, `emergency_tone.mp3`) missing, ≤1 KiB, or not recognized as audio by `ffprobe` — each checked independently, so validation never stops at the first playable asset — or any `generate_silence` reference in `producer.py`, (3) missing `_pick_canned_clip=None` test mock (empty-container / missing packaged recovery untested), (4) missing `session_stopped` test (post-restart silence untested). The manifest/hash boundary for those assets is no longer a per-asset call in this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py` run covers the whole packaged demo inventory (and, with `--browser-assets-root`, the browser narration pack) before the per-asset reachability check. Local: `bash scripts/check-release-invariants.sh`.
 - **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
 - **Advertised-version guard** (`scripts/check-advertised-version.sh`): asks GHCR whether the version `main` advertises to the HA Supervisor exists, for both arches, over the anonymous token endpoint (no scope needed). Home Assistant requires a prebuilt `image:` add-on's `version:` to name a real tag; when it does not, fresh installs fail and updates roll back.

@@ -376,6 +376,22 @@ When behavior changes, update the matching docs in the same change:
 
 If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.
 
+When changing anything a listener or operator reads — template copy, `ui_copy.py`,
+toast text, `streamer.py` setup errors, add-on option descriptions — run
+`bash scripts/check-ui-copy-lint.sh`. It holds human-facing strings to leadership
+principle #5. Three rules can fail it: a machine word on screen (`tech_lingo`), copy still
+phrased around picking a speaker or room (`stale_speaker_copy`), and a stated failure with
+no next step (`no_way_out`) — the last one only inside the authored error tables, because
+in free-text toasts the check misjudges correct copy. `--audit` prints everything it found
+and labels each row blocking or advisory.
+
+Known violations are grandfathered in `.config/ui-copy-baseline.json`. Fixing one also
+fails the lint, on purpose: the backlog may only shrink, so it tells you to refresh with
+`bash scripts/check-ui-copy-lint.sh --write-baseline`. Read the `+` lines that refresh
+prints — those are violations it newly *accepted*, and each one should be copy you meant
+to grandfather rather than a regression you just wrote. Fixed entries leave as a
+`- dropped N` line.
+
 When changing the public install or add-on guides, run `bash scripts/check-docs-safety.sh`. It catches retired Home Assistant navigation, unsafe live-recovery instructions, and broken relative Markdown links before CI does.
 
 
