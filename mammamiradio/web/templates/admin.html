@@ -2915,6 +2915,8 @@ function resetFirstListenGuideSource(audio){
   audio.load();
 }
 function stopFirstListenGuide({reset=true,resumeStation=true}={}){
+  // Invalidate pending playback before pause/load can settle its continuation.
+  ++_firstListenGuideAttempt;
   if(_firstListenGuideWatchdog){clearTimeout(_firstListenGuideWatchdog);_firstListenGuideWatchdog=null;}
   const audio=firstListenGuideAudio();
   const button=_firstListenUi.guideButton;
