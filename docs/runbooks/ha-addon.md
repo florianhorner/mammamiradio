@@ -88,10 +88,6 @@ opening; verify that charts, Jamendo, local music, bundled demo music, and
 recovery cover are described honestly. The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
-Failed background checks must offer a concrete recovery action and clear the
-warning after a successful check, without losing saved progress. Final privacy
-saves must keep First Listen open. A first privacy choice must not be described
-as an unsuccessful save.
 
 Required First Listen proof is hearing the station on this device in the add-on
 Web UI. Select **Start sound check**, then **Yes, I hear it** only after you hear

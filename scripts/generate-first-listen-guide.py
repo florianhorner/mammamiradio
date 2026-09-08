@@ -212,9 +212,48 @@ def _display_path(path: Path) -> str:
 
 
 def _publish_staged_file(staged: Path, destination: Path) -> None:
-    """Publish a render even when OS temp and --output-root use different filesystems."""
+    """Replace a complete file atomically, including across filesystems."""
 
-    shutil.move(str(staged), destination)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as handle:
+        local_copy = Path(handle.name)
+    try:
+        shutil.copyfile(staged, local_copy)
+        os.replace(local_copy, destination)
+        staged.unlink()
+    finally:
+        local_copy.unlink(missing_ok=True)
+
+
+def _publish_staged_pack(files: list[tuple[Path, Path]]) -> None:
+    """Publish media then manifest; restore the old pack on a catchable failure."""
+
+    root = Path(os.path.commonpath([destination.parent for _, destination in files]))
+    backup_dir = Path(tempfile.mkdtemp(prefix=".first-listen-backup-", dir=root))
+    originals = []
+    cleanup = True
+    try:
+        for index, (_, destination) in enumerate(files):
+            backup = backup_dir / str(index) if destination.exists() else None
+            if backup is not None:
+                shutil.copyfile(destination, backup)
+            originals.append((destination, backup))
+        try:
+            for staged, destination in files:
+                _publish_staged_file(staged, destination)
+        except Exception:
+            try:
+                for destination, backup in reversed(originals):
+                    if backup is None:
+                        destination.unlink(missing_ok=True)
+                    else:
+                        os.replace(backup, destination)
+            except OSError as exc:
+                cleanup = False
+                raise RuntimeError(f"publication rollback failed; retained backups at {backup_dir}") from exc
+            raise
+    finally:
+        if cleanup:
+            shutil.rmtree(backup_dir)
 
 
 def _load_pack_validator():
@@ -393,8 +432,9 @@ async def _render_station_opening(output_root, hosts, canonical_receipt, motif_n
         errors = validator["validate_demo_spoken_assets"](assets_root=staging, package_assets_root=staging)
         if errors:
             raise RuntimeError("invalid station render: " + "; ".join(errors))
-        _publish_staged_file(destination, output_root / relative)
-        _publish_staged_file(staged_manifest, output_root / MANIFEST_FILENAME)
+        _publish_staged_pack(
+            [(destination, output_root / relative), (staged_manifest, output_root / MANIFEST_FILENAME)]
+        )
         print(f"rendered station opening: {entry['duration_seconds']}s; wrote {_display_path(output_root / relative)}")
 
 
@@ -452,11 +492,13 @@ async def _run(args: argparse.Namespace) -> None:
         # staged manifest pass. Retained clips are never republished.
         output_dir = output_root / "first_listen"
         output_dir.mkdir(parents=True, exist_ok=True)
-        for clip in clips:
-            _publish_staged_file(
-                staging_dir / "first_listen" / f"{clip.clip_id}.mp3", output_dir / f"{clip.clip_id}.mp3"
-            )
-        _publish_staged_file(staged_manifest, output_root / MANIFEST_FILENAME)
+        _publish_staged_pack(
+            [
+                (staging_dir / "first_listen" / f"{clip.clip_id}.mp3", output_dir / f"{clip.clip_id}.mp3")
+                for clip in clips
+            ]
+            + [(staged_manifest, output_root / MANIFEST_FILENAME)]
+        )
         print(f"wrote {_display_path(output_root / MANIFEST_FILENAME)}")
 
 

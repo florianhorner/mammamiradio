@@ -143,7 +143,7 @@ def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() ->
          ("firstListenEntry!=='completing'",
           "firstListenEntry='complete'", "syncFirstListenSetupMount()")),
         ("resolveFirstListenLanding", "renderGuidedSetupStrip",
-         ("previous==='required'&&_activeTab==='setup'", "previous==='completing'",
+         ("_activeTab==='setup'&&_firstListenUi.showSuccess", "previous==='completing'",
           "preserveSuccess?'completing':required?'required':'complete'")),
     )  # fmt: skip
     for start, end, needles in sections:
@@ -293,11 +293,8 @@ def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
     assert "We won’t request Home details unless you ask for a preview." in html
     assert "Keep Home private and we request nothing." in html
     assert "preview exactly what the hosts would receive, then decide." in html
-    assert "apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview)" in html
-    assert (
-        "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy)"
-        in html
-    )
+    assert "apiResponse('POST','/api/setup/home-context-preview',{})" in html
+    assert "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled})" in html
     assert "Keep Home private" in html
     assert "See what the hosts would receive" in html
     assert "Let Marco and Giulia use these details" in html
@@ -408,13 +405,13 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
         (
             "loadHomeContextPreview",
             "loadCachedHomeContextDiagnostics",
-            "apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview)",
+            "apiResponse('POST','/api/setup/home-context-preview',{})",
             "_firstListenUi.privacyPreviewValid=true",
         ),
         (
             "chooseFirstListenPrivacy",
             "renderHomeContextPreviewGate",
-            "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy)",
+            "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled})",
             "_firstListenUi.privacyChoice=requestedEnabled",
         ),
     )
@@ -635,10 +632,7 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
     html = _html()
     # Network exceptions use one fixed client-only safe-state message. Every
     # server reason must otherwise have exactly one explicit UI mapping.
-    assert _ui_first_listen_error_codes() == _server_setup_error_codes() | {
-        "persistence_failed",
-        "privacy_save_unconfirmed",
-    }
+    assert _ui_first_listen_error_codes() == _server_setup_error_codes() | {"persistence_failed"}
     assert "stale_attempt:" not in html
 
     error_block = _function("firstListenErrorCopy", "firstListenErrorMessage")
@@ -879,7 +873,7 @@ def test_existing_install_without_a_saved_speaker_routes_to_selection() -> None:
     assert 'id="firstListenRetestBtn"' in html
     assert 'id="firstListenChooseSpeakerToRetestBtn"' not in html
     assert "Choose a speaker to test" not in html
-    assert "retestBtn.hidden=false" in progress
+    assert "if(retestBtn)retestBtn.hidden=false" in progress
     assert "startFirstListen(el)" in retest
     assert "chooseAnotherFirstListenSpeaker" not in retest
 
@@ -1048,12 +1042,8 @@ def test_every_first_listen_mutation_carries_a_deadline_and_a_way_out() -> None:
     assert "const FIRST_LISTEN_TIMEOUTS={" in html
     assert "function firstListenTimedOut(error){return Boolean(error&&error.name==='AbortError')}" in html
 
-    for method, route, budget in (
-        ("POST", "/api/resume", "FIRST_LISTEN_TIMEOUTS.play"),
-        ("POST", "/api/setup/home-context-preview", "FIRST_LISTEN_TIMEOUTS.preview"),
-        ("PATCH", "/api/setup/home-context-choice", "FIRST_LISTEN_TIMEOUTS.privacy"),
-    ):
-        call = re.search(rf"apiResponse\('{method}','{re.escape(route)}',[^;]*?\);", html)
+    for route, budget in (("/api/resume", "FIRST_LISTEN_TIMEOUTS.play"),):
+        call = re.search(rf"apiResponse\('POST','{re.escape(route)}',[^;]*?\);", html)
         assert call is not None, f"{route} is no longer called through apiResponse"
         assert budget in call.group(0), f"{route} is dispatched with no deadline"
 

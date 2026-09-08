@@ -307,9 +307,10 @@ def generator_media_tools(stub_browser_media_tools, monkeypatch):
     monkeypatch.setattr(GENERATOR, "_load_pack_validator", lambda: VALIDATOR.validate_browser_narration_pack)
 
 
+@pytest.mark.parametrize("publish_failure", [False, True])
 @pytest.mark.parametrize("selected", ["welcome", None])
 def test_generator_stages_selected_clips_and_preserves_retained_pack(
-    copied_pack, monkeypatch, selected, generator_media_tools
+    copied_pack, monkeypatch, selected, publish_failure, generator_media_tools
 ) -> None:
     _static_root, copied_pack = copied_pack
     before = {path.name: path.read_bytes() for path in (copied_pack / "first_listen").glob("*.mp3")}
@@ -327,6 +328,24 @@ def test_generator_stages_selected_clips_and_preserves_retained_pack(
 
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-no-provider-calls")
     monkeypatch.setattr(GENERATOR, "_render_clip", render)
+    if publish_failure:
+        publish = GENERATOR._publish_staged_file
+
+        def fail_manifest(source, destination):
+            if destination.name == "spoken_assets.json":
+                raise OSError("manifest publication failed")
+            publish(source, destination)
+
+        monkeypatch.setattr(GENERATOR, "_publish_staged_file", fail_manifest)
+        with pytest.raises(OSError, match="manifest publication failed"):
+            asyncio.run(
+                GENERATOR._run(
+                    argparse.Namespace(env_file=copied_pack / "absent.env", output_root=copied_pack, clip=selected)
+                )
+            )
+        assert json.loads((copied_pack / "spoken_assets.json").read_text()) == original
+        assert {path.name: path.read_bytes() for path in (copied_pack / "first_listen").glob("*.mp3")} == before
+        return
     asyncio.run(
         GENERATOR._run(argparse.Namespace(env_file=copied_pack / "absent.env", output_root=copied_pack, clip=selected))
     )
@@ -921,7 +940,7 @@ async def test_all_browser_narration_clips_are_public_audio_mpeg() -> None:
 
 
 @pytest.mark.parametrize("default_root", [False, True])
-@pytest.mark.parametrize("failure", [None, "inventory", "hash", "voice", "render", "validation"])
+@pytest.mark.parametrize("failure", [None, "inventory", "hash", "voice", "render", "validation", "publication"])
 def test_station_render_preserves_both_packs_and_fails_before_publication(
     tmp_path, monkeypatch, generator_media_tools, failure, default_root
 ):
@@ -961,6 +980,15 @@ def test_station_render_preserves_both_packs_and_fails_before_publication(
 
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-no-provider-calls")
     monkeypatch.setattr(GENERATOR, "_render_clip", render)
+    if failure == "publication":
+        publish = GENERATOR._publish_staged_file
+
+        def fail_manifest(source, destination):
+            if destination.name == "spoken_assets.json":
+                raise RuntimeError("manifest publication failed")
+            publish(source, destination)
+
+        monkeypatch.setattr(GENERATOR, "_publish_staged_file", fail_manifest)
     monkeypatch.setattr(
         GENERATOR.runpy,
         "run_path",
@@ -1043,3 +1071,83 @@ def test_station_opening_validator_rejects_invalid_retained_media(tmp_path, monk
     monkeypatch.setattr(VALIDATOR, "_probe_audio", probe)
     errors = VALIDATOR.validate_demo_spoken_assets(assets_root=root, package_assets_root=root)
     assert any(error in message for message in errors), errors
+
+
+@pytest.mark.parametrize("failure_index", [0, 1, 2])
+@pytest.mark.parametrize("existing", [True, False])
+def test_pack_publication_failure_restores_every_destination(tmp_path, monkeypatch, failure_index, existing):
+    staged, output = tmp_path / "staged", tmp_path / "output"
+    staged.mkdir()
+    output.mkdir()
+    files = []
+    for name in ("privacy.mp3", "ai.mp3", "spoken_assets.json"):
+        (staged / name).write_bytes(b"new " + name.encode())
+        if existing:
+            (output / name).write_bytes(b"old " + name.encode())
+        files.append((staged / name, output / name))
+    before = {p.name: p.read_bytes() for p in output.iterdir()}
+    publish = GENERATOR._publish_staged_file
+    calls = 0
+
+    def fail_once(source, destination):
+        nonlocal calls
+        index, calls = calls, calls + 1
+        if index == failure_index:
+            raise OSError("injected publication failure")
+        publish(source, destination)
+
+    monkeypatch.setattr(GENERATOR, "_publish_staged_file", fail_once)
+    with pytest.raises(OSError, match="injected publication failure"):
+        GENERATOR._publish_staged_pack(files)
+    assert {p.name: p.read_bytes() for p in output.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    "clip, pause, bed",
+    [
+        (GENERATOR.STATION_OPENING_CLIP, 600, 10.4),
+        (GENERATOR.GUIDE_CLIPS[0], 280, 3.0),
+        (GENERATOR.GUIDE_CLIPS[1], 280, None),
+    ],
+)
+@pytest.mark.parametrize("duration", [None, 3.99, 4.0, 20.0, 20.01])
+def test_render_clip_constructs_dialogue_and_enforces_duration(tmp_path, monkeypatch, clip, pause, bed, duration):
+    from mammamiradio.audio import normalizer
+
+    calls = []
+    destination = tmp_path / "finished.mp3"
+
+    async def render_line(host, text, path):
+        path.write_bytes(text.encode())
+        return path
+
+    def concat(paths, output, **kwargs):
+        assert [path.read_text() for path in paths] == [line.text for line in clip.lines]
+        assert kwargs == {"silence_ms": pause, "loudnorm": bed is None, "strict_duration": True}
+        output.write_bytes(b"dialogue")
+
+    def generate_bed(path, seconds, notes):
+        calls.append((seconds, notes))
+        path.write_bytes(b"bed")
+
+    def mix(voice, sting, output):
+        output.write_bytes(voice.read_bytes() + sting.read_bytes())
+
+    monkeypatch.setattr(GENERATOR, "_render_line", render_line)
+    monkeypatch.setattr(normalizer, "concat_files", concat)
+    monkeypatch.setattr(normalizer, "generate_station_id_bed", generate_bed)
+    monkeypatch.setattr(normalizer, "mix_voice_with_sting", mix)
+    monkeypatch.setattr(normalizer, "probe_duration_sec", lambda path: duration if path == destination else 10.0)
+    render = GENERATOR._render_clip(
+        clip, {line.host: line.host for line in clip.lines}, tmp_path, destination, motif_notes=[60, 64]
+    )
+    if duration is None or not 4 <= duration <= 20:
+        with pytest.raises(RuntimeError, match="between 4 and 20 seconds"):
+            asyncio.run(render)
+    else:
+        entry = asyncio.run(render)
+        assert entry["duration_seconds"] == duration
+        assert entry["sha256"] == GENERATOR._sha256(destination)
+        assert entry["transcript"] == clip.transcript
+    assert calls == ([(bed, [60, 64])] if bed is not None else [])
+    assert destination.read_bytes() == (b"dialoguebed" if bed is not None else b"dialogue")
