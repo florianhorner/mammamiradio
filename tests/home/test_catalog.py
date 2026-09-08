@@ -34,6 +34,39 @@ def _reset_catalog_state():
     reset_catalog_cache()
 
 
+class _FakeAnthropic:
+    """Stand-in for AsyncAnthropic. The real client is an async context manager and
+    the catalog closes it, so a double that skips that protocol would hide a leak."""
+
+    def __init__(self, client, kwargs):
+        self._client = client
+        self.kwargs = kwargs
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        self.closed = True
+        return False
+
+    def with_options(self, **opts):
+        self.options = opts
+        return self._client
+
+
+def _patch_anthropic(monkeypatch, create):
+    """Install the double and return the list of constructed clients."""
+    built: list[_FakeAnthropic] = []
+
+    def factory(**kwargs):
+        built.append(_FakeAnthropic(SimpleNamespace(messages=SimpleNamespace(create=create)), kwargs))
+        return built[-1]
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", factory)
+    return built
+
+
 def _state(name: str | None = "Kitchen light", *, area: str | None = "Kitchen") -> dict:
     attrs = {}
     if name is not None:
@@ -456,16 +489,13 @@ async def test_call_anthropic_labels_builds_client_and_parses_labels(count, budg
         ]
     )
     create = AsyncMock(return_value=fake_response)
-    scoped_client = SimpleNamespace(messages=SimpleNamespace(create=create))
-    seen_options: dict[str, object] = {}
+    built: list[_FakeAnthropic] = []
 
-    def with_options(**kwargs):
-        seen_options.update(kwargs)
-        return scoped_client
+    def factory(**kwargs):
+        built.append(_FakeAnthropic(SimpleNamespace(messages=SimpleNamespace(create=create)), kwargs))
+        return built[-1]
 
-    client = SimpleNamespace(with_options=with_options)
-
-    with patch("anthropic.AsyncAnthropic", return_value=client):
+    with patch("anthropic.AsyncAnthropic", factory):
         labels = await _call_anthropic_labels(
             [candidate] * count, config, role="fast", policy_epoch=catalog._generation_policy_epoch
         )
@@ -473,8 +503,11 @@ async def test_call_anthropic_labels_builds_client_and_parses_labels(count, budg
     assert labels == [{"entity_id": "light.counter", "label_it": "Luce", "label_en": "Light"}]
     assert create.await_args.kwargs["model"] == "claude-haiku-test"
     assert create.await_args.kwargs["max_tokens"] == budget
-    # The 45s timeout must be applied (it guards _CATALOG_LOCK from a 10-min stall).
-    assert seen_options == {"timeout": 45.0}
+    # The deadline guards _CATALOG_LOCK from a long stall and scales with the
+    # requested budget: a fixed 45s cannot cover a 4,000-token response.
+    assert built[0].options == {"timeout": catalog._label_attempt_timeout(budget)}
+    assert built[0].options["timeout"] >= 45.0
+    assert built[0].closed
 
 
 def _label_response(labels=(), *, stop_reason="end_turn", text=None):
@@ -491,10 +524,7 @@ def _request_entities(call):
 @pytest.fixture
 def label_provider(monkeypatch):
     create = AsyncMock()
-    client = SimpleNamespace(messages=SimpleNamespace(create=create))
-    monkeypatch.setattr(
-        "anthropic.AsyncAnthropic", lambda **kwargs: SimpleNamespace(with_options=lambda **opts: client)
-    )
+    _patch_anthropic(monkeypatch, create)
     return SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section()), create
 
 
@@ -667,21 +697,15 @@ def test_catalog_temp_file_is_created_owner_only(tmp_path):
 async def test_label_client_disables_sdk_retries(tmp_path, monkeypatch):
     """anthropic's default max_retries=2 multiplies the per-request timeout, and the
     whole call runs while _CATALOG_LOCK is held."""
-    constructed: list[dict] = []
-    create = AsyncMock(return_value=_label_response([]))
-    client = SimpleNamespace(messages=SimpleNamespace(create=create))
-
-    def factory(**kwargs):
-        constructed.append(kwargs)
-        return SimpleNamespace(with_options=lambda **opts: client)
-
-    monkeypatch.setattr("anthropic.AsyncAnthropic", factory)
+    built = _patch_anthropic(monkeypatch, AsyncMock(return_value=_label_response([])))
     config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
 
     await generate_label_catalog({"light.counter": _state("Counter light")}, cache_dir=tmp_path, config=config)
 
-    assert constructed
-    assert constructed[0].get("max_retries") == 0
+    assert built
+    assert built[0].kwargs.get("max_retries") == 0
+    # The pool is closed, so a cancelled attempt cannot abandon a live socket.
+    assert built[0].closed
 
 
 @pytest.mark.asyncio
@@ -693,11 +717,8 @@ async def test_stalled_provider_cannot_hold_the_catalog_lock_open_ended(tmp_path
     async def never_answers(**kwargs):
         await asyncio.sleep(3600)
 
-    client = SimpleNamespace(messages=SimpleNamespace(create=never_answers))
-    monkeypatch.setattr(
-        "anthropic.AsyncAnthropic", lambda **kwargs: SimpleNamespace(with_options=lambda **opts: client)
-    )
-    monkeypatch.setattr(catalog, "_LABEL_REQUEST_BUDGET_SECONDS", 0.05)
+    built = _patch_anthropic(monkeypatch, never_answers)
+    monkeypatch.setattr(catalog, "_label_attempt_timeout", lambda max_tokens: 0.05)
 
     config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
     entity_id = "light.counter"
@@ -718,6 +739,69 @@ async def test_stalled_provider_cannot_hold_the_catalog_lock_open_ended(tmp_path
 
     assert result["entries"][entity_id]["label_it"] == "Vecchia luce"
     assert not catalog._CATALOG_LOCK.locked()
+    assert built[0].closed
+
+
+@pytest.mark.asyncio
+async def test_half_batch_retry_survives_a_slow_first_attempt(tmp_path, monkeypatch):
+    """One deadline shared by both attempts threw away the retry's own labels.
+
+    A first attempt that truncates after spending most of a shared budget left the
+    half-batch retry to issue its request, succeed, and have the result discarded by
+    the expiring deadline, which is exactly the case the retry exists for."""
+    import mammamiradio.home.catalog as catalog
+
+    seen: list[int] = []
+
+    async def slow_then_good(**kwargs):
+        seen.append(kwargs["max_tokens"])
+        if len(seen) == 1:
+            await asyncio.sleep(0.14)
+            return _label_response([], stop_reason="max_tokens")
+        await asyncio.sleep(0.08)
+        return _label_response([{"entity_id": "light.e0", "label_it": "Luce", "label_en": "Light"}])
+
+    _patch_anthropic(monkeypatch, slow_then_good)
+    # Each attempt gets its own deadline, scaled to its own token budget.
+    monkeypatch.setattr(catalog, "_label_attempt_timeout", lambda max_tokens: 0.20)
+
+    states = {f"light.e{index}": _state(f"Counter {index}") for index in range(50)}
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
+
+    result = await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+
+    assert len(seen) == 2
+    assert seen[1] < seen[0]
+    assert result["entries"]["light.e0"]["label_it"] == "Luce"
+
+
+def test_catalog_partial_write_failure_unlinks_orphaned_tmp(tmp_path):
+    """Nothing prunes scratch in the cache directory, so a failure after the temp
+    file exists must clean up after itself or the file sits there forever."""
+    import mammamiradio.home.catalog as catalog
+
+    destination = tmp_path / CATALOG_FILENAME
+    save_catalog(tmp_path, {"entries": {"light.previous": {"label_it": "Vecchia", "label_en": "Old"}}})
+    before = destination.read_bytes()
+
+    with patch("mammamiradio.home.catalog.os.replace", side_effect=OSError("PRIVATE-REPLACE-CANARY")):
+        assert not catalog._atomic_write_json(destination, {"entries": {}})
+
+    assert destination.read_bytes() == before
+    assert not list(tmp_path.glob(f".{CATALOG_FILENAME}.*.tmp"))
+
+
+def test_catalog_unencodable_payload_is_fail_soft_and_leaves_no_scratch(tmp_path, caplog):
+    """save_catalog is called outside the caller's try, so an escaping TypeError
+    would kill the detached refresh task instead of preserving the catalog."""
+    import mammamiradio.home.catalog as catalog
+
+    destination = tmp_path / CATALOG_FILENAME
+
+    assert not catalog._atomic_write_json(destination, {"entries": {"light.a": object()}})
+    assert not destination.exists()
+    assert not list(tmp_path.glob(f".{CATALOG_FILENAME}.*.tmp"))
+    assert "TypeError" in caplog.text
 
 
 def test_catalog_directory_failure_is_fail_soft(tmp_path, caplog):

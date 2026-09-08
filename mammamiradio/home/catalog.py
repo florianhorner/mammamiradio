@@ -341,22 +341,28 @@ def _atomic_write_json(path: Path, payload: dict) -> bool:
     """
     tmp_path: Path | None = None
     try:
+        # Serialize before the temp file exists. A payload that cannot be encoded
+        # raises TypeError, not OSError, so doing this after mkstemp would escape
+        # the "returns success" contract and strand scratch nothing prunes.
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
         tmp_path = Path(tmp_name)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+            handle.write(body)
         os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, path)
         return True
-    except OSError:
-        logger.warning("Failed to write HA label catalog; preserving existing data")
-        if tmp_path is not None:
+    except (OSError, TypeError, ValueError) as exc:
+        # Type only: an encode failure must never put household text in the log.
+        logger.warning("Failed to write HA label catalog (%s); preserving existing data", type(exc).__name__)
+        return False
+    finally:
+        if tmp_path is not None and tmp_path.exists():
             try:
-                tmp_path.unlink(missing_ok=True)
+                tmp_path.unlink()
             except OSError:
                 pass
-        return False
 
 
 def save_catalog(cache_dir: Path, catalog: dict) -> bool:
@@ -636,13 +642,25 @@ async def generate_label_catalog(
         return updated
 
 
-# Hard wall-clock ceiling for one label refresh. _CATALOG_LOCK is held for the
-# whole call, so this is the longest one refresh can block the next.
-_LABEL_REQUEST_BUDGET_SECONDS = 45.0
-
-
 def _label_output_budget(candidate_count: int) -> int:
     return max(1200, min(4000, 200 + 80 * max(1, candidate_count)))
+
+
+def _label_attempt_timeout(max_tokens: int) -> float:
+    """Per-attempt wall clock scaled to that attempt's token budget.
+
+    Same shape and reasoning as ``hosts/scriptwriter.py::_attempt_timeout``: at the
+    observed generation rate 1,200 tokens fits 45s, so a 4,000-token label request
+    needs proportionally longer or it dies by timeout before the model finishes.
+
+    One fixed ceiling shared by both attempts is the wrong shape here. It made the
+    half-batch retry dead on arrival whenever the first attempt spent most of the
+    budget: the retry would issue its request, succeed, and have its labels thrown
+    away by the expiring shared deadline. Bounding each attempt separately keeps
+    the whole call bounded too, because ``max_retries=0`` means one HTTP attempt
+    per request and the loop makes at most two.
+    """
+    return max(45.0, min(120.0, 45.0 * max_tokens / 1200))
 
 
 async def _call_anthropic_labels(
@@ -658,14 +676,16 @@ async def _call_anthropic_labels(
     model = _resolve_anthropic_fast_model(config)
     if not model:
         return []
-    # SDK retries would multiply the per-request timeout below, and the whole call
-    # runs while _CATALOG_LOCK is held: anthropic's default max_retries=2 lets one
-    # messages.create run about three timeouts long. Drop them and put one
-    # wall-clock ceiling around both attempts instead. A transient provider failure
-    # now costs one poll interval, because the caller keeps the existing catalog.
-    client = AsyncAnthropic(api_key=config.anthropic_api_key, max_retries=0)
+    # SDK retries would multiply the per-request timeout below, and this call runs
+    # while _CATALOG_LOCK is held: anthropic's default max_retries=2 lets one
+    # messages.create run about three timeouts long. With retries off each request
+    # is a single HTTP attempt under its own deadline, and the loop makes at most
+    # two, so the whole call stays bounded. A transient provider failure costs one
+    # poll interval, because the caller keeps the existing catalog. The client is
+    # closed on every path, so a cancelled attempt cannot abandon a live socket in
+    # a pool nothing reaps.
     batch = candidates
-    async with asyncio.timeout(_LABEL_REQUEST_BUDGET_SECONDS):
+    async with AsyncAnthropic(api_key=config.anthropic_api_key, max_retries=0) as client:
         for attempt in range(2):
             prompt = (
                 "Generate concise home-automation labels for an Italian radio host prompt. "
@@ -677,14 +697,20 @@ async def _call_anthropic_labels(
             # privacy generation. A late result must never restore permission.
             if policy_epoch != _generation_policy_epoch:
                 return []
-            # Bound the single request too, so one stalled attempt cannot eat the
-            # whole budget and starve the half-batch retry.
-            response = await client.with_options(timeout=_LABEL_REQUEST_BUDGET_SECONDS).messages.create(
-                model=model,
-                max_tokens=_label_output_budget(len(batch)),
-                system="You label Home Assistant entities safely and concisely.",
-                messages=[{"role": "user", "content": prompt}],
-            )
+            output_budget = _label_output_budget(len(batch))
+            attempt_deadline = _label_attempt_timeout(output_budget)
+            # Per attempt, not shared: a shared deadline let a slow first attempt
+            # expire while the half-batch retry was mid-flight, throwing away labels
+            # the retry had already produced. The SDK timeout is the same value; the
+            # asyncio one is the in-process guarantee that _CATALOG_LOCK is released
+            # even if the transport never returns.
+            async with asyncio.timeout(attempt_deadline):
+                response = await client.with_options(timeout=attempt_deadline).messages.create(
+                    model=model,
+                    max_tokens=output_budget,
+                    system="You label Home Assistant entities safely and concisely.",
+                    messages=[{"role": "user", "content": prompt}],
+                )
             if policy_epoch != _generation_policy_epoch:
                 return []
             if getattr(response, "stop_reason", None) != "max_tokens":
