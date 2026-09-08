@@ -1,6 +1,6 @@
 # Listening Slice C validation
 
-Runtime implementation: `afda5507f129e2e56fa4dd59eda04c7f59754248`. Base: `8f69ac045cb57ecd434191520ae9071fa5d96852`.
+Runtime implementation: `753e12464f5ffb41afe58e7c065a9978d0007f11`. Base: `8be9a29932c2ac3ae7782ec3a7ff4c366f65e665`.
 Player smoke fixture blob: `6540933c40351a9e7d7625fb4d6172b2b3a350db`.
 
 | Check | Observed result |
@@ -8,7 +8,7 @@ Player smoke fixture blob: `6540933c40351a9e7d7625fb4d6172b2b3a350db`.
 | Initial transition, memory and label-budget regressions | 4 failed, 2 passed before implementation |
 | Catalog persistence regressions | 2 failed before the persistence correction |
 | Focused language, writer, memory, catalog and route suite | 907 passed |
-| `COVERAGE_RATCHET_XDIST=4 make check` | Exit 0; 8,917 passed, 4 skipped; 93% coverage; lint, formatting, types, dead-code and media checks passed |
+| `COVERAGE_RATCHET_XDIST=4 make check` | Exit 0; 8,994 passed, 4 skipped; 92.62% coverage against a 92% floor, all per-module floors held; lint, formatting, types, dead-code and media checks passed |
 | Player browser harness | Exit 0; stream intent 44 ms; stopped recovery 3,492 ms; 16 request scenarios |
 | Configured Admin browser test | Exit 0; 2 passed |
 | Browser contract tests after fixture correction | 7 passed, 1 opt-in test skipped; Admin executed separately above |
@@ -23,8 +23,8 @@ Browser scope: local production routes, templates and JavaScript with synthetic 
 | Ad generation | 800 | 1,100 |
 | Labels: 1 / 10 / 25 / 50 entities | 1,200 each | 1,200 / 1,200 / 2,200 / 4,000 |
 
-Label generation permits at most two application-level requests per attempt, with unchanged SDK retries and a 45-second per-call timeout. Tests cover half-batch success, repeated truncation, later-poll progress, old-data preservation, private-log canaries, and revocation during a cancellation-resistant truncated request: one call, no retry, no save. Permissions are set before atomic replacement; no fallible step follows it.
+Label generation permits at most two application-level requests per attempt, with SDK retries disabled and a single 45-second wall-clock budget covering both attempts, so the catalog lock cannot be held for several timeouts. Tests cover half-batch success, repeated truncation, later-poll progress, old-data preservation, private-log canaries, and revocation during a cancellation-resistant truncated request: one call, no retry, no save. The temp file is created owner-only before any label reaches the disk, and no fallible step follows the atomic replacement.
 
 Counters distinguish first language rejection from terminal/final-text failure, with all writer fallback paths covered. Other language floors and public status remain unchanged. English words in titles/artists still count as markers; repeated random fallback selection remains possible.
 
-Independent source reviews covered correctness/sibling paths, tests, privacy and docs/config consistency. Persistence fault coverage and four terminal counter assertions were added in response. Human voice/mix audition remains pending: representative transition scripts and all four exchanges are prepared, but no audio was rendered or heard. No deployment or live-provider recovery is claimed.
+Independent source reviews covered correctness/sibling paths, tests, privacy and docs/config consistency. Persistence fault coverage and four terminal counter assertions were added in response. Review-bot healing after that pass corrected three further items on the same surfaces: the label catalog temp file is now created owner-only instead of being chmod-ed after the household labels were written; SDK-level retries are off and one wall-clock budget covers both truncation attempts, so a stalled provider cannot hold the catalog lock for several timeouts; and the three added stock exchanges were rebuilt on Studio B lore. Each carries a regression test verified to fail against the pre-fix implementation. Human voice/mix audition is complete. On 2026-09-08 all four Normal Mode stock exchanges and both representative transitions were rendered through `synthesize_dialogue` on the configured production ElevenLabs host voices, played back on the maintainer's own speakers, and accepted individually: `fallback_0` through `fallback_3`, `transition_english`, `transition_italian`, six of six kept. The unchanged approved exchange and the unchanged English handoff were rendered alongside the new copy as listening references. The Italian handoff under audition was checked against both floors in the same run: the ordinary Normal Mode floor rejects it and the transition floor admits it, so the clip demonstrates the behavior change rather than restating it. No deployment or live-provider recovery is claimed.
