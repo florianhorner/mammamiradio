@@ -415,13 +415,12 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-key-banner[data-state="incomplete"] .setup-key-banner-label{color:var(--warning);}
 .setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
 .setup-snippet.show { display: block; }
-/* position+z-index are load-bearing: .setup-strip is a child of the sticky
-   .mmr-deck, whose ::before paints an opaque var(--bg) rectangle over the
-   whole deck. Its siblings .mmr-console and .mmr-tabbar each escape that
-   overlay with z-index:1; without the same lift this strip renders *under*
-   it — an invisible block that still takes layout height and still hands
-   keyboard focus to its "Add AI key" button. */
-.setup-strip{display:none;position:relative;z-index:1;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
+/* The z-index:1 lift this strip used to carry is gone with the .mmr-deck::before
+   overlay that made it necessary. The deck now paints its own background, and a
+   background always paints below in-flow descendants, so the strip needs no
+   escape hatch. `position:relative` stays as the containing block for the
+   absolutely-positioned chip affordances. */
+.setup-strip{display:none;position:relative;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
 .setup-strip.show{display:flex}
 .setup-strip-title{font-size:12px;font-weight:800;color:var(--cream);min-width:0;white-space:nowrap}
 .setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
@@ -1492,8 +1491,9 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   padding: 24px 24px 72px;
 }
 .a-content.producer-main {
+  --mmr-producer-gap: 18px;
   padding: 0;
-  gap: 18px;
+  gap: var(--mmr-producer-gap, 18px);
 }
 .producer-header {
   display: flex;
@@ -1787,17 +1787,58 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 }
 /* ══════════ Producer Desk — Concept B: pinned console + tabbed work area ══════════ */
 .producer-desk .producer-main{max-width:1100px}
-/* Sticky deck — console + tab bar pin together (one sticky unit, never overlap) */
-.mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate;background:var(--bg);padding-top:8px;margin-bottom:16px}
-.mmr-deck::before{content:"";position:absolute;inset:0 0 -16px 0;background:var(--bg);z-index:0;pointer-events:none}
+/* Sticky deck: console + tab bar pin together (one sticky unit, never overlap).
+   The opaque backdrop is state-driven. `html` carries the page atmosphere (gold
+   radial glow + grain + warm top gradient, the Sun Glow block in
+   docs/design/system.md), and the deck sits where that atmosphere is warmest. A
+   flat var(--bg) fill painted here at rest stamps a hard-edged patch over it,
+   measured as a 17/255 step at the deck's bottom edge. At scrollTop 0 nothing is
+   behind the deck yet, so it carries no fill; `.is-pinned` arms one once panel
+   chrome passes underneath. The 16px below the deck is padding, not margin, so
+   the armed fill covers it without a second paint layer. */
+.mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate;background:transparent;
+  padding-top:8px;padding-bottom:16px;margin-bottom:0;
+  box-shadow:0 6px 16px -12px rgba(0,0,0,0);
+  transition:box-shadow 180ms ease}
+/* The tab bar already ends in its own --line-strong border 16px up, so the
+   design system's 1px sticky hairline (system.md "Listener site composition")
+   would read as a railroad track here. A shadow says "content is passing under
+   me" without a competing line.
+   The fill is absent from the transition. .mmr-tabbar carries no background of
+   its own, so during a cross-fade the page scrolls through the tab row and the
+   8/10/16px bands around it. That is the same bleed the permanent backdrop
+   existed to stop, narrowed to each pin crossing. The mask snaps; only the
+   elevation cue fades, which is why the resting shadow is the same geometry at
+   zero alpha (box-shadow does not interpolate from none).
+   Armed at every width where the deck is sticky, and disarmed inside the
+   max-width:768px block below rather than scoped to a min-width twin: a
+   768px/769px pair leaves fractional viewport widths (routine under browser
+   zoom) matching neither, and the deck would pin there with no fill. */
+.mmr-deck.is-pinned{background:var(--bg);box-shadow:0 6px 16px -12px rgba(0,0,0,.85)}
+/* 1px probe directly above the deck. While it is on screen the deck is at rest;
+   once it scrolls out, the deck is pinned. Cheaper than reading scrollY, and it
+   needs no threshold tuning.
+   It is an in-flow flex child of .producer-main, so the trailing margin cancels
+   the extra --mmr-producer-gap it would otherwise insert between header and deck.
+   A wrapper is unsafe: it would become the sticky containing block and the deck
+   could no longer pin. */
+.mmr-deck-sentinel{height:1px;margin:0 0 calc(-1px - var(--mmr-producer-gap, 18px));padding:0;pointer-events:none;overflow:hidden}
 @media (max-width:768px){
+  /* Static deck scrolls away with the page, so nothing passes underneath it and
+     the atmosphere stays continuous at every mobile width. The sentinel
+     still leaves the viewport, so the class can still be set; this is where it
+     is disarmed, so no viewport width is left both sticky and unmasked. */
   .mmr-deck{position:static;top:auto;z-index:auto}
-  .mmr-deck::before{display:none}
+  .mmr-deck.is-pinned{background:transparent;box-shadow:0 6px 16px -12px rgba(0,0,0,0)}
+}
+@media (prefers-reduced-motion: reduce){
+  /* The mask already snaps; this drops the elevation cue's fade too. */
+  .mmr-deck{transition:none}
 }
 /* Pinned live console */
 .mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:12px;
   background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 8px 24px -16px rgba(0,0,0,.7);
-  overflow:hidden;margin-bottom:10px;z-index:1}
+  overflow:hidden;margin-bottom:10px}
 /* Inner top accent: keep the real 1px rounded border visible. Placing this at
    top:0 made the accent replace the border, so the corner read as broken. */
 .mmr-console::before{content:"";position:absolute;top:1px;left:1px;right:1px;height:2px;border-radius:11px 11px 0 0;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1;pointer-events:none}
@@ -1833,7 +1874,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 /* Tab bar */
-.mmr-tabbar{position:relative;z-index:1;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
+/* position:relative stays because the active tab's ::after underline anchors
+   to it.
+   The z-index:1 that used to lift it over .mmr-deck::before is gone with that
+   overlay. */
+.mmr-tabbar{position:relative;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
 .mmr-tabbar::-webkit-scrollbar{display:none}
 .mmr-tab{position:relative;display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:44px;min-height:44px;padding:9px 8px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap;text-align:center}
 .mmr-tab:hover{color:var(--cream-dk)}
@@ -1955,6 +2000,8 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
     <div class="stopped-banner" id="stoppedBanner" role="status" aria-live="polite">&#9632; Station paused · press Start when you're ready.</div>
 
     <!-- ══ Sticky deck — console + tab bar pin together so the tabs never hide behind the console ══ -->
+    <!-- Probe for the deck's pinned state; see initDeckPinned(). -->
+    <div class="mmr-deck-sentinel" aria-hidden="true"></div>
     <div class="mmr-deck">
 
     <!-- ══ Pinned live console — transport + triggers + cooking feed, always in view ══ -->
@@ -2418,7 +2465,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               the way a real broadcast sounds versus a clean studio file. It is deliberately understated — on
               good speakers you may not hear any difference at all; it is most noticeable on small or phone
               speakers. Toggling it does not change the track that is playing now: it takes effect on the next
-              few tracks as the buffered queue cycles through, so give it a moment before you judge the change.
+              few tracks, so give it a moment before you judge the change.
             </div>
           </div>
         </div>
@@ -3470,6 +3517,44 @@ function initOnAirSticky(){
   observer.observe(onAir);
 }
 initOnAirSticky();
+
+// The deck's opaque backdrop is armed only while the deck is pinned. At
+// scrollTop 0 nothing is behind it, and a fill there stamps a flat rectangle
+// over the page atmosphere that `html` carries. This is not the same signal as
+// data-sticky-onair above: that one watches the console leave the viewport,
+// which on desktop never happens because the deck pins it in place, so it is
+// the mobile compact-strip trigger. This one watches the deck leave its
+// resting place.
+//
+// scroll-padding-top is derived from the live deck height rather than hardcoded,
+// because the console collapses and expands with `is-idle`; a fixed number would
+// be wrong half the time and would leave keyboard focus under the deck.
+function initDeckPinned(){
+  const deck=document.querySelector('.mmr-deck');
+  const sentinel=document.querySelector('.mmr-deck-sentinel');
+  if(!deck)return;
+  const syncScrollPadding=()=>{
+    // Reads 'sticky' only above the 768px breakpoint, so the CSS owns the
+    // breakpoint and JS never duplicates it.
+    const pinned=getComputedStyle(deck).position==='sticky';
+    document.documentElement.style.scrollPaddingTop=
+      pinned?`${Math.round(deck.getBoundingClientRect().height)+8}px`:'';
+  };
+  syncScrollPadding();
+  window.addEventListener('resize',syncScrollPadding);
+  if('ResizeObserver' in window)new ResizeObserver(syncScrollPadding).observe(deck);
+  if(!sentinel||!('IntersectionObserver' in window))return;
+  new IntersectionObserver(entries=>{
+    const entry=entries[entries.length-1];
+    // Off-screen alone does not mean pinned: the sentinel is also off-screen
+    // before it has been reached, which is the state on load whenever the deck
+    // starts below the fold (short viewport, tall header, zoomed browser).
+    // Treating that as pinned would arm the opaque fill at rest, which is the
+    // band this change removes. Pinned means the sentinel left past the top.
+    deck.classList.toggle('is-pinned',!entry.isIntersecting&&entry.boundingClientRect.top<0);
+  },{threshold:0}).observe(sentinel);
+}
+initDeckPinned();
 
 // ── Transport ──
 async function doSkip(el){
@@ -4742,7 +4827,7 @@ const JAMENDO_ERROR_COPY={
   jamendo_client_id_invalid:'Enter a valid Jamendo client ID.',
   jamendo_client_id_conflict:'Replace or clear the client ID, not both.',
   jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
-  jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
+  jamendo_ack_required:'Confirm non-commercial use before enabling Jamendo.',
   jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
   jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check that the station storage has free space and is writable, then try again.',
 };
@@ -4760,7 +4845,7 @@ const JAMENDO_ERROR_COPY={
 // on the add-on that advice would name a step the reader cannot take.
 function jamendoFailureHint(code){
   return {
-    api_auth_failed:"Jamendo rejected the current access — check setup: use your own client ID, or replace the one you added.",
+    api_auth_failed:"Jamendo did not accept the current access — check setup: use your own client ID, or replace the one you added.",
     rate_limited:"Jamendo asked the station to pause — retrying automatically. No action needed.",
     temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
     api_failed:"Jamendo didn't respond — retrying automatically.",
@@ -6629,7 +6714,7 @@ async function copySetupSnippet(){
     await navigator.clipboard.writeText(txt);
     toast('Snippet copied');
   }catch(_){
-    toast('Clipboard unavailable');
+    toast('Your browser would not let us copy it — select the snippet above and copy it by hand.');
   }
 }
 
