@@ -99,8 +99,8 @@ Assistant. The media-player ownership choice above does not change this route.
 1. Open the Mamma Mi Radio add-on Web UI. A fresh unfinished install opens
    **First Listen** automatically; completed installs review or repair it under
    **Motore → Setup**.
-2. The opening card puts a reviewed 27-second Mamma Mi Radio mini-show on deck:
-   an original music bed plus a privacy-aware Marco/Giulia welcome, then a
+2. The opening card puts a recorded English Mamma Mi Radio mini-show on deck:
+   an original music bed plus the Marco/Giulia welcome, then a
    handoff to the live stream. It uses neither an AI key nor Home context.
    Source readiness for live charts, Jamendo, local music, bundled demo music,
    and recovery cover says whether primary music, recovery cover, or a music

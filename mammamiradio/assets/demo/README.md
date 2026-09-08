@@ -14,10 +14,13 @@ demo-asset contract decision (see the 2026-04-16 documentation audit in
   `emergency_tone.mp3` is the required 2-second cold-cache/no-clip final rung.
   Keep both under this package tree so they are available without rendering in
   standalone and Home Assistant add-on builds.
-- `first_listen/` — one reviewed, content-addressed 27-second mini-show with an
-  original music bed, station identity, and the free Edge fallback voices for
-  Marco and Giulia. Fresh unfinished clients hear it before they join the
-  shared live stream; it is onboarding, not a rotation source.
+- `first_listen/` — two reviewed, content-addressed openings. Fresh unfinished
+  Admin clients using `/stream?first_listen=1` hear the English
+  `first_listen_admin_show.mp3`, recorded with the canonical Marco/Giulia studio
+  voices. Ordinary listeners retain the 27-second Italian Edge recording
+  `first_listen_show.mp3`. Each client joins the live stream afterward; these
+  recordings never enter the shared rotation. Missing or rejected recordings
+  fall through to live audio.
 - `spoken_assets.json` — reviewed transcript, language, role, and SHA-256 for
   every MP3 inventoried under recovery/banter/first_listen. Missing, changed,
   unlisted, or listener-unsafe speech fails closed. Runtime may admit approved
@@ -27,6 +30,17 @@ demo-asset contract decision (see the 2026-04-16 documentation audit in
 - `banter/`, `ads/`, `music/`, `jingles/` — not committed yet. The runtime tolerates absence: banter falls back to stock copy, ads get skipped, music falls through local files and then the recovery ladder. The First Listen mini-show does not make any of these folders a bundled music catalog. Any future packaged banter must also be declared in `spoken_assets.json` before runtime can use it.
 
 ## Generation
+
+`python scripts/generate-first-listen-guide.py --station-opening` renders only
+that English opening (paid ElevenLabs job; approval required). It validates the
+retained inventories, browser voices and station banter media before synthesis,
+then validates the complete staged pack before replacing the MP3 and manifest.
+Publication failures trigger rollback; if restoration also fails, backups are
+retained and their directory is reported. After changing canonical voices,
+regenerate the full browser pack first, then replace the Admin opening. The seven
+browser guides and ordinary Italian opening are retained. Without that flag,
+the generator still renders the full browser-guide pack; `--clip welcome`
+replaces only its welcome. Human audition remains required before shipping.
 
 The historical welcome-clip generator now emits neutral station-continuity
 lines for local review only. Its output is not runtime-discoverable.
