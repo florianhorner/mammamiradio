@@ -107,6 +107,23 @@ a sustained period is a pre-existing pattern this diff doesn't worsen
 - Manual local `/admin`: HTTP 200, Home Assistant publishing panel rendered disabled state, no console errors, same-origin API/static requests succeeded. Existing fixture evidence: `.context/plans/ha-publish-admin-qa.html` and its three PNGs.
 - Diff size against the current base: `git diff "$(git merge-base origin/main HEAD)" --stat` (this number moves with every review-remediation commit; see the note at the top of this file rather than trusting a pinned figure here).
 
+## Scope decision: line-count limit
+
+`docs/agents.md:46` caps human/feature PRs at 1,000 changed lines. This
+branch is over that cap (see the diff-size command above) entirely from
+review-remediation commits on this one slice: coverage-audit tests, Fix-First
+review fixes, a bot-review fix, and doc/evidence accuracy corrections. None
+of it is unrelated scope. Florian reviewed the overage and the alternative
+(splitting an already-green, already-evidenced PR after the fact) and
+explicitly accepted shipping this as one PR rather than splitting.
+
+Deferred, not in this PR: real browser-level test coverage for the Admin
+publishing-state rendering (`tests/web/admin_browser_smoke.js` already mocks
+`/status` and could drive `homePublishPresentation()`/`#haDetails` end to
+end; the current tests only assert on the JS source text). Filed as a
+follow-up rather than added here, since adding it would only worsen the
+already-accepted overage.
+
 ## Boundaries
 
 No live Home Assistant or physical/audible player validation was performed. The implementation is locally verified; live HA credentials, deployment, and release metadata remain integrator-owned follow-up.
