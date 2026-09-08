@@ -767,6 +767,8 @@ def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatc
     monkeypatch.setenv("AZURE_SPEECH_KEY", "")
     monkeypatch.setenv("AZURE_SPEECH_REGION", "")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+    rearmed: list[str] = []
+    monkeypatch.setattr("mammamiradio.audio.tts.reset_cloud_engine_failures", rearmed.append)
     config = SimpleNamespace(
         anthropic_api_key="",
         openai_api_key="",
@@ -799,3 +801,31 @@ def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatc
     assert os.environ["ELEVENLABS_API_KEY"] == "el-new"
     assert state.anthropic_disabled_until == 0.0
     assert state.anthropic_last_error == ""
+    assert rearmed == ["openai", "azure", "elevenlabs"]
+
+
+def test_rearming_voice_key_invalidates_only_current_failure_evidence(monkeypatch):
+    resets = []
+    monkeypatch.setattr("mammamiradio.audio.tts.reset_cloud_engine_failures", resets.append)
+    failure_reason = "Runtime TTS fallback: elevenlabs=provider_disabled_session:HTTP 401 — invalid_api_key"
+    aggregate = {
+        "current_provider": "edge",
+        "primary_provider": "mixed_tts",
+        "reason": failure_reason,
+        "last_audible_provider": "edge",
+        "last_audible_reason": failure_reason,
+    }
+    engine = {}
+    state = SimpleNamespace(
+        runtime_provider_state={"tts:elevenlabs": engine, "tts_provider": aggregate},
+    )
+
+    persistence._rearm_cloud_voice_engine(state, "openai")
+    assert "invalidated_by_credential_save" not in aggregate
+
+    persistence._rearm_cloud_voice_engine(state, "elevenlabs")
+
+    assert resets == ["openai", "elevenlabs"]
+    assert engine["invalidated_by_credential_save"] is True
+    assert aggregate["invalidated_by_credential_save"] is True
+    assert aggregate["last_audible_reason"] == failure_reason

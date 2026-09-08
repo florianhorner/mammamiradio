@@ -814,7 +814,7 @@ Use these to tell intentional degradation from a real regression during post-mer
 
 **Anthropic auth suspended (intentional)**: one `Anthropic auth failed — suspending for 10 minutes` followed by OpenAI script generation. If you see this line repeating every few seconds, the WS3-A cooldown broke.
 
-**TTS voice substituted (intentional)**: one `Invalid voice 'X' for backend edge; falling back to it-IT-DiegoNeural` at boot. Zero per-segment `Invalid voice` lines. Dashboard shows `tts_degraded` badge.
+**TTS voice substituted (intentional)**: one `Invalid voice 'X' for backend edge; falling back to it-IT-DiegoNeural` at boot. Zero per-segment `Invalid voice` lines. Engine Room → Voices shows the engine state.
 
 **Starter catalog admitted (required)**: the boot summary identifies the
 attributed starter/local base and the first `Producing MUSIC:` line follows
