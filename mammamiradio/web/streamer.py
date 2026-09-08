@@ -154,6 +154,7 @@ from mammamiradio.home.ha_context import (
     PRESENCE_SENSOR_DEVICE_CLASSES,
     fetch_home_context_preview,
     get_cached_home_context,
+    ha_publish_status_payload,
     invalidate_all_home_context,
     invalidate_home_context_entity_baselines,
     push_state_to_ha,
@@ -12023,7 +12024,10 @@ async def status(
             # unique people.  Keep the legacy nested shape unchanged.
             "connections_total": state.listeners_total,
             "listener_session": state.listener_session.snapshot().to_dict(),
-            "runtime_health": runtime_health,
+            "runtime_health": {
+                **runtime_health,
+                "ha_publish": ha_publish_status_payload(config),
+            },
             "runtime_status": runtime_status,
             "provider_health": provider_health,
             "chaos_mode": {

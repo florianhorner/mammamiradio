@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import mammamiradio.home.ha_context as ha
@@ -39,6 +40,8 @@ def _reset_push_globals():
     ha._media_player_ghost_purged = False
     ha._ha_entity_payload_fingerprints.clear()
     ha._ha_entity_last_push_at.clear()
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
     yield
 
 
@@ -134,3 +137,64 @@ async def test_failed_purge_retries_next_push(monkeypatch):
         await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
     # First delete failed -> the purge flag was reset -> retried on the next push.
     assert client.delete.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "error, category",
+    [(RuntimeError("boom token=sekrit http://ha:8123"), "unexpected"), (httpx.ConnectError("nope"), "transport")],
+)
+@pytest.mark.asyncio
+async def test_failed_purge_does_not_log_exception_text(monkeypatch, caplog, error, category):
+    import logging
+
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
+    client = _mock_client()
+    client.delete.side_effect = error
+    with (
+        patch.object(ha, "_get_ha_client", return_value=client),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
+    text = caplog.text
+    assert f"failing ({category})" in text
+    assert "ghost media player cleanup failed" not in text and str(error) not in text
+
+
+@pytest.mark.asyncio
+async def test_failed_purge_http_status_is_publish_failure(monkeypatch):
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
+    client = _mock_client()
+    with patch.object(ha, "_get_ha_client", return_value=client):
+        await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
+        ha._last_ha_push, ha._media_player_ghost_purged = 0.0, False
+        client.delete.return_value = MagicMock(status_code=503)
+        result = await ha.push_state_to_ha("http://ha:8123", "tok", {"type": "music"}, None, 1, False)
+    assert result is False
+    with ha._ha_publish_health_lock:
+        assert (ha._ha_publish_health.reason, ha._ha_publish_health.failure_streak) == ("http_error", 1)
+
+
+@pytest.mark.asyncio
+async def test_push_returns_none_once_purge_done_and_sensors_deduped(monkeypatch):
+    """Steady state for a HACS-integration operator: media_player is excluded,
+    the ghost was already purged, and nothing changed since the last heartbeat.
+
+    Nothing was actually due to write this cycle, so the result must be a
+    no-op ``None``, not ``False``. Returning ``False`` here would be silently
+    indistinguishable from a real outage: the heartbeat backoff would slow to
+    300s and the Admin card would say "retrying" while HA publishing is
+    perfectly healthy.
+    """
+    monkeypatch.setenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "false")
+    client = _mock_client()
+    payload = {"type": "music", "metadata": {"title": "X"}}
+    with patch.object(ha, "_get_ha_client", return_value=client):
+        first = await ha.push_state_to_ha("http://ha:8123", "tok", payload, None, 1, False)
+        ha._last_ha_push = 0.0  # bypass the 2s debounce for the second push
+        second = await ha.push_state_to_ha("http://ha:8123", "tok", payload, None, 1, False)
+    assert first is True
+    assert second is None
+    # The debounced/no-op cycle must not be mistaken for an outage.
+    with ha._ha_publish_health_lock:
+        assert ha._ha_publish_health.failure_streak == 0
+        assert ha._ha_publish_health.outage_active is False
