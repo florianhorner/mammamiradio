@@ -5502,6 +5502,41 @@ def _skip_latency_percentile(samples: list[float], percentile: float) -> float:
     return ordered[rank - 1]
 
 
+def _skip_latency_probe_cycles() -> int:
+    """Read the optional probe cycle count with a useful configuration error."""
+    raw_cycles = os.environ.get("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", "10")
+    try:
+        return max(1, int(raw_cycles))
+    except (TypeError, ValueError):
+        pytest.fail(
+            "Invalid MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES configuration: expected an integer, got " + repr(raw_cycles)
+        )
+
+
+@pytest.mark.parametrize(
+    ("configured_cycles", "expected_cycles"),
+    [(None, 10), ("0", 1), ("-2", 1), ("3", 3)],
+)
+def test_skip_latency_probe_cycles_preserves_default_and_minimum(monkeypatch, configured_cycles, expected_cycles):
+    if configured_cycles is None:
+        monkeypatch.delenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", raising=False)
+    else:
+        monkeypatch.setenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", configured_cycles)
+
+    assert _skip_latency_probe_cycles() == expected_cycles
+
+
+@pytest.mark.parametrize("configured_cycles", ["", "not-a-number"])
+def test_skip_latency_probe_cycles_fails_clearly_for_invalid_configuration(monkeypatch, configured_cycles):
+    monkeypatch.setenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", configured_cycles)
+
+    with pytest.raises(
+        pytest.fail.Exception,
+        match=r"Invalid MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES configuration: expected an integer",
+    ):
+        _skip_latency_probe_cycles()
+
+
 @pytest.mark.asyncio
 async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
     """Repeated skip probe at the accepted-listener boundary (no new production fields).
@@ -5512,7 +5547,7 @@ async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
     counters and reports P50/P95 app-to-listener handoff delay. Opt into a longer run with
     ``MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES`` (default 10).
     """
-    cycles = max(1, int(os.environ.get("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", "10")))
+    cycles = _skip_latency_probe_cycles()
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     state = app.state.station_state
