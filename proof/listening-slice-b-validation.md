@@ -1,10 +1,23 @@
 # Listening Slice B: validation
 
 Path A to `main`. Workspace `tegucigalpa`. Branch `florianhorner/feat/listening-slice-b`.
-Original review merge base: `7829fb728611cd99e9fc79d39f1a3164a7e36142`; original implementation commit: `b0b00c27fb8673d676525abdcc397213472e64dd`.
-`/ship` merged `origin/main` on top (clean 3-way merge, no conflicts) and ran a fresh
-pre-ship review pass against the result. Current merge base:
-`9b2b72ab167f53cb3d12dc6a3517a669eddf86c6`; final HEAD: `1bbeee344b276ab9b1b4c4933a2e2e33aa6ec709`.
+
+This branch went through several rounds of review after the original
+implementation, each rebinding evidence to a new HEAD as `origin/main` moved
+and fixes landed. Rather than name one "final" commit (which goes stale on
+the next fix), the checkpoints:
+
+- Original review merge base `7829fb72`, implementation commit `b0b00c27`.
+- `/ship` merged `origin/main` (merge base `9b2b72ab`) and ran its pre-ship
+  pass, landing through `1bbeee34`.
+- A second `origin/main` merge (base `04d3049f`) plus a deslop pass, a
+  PR-bot-review fix, and this independent read-only review's remediation
+  followed.
+
+**The v2 receipt under `proof/preship-reviews/v2/` and the PR's own `git log`
+are the source of truth for exactly what was reviewed at what commit** — this
+file is a narrative summary, not the exact-head record. Check `git log
+origin/main..HEAD` for the current commit list.
 
 ## Write-set
 
@@ -92,7 +105,7 @@ a sustained period is a pre-existing pattern this diff doesn't worsen
   independently reproduced clean during the `/ship` pass.
 - Real Admin browser guard: `1 passed in 8.12s` via `ADMIN_BROWSER_SMOKE_URL=http://127.0.0.1:8000`.
 - Manual local `/admin`: HTTP 200, Home Assistant publishing panel rendered disabled state, no console errors, same-origin API/static requests succeeded. Existing fixture evidence: `.context/plans/ha-publish-admin-qa.html` and its three PNGs.
-- Final merge-base diff: 13 files, 1044 insertions, 166 deletions (1210 changed lines).
+- Diff size against the current base: `git diff "$(git merge-base origin/main HEAD)" --stat` (this number moves with every review-remediation commit; see the note at the top of this file rather than trusting a pinned figure here).
 
 ## Boundaries
 

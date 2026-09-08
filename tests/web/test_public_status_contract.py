@@ -10,6 +10,9 @@ Cathedral standard:
 - Bytes-identical for shared fields: capabilities dict, brand dict, uptime,
   tracks_played, rotation_track_count, session_stopped, now_streaming, upcoming/upcoming_mode,
   runtime_health, playback_actions, ha_moments
+- Exception: runtime_health.ha_publish is admin-only diagnostics and is
+  excluded from /public-status entirely; the byte-identity rule applies to
+  every other runtime_health leaf.
 - Shape snapshot: catches accidental field additions on the listener side
 """
 

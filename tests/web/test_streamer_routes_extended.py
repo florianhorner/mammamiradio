@@ -8308,21 +8308,24 @@ async def test_admin_status_ha_details_absent_when_no_ha_context():
 
 @pytest.mark.asyncio
 async def test_admin_status_ha_publish_is_private_and_settings_driven():
+    # client=("127.0.0.1", ...) is loopback, which require_admin_access trusts
+    # unconditionally before any credential check runs — no auth header is
+    # actually exercised here. This test is about ha_publish's presence and
+    # privacy, not the auth mechanism.
     app = _make_test_app(admin_token="secret-tok")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    headers = {"Authorization": "Bearer secret-tok"}
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        disabled = (await client.get("/status", headers=headers)).json()
+        disabled = (await client.get("/status")).json()
         public = (await client.get("/public-status")).json()
         healthz = (await client.get("/healthz")).json()
         readyz = (await client.get("/readyz")).json()
         app.state.config.homeassistant.enabled = True
         app.state.config.homeassistant.url = ""
         app.state.config.ha_token = ""
-        unconfigured = (await client.get("/status", headers=headers)).json()
+        unconfigured = (await client.get("/status")).json()
         app.state.config.homeassistant.url = "http://ha.local:8123"
         app.state.config.ha_token = "test-token"
-        idle = (await client.get("/status", headers=headers)).json()
+        idle = (await client.get("/status")).json()
 
     assert disabled["runtime_health"]["ha_publish"]["status"] == "disabled"
     assert unconfigured["runtime_health"]["ha_publish"]["status"] == "unconfigured"

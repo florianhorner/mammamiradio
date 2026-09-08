@@ -972,10 +972,12 @@ integration is installed, turn `ha_media_player_push` off so its registered
 `media_player.mammamiradio` owns the id instead of the REST-pushed ghost; the
 sensors keep flowing either way.
 
-**Publishing health (admin-only diagnostics):** the authenticated `GET /status`
+**Publishing health (admin-only diagnostics):** the admin-authorized `GET /status`
 response carries `runtime_health.ha_publish`, an operator-safe summary of the
-heartbeat above. It is never present on `/public-status`, `/healthz`, or
-`/readyz`. Shape:
+heartbeat above. ("Admin-authorized" per `require_admin_access`: loopback and,
+in add-on mode, the HA Supervisor network are trusted outright; everyone else
+needs the configured token or password.) It is never present on
+`/public-status`, `/healthz`, or `/readyz`. Shape:
 
 | Field | Type | Meaning |
 |---|---|---|
