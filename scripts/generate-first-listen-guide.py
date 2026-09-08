@@ -405,7 +405,9 @@ async def _render_station_opening(output_root, hosts, canonical_receipt, motif_n
 
     validator = runpy.run_path(str(REPO_ROOT / "scripts" / "validate-spoken-assets.py"))
     _validated_pack(DEFAULT_OUTPUT_ROOT, canonical_receipt)
-    errors = validator["validate_spoken_asset_manifest"](assets_root=output_root)
+    errors = validator["validate_demo_spoken_assets"](
+        assets_root=output_root, package_assets_root=output_root, include_admin_opening=False
+    )
     if errors:
         raise RuntimeError("invalid station pack: " + "; ".join(errors))
     manifest = json.loads((output_root / MANIFEST_FILENAME).read_text())
@@ -416,9 +418,6 @@ async def _render_station_opening(output_root, hosts, canonical_receipt, motif_n
 
     if retained(manifest) != set(validator["DEMO_SPOKEN_PATHS"]) - {relative}:
         raise RuntimeError("station pack retained inventory does not match the shipped pack")
-    for entry in manifest["assets"]:
-        if entry["path"] == relative and entry.get("canonical_render_receipt") != canonical_receipt:
-            raise RuntimeError("station opening canonical voice receipt does not match radio.toml")
     with _temporary_work_directory() as raw_work_dir:
         work_dir = Path(raw_work_dir)
         staging = work_dir / "staging"

@@ -33,9 +33,11 @@ demo-asset contract decision (see the 2026-04-16 documentation audit in
 
 `python scripts/generate-first-listen-guide.py --station-opening` renders only
 that English opening (paid ElevenLabs job; approval required). It validates the
-retained inventories and canonical voice receipt before synthesis, then stages
-and validates the result before replacing the MP3 and manifest. Catchable
-publication failures restore the previous files together. The seven
+retained inventories, browser voices and station banter media before synthesis,
+then validates the complete staged pack before replacing the MP3 and manifest.
+Publication failures trigger rollback; if restoration also fails, backups are
+retained and their directory is reported. After changing canonical voices,
+regenerate the full browser pack first, then replace the Admin opening. The seven
 browser guides and ordinary Italian opening are retained. Without that flag,
 the generator still renders the full browser-guide pack; `--clip welcome`
 replaces only its welcome. Human audition remains required before shipping.

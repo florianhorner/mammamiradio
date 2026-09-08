@@ -375,8 +375,9 @@ def validate_demo_spoken_assets(
     *,
     assets_root: Path = DEMO_ASSETS_ROOT,
     package_assets_root: Any = None,
+    include_admin_opening: bool = True,
 ) -> list[str]:
-    """Validate every reviewed banter byte as shipped, decodable package audio."""
+    """Validate packaged banter; exclude the old opening only before replacing it."""
 
     root = Path(assets_root)
     errors = validate_spoken_asset_manifest(assets_root=root)
@@ -395,9 +396,11 @@ def validate_demo_spoken_assets(
         errors.append("demo banter inventory is empty")
         return errors
     openings = [
-        entry for entry in raw_assets if isinstance(entry, dict) and entry.get("path") == ADMIN_STATION_OPENING_PATH
+        entry
+        for entry in raw_assets
+        if include_admin_opening and isinstance(entry, dict) and entry.get("path") == ADMIN_STATION_OPENING_PATH
     ]
-    if _is_demo_assets_root(root) and len(openings) != 1:
+    if include_admin_opening and _is_demo_assets_root(root) and len(openings) != 1:
         errors.append("demo inventory must contain the English Admin station opening")
     for entry in openings:
         if (
