@@ -10396,7 +10396,7 @@ async def test_homeassistant_entity_policy_hard_mute_blocks_late_label_catalog_p
     }
     provider_entered = asyncio.Event()
 
-    async def cancellation_resistant_provider(candidates, _config, *, role):
+    async def cancellation_resistant_provider(candidates, _config, *, role, policy_epoch):
         assert role == "fast"
         provider_entered.set()
         try:
@@ -13812,3 +13812,25 @@ def test_tts_provider_status_does_not_duplicate_reason_as_action_guidance():
 
     state.runtime_provider_state["tts_provider"]["invalidated_by_credential_save"] = True
     assert _tts_provider_status(config, state)["fallback_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_script_guard_counters_stay_in_admin_diagnostics():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.language_guard_rejections, state.language_guard_failures = 4, 2
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for path in ("/status", "/api/capabilities"):
+            response = await client.get(path)
+            assert response.status_code == 200
+            body = response.json()
+            health = body["provider_health"]
+            assert health["script_guard"] == {"rejections": 4, "failures": 2}
+            assert {"anthropic", "openai_speech", "azure_speech", "elevenlabs", "chaos"} <= health.keys()
+            if path == "/status":
+                assert "ha_publish" in body["runtime_health"]
+        response = await client.get("/public-status")
+        assert response.status_code == 200
+        assert "script_guard" not in response.text
+        assert "language_guard" not in response.text

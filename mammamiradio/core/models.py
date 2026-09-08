@@ -1543,6 +1543,8 @@ class StationState:
     urgent_interrupt_drained_audio: bool = False
     chaos_cutover_epoch: int = 0
     chaos_script_fallbacks: int = 0
+    language_guard_rejections: int = 0  # First language rejection, followed by a repair attempt.
+    language_guard_failures: int = 0  # Terminal or post-processing language rejection.
     chaos_audio_failures: int = 0
     chaos_last_degraded_reason: str = ""
     # Pinned track: select_next_track returns this immediately then clears it

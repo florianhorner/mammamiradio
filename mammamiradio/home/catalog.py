@@ -333,16 +333,15 @@ def load_catalog(cache_dir: Path | None) -> dict:
 
 def _atomic_write_json(path: Path, payload: dict) -> bool:
     """Write JSON to a unique temp file then atomically replace; owner-only perms. Returns success."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
         os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, path)
-        os.chmod(path, 0o600)
         return True
-    except OSError as exc:
-        logger.warning("Failed to write HA label catalog %s: %s", path, exc)
+    except OSError:
+        logger.warning("Failed to write HA label catalog; preserving existing data")
         try:
             tmp_path.unlink(missing_ok=True)
         except OSError:
@@ -570,6 +569,7 @@ async def generate_label_catalog(
     _expected_policy_epoch: int | None = None,
 ) -> dict:
     """Refresh generated labels, preserving the old catalog on any LLM failure."""
+    policy_epoch = _generation_policy_epoch if _expected_policy_epoch is None else _expected_policy_epoch
     if _CATALOG_LOCK.locked():
         return load_catalog(cache_dir)
     async with _CATALOG_LOCK:
@@ -582,14 +582,14 @@ async def generate_label_catalog(
         )
         if not candidates or not config.anthropic_api_key:
             return catalog
-        if _expected_policy_epoch is not None and _expected_policy_epoch != _generation_policy_epoch:
+        if policy_epoch != _generation_policy_epoch:
             return catalog
         try:
-            generated = await _call_anthropic_labels(candidates, config, role="fast")
-        except Exception as exc:
-            logger.warning("HA label generation failed; preserving existing catalog: %s", exc)
+            generated = await _call_anthropic_labels(candidates, config, role="fast", policy_epoch=policy_epoch)
+        except Exception:
+            logger.warning("HA label provider request failed; preserving existing catalog")
             return catalog
-        if _expected_policy_epoch is not None and _expected_policy_epoch != _generation_policy_epoch:
+        if policy_epoch != _generation_policy_epoch:
             return catalog
 
         by_entity = {candidate.entity_id: candidate for candidate in candidates}
@@ -626,11 +626,16 @@ async def generate_label_catalog(
         return updated
 
 
+def _label_output_budget(candidate_count: int) -> int:
+    return max(1200, min(4000, 200 + 80 * max(1, candidate_count)))
+
+
 async def _call_anthropic_labels(
     candidates: list[LabelCandidate],
     config: StationConfig,
     *,
     role: str,
+    policy_epoch: int,
 ) -> list[dict]:
     """Ask the fast Anthropic model for Italian/English labels."""
     from anthropic import AsyncAnthropic
@@ -639,23 +644,35 @@ async def _call_anthropic_labels(
     if not model:
         return []
     client = AsyncAnthropic(api_key=config.anthropic_api_key)
-    prompt_payload = [candidate.metadata for candidate in candidates]
-    prompt = (
-        "Generate concise home-automation labels for an Italian radio host prompt. "
-        "Return only JSON with a labels array. Each item must contain entity_id, "
-        "label_it, and label_en. Do not include raw entity IDs in labels.\n\n"
-        + json.dumps({"entities": prompt_payload}, ensure_ascii=False, sort_keys=True)
-    )
-    # Cap the request: this is a background labeling call that should finish in
-    # seconds. The SDK default is 10 minutes, which would hold _CATALOG_LOCK and
-    # block future refreshes if the API stalls.
-    response = await client.with_options(timeout=45.0).messages.create(
-        model=model,
-        max_tokens=1200,
-        system="You label Home Assistant entities safely and concisely.",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return _parse_label_payload(_response_text(response))
+    batch = candidates
+    for attempt in range(2):
+        prompt = (
+            "Generate concise home-automation labels for an Italian radio host prompt. "
+            "Return only JSON with a labels array. Each item must contain entity_id, "
+            "label_it, and label_en. Do not include raw entity IDs in labels.\n\n"
+            + json.dumps({"entities": [c.metadata for c in batch]}, ensure_ascii=False, sort_keys=True)
+        )
+        # Every submission, including a smaller retry, belongs to the original
+        # privacy generation. A late result must never restore permission.
+        if policy_epoch != _generation_policy_epoch:
+            return []
+        # Keep the background request bounded without changing SDK retries.
+        response = await client.with_options(timeout=45.0).messages.create(
+            model=model,
+            max_tokens=_label_output_budget(len(batch)),
+            system="You label Home Assistant entities safely and concisely.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if policy_epoch != _generation_policy_epoch:
+            return []
+        if getattr(response, "stop_reason", None) != "max_tokens":
+            return _parse_label_payload(_response_text(response))
+        logger.warning("HA label output truncated: attempt=%d candidates=%d", attempt + 1, len(batch))
+        if attempt == 0 and len(batch) > 1:
+            batch = batch[: len(batch) // 2]
+        else:
+            return []
+    return []
 
 
 def _parse_label_payload(text: str) -> list[dict]:
