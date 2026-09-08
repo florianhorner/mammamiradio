@@ -508,7 +508,11 @@ async (page) => {
       });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"bridged":false}' });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, bridged: skipScenario === 'bridged' }),
+    });
   });
   await page.route('**/api/resume*', async (route) => {
     const request = route.request();
@@ -1008,6 +1012,20 @@ async (page) => {
     await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'DJ handoff in progress — next segment queued.',
     'successful skip lost its confirmation',
   );
+  skipScenario = 'bridged';
+  await page.evaluate(() => doSkip(skipBtn));
+  const bridgedSkipToast = await page.evaluate(() => window.__adminSmokeToasts.at(-1));
+  assert(
+    bridgedSkipToast === 'DJ handoff in progress — cueing the next segment.',
+    `bridged skip falsely claimed playable runway: ${bridgedSkipToast}`,
+  );
+  assert(
+    !bridgedSkipToast.toLowerCase().includes('queued')
+      && !bridgedSkipToast.toLowerCase().includes('audible'),
+    `bridged skip claimed queued or audible delivery: ${bridgedSkipToast}`,
+  );
+  skipScenario = 'success';
+  await page.evaluate(() => doSkip(skipBtn));
 
   // Truthful handoff theater: success means the next segment is queued, not that
   // it is already audible. The skipping chip and queue row must stay honest.

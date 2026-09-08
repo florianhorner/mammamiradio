@@ -3581,10 +3581,11 @@ async function doSkip(el){
       toast((r&&r.error)||wayOut('skip that segment'));
       return;
     }
-    // Honest handoff: the command landed and the next segment is queued — not
-    // that the room can already hear it. Bridged skips still queue the next
-    // segment (forced music); do not claim a track is already audible.
-    toast('DJ handoff in progress — next segment queued.');
+    // Honest handoff: a bridged skip has only requested future music, while an
+    // unbridged skip already has playable runway. Neither claims room audibility.
+    toast(r.bridged
+      ? 'DJ handoff in progress — cueing the next segment.'
+      : 'DJ handoff in progress — next segment queued.');
   }catch(_){toast(offlineMsg());}
 }
 // Keep-this stays reachable for a beat after a host break ends, because the

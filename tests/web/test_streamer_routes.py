@@ -5498,16 +5498,16 @@ async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
     """Repeated skip probe at the accepted-listener boundary (no new production fields).
 
     Seeds deterministic current/next segments, POSTs ``/api/skip``, and records
-    command acceptance → ``skipping`` → playback-epoch change → first accepted
-    next-segment chunk. Collects pacing/underrun/drop counters and reports
-    P50/P95 app-to-listener handoff delay. Opt into a longer run with
+    command acceptance → ``skipping`` → playback-epoch change → the next
+    segment's accepted-listener audible commit. Collects pacing/underrun/drop
+    counters and reports P50/P95 app-to-listener handoff delay. Opt into a longer run with
     ``MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES`` (default 10).
     """
     cycles = max(1, int(os.environ.get("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", "10")))
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     state = app.state.station_state
-    _listener_id, listener_queue = app.state.stream_hub.subscribe()
+    listener_id, listener_queue = app.state.stream_hub.subscribe()
 
     segments: list[Segment] = []
     for index in range(cycles + 1):
@@ -5611,7 +5611,8 @@ async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
                                 f"(label={label!r}, audible={state.current_stream_audible}, "
                                 f"audible_epoch={state.audible_playback_epoch})"
                             )
-                        # Drain listener chunks so a full queue cannot stall delivery.
+                        # Drain prior chunks while waiting so the harness cannot
+                        # manufacture a synthetic slow-listener drop.
                         with contextlib.suppress(asyncio.QueueEmpty):
                             while True:
                                 chunk = listener_queue.get_nowait()
@@ -5619,6 +5620,16 @@ async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
                         await real_sleep(0)
                     listener_at = time.perf_counter()
                     seen_titles.append(str((state.now_streaming or {}).get("label") or ""))
+
+                    accepted_chunks = 0
+                    while True:
+                        try:
+                            chunk = listener_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        assert chunk, "listener received an empty/sentinel chunk mid-probe"
+                        accepted_chunks += 1
+                    assert accepted_chunks > 0, f"cycle {index}: audible commit had no accepted listener chunk"
 
                     handoffs.append(
                         {
@@ -5636,7 +5647,9 @@ async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
             app.state.skip_event.set()
         playback_task.cancel()
         await asyncio.gather(playback_task, return_exceptions=True)
+        app.state.stream_hub.unsubscribe(listener_id)
 
+    assert not app.state.stream_hub.has_listener(listener_id)
     assert len(handoffs) == cycles
     assert len(seen_titles) == cycles
     for index, title in enumerate(seen_titles):
