@@ -1941,19 +1941,19 @@ def _banter_fallback_pools(config: StationConfig) -> list[list[DialogueLine]]:
             DialogueLine(h0, "Music. Now. Trust the process."),
         ],
         [
-            DialogueLine(h1, "Okay, that one grew on me halfway through."),
-            DialogueLine(h0, "Halfway is generous."),
-            DialogueLine(h1, "Fine. Back to the music, dai."),
+            DialogueLine(h1, "That was twenty seconds. I counted."),
+            DialogueLine(h0, "I was building to something."),
+            DialogueLine(h1, "It was second forty. Music, dai."),
         ],
         [
-            DialogueLine(h0, "Quick one. Did anyone else hear that ending?"),
-            DialogueLine(h1, "I heard you talking over it."),
-            DialogueLine(h0, "Fair enough. Music, now."),
+            DialogueLine(h0, "I read one paragraph about this. I am basically an expert."),
+            DialogueLine(h1, "One paragraph."),
+            DialogueLine(h0, "One very good paragraph. Music."),
         ],
         [
-            DialogueLine(h1, "We had a whole bit planned for this."),
-            DialogueLine(h0, "We did not."),
-            DialogueLine(h1, "We did not. Next song, andiamo."),
+            DialogueLine(h1, "This is the first demo tape all over again."),
+            DialogueLine(h0, "Nobody talked over the ident."),
+            DialogueLine(h1, "Somebody talked over the ident. I kept the take anyway. Music."),
         ],
     ]
 
