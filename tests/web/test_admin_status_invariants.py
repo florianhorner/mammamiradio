@@ -663,15 +663,17 @@ def test_engine_room_publishing_states_are_plain_and_escaped() -> None:
     presentation = _function_block(html, "homePublishPresentation")
     engine = _function_block(html, "updateEngineRoom")
 
-    assert "status==='disabled'" in presentation
-    assert "label:'off'" in presentation
-    assert "status==='unconfigured'" in presentation
-    assert "label:'not configured'" in presentation
-    assert "label:'not tested yet'" in presentation
-    assert "label:'working'" in presentation
-    assert "label:'recovered'" in presentation
-    assert "label:'token rejected'" in presentation
-    assert "label:'retrying'" in presentation
+    assert "if(status==='disabled')return{state:'idle',label:'off'" in presentation
+    assert "if(status==='unconfigured')return{state:'idle',label:'not configured'" in presentation
+    assert "if(status==='idle')return{state:'idle',label:'not tested yet'" in presentation
+    assert (
+        "if(status==='ok'){\n"
+        "    if(pub.last_failure_at)return{state:'ready',label:'recovered',detail:message,nextStep};\n"
+        "    return{state:'ready',label:'working',detail:message,nextStep};\n"
+        "  }"
+    ) in presentation
+    assert "if(reason==='auth_denied')return{state:'blocked',label:'token rejected'" in presentation
+    assert "if(status==='degraded')return{state:'degraded',label:'retrying'" in presentation
     assert "esc(publish.detail)" in engine
     assert "esc(publish.nextStep)" in engine
     assert "st.runtime_health&&st.runtime_health.ha_publish" in engine
