@@ -1005,8 +1005,59 @@ async (page) => {
   skipScenario = 'success';
   await page.evaluate(() => doSkip(skipBtn));
   assert(
-    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'Skip — moving to the next segment',
+    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'DJ handoff in progress — next segment queued.',
     'successful skip lost its confirmation',
+  );
+
+  // Truthful handoff theater: success means the next segment is queued, not that
+  // it is already audible. The skipping chip and queue row must stay honest.
+  const handoffUi = await page.evaluate(() => {
+    updateStopState(false);
+    updateNow({ type: 'skipping', label: 'Skipping...', started: Date.now() / 1000, metadata: {} });
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-skip-next',
+        type: 'music',
+        label: 'Queued Next Segment Song',
+        source_kind: 'local',
+        source: 'rendered_queue',
+        duration_ms: 180000,
+      }],
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    });
+    const skip = document.getElementById('skipBtn');
+    const queueRow = document.querySelector('#programmeList tbody tr');
+    return {
+      toast: window.__adminSmokeToasts.at(-1),
+      skipTitle: skip ? skip.getAttribute('title') : '',
+      skipAria: skip ? skip.getAttribute('aria-label') : '',
+      typeText: document.getElementById('nowType')?.textContent || '',
+      typeAria: document.getElementById('nowType')?.getAttribute('aria-label') || '',
+      nowTitle: document.getElementById('nowTitle')?.textContent || '',
+      queueWhen: queueRow?.cells[0]?.textContent.trim() || '',
+      queueTitle: queueRow?.cells[2]?.firstChild?.textContent.trim() || '',
+    };
+  });
+  assert(handoffUi.skipTitle === 'Next segment', `skip control still says track: ${handoffUi.skipTitle}`);
+  assert(
+    handoffUi.skipAria === 'Skip to next segment',
+    `skip control lost its segment aria-label: ${handoffUi.skipAria}`,
+  );
+  assert(handoffUi.typeText === 'Switching…', `skipping chip drifted: ${handoffUi.typeText}`);
+  assert(handoffUi.typeAria === 'status: working', `skipping chip lost working status: ${handoffUi.typeAria}`);
+  assert(
+    handoffUi.nowTitle === 'Skipping...' && !handoffUi.nowTitle.includes('Queued Next Segment Song'),
+    `skipping now-playing falsely presented the queued item as audible: ${handoffUi.nowTitle}`,
+  );
+  assert(
+    handoffUi.queueWhen === 'next' && handoffUi.queueTitle === 'Queued Next Segment Song',
+    `queued next segment was not shown as upcoming during handoff: ${JSON.stringify(handoffUi)}`,
+  );
+  assert(
+    handoffUi.toast.includes('queued') && !handoffUi.toast.toLowerCase().includes('audible'),
+    `skip toast claimed audibility instead of a queued handoff: ${handoffUi.toast}`,
   );
 
   const searchResponseQueue = [];

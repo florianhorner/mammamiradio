@@ -2022,7 +2022,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
             </div>
           </div>
           <div class="mmr-air-controls">
-            <button type="button" class="btn-icon" id="skipBtn" title="Next track" onclick="doSkip(this)">
+            <button type="button" class="btn-icon" id="skipBtn" title="Next segment" aria-label="Skip to next segment" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
             </button>
             <button type="button" id="prefUpNowBtn" class="btn-icon pref-btn" title="Play this song more often" aria-label="Like this song" aria-pressed="false" data-preference-target="now" data-preference-vote="up" style="display:none">
@@ -3581,7 +3581,10 @@ async function doSkip(el){
       toast((r&&r.error)||wayOut('skip that segment'));
       return;
     }
-    toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
+    // Honest handoff: the command landed and the next segment is queued — not
+    // that the room can already hear it. Bridged skips still queue the next
+    // segment (forced music); do not claim a track is already audible.
+    toast('DJ handoff in progress — next segment queued.');
   }catch(_){toast(offlineMsg());}
 }
 // Keep-this stays reachable for a beat after a host break ends, because the
