@@ -218,6 +218,8 @@ def _publish_staged_file(staged: Path, destination: Path) -> None:
         local_copy = Path(handle.name)
     try:
         shutil.copyfile(staged, local_copy)
+        # Keep installed permissions; new public assets must be server-readable.
+        local_copy.chmod(destination.stat().st_mode & 0o777 if destination.exists() else 0o644)
         os.replace(local_copy, destination)
         staged.unlink()
     finally:
@@ -235,7 +237,7 @@ def _publish_staged_pack(files: list[tuple[Path, Path]]) -> None:
         for index, (_, destination) in enumerate(files):
             backup = backup_dir / str(index) if destination.exists() else None
             if backup is not None:
-                shutil.copyfile(destination, backup)
+                shutil.copy2(destination, backup)
             originals.append((destination, backup))
         try:
             for staged, destination in files:
@@ -410,7 +412,7 @@ async def _render_station_opening(output_root, hosts, canonical_receipt, motif_n
     )
     if errors:
         raise RuntimeError("invalid station pack: " + "; ".join(errors))
-    manifest = json.loads((output_root / MANIFEST_FILENAME).read_text())
+    manifest = json.loads((output_root / MANIFEST_FILENAME).read_text(encoding="utf-8"))
     relative = f"first_listen/{STATION_OPENING_CLIP.clip_id}.mp3"
 
     def retained(pack):

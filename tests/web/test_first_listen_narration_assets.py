@@ -553,15 +553,21 @@ def test_generator_print_path_supports_external_output_root(
     assert GENERATOR._display_path(external_manifest) == str(external_manifest)
 
 
+@pytest.mark.parametrize("existing_mode", [None, 0o600, 0o640, 0o644])
 def test_generator_publish_handles_cross_filesystem_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    existing_mode: int | None,
 ) -> None:
     staged = tmp_path / "os-temp" / "welcome.mp3"
     destination = tmp_path / "external-output" / "welcome.mp3"
     staged.parent.mkdir()
     destination.parent.mkdir()
     staged.write_bytes(b"rendered audio")
+    staged.chmod(0o600)
+    if existing_mode is not None:
+        destination.write_bytes(b"old audio")
+        destination.chmod(existing_mode)
     real_rename = os.rename
 
     def cross_device_rename(source, target):
@@ -574,6 +580,7 @@ def test_generator_publish_handles_cross_filesystem_output(
     GENERATOR._publish_staged_file(staged, destination)
 
     assert destination.read_bytes() == b"rendered audio"
+    assert destination.stat().st_mode & 0o777 == (0o644 if existing_mode is None else existing_mode)
     assert not staged.exists()
 
 
@@ -1109,8 +1116,9 @@ def test_pack_publication_failure_restores_every_destination(tmp_path, monkeypat
         (staged / name).write_bytes(b"new " + name.encode())
         if existing:
             (output / name).write_bytes(b"old " + name.encode())
+            (output / name).chmod(0o640)
         files.append((staged / name, output / name))
-    before = {p.name: p.read_bytes() for p in output.iterdir()}
+    before = {p.name: (p.read_bytes(), p.stat().st_mode & 0o777) for p in output.iterdir()}
     publish = GENERATOR._publish_staged_file
     calls = 0
 
@@ -1124,7 +1132,7 @@ def test_pack_publication_failure_restores_every_destination(tmp_path, monkeypat
     monkeypatch.setattr(GENERATOR, "_publish_staged_file", fail_once)
     with pytest.raises(OSError, match="injected publication failure"):
         GENERATOR._publish_staged_pack(files)
-    assert {p.name: p.read_bytes() for p in output.iterdir()} == before
+    assert {p.name: (p.read_bytes(), p.stat().st_mode & 0o777) for p in output.iterdir()} == before
 
 
 @pytest.mark.parametrize(
