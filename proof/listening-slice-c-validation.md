@@ -1,6 +1,6 @@
 # Listening Slice C validation
 
-Runtime implementation: `753e12464f5ffb41afe58e7c065a9978d0007f11`. Base: `8be9a29932c2ac3ae7782ec3a7ff4c366f65e665`.
+Runtime implementation: `a8bc9fc085fd91aa07aca475969021190a28dad1`. Base: `8be9a29932c2ac3ae7782ec3a7ff4c366f65e665`.
 Player smoke fixture blob: `6540933c40351a9e7d7625fb4d6172b2b3a350db`.
 
 | Check | Observed result |
@@ -8,7 +8,7 @@ Player smoke fixture blob: `6540933c40351a9e7d7625fb4d6172b2b3a350db`.
 | Initial transition, memory and label-budget regressions | 4 failed, 2 passed before implementation |
 | Catalog persistence regressions | 2 failed before the persistence correction |
 | Focused language, writer, memory, catalog and route suite | 907 passed |
-| `COVERAGE_RATCHET_XDIST=4 make check` | Exit 0; 8,994 passed, 4 skipped; 92.62% coverage against a 92% floor, all per-module floors held; lint, formatting, types, dead-code and media checks passed |
+| `COVERAGE_RATCHET_XDIST=4 make check` | Exit 0; 8,997 passed, 4 skipped; 93% coverage against a 92% floor, all per-module floors held; lint, formatting, types, dead-code and media checks passed |
 | Player browser harness | Exit 0; stream intent 44 ms; stopped recovery 3,492 ms; 16 request scenarios |
 | Configured Admin browser test | Exit 0; 2 passed |
 | Browser contract tests after fixture correction | 7 passed, 1 opt-in test skipped; Admin executed separately above |
