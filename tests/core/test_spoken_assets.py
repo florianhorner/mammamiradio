@@ -41,7 +41,16 @@ def test_shipped_manifest_is_valid_and_declares_reviewed_spoken_assets():
     first_listen = approved_spoken_assets("first_listen")
     banter = approved_spoken_asset_entries("banter")
     assert [path.name for path in recovery] == ["continuity_1.mp3"]
-    assert [path.name for path in first_listen] == ["first_listen_show.mp3"]
+    assert sorted(path.name for path in first_listen) == ["first_listen_admin_show.mp3", "first_listen_show.mp3"]
+    openings = {Path(entry.relative_path).name: entry for entry in approved_spoken_asset_entries("first_listen")}
+    assert openings["first_listen_admin_show.mp3"].language == "en"
+    assert openings["first_listen_show.mp3"].language == "it"
+    assert (
+        hashlib.sha256(
+            next(path for path in first_listen if path.name == "first_listen_show.mp3").read_bytes()
+        ).hexdigest()
+        == "f03a1dc3184f9f108ae502a27e89ca7eebf626ee54cc28e555a63a5b08ab7af8"
+    )
     assert len(banter) == 21
     assert sum(entry.mode == "normal" for entry in banter) == 15
     assert sum(entry.mode == "super_italian" for entry in banter) == 6

@@ -80,10 +80,10 @@ A successful thaw enables future PR events; it does not re-arm held PRs itself.
 
 ## First-listen operator check
 
-Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
-authored 27-second mini-show on deck: an original music bed and a privacy-aware
-Marco/Giulia opening, then a source-aware handoff to the live stream. It needs
-no AI key or Home context. Source readiness is supporting detail under that
+Open the add-on Web UI. A fresh unfinished install opens **First Listen** with a
+recorded English Marco/Giulia station opening, then a source-aware handoff to
+the live stream. It needs no AI key or Home context. Ordinary listener playback
+retains its existing opening. Source readiness is supporting detail under that
 opening; verify that charts, Jamendo, local music, bundled demo music, and
 recovery cover are described honestly. The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled

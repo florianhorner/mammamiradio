@@ -5009,8 +5009,9 @@ async def test_audio_generator_preserves_persisted_session_stopped_on_connect(tm
     assert flag.exists()
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscription(tmp_path):
+async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscription(tmp_path, first_listen):
     """The mini-show is client-local and hands off to the ordinary live hub."""
     import threading
 
@@ -5020,7 +5021,8 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
     app.state.first_listen_receipt = None
     show = tmp_path / "first-listen-show.mp3"
-    show.write_bytes(b"authored-mini-show")
+    opening_bytes = b"english-mini-show" if first_listen else b"italian-mini-show"
+    show.write_bytes(opening_bytes)
 
     mock_request = MagicMock()
     mock_request.app = app
@@ -5029,21 +5031,22 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     approval_threads: list[int] = []
     read_threads: list[int] = []
 
-    def approve_show():
+    def approve_show(*, english):
+        assert english is first_listen
         approval_threads.append(threading.get_ident())
         return show
 
     def chunks(_path):
         read_threads.append(threading.get_ident())
-        yield b"authored-mini-show"
+        yield opening_bytes
 
     with (
         patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
         patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=approve_show),
         patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=chunks),
     ):
-        generator = _audio_generator(mock_request)
-        assert await anext(generator) == b"authored-mini-show"
+        generator = _audio_generator(mock_request, first_listen=first_listen)
+        assert await anext(generator) == opening_bytes
         assert app.state.station_state.listeners_active == 0
 
         live_chunk = asyncio.create_task(anext(generator))
@@ -5349,8 +5352,9 @@ async def test_password_configured_active_setup_still_rejects_a_rebound_host_wit
     assert response.status_code in (401, 403)
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path):
+async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path, first_listen):
     """A truncated packaged mini-show must hand off to live audio, never silence."""
     from mammamiradio.web.streamer import _audio_generator
 
@@ -5371,7 +5375,7 @@ async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_pa
         patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
         patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=broken_chunks),
     ):
-        generator = _audio_generator(mock_request)
+        generator = _audio_generator(mock_request, first_listen=first_listen)
         assert await anext(generator) == b"partial-show"
 
         live_chunk = asyncio.create_task(anext(generator))
@@ -5388,8 +5392,9 @@ async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_pa
     assert app.state.station_state.listeners_active == 0
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_first_listen_package_approval_timeout_falls_through_to_live_audio():
+async def test_first_listen_package_approval_timeout_falls_through_to_live_audio(first_listen, caplog):
     """Slow package I/O never consumes the instant-audio startup guarantee."""
     import threading
 
@@ -5397,8 +5402,10 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
 
     app = _make_test_app()
     release_approval = threading.Event()
+    selections = []
 
-    def stalled_approval():
+    def stalled_approval(*, english):
+        selections.append(english)
         release_approval.wait(timeout=1)
         return None
 
@@ -5412,7 +5419,7 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
             patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=stalled_approval),
             patch("mammamiradio.web.streamer.FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS", 0.01),
         ):
-            generator = _audio_generator(mock_request)
+            generator = _audio_generator(mock_request, first_listen=first_listen)
             live_chunk = asyncio.create_task(anext(generator))
             deadline = time.monotonic() + 0.5
             while app.state.station_state.listeners_active == 0:
@@ -5426,6 +5433,8 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
     finally:
         release_approval.set()
 
+    assert selections == [first_listen]
+    assert "First Listen package approval exceeded the first-audio budget" in caplog.text
     assert app.state.station_state.listeners_active == 0
 
 
