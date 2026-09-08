@@ -986,9 +986,9 @@ heartbeat above. It is never present on `/public-status`, `/healthz`, or
 | `last_success_at` / `last_failure_at` / `last_attempt_at` | float \| null | unix timestamps |
 | `message` / `next_step` | string | operator-safe copy and a concrete recovery action, worded for standalone vs. add-on installs |
 
-The fields are always sanitized: no raw Home Assistant response body,
-exception text, token, or credential-bearing URL ever reaches this payload or
-the logs behind it — only the fixed reason/copy vocabulary above.
+The fields are sanitized: no raw Home Assistant response body, exception
+text, token, or credential-bearing URL ever reaches this payload or the logs
+behind it. Only the fixed reason/copy vocabulary above does.
 
 These entities answer a much looser question than the control room does.
 `binary_sensor.mammamiradio_on_air` reports only "has the operator stopped the

@@ -3206,7 +3206,7 @@ async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.
         return "transport"
     except Exception as exc:
         _media_player_ghost_purged = False  # allow a retry on the next push
-        # Exception class name only — never str(exc)/repr(exc), which could
+        # Exception class name only, never str(exc)/repr(exc), which could
         # carry a response body, URL, or token. See push_state_to_ha's own
         # sanitization boundary tests.
         logger.debug("HA ghost media_player purge failed unexpectedly: %s", type(exc).__name__)
@@ -3255,7 +3255,7 @@ async def push_state_to_ha(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        # Exception class name only — see the docstring above and the
+        # Exception class name only, see the docstring above and the
         # ha_publish log-sanitization tests for why the message/repr never
         # gets logged here.
         logger.debug("HA publish saw an unexpected exception type: %s", type(exc).__name__)

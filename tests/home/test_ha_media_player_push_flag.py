@@ -179,8 +179,8 @@ async def test_push_returns_none_once_purge_done_and_sensors_deduped(monkeypatch
     """Steady state for a HACS-integration operator: media_player is excluded,
     the ghost was already purged, and nothing changed since the last heartbeat.
 
-    Nothing was actually due to write this cycle, so the result must be ``None``
-    (no-op) — not ``False``. Returning ``False`` here would be silently
+    Nothing was actually due to write this cycle, so the result must be a
+    no-op ``None``, not ``False``. Returning ``False`` here would be silently
     indistinguishable from a real outage: the heartbeat backoff would slow to
     300s and the Admin card would say "retrying" while HA publishing is
     perfectly healthy.

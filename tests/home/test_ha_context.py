@@ -5892,8 +5892,8 @@ async def test_push_state_to_ha_one_outage_and_one_recovery(reset_ha_push_deboun
 
 @pytest.mark.asyncio
 async def test_push_state_to_ha_worst_reason_wins_across_mixed_failures(reset_ha_push_debounce):
-    """When entities fail for different reasons in one cycle, the more specific/
-    actionable reason wins the reported category — regardless of encounter
+    """When entities fail for different reasons in one cycle, the more specific
+    or actionable reason wins the reported category, regardless of encounter
     order. media_player (posted first) fails with a transport error; the
     segment_type sensor (posted second) fails with a 403. The overall reason
     must upgrade to auth_denied, not freeze on the first-seen transport error,
@@ -6038,7 +6038,7 @@ def test_ha_publish_status_payload_settings_not_home_context():
 
 def test_ha_publish_status_payload_addon_auth_denied_copy():
     """An add-on operator cannot act on the standalone 'save the token again'
-    instruction (Supervisor owns the token) — the add-on's auth_denied
+    instruction, since Supervisor owns the token. The add-on's auth_denied
     next_step must point at the Supervisor connection instead."""
     import mammamiradio.home.ha_context as ha
 
@@ -6069,11 +6069,12 @@ def test_ha_publish_status_payload_addon_auth_denied_copy():
 async def test_ha_publish_status_payload_ok_without_prior_failure_is_not_worded_as_recovered(
     reset_ha_push_debounce,
 ):
-    """The most common steady state — the first-ever push succeeds and nothing
-    has failed yet — must read as plain 'working', not 'recovered.' Conflating
-    the two would tell an operator who never had a problem that something was
-    just fixed. Only the state transition (success recorded) was previously
-    exercised; the rendered payload for this specific branch was not.
+    """The most common steady state, where the first-ever push succeeds and
+    nothing has failed yet, must read as plain 'working', not 'recovered.'
+    Conflating the two would tell an operator who never had a problem that
+    something was just fixed. Only the state transition (success recorded)
+    was previously exercised; the rendered payload for this specific branch
+    was not.
     """
     mock_client = AsyncMock()
     mock_client.post.return_value = MagicMock(status_code=200)

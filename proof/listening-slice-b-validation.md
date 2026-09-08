@@ -1,4 +1,4 @@
-# Listening Slice B — validation
+# Listening Slice B: validation
 
 Path A to `main`. Workspace `tegucigalpa`. Branch `florianhorner/feat/listening-slice-b`.
 Original review merge base: `7829fb728611cd99e9fc79d39f1a3164a7e36142`; original implementation commit: `b0b00c27fb8673d676525abdcc397213472e64dd`.
@@ -33,10 +33,10 @@ No extra XSS file remains in the final diff. No integrator-only files changed.
 
 ## Review remediation (`/ship` pre-landing pass)
 
-Nine subagents (coverage audit, plan-completion audit, five specialists —
-testing/maintainability/security/performance/api-contract/design, Claude
-adversarial) plus Codex adversarial and Codex structured review (`--base main`,
-P1 gate) ran against the merged diff. Fixed:
+Nine subagents ran against the merged diff: coverage audit, plan-completion
+audit, five specialists (testing, maintainability, security, performance,
+api-contract, design), and Claude adversarial, plus Codex adversarial and
+Codex structured review (`--base main`, P1 gate). Fixed:
 
 - 4 coverage gaps closed with mutation-verified tests: the `attempted==0 → None`
   no-op contract, worst-reason-wins across mixed failure categories in one
@@ -45,8 +45,8 @@ P1 gate) ran against the merged diff. Fixed:
 - `recovered`/`ok`/`idle` status copy now routes through `_ha_publish_copy()`
   like every other branch, so a future addon-specific override can't be
   silently skipped by three call sites that read the copy dict directly.
-- The three generic-exception branches now log the exception **class name
-  only** (never message/repr) at DEBUG, so an unrelated real bug doesn't sit
+- The three generic-exception branches now log the exception class name only
+  (never message/repr) at DEBUG, so an unrelated real bug doesn't sit
   invisible forever behind the sanitized "unexpected" reason.
 - Fixed indentation of the pre-existing `ha_details` block in
   `updateEngineRoom()` (whitespace only, brace nesting was ambiguous under the
@@ -55,33 +55,33 @@ P1 gate) ran against the merged diff. Fixed:
   fixture instead of duplicating it inline in two tests (maintainability +
   testing specialists both flagged this independently).
 - Documented `runtime_health.ha_publish`'s shape in `docs/operations.md`.
-- **Codex structured review [P1 gate], 2 real P2s:** `ha_publish_status_payload`
+- Codex structured review (P1 gate) found 2 real P2s. `ha_publish_status_payload`
   reported `enabled: false` for the `unconfigured` status even when the
   operator had turned HA on in config, making it indistinguishable from
-  `disabled` to anything reading the `enabled` field — now reports the actual
-  config toggle. The just-added `reason` doc line claimed empty outside
-  `degraded`; the `ok`/`recovered` path has always set `reason: "ok"` — fixed
-  the table, not the already-reviewed code.
+  `disabled` to anything reading the `enabled` field; it now reports the
+  actual config toggle. The just-added `reason` doc line claimed empty outside
+  `degraded`, but the `ok`/`recovered` path has always set `reason: "ok"`.
+  Fixed the table, not the already-reviewed code.
 - The Codex P1 (evidence staleness) is resolved by this revision of this file
   and a fresh `proof/preship-reviews/v2/` receipt at final HEAD.
 
-One design finding was investigated and found to be **intended behavior, not a
-bug**: the HA card now always renders (even fully-disabled installs show
-"Publishing: off") because `ha_publish_status_payload()` never returns null —
-this is exactly what the plan asked for ("render publishing status even when
+One design finding was investigated and found to be intended behavior, not a
+bug. The HA card now always renders (even fully-disabled installs show
+"Publishing: off") because `ha_publish_status_payload()` never returns null.
+That is exactly what the plan asked for ("render publishing status even when
 `ha_details` is absent"), verified against
 `.context/plans/listening-slice-b-home-assistant-push-recovery.md`.
 
 Deferred, not blocking (out of scope for this slice, noted for the integrator):
 admin.html's `homePublishPresentation()`/`updateEngineRoom()` JS has no
-behavioral test coverage — this repo has no JS runtime/test harness at all, a
+behavioral test coverage. This repo has no JS runtime/test harness at all, a
 pre-existing structural gap, not something introduced here. Backoff is global
-per push-cycle, not per-entity — a strict improvement over the pre-diff code
-(whose backoff never fired for real HTTP/connectivity failures), narrowing
-further is a follow-up enhancement. Unbounded `ha_push_tasks`/lock-waiter
-growth if HA is reachable-but-non-responsive for a sustained period is a
-pre-existing pattern this diff doesn't worsen (confirmed it never touches the
-FFmpeg/audio path either way).
+per push-cycle, not per-entity, which is a strict improvement over the
+pre-diff code (whose backoff never fired for real HTTP/connectivity
+failures); narrowing further is a follow-up enhancement. Unbounded
+`ha_push_tasks`/lock-waiter growth if HA is reachable but non-responsive for
+a sustained period is a pre-existing pattern this diff doesn't worsen
+(confirmed it never touches the FFmpeg/audio path either way).
 
 ## Validation
 
