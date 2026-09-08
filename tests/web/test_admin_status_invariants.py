@@ -648,6 +648,36 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "<summary>Voice providers</summary>" in _read_admin_html()
     assert "restart the add-on" not in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
+    assert "'Voices: '+voicesLine" in block
+    assert "homePublishPresentation(pub)" in block
+    assert "Publishing: '+statusInline(publish.state,publish.label)" in block
+    assert "esc(publish.detail)" in block
+    assert "esc(publish.nextStep)" in block
+    assert "const pub=st.runtime_health&&st.runtime_health.ha_publish" in block
+    assert "if(pub||hd)" in block
+    assert "haCard.style.display='none'" in block
+
+
+def test_engine_room_publishing_states_are_plain_and_escaped() -> None:
+    html = _read_admin_html()
+    presentation = _function_block(html, "homePublishPresentation")
+    engine = _function_block(html, "updateEngineRoom")
+
+    assert "if(status==='disabled')return{state:'idle',label:'off'" in presentation
+    assert "if(status==='unconfigured')return{state:'idle',label:'not configured'" in presentation
+    assert "if(status==='idle')return{state:'idle',label:'not tested yet'" in presentation
+    assert (
+        "if(status==='ok'){\n"
+        "    if(pub.last_failure_at)return{state:'ready',label:'recovered',detail:message,nextStep};\n"
+        "    return{state:'ready',label:'working',detail:message,nextStep};\n"
+        "  }"
+    ) in presentation
+    assert "if(reason==='auth_denied')return{state:'blocked',label:'token rejected'" in presentation
+    assert "if(status==='degraded')return{state:'degraded',label:'retrying'" in presentation
+    assert "esc(publish.detail)" in engine
+    assert "esc(publish.nextStep)" in engine
+    assert "st.runtime_health&&st.runtime_health.ha_publish" in engine
+    assert "statusInline('idle','Edge only')" in engine
 
 
 def test_engine_room_ha_observability_escapes_home_assistant_values() -> None:

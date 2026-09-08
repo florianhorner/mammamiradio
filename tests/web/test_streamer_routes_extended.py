@@ -95,6 +95,21 @@ def _no_real_dotenv_writes():
         yield
 
 
+def _reset_ha_publish_state() -> None:
+    import mammamiradio.home.ha_context as ha
+
+    ha._last_ha_push = ha._last_ha_stop_push = 0.0
+    with ha._ha_publish_health_lock:
+        ha._ha_publish_health = ha._HaPublishHealth()
+
+
+@pytest.fixture(autouse=True)
+def _reset_ha_publish_globals():
+    _reset_ha_publish_state()
+    yield
+    _reset_ha_publish_state()
+
+
 def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon: bool = False) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -182,6 +197,22 @@ async def test_healthz_returns_ok():
     assert "uptime_s" in body
     assert "runtime" in body
     assert "shadow_queue_in_sync" in body["runtime"]
+
+
+@pytest.mark.asyncio
+async def test_selected_playback_publishes_state_to_ha(tmp_path):
+    from mammamiradio.web import streamer as streamer_mod
+
+    app = _make_test_app()
+    config = app.state.config
+    config.homeassistant.enabled, config.homeassistant.url, config.ha_token = True, "http://ha.local:8123", "test-token"
+    segment = Segment(type=SegmentType.MUSIC, path=tmp_path / "selected.mp3", metadata={"title": "Selected song"})
+    tasks: set[asyncio.Task] = set()
+    with patch.object(streamer_mod, "push_state_to_ha", new_callable=AsyncMock) as push:
+        streamer_mod._start_stream_segment(app, app.state.station_state, config, segment, tasks)
+        await asyncio.gather(*tuple(tasks))
+    push.assert_awaited_once()
+    assert push.await_args.kwargs["now_streaming"]["label"] == "Selected song"
 
 
 @pytest.mark.asyncio
@@ -8273,6 +8304,86 @@ async def test_admin_status_ha_details_absent_when_no_ha_context():
         resp = await client.get("/status", headers={"Authorization": "Bearer secret-tok"})
     assert resp.status_code == 200
     assert resp.json()["ha_details"] is None
+
+
+@pytest.mark.asyncio
+async def test_admin_status_ha_publish_is_private_and_settings_driven():
+    # client=("127.0.0.1", ...) is loopback, which require_admin_access trusts
+    # unconditionally before any credential check runs — no auth header is
+    # actually exercised here. This test is about ha_publish's presence and
+    # privacy, not the auth mechanism.
+    app = _make_test_app(admin_token="secret-tok")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        disabled = (await client.get("/status")).json()
+        public = (await client.get("/public-status")).json()
+        healthz = (await client.get("/healthz")).json()
+        readyz = (await client.get("/readyz")).json()
+        app.state.config.homeassistant.enabled = True
+        app.state.config.homeassistant.url = ""
+        app.state.config.ha_token = ""
+        unconfigured = (await client.get("/status")).json()
+        app.state.config.homeassistant.url = "http://ha.local:8123"
+        app.state.config.ha_token = "test-token"
+        idle = (await client.get("/status")).json()
+
+    assert disabled["runtime_health"]["ha_publish"]["status"] == "disabled"
+    assert unconfigured["runtime_health"]["ha_publish"]["status"] == "unconfigured"
+    assert idle["runtime_health"]["ha_publish"]["status"] == "idle"
+    assert idle["ha_details"] is None
+    assert "ha_publish" not in public["runtime_health"]
+    assert "ha_publish" not in healthz.get("runtime", {})
+    assert "ha_publish" not in (readyz.get("runtime") or {})
+    assert "test-token" not in json.dumps(idle["runtime_health"]["ha_publish"])
+    assert "http://ha.local" not in json.dumps(idle["runtime_health"]["ha_publish"])
+
+
+@pytest.mark.asyncio
+async def test_admin_status_ha_publish_failure_and_recovery():
+    import mammamiradio.home.ha_context as ha
+
+    fail = MagicMock(status_code=502, text="gateway secret")
+    ok = MagicMock(status_code=200)
+    mock_client = AsyncMock()
+    mock_client.post.return_value = fail
+    with patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client):
+        await ha.push_state_to_ha(
+            "http://ha.local:8123",
+            "test-token",
+            {"type": "music", "metadata": {"title": "X"}},
+            None,
+            1,
+            False,
+        )
+        app = _make_test_app(admin_token="secret-tok")
+        app.state.config.homeassistant.enabled = True
+        app.state.config.homeassistant.url = "http://ha.local:8123"
+        app.state.config.ha_token = "test-token"
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        headers = {"Authorization": "Bearer secret-tok"}
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            failing = (await client.get("/status", headers=headers)).json()["runtime_health"]["ha_publish"]
+            mock_client.post.return_value = ok
+            ha._last_ha_push = 0.0
+            await ha.push_state_to_ha(
+                "http://ha.local:8123",
+                "test-token",
+                {"type": "music", "metadata": {"title": "X"}},
+                None,
+                1,
+                False,
+            )
+            recovered = (await client.get("/status", headers=headers)).json()["runtime_health"]["ha_publish"]
+            app.state.config.homeassistant.enabled = False
+            later_off = (await client.get("/status", headers=headers)).json()["runtime_health"]["ha_publish"]
+
+    assert failing["status"] == "degraded"
+    assert failing["reason"] == "http_error"
+    assert "gateway secret" not in json.dumps(failing)
+    assert recovered["status"] == "ok"
+    assert recovered["message"].endswith("recovered.")
+    assert later_off["status"] == "disabled"
+    assert later_off["failure_streak"] == 0
 
 
 @pytest.mark.asyncio

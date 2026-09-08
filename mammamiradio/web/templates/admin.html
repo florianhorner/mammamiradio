@@ -3192,6 +3192,23 @@ function formatHomeSnapshotTimestamp(ts){
   if(Number.isNaN(d.getTime()))return'—';
   return d.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'});
 }
+function homePublishPresentation(p){
+  const pub=p||{};
+  const status=String(pub.status||'');
+  const reason=String(pub.reason||'');
+  const message=String(pub.message||'');
+  const nextStep=String(pub.next_step||'');
+  if(status==='disabled')return{state:'idle',label:'off',detail:message,nextStep};
+  if(status==='unconfigured')return{state:'idle',label:'not configured',detail:message,nextStep};
+  if(status==='idle')return{state:'idle',label:'not tested yet',detail:message,nextStep};
+  if(status==='ok'){
+    if(pub.last_failure_at)return{state:'ready',label:'recovered',detail:message,nextStep};
+    return{state:'ready',label:'working',detail:message,nextStep};
+  }
+  if(reason==='auth_denied')return{state:'blocked',label:'token rejected',detail:message,nextStep};
+  if(status==='degraded')return{state:'degraded',label:'retrying',detail:message,nextStep};
+  return{state:'idle',label:'not tested yet',detail:message,nextStep};
+}
 function homeSnapshotPresentation(refresh){
   const r=refresh||{};
   const age=formatHomeSnapshotAge(r.age_seconds);
@@ -8310,45 +8327,53 @@ function updateEngineRoom(st,caps){
   const haCard=document.getElementById('ha-details-card');
   const haEl=document.getElementById('haDetails');
   const hd=st.ha_details;
-  if(hd){
+  const pub=st.runtime_health&&st.runtime_health.ha_publish;
+  if(pub||hd){
     haCard.style.display='';
     const lines=[];
-    const refresh=hd.refresh||{};
-    const snapshot=homeSnapshotPresentation(refresh);
-    lines.push('Home snapshot: '+statusInline(snapshot.state,snapshot.label)+' '+snapshot.detail);
-    if(refresh.last_success_at){
-      lines.push('Last success: '+formatHomeSnapshotTimestamp(refresh.last_success_at)+' · '+formatHomeSnapshotAge(refresh.age_seconds));
+    if(pub){
+      const publish=homePublishPresentation(pub);
+      lines.push('Publishing: '+statusInline(publish.state,publish.label)+' '+esc(publish.detail));
+      if(publish.nextStep)lines.push(esc(publish.nextStep));
     }
-    if(refresh.last_attempt_at)lines.push('Last attempt: '+formatHomeSnapshotTimestamp(refresh.last_attempt_at));
-    if(refresh.in_flight&&refresh.active_foreground_timed_out){
-      lines.push('The replacement is still catching up; the show kept moving.');
+    if(hd){
+      const refresh=hd.refresh||{};
+      const snapshot=homeSnapshotPresentation(refresh);
+      lines.push('Home snapshot: '+statusInline(snapshot.state,snapshot.label)+' '+snapshot.detail);
+      if(refresh.last_success_at){
+        lines.push('Last success: '+formatHomeSnapshotTimestamp(refresh.last_success_at)+' · '+formatHomeSnapshotAge(refresh.age_seconds));
+      }
+      if(refresh.last_attempt_at)lines.push('Last attempt: '+formatHomeSnapshotTimestamp(refresh.last_attempt_at));
+      if(refresh.in_flight&&refresh.active_foreground_timed_out){
+        lines.push('The replacement is still catching up; the show kept moving.');
+      }
+      const latestRefresh=homeRefreshResultLine(refresh);
+      if(latestRefresh&&!refresh.adoption_pending)lines.push('Latest refresh: '+latestRefresh);
+      if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+esc(hd.mood_en||hd.mood)+'</strong>');
+      if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+esc(hd.weather_arc_en||hd.weather_arc));
+      if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
+      if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
+      lines.push('Recent events: '+(hd.recent_event_count||0));
+      lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
+      if(hd.context_last_updated&&!refresh.last_success_at)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
+      const director=hd.home_context_director;
+      if(director){
+        const rotation=director.operator_message||director.mode||'Waiting for a safe home cue';
+        const counts=[['eligible',director.eligible_count],['resting',director.cooling_count],['queued',director.reserved_count]].filter(([,v])=>v!=null).map(([k,v])=>esc(k)+': '+Number(v||0)).join(' · ');
+        lines.push('Home context rotation: <strong>'+esc(rotation)+'</strong>'+(counts?'<br><span style="color:var(--muted)">'+counts+'</span>':''));
+      }
+      lines.push('First home moment: '+(hd.first_home_context_moment_fired?'fired':'waiting'));
+      if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
+      if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
+        const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
+        lines.push('Sent to prompt:<br>'+scored.join('<br>'));
+      }
+      if(hd.denylist_hits&&Object.keys(hd.denylist_hits).length){
+        const denied=Object.entries(hd.denylist_hits).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))).map(([k,v])=>esc(k)+': <strong>'+Number(v||0)+'</strong>');
+        lines.push('Filtered for privacy:<br>'+denied.join('<br>'));
+      }
+      if(hd.catalog_hit_rate!=null)lines.push('Label catalog: <strong>'+Math.round(Number(hd.catalog_hit_rate||0)*100)+'%</strong>');
     }
-    const latestRefresh=homeRefreshResultLine(refresh);
-    if(latestRefresh&&!refresh.adoption_pending)lines.push('Latest refresh: '+latestRefresh);
-    if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+esc(hd.mood_en||hd.mood)+'</strong>');
-    if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+esc(hd.weather_arc_en||hd.weather_arc));
-    if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
-    if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
-    lines.push('Recent events: '+(hd.recent_event_count||0));
-    lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
-    if(hd.context_last_updated&&!refresh.last_success_at)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
-    const director=hd.home_context_director;
-    if(director){
-      const rotation=director.operator_message||director.mode||'Waiting for a safe home cue';
-      const counts=[['eligible',director.eligible_count],['resting',director.cooling_count],['queued',director.reserved_count]].filter(([,v])=>v!=null).map(([k,v])=>esc(k)+': '+Number(v||0)).join(' · ');
-      lines.push('Home context rotation: <strong>'+esc(rotation)+'</strong>'+(counts?'<br><span style="color:var(--muted)">'+counts+'</span>':''));
-    }
-    lines.push('First home moment: '+(hd.first_home_context_moment_fired?'fired':'waiting'));
-    if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
-    if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
-      const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
-      lines.push('Sent to prompt:<br>'+scored.join('<br>'));
-    }
-    if(hd.denylist_hits&&Object.keys(hd.denylist_hits).length){
-      const denied=Object.entries(hd.denylist_hits).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))).map(([k,v])=>esc(k)+': <strong>'+Number(v||0)+'</strong>');
-      lines.push('Filtered for privacy:<br>'+denied.join('<br>'));
-    }
-    if(hd.catalog_hit_rate!=null)lines.push('Label catalog: <strong>'+Math.round(Number(hd.catalog_hit_rate||0)*100)+'%</strong>');
     haEl.innerHTML=lines.join('<br>')||'No HA data';
   }else{
     haCard.style.display='none';
