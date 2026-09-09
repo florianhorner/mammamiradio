@@ -743,11 +743,22 @@ try:
     import tomllib
 except ImportError:
     import tomli as tomllib
+import datetime
+import re
 with open('model_registry.toml', 'rb') as f:
     raw = tomllib.load(f)
 models = raw.get('models')
 if not isinstance(models, dict):
     raise SystemExit('model_registry.toml schema invalid: [models] table is required')
+# Shape only (a date, or a YYYY-MM-DD string); calendar validity and age are the cut's
+# question, parse_last_reviewed in scripts/check_model_registry.py, run by pre-release-check.sh.
+last_reviewed = models.get('last_reviewed')
+if isinstance(last_reviewed, datetime.datetime) or not (
+    isinstance(last_reviewed, datetime.date)
+    or (isinstance(last_reviewed, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', last_reviewed))
+):
+    raise SystemExit('model_registry.toml schema invalid: [models].last_reviewed must be a YYYY-MM-DD date, '
+                     'the day a maintainer last decided the pins')
 catalog = models.get('catalog')
 profiles = models.get('profiles')
 routing = models.get('routing') or {}
