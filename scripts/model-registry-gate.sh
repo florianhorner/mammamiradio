@@ -54,11 +54,13 @@ model_registry_gate() {
         fixture_args=(--fixture-dir "$MMR_MODEL_REGISTRY_FIXTURES")
     fi
     # ${arr[@]+"${arr[@]}"} expands an empty array safely under set -u on bash 3.2.
-    if "$python" "$checker" --age ${registry_args[@]+"${registry_args[@]}"}; then
-        ok "Model registry review age: a maintainer decided the pins within the last 45 days"
-    else
-        fail "Model registry review age: last_reviewed is missing, malformed, or older than 45 days (see above)"
-    fi
+    local age_rc=0
+    "$python" "$checker" --age ${registry_args[@]+"${registry_args[@]}"} || age_rc=$?
+    case "$age_rc" in
+        0) ok "Model registry review age: a maintainer decided the pins within the last 45 days" ;;
+        2) fail "Model registry review age: the checker/source failed, so last_reviewed could not be verified (see above)" ;;
+        *) fail "Model registry review age: last_reviewed is missing, malformed, or older than 45 days (see above)" ;;
+    esac
     local liveness_rc=0
     "$python" "$checker" --providers --gate liveness \
         ${registry_args[@]+"${registry_args[@]}"} ${fixture_args[@]+"${fixture_args[@]}"} || liveness_rc=$?
