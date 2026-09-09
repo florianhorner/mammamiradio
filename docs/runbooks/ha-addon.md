@@ -791,7 +791,7 @@ Before merging ANY change that touches addon files:
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.
 
-Local pre-release: `make pre-release` (runs the full eight-check
+Local pre-release: `make pre-release` (runs every section of
 `pre-release-check.sh`, including independent validation of both packaged
 recovery assets and a target-scoped release-beat check:
 `--channel stable --semver "$ADDON_VER"`, which additionally confirms the
