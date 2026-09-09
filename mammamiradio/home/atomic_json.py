@@ -169,7 +169,10 @@ def atomic_write_json(
     tmp_path = Path(tmp_name)
     replaced = False
     try:
-        os.fchmod(fd, 0o600)
+        fchmod = getattr(os, "fchmod", None)
+        if fchmod is None:
+            raise OSError("owner-only atomic JSON writes require os.fchmod")
+        fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(body)

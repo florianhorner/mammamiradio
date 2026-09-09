@@ -63,6 +63,19 @@ def test_atomic_write_json_replace_failure_raises_and_leaves_destination(tmp_pat
     assert list(tmp_path.glob(".household.json.*.tmp")) == []
 
 
+def test_atomic_write_json_without_fchmod_fails_closed_and_cleans_scratch(tmp_path, monkeypatch):
+    destination = tmp_path / "household.json"
+    previous = '{"kept": true}'
+    destination.write_text(previous, encoding="utf-8")
+    monkeypatch.delattr(os, "fchmod")
+
+    with pytest.raises(OSError, match=r"owner-only atomic JSON writes require os\.fchmod"):
+        atomic_write_json(destination, {"k": "v"}, ensure_ascii=True)
+
+    assert destination.read_text(encoding="utf-8") == previous
+    assert list(tmp_path.glob(".household.json.*.tmp")) == []
+
+
 def test_atomic_write_json_write_failure_raises_and_leaves_destination(tmp_path):
     destination = tmp_path / "household.json"
     previous = '{"kept": true}'
