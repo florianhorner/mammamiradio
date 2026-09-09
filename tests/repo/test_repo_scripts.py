@@ -18,6 +18,7 @@ CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
 CHECK_UI_COPY_LINT = ROOT / "scripts" / "check-ui-copy-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
+MODEL_REGISTRY_GATE_SELF_TEST = ROOT / "tests" / "workflows" / "test_model_registry_gate.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 ADDON_BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "addon-build.yml"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
@@ -417,6 +418,13 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "browser narration assets and admin metadata match the release manifest" in result.stdout
+
+
+def test_model_registry_gate_workflow_contract() -> None:
+    result = _run(["bash", str(MODEL_REGISTRY_GATE_SELF_TEST)], cwd=ROOT)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "All model registry gate cases passed." in result.stdout
 
 
 def test_pre_release_check_fails_on_manifest_version_mismatch(
@@ -1295,6 +1303,7 @@ def _create_validate_addon_repo(
         """
 [models]
 default_profile = "balanced"
+last_reviewed = "2026-09-08"
 
 [models.catalog.anthropic]
 opus = "anthropic-creative"
@@ -1407,12 +1416,34 @@ def test_validate_addon_rejects_registry_that_runtime_cannot_route(tmp_path: Pat
         tmp_path,
         streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
     )
-    _write(tmp_path / "model_registry.toml", "[models]\ndefault_profile = 'balanced'\n")
+    # The stamp is present so the failure is the routing schema, not the newer stamp check.
+    _write(
+        tmp_path / "model_registry.toml",
+        "[models]\ndefault_profile = 'balanced'\nlast_reviewed = '2026-09-08'\n",
+    )
 
     result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
 
     assert result.returncode != 0
     assert "model_registry.toml parse/schema error" in result.stdout
+    assert "[models.catalog] must be non-empty" in result.stdout
+
+
+def test_validate_addon_rejects_registry_without_last_reviewed(tmp_path: Path) -> None:
+    """The stamp is schema here and age at the cut; a registry nobody dated never validates."""
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    dated = registry.read_text()
+    assert 'last_reviewed = "2026-09-08"\n' in dated
+    _write(registry, dated.replace('last_reviewed = "2026-09-08"\n', ""))
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "last_reviewed must be a YYYY-MM-DD date" in result.stdout
 
 
 def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:

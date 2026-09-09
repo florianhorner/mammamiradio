@@ -6,6 +6,10 @@
 
 [models]
 default_profile = "balanced"
+# The day a maintainer last decided these pins, bump or hold; the comment says which.
+# 2026-09-08: pins deliberately held pending the separate Claude 5 generation update;
+# that decision will restamp. scripts/check_model_registry.py --age checks age at the cut.
+last_reviewed = "2026-09-08"
 
 [models.catalog.anthropic]
 fable = "claude-fable-5"  # ported from main #806; unmapped by any profile — usable via CLAUDE_CREATIVE_MODEL, gated keys fall back to OpenAI
