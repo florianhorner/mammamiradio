@@ -341,7 +341,8 @@ def test_skip_control_reports_backend_declines_and_network_failure() -> None:
     assert "if(!(r&&r.ok))" in block
     assert "(r&&r.error)||wayOut('skip that segment')" in block
     assert "toast(offlineMsg())" in block
-    assert block.index("if(!(r&&r.ok))") < block.index("Skip prepared"), (
+    assert "DJ handoff in progress — next segment queued." in block
+    assert block.index("if(!(r&&r.ok))") < block.index("DJ handoff in progress"), (
         "skip success copy must only run after the response proves ok=true."
     )
 

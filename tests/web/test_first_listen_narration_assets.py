@@ -238,6 +238,7 @@ def test_generator_selected_env_precedes_runtime_import_without_overriding_proce
     args = argparse.Namespace(
         env_file=env_file,
         output_root=tmp_path / "audio",
+        clip=None,
     )
 
     with pytest.raises(StopBeforeRuntimeCallsError):
@@ -283,12 +284,199 @@ def test_generator_cli_keeps_staging_inputs_and_rejects_provider_selection(
 
     assert args.output_root == output_root
     assert args.env_file == env_file
+    assert args.clip is None  # The established full-pack default is unchanged.
     assert not hasattr(args, "provider")
+
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--clip", "welcome"])
+    assert GENERATOR._arguments().clip == "welcome"
+
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--station-opening"])
+    assert GENERATOR._arguments().output_root == GENERATOR.STATION_OUTPUT_ROOT
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--station-opening", "--clip", "welcome"])
+    with pytest.raises(SystemExit):
+        GENERATOR._arguments()
 
     monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--provider", "edge"])
     with pytest.raises(SystemExit) as exc_info:
         GENERATOR._arguments()
     assert exc_info.value.code == 2
+
+
+@pytest.fixture
+def generator_media_tools(stub_browser_media_tools, monkeypatch):
+    monkeypatch.setattr(GENERATOR, "_load_pack_validator", lambda: VALIDATOR.validate_browser_narration_pack)
+
+
+@pytest.mark.parametrize("publish_failure", [False, True])
+@pytest.mark.parametrize("selected", ["welcome", None])
+def test_generator_stages_selected_clips_and_preserves_retained_pack(
+    copied_pack, monkeypatch, selected, publish_failure, generator_media_tools
+) -> None:
+    _static_root, copied_pack = copied_pack
+    before = {path.name: path.read_bytes() for path in (copied_pack / "first_listen").glob("*.mp3")}
+    original = json.loads((copied_pack / "spoken_assets.json").read_text())
+    calls = []
+
+    async def render(clip, _hosts, _work_dir, destination, **_kwargs):
+        calls.append(clip.clip_id)
+        destination.write_bytes(b"replacement " + clip.clip_id.encode())
+        return {
+            **next(entry for entry in original["assets"] if entry["path"].endswith(f"/{clip.clip_id}.mp3")),
+            "sha256": GENERATOR._sha256(destination),
+            "transcript": clip.transcript,
+        }
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-no-provider-calls")
+    monkeypatch.setattr(GENERATOR, "_render_clip", render)
+    if publish_failure:
+        publish = GENERATOR._publish_staged_file
+
+        def fail_manifest(source, destination):
+            if destination.name == "spoken_assets.json":
+                raise OSError("manifest publication failed")
+            publish(source, destination)
+
+        monkeypatch.setattr(GENERATOR, "_publish_staged_file", fail_manifest)
+        with pytest.raises(OSError, match="manifest publication failed"):
+            asyncio.run(
+                GENERATOR._run(
+                    argparse.Namespace(env_file=copied_pack / "absent.env", output_root=copied_pack, clip=selected)
+                )
+            )
+        assert json.loads((copied_pack / "spoken_assets.json").read_text()) == original
+        assert {path.name: path.read_bytes() for path in (copied_pack / "first_listen").glob("*.mp3")} == before
+        return
+    asyncio.run(
+        GENERATOR._run(argparse.Namespace(env_file=copied_pack / "absent.env", output_root=copied_pack, clip=selected))
+    )
+    after = json.loads((copied_pack / "spoken_assets.json").read_text())
+    assert calls == (["welcome"] if selected else [clip.clip_id for clip in GENERATOR.GUIDE_CLIPS])
+    assert len(after["assets"]) == 7
+    for old, new in zip(original["assets"], after["assets"], strict=True):
+        if selected and not old["path"].endswith("/welcome.mp3"):
+            assert old == new
+            assert (copied_pack / old["path"]).read_bytes() == before[Path(old["path"]).name]
+        else:
+            assert old["sha256"] != new["sha256"]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "unlisted",
+        "inventory",
+        "hash",
+        "receipt",
+        "provider",
+        "malformed",
+        "duration",
+        "speakers",
+        "transcript",
+    ],
+)
+def test_welcome_render_refuses_invalid_retained_pack_before_synthesis(
+    copied_pack, monkeypatch, damage, generator_media_tools
+) -> None:
+    _static_root, copied_pack = copied_pack
+    if damage == "missing":
+        (copied_pack / "first_listen/privacy.mp3").unlink()
+    elif damage == "unlisted":
+        (copied_pack / "first_listen/extra.mp3").write_bytes(b"unexpected")
+    elif damage == "hash":
+        (copied_pack / "first_listen/privacy.mp3").write_bytes(b"tampered")
+    elif damage == "malformed":
+        (copied_pack / "spoken_assets.json").write_text("[]")
+    else:
+
+        def mutate(manifest):
+            if damage == "inventory":
+                manifest["assets"].pop()
+                (copied_pack / "first_listen/success.mp3").unlink()
+            elif damage == "receipt":
+                manifest["canonical_render_receipt"]["hosts"][0]["voice_id"] = "wrong-voice"
+            elif damage in {"duration", "speakers", "transcript"}:
+                entry = next(item for item in manifest["assets"] if item["path"] == "first_listen/privacy.mp3")
+                entry[{"duration": "duration_seconds", "speakers": "speakers", "transcript": "transcript"}[damage]] = (
+                    "Marco: Only one host." if damage == "transcript" else None
+                )
+            else:
+                manifest["render_provider"] = "edge"
+
+        _rewrite_manifest(copied_pack, mutate)
+
+    async def reject_render(*_args, **_kwargs):
+        pytest.fail("invalid retained pack reached paid synthesis")
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-no-provider-calls")
+    monkeypatch.setattr(GENERATOR, "_render_clip", reject_render)
+    before = {p.relative_to(copied_pack): p.read_bytes() for p in copied_pack.rglob("*") if p.is_file()}
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            GENERATOR._run(
+                argparse.Namespace(env_file=copied_pack / "absent.env", output_root=copied_pack, clip="welcome")
+            )
+        )
+    assert before == {p.relative_to(copied_pack): p.read_bytes() for p in copied_pack.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("failure", ["synthesis", "validation", "media"])
+@pytest.mark.parametrize("selected", ["welcome", None])
+def test_failed_render_or_staged_validation_leaves_shipped_pack_untouched(
+    copied_pack, monkeypatch, failure, selected, generator_media_tools
+) -> None:
+    _static_root, copied_pack = copied_pack
+    original = json.loads((copied_pack / "spoken_assets.json").read_text())
+    before = {p.relative_to(copied_pack): p.read_bytes() for p in copied_pack.rglob("*") if p.is_file()}
+
+    async def render(clip, _hosts, _work_dir, destination, **_kwargs):
+        destination.write_bytes(b"unfinished replacement")
+        if failure == "synthesis":
+            raise RuntimeError("provider render failed")
+        entry = next(entry for entry in original["assets"] if entry["path"].endswith(f"/{clip.clip_id}.mp3"))
+        if failure == "media":
+            monkeypatch.setattr(VALIDATOR, "_probe_audio", lambda *_args, **_kwargs: (None, "not playable audio"))
+            return {**entry, "sha256": GENERATOR._sha256(destination)}
+        return entry
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-no-provider-calls")
+    monkeypatch.setattr(GENERATOR, "_render_clip", render)
+    with pytest.raises(RuntimeError, match=r"provider render failed|sha256 does not match|not playable audio"):
+        asyncio.run(
+            GENERATOR._run(
+                argparse.Namespace(env_file=copied_pack / "absent.env", output_root=copied_pack, clip=selected)
+            )
+        )
+    assert before == {p.relative_to(copied_pack): p.read_bytes() for p in copied_pack.rglob("*") if p.is_file()}
+
+
+@pytest.mark.requires_ffmpeg
+def test_generator_rejects_hash_bound_non_audio_before_render(copied_pack, monkeypatch) -> None:
+    _static, root = copied_pack
+    path = root / "first_listen/privacy.mp3"
+    path.write_bytes(b"not an MP3 even with a matching hash")
+    _rewrite_manifest(
+        root,
+        lambda manifest: next(
+            entry for entry in manifest["assets"] if entry["path"] == "first_listen/privacy.mp3"
+        ).update(sha256=GENERATOR._sha256(path)),
+    )
+    manifest = json.loads((root / "spoken_assets.json").read_text())
+    with pytest.raises(RuntimeError):
+        GENERATOR._validated_pack(root, manifest["canonical_render_receipt"])
+
+
+def test_staged_render_validation_keeps_release_ui_binding_checks(copied_pack, generator_media_tools) -> None:
+    static, root = copied_pack
+    _rewrite_manifest(
+        root,
+        lambda manifest: manifest["assets"][0].update(transcript="Marco: Updated welcome. Giulia: Three small steps."),
+    )
+    assert VALIDATOR.validate_browser_narration_pack(assets_root=root, staged_render=True) == []
+    assert any(
+        "transcript" in error
+        for error in VALIDATOR.validate_browser_narration_pack(assets_root=root, static_root=static)
+    )
 
 
 @pytest.mark.asyncio
@@ -365,15 +553,21 @@ def test_generator_print_path_supports_external_output_root(
     assert GENERATOR._display_path(external_manifest) == str(external_manifest)
 
 
+@pytest.mark.parametrize("existing_mode", [None, 0o600, 0o640, 0o644])
 def test_generator_publish_handles_cross_filesystem_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    existing_mode: int | None,
 ) -> None:
     staged = tmp_path / "os-temp" / "welcome.mp3"
     destination = tmp_path / "external-output" / "welcome.mp3"
     staged.parent.mkdir()
     destination.parent.mkdir()
     staged.write_bytes(b"rendered audio")
+    staged.chmod(0o600)
+    if existing_mode is not None:
+        destination.write_bytes(b"old audio")
+        destination.chmod(existing_mode)
     real_rename = os.rename
 
     def cross_device_rename(source, target):
@@ -386,6 +580,7 @@ def test_generator_publish_handles_cross_filesystem_output(
     GENERATOR._publish_staged_file(staged, destination)
 
     assert destination.read_bytes() == b"rendered audio"
+    assert destination.stat().st_mode & 0o777 == (0o644 if existing_mode is None else existing_mode)
     assert not staged.exists()
 
 
@@ -749,3 +944,243 @@ async def test_all_browser_narration_clips_are_public_audio_mpeg() -> None:
             assert response.status_code == 200, relative_path
             assert response.headers["content-type"].startswith("audio/mpeg"), relative_path
             assert response.content, relative_path
+
+
+@pytest.mark.parametrize("default_root", [False, True])
+@pytest.mark.parametrize("failure", [None, "inventory", "hash", "refresh_voice", "render", "validation", "publication"])
+def test_station_render_preserves_both_packs_and_fails_before_publication(
+    tmp_path, monkeypatch, generator_media_tools, failure, default_root
+):
+    root = tmp_path / "demo"
+    shutil.copytree(GENERATOR.STATION_OUTPUT_ROOT, root)
+    if default_root:
+        monkeypatch.setattr(GENERATOR, "STATION_OUTPUT_ROOT", root)
+    browser_before = {p: p.read_bytes() for p in SHIPPED_AUDIO_ROOT.rglob("*.mp3")}
+    original = json.loads((root / "spoken_assets.json").read_text())
+    if failure == "inventory":
+        removed = original["assets"].pop(0)
+        (root / removed["path"]).unlink()
+    elif failure == "hash":
+        (root / original["assets"][0]["path"]).write_bytes(b"tampered")
+    elif failure == "refresh_voice":
+        opening = next(entry for entry in original["assets"] if entry["path"] == VALIDATOR.ADMIN_STATION_OPENING_PATH)
+        opening["canonical_render_receipt"]["hosts"][0]["voice_id"] = "incompatible-voice"
+    (root / "spoken_assets.json").write_text(json.dumps(original))
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    calls = []
+
+    async def render(clip, _hosts, _work, destination, **_kwargs):
+        calls.append(clip.clip_id)
+        assert clip is GENERATOR.STATION_OPENING_CLIP
+        destination.write_bytes(b"replacement station recording")
+        if failure == "render":
+            raise RuntimeError("synthesis failed")
+        return {
+            "path": f"first_listen/{clip.clip_id}.mp3",
+            "sha256": GENERATOR._sha256(destination),
+            "kind": "speech",
+            "language": "en",
+            "transcript": clip.transcript,
+            "duration_seconds": 17.0,
+            "speakers": [line.host for line in clip.lines],
+        }
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-no-provider-calls")
+    monkeypatch.setattr(GENERATOR, "_render_clip", render)
+    if failure == "publication":
+        publish = GENERATOR._publish_staged_file
+
+        def fail_manifest(source, destination):
+            if destination.name == "spoken_assets.json":
+                raise RuntimeError("manifest publication failed")
+            publish(source, destination)
+
+        monkeypatch.setattr(GENERATOR, "_publish_staged_file", fail_manifest)
+    monkeypatch.setattr(
+        GENERATOR.runpy,
+        "run_path",
+        lambda _path: {
+            "DEMO_SPOKEN_PATHS": VALIDATOR.DEMO_SPOKEN_PATHS,
+            "validate_spoken_asset_manifest": VALIDATOR.validate_spoken_asset_manifest,
+            "validate_demo_spoken_assets": lambda **kwargs: (
+                ["invalid staged media"]
+                if failure == "validation" and kwargs.get("include_admin_opening", True)
+                else VALIDATOR.validate_spoken_asset_manifest(assets_root=kwargs["assets_root"])
+            ),
+        },
+    )
+    args = argparse.Namespace(env_file=root / "absent.env", output_root=root, clip=None, station_opening=True)
+    if failure and failure != "refresh_voice":
+        with pytest.raises(RuntimeError):
+            asyncio.run(GENERATOR._run(args))
+        assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+        assert len(calls) == (0 if failure in {"inventory", "hash"} else 1)
+    else:
+        asyncio.run(GENERATOR._run(args))
+        assert calls == ["first_listen_admin_show"]
+        after = json.loads((root / "spoken_assets.json").read_text())
+        opening = next(entry for entry in after["assets"] if entry["path"] == VALIDATOR.ADMIN_STATION_OPENING_PATH)
+        assert opening["canonical_render_receipt"] == VALIDATOR._canonical_render_receipt()
+        for entry in original["assets"]:
+            if not entry["path"].endswith("first_listen_admin_show.mp3"):
+                assert entry in after["assets"]
+                assert (root / entry["path"]).read_bytes() == before[Path(entry["path"])]
+    assert all(p.read_bytes() == payload for p, payload in browser_before.items())
+
+
+@pytest.mark.requires_ffmpeg
+def test_station_render_rejects_hash_approved_non_audio_before_paid_synthesis(tmp_path, monkeypatch):
+    root = tmp_path / "demo"
+    shutil.copytree(GENERATOR.STATION_OUTPUT_ROOT, root)
+    manifest_path = root / "spoken_assets.json"
+    manifest = json.loads(manifest_path.read_text())
+    retained = next(entry for entry in manifest["assets"] if entry["path"].startswith("banter/"))
+    (root / retained["path"]).write_bytes(b"not an audio recording")
+    retained["sha256"] = GENERATOR._sha256(root / retained["path"])
+    manifest_path.write_text(json.dumps(manifest))
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+    async def unexpected_render(*args, **kwargs):
+        pytest.fail("invalid retained media reached paid synthesis")
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-no-provider-calls")
+    monkeypatch.setattr(GENERATOR, "_render_clip", unexpected_render)
+    args = argparse.Namespace(env_file=root / "absent.env", output_root=root, clip=None, station_opening=True)
+    with pytest.raises(RuntimeError, match="invalid station pack:.*" + retained["path"]):
+        asyncio.run(GENERATOR._run(args))
+    assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.requires_ffmpeg
+def test_station_opening_media_and_transcript_match_approved_script():
+    root = GENERATOR.STATION_OUTPUT_ROOT
+    manifest = json.loads((root / "spoken_assets.json").read_text())
+    entry = next(entry for entry in manifest["assets"] if entry["path"] == VALIDATOR.ADMIN_STATION_OPENING_PATH)
+    assert entry["transcript"] == GENERATOR.STATION_OPENING_CLIP.transcript
+    assert entry["canonical_render_receipt"] == VALIDATOR._canonical_render_receipt()
+    assert VALIDATOR.validate_demo_spoken_assets() == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("missing", None, "inventory must contain"),
+        ("language", "it", "English Marco/Giulia"),
+        ("speakers", ["Giulia"], "English Marco/Giulia"),
+        ("canonical_render_receipt", {}, "canonical_render_receipt does not match"),
+        ("duration_seconds", 2, "declared duration does not match"),
+        ("measured", 14.9, "outside 15.0-20.0s"),
+        ("measured", 20.1, "outside 15.0-20.0s"),
+    ],
+)
+def test_station_opening_validator_rejects_invalid_retained_media(tmp_path, monkeypatch, field, value, error):
+    root = tmp_path / "demo"
+    shutil.copytree(GENERATOR.STATION_OUTPUT_ROOT, root)
+    manifest = json.loads((root / "spoken_assets.json").read_text())
+    entry = next(item for item in manifest["assets"] if item["path"] == VALIDATOR.ADMIN_STATION_OPENING_PATH)
+    if field == "missing":
+        manifest["assets"].remove(entry)
+    elif field != "measured":
+        entry[field] = value
+    (root / "spoken_assets.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(VALIDATOR, "_is_demo_assets_root", lambda _root: True)
+    monkeypatch.setattr(VALIDATOR.shutil, "which", lambda command: f"/test-bin/{command}")
+    monkeypatch.setattr(VALIDATOR, "_measure_loudness", lambda path, **kwargs: ((-16.0, -2.0), None))
+
+    def probe(path, **kwargs):
+        opening = path.name == "first_listen_admin_show.mp3"
+        duration = value if opening and field == "measured" else 15.096 if opening else 30.0
+        stream = {
+            "codec_type": "audio",
+            "codec_name": "mp3",
+            "sample_rate": 48000,
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bit_rate": 192000,
+        }
+        return {"stream": stream, "format": {"duration": duration}}, None
+
+    monkeypatch.setattr(VALIDATOR, "_probe_audio", probe)
+    errors = VALIDATOR.validate_demo_spoken_assets(assets_root=root, package_assets_root=root)
+    assert any(error in message for message in errors), errors
+
+
+@pytest.mark.parametrize("failure_index", [0, 1, 2])
+@pytest.mark.parametrize("existing", [True, False])
+def test_pack_publication_failure_restores_every_destination(tmp_path, monkeypatch, failure_index, existing):
+    staged, output = tmp_path / "staged", tmp_path / "output"
+    staged.mkdir()
+    output.mkdir()
+    files = []
+    for name in ("privacy.mp3", "ai.mp3", "spoken_assets.json"):
+        (staged / name).write_bytes(b"new " + name.encode())
+        if existing:
+            (output / name).write_bytes(b"old " + name.encode())
+            (output / name).chmod(0o640)
+        files.append((staged / name, output / name))
+    before = {p.name: (p.read_bytes(), p.stat().st_mode & 0o777) for p in output.iterdir()}
+    publish = GENERATOR._publish_staged_file
+    calls = 0
+
+    def fail_once(source, destination):
+        nonlocal calls
+        index, calls = calls, calls + 1
+        if index == failure_index:
+            raise OSError("injected publication failure")
+        publish(source, destination)
+
+    monkeypatch.setattr(GENERATOR, "_publish_staged_file", fail_once)
+    with pytest.raises(OSError, match="injected publication failure"):
+        GENERATOR._publish_staged_pack(files)
+    assert {p.name: (p.read_bytes(), p.stat().st_mode & 0o777) for p in output.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    "clip, pause, bed",
+    [
+        (GENERATOR.STATION_OPENING_CLIP, 600, 10.4),
+        (GENERATOR.GUIDE_CLIPS[0], 280, 3.0),
+        (GENERATOR.GUIDE_CLIPS[1], 280, None),
+    ],
+)
+@pytest.mark.parametrize("duration", [None, 3.99, 4.0, 20.0, 20.01])
+def test_render_clip_constructs_dialogue_and_enforces_duration(tmp_path, monkeypatch, clip, pause, bed, duration):
+    from mammamiradio.audio import normalizer
+
+    calls = []
+    destination = tmp_path / "finished.mp3"
+
+    async def render_line(host, text, path):
+        path.write_bytes(text.encode())
+        return path
+
+    def concat(paths, output, **kwargs):
+        assert [path.read_text() for path in paths] == [line.text for line in clip.lines]
+        assert kwargs == {"silence_ms": pause, "loudnorm": bed is None, "strict_duration": True}
+        output.write_bytes(b"dialogue")
+
+    def generate_bed(path, seconds, notes):
+        calls.append((seconds, notes))
+        path.write_bytes(b"bed")
+
+    def mix(voice, sting, output):
+        output.write_bytes(voice.read_bytes() + sting.read_bytes())
+
+    monkeypatch.setattr(GENERATOR, "_render_line", render_line)
+    monkeypatch.setattr(normalizer, "concat_files", concat)
+    monkeypatch.setattr(normalizer, "generate_station_id_bed", generate_bed)
+    monkeypatch.setattr(normalizer, "mix_voice_with_sting", mix)
+    monkeypatch.setattr(normalizer, "probe_duration_sec", lambda path: duration if path == destination else 10.0)
+    render = GENERATOR._render_clip(
+        clip, {line.host: line.host for line in clip.lines}, tmp_path, destination, motif_notes=[60, 64]
+    )
+    if duration is None or not 4 <= duration <= 20:
+        with pytest.raises(RuntimeError, match="between 4 and 20 seconds"):
+            asyncio.run(render)
+    else:
+        entry = asyncio.run(render)
+        assert entry["duration_seconds"] == duration
+        assert entry["sha256"] == GENERATOR._sha256(destination)
+        assert entry["transcript"] == clip.transcript
+    assert calls == ([(bed, [60, 64])] if bed is not None else [])
+    assert destination.read_bytes() == (b"dialoguebed" if bed is not None else b"dialogue")

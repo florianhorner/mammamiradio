@@ -10,6 +10,9 @@ Cathedral standard:
 - Bytes-identical for shared fields: capabilities dict, brand dict, uptime,
   tracks_played, rotation_track_count, session_stopped, now_streaming, upcoming/upcoming_mode,
   runtime_health, playback_actions, ha_moments
+- Exception: runtime_health.ha_publish is admin-only diagnostics and is
+  excluded from /public-status entirely; the byte-identity rule applies to
+  every other runtime_health leaf.
 - Shape snapshot: catches accidental field additions on the listener side
 """
 
@@ -465,7 +468,11 @@ async def test_admin_listener_facts_agree():
     assert admin["capabilities"] == public["capabilities"]
     assert admin["upcoming"] == public["upcoming"]
     assert admin["upcoming_mode"] == public["upcoming_mode"]
-    assert admin["runtime_health"] == public["runtime_health"]
+    admin_health = dict(admin["runtime_health"])
+    ha_publish = admin_health.pop("ha_publish", None)
+    assert ha_publish is not None
+    assert "ha_publish" not in public["runtime_health"]
+    assert admin_health == public["runtime_health"]
     assert admin["playback_actions"] == public["playback_actions"]
     assert admin.get("ha_moments") == public.get("ha_moments")
 

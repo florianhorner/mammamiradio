@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -44,11 +46,12 @@ def _state(
     )
 
 
-def test_shipped_first_listen_show_is_reviewed_nontrivial_mp3() -> None:
-    path = approved_first_listen_show_path()
+@pytest.mark.parametrize("english", [False, True])
+def test_shipped_first_listen_show_is_reviewed_nontrivial_mp3(english) -> None:
+    path = approved_first_listen_show_path(english=english)
 
     assert path is not None
-    assert path.name == "first_listen_show.mp3"
+    assert path.name == ("first_listen_admin_show.mp3" if english else "first_listen_show.mp3")
     assert path.stat().st_size > 100_000
     assert path.read_bytes()[:3] in {b"ID3", b"\xff\xfb", b"\xff\xf3"}
 
@@ -121,3 +124,26 @@ def test_show_chunk_size_must_be_positive(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="positive"):
         list(iter_first_listen_show_chunks(path, chunk_bytes=0))
+
+
+@pytest.mark.parametrize("damage", ["file", "entry", "hash", "manifest"])
+def test_rejected_english_opening_never_substitutes_italian(tmp_path, damage):
+    original = approved_first_listen_show_path(english=True)
+    assert original is not None
+    shutil.copytree(original.parents[1], tmp_path / "demo")
+    root = tmp_path / "demo"
+    clip = root / "first_listen" / original.name
+    manifest_path = root / "spoken_assets.json"
+    if damage == "file":
+        clip.unlink()
+    elif damage == "hash":
+        clip.write_bytes(b"unapproved replacement")
+    elif damage == "manifest":
+        manifest_path.write_text("broken JSON")
+    else:
+        manifest = json.loads(manifest_path.read_text())
+        manifest["assets"] = [entry for entry in manifest["assets"] if not entry["path"].endswith(original.name)]
+        manifest_path.write_text(json.dumps(manifest))
+    assert approved_first_listen_show_path(assets_root=root, english=True) is None
+    if damage != "manifest":
+        assert approved_first_listen_show_path(assets_root=root).name == "first_listen_show.mp3"

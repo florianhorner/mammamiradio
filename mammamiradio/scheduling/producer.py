@@ -115,6 +115,7 @@ from mammamiradio.home.ha_context import (
     home_context_invalidation_generation,
     push_state_to_ha,
     revalidate_home_context_outcome_mutes,
+    run_ha_publish_heartbeat,
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch, commit_radio_event_directive
@@ -5805,9 +5806,9 @@ async def _run_producer_inner(
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
     _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
-    _ha_tasks: set[asyncio.Task[None]] = set()
+    _ha_tasks: set[asyncio.Task[Any]] = set()
 
-    def _track_ha_task(task: asyncio.Task[None]) -> None:
+    def _track_ha_task(task: asyncio.Task[Any]) -> None:
         _ha_tasks.add(task)
         task.add_done_callback(_ha_tasks.discard)
 
@@ -5815,25 +5816,23 @@ async def _run_producer_inner(
     if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
 
         async def _ha_heartbeat() -> None:
-            interval = 30.0
-            while True:
-                await asyncio.sleep(interval)
-                if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
-                    try:
-                        await push_state_to_ha(
-                            ha_url=config.homeassistant.url,
-                            ha_token=config.ha_token,
-                            now_streaming=copy.deepcopy(state.now_streaming),
-                            current_track=state.current_track,
-                            listeners_active=state.listeners_active,
-                            session_stopped=state.session_stopped,
-                            queue_depth=len(state.queued_segments),
-                            station_name=config.display_station_name,
-                            artwork_url=config.brand.artwork_url,
-                        )
-                        interval = 30.0
-                    except Exception:
-                        interval = min(interval * 2, 300.0)
+            async def _push() -> bool | None:
+                return await push_state_to_ha(
+                    ha_url=config.homeassistant.url,
+                    ha_token=config.ha_token,
+                    now_streaming=copy.deepcopy(state.now_streaming),
+                    current_track=state.current_track,
+                    listeners_active=state.listeners_active,
+                    session_stopped=state.session_stopped,
+                    queue_depth=len(state.queued_segments),
+                    station_name=config.display_station_name,
+                    artwork_url=config.brand.artwork_url,
+                )
+
+            await run_ha_publish_heartbeat(
+                _push,
+                lambda: bool(config.homeassistant.enabled and config.ha_token and config.homeassistant.url),
+            )
 
         _ha_heartbeat_task = asyncio.create_task(_ha_heartbeat())
         _track_ha_task(_ha_heartbeat_task)
@@ -5973,21 +5972,21 @@ async def _run_producer_inner(
             observed_continuity_epoch = state.continuity_epoch
         if state.session_stopped:
             if not _was_stopped and config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
-                _track_ha_task(
-                    asyncio.create_task(
-                        push_state_to_ha(
-                            ha_url=config.homeassistant.url,
-                            ha_token=config.ha_token,
-                            now_streaming={},
-                            current_track=None,
-                            listeners_active=state.listeners_active,
-                            session_stopped=True,
-                            queue_depth=0,
-                            station_name=config.display_station_name,
-                            artwork_url=config.brand.artwork_url,
-                        )
+
+                async def _push_stopped_state() -> None:
+                    await push_state_to_ha(
+                        ha_url=config.homeassistant.url,
+                        ha_token=config.ha_token,
+                        now_streaming={},
+                        current_track=None,
+                        listeners_active=state.listeners_active,
+                        session_stopped=True,
+                        queue_depth=0,
+                        station_name=config.display_station_name,
+                        artwork_url=config.brand.artwork_url,
                     )
-                )
+
+                _track_ha_task(asyncio.create_task(_push_stopped_state()))
             # Deliberately NOT cancelled: .cancel() only detaches the asyncio.Task
             # wrapper, it can't interrupt the in-flight executor ffmpeg (same
             # limitation the relaunch guard below is built around). Cancelling

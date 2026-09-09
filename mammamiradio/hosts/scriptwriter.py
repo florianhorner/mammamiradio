@@ -73,6 +73,7 @@ from mammamiradio.hosts.language_policy import (
     NORMAL_MODE_ENGLISH_MAX,
     NORMAL_MODE_ENGLISH_MIN,
     NORMAL_MODE_ENGLISH_TARGET,
+    NORMAL_MODE_TRANSITION_MIN_ENGLISH,
     assess_language,
 )
 from mammamiradio.hosts.language_policy import (
@@ -1939,6 +1940,21 @@ def _banter_fallback_pools(config: StationConfig) -> list[list[DialogueLine]]:
             DialogueLine(h1, normal_interruption_reply),
             DialogueLine(h0, "Music. Now. Trust the process."),
         ],
+        [
+            DialogueLine(h1, "That was twenty seconds. I counted."),
+            DialogueLine(h0, "I was building to something."),
+            DialogueLine(h1, "It was second forty. Music, dai."),
+        ],
+        [
+            DialogueLine(h0, "I read one paragraph about this. I am basically an expert."),
+            DialogueLine(h1, "One paragraph."),
+            DialogueLine(h0, "One very good paragraph. Music."),
+        ],
+        [
+            DialogueLine(h1, "This is the first demo tape all over again."),
+            DialogueLine(h0, "Nobody talked over the ident."),
+            DialogueLine(h1, "Somebody talked over the ident. I kept the take anyway. Music."),
+        ],
     ]
 
 
@@ -2079,9 +2095,13 @@ def _json_has_spoken_role(data: object, required_role: str) -> bool:
     )
 
 
-def _normal_mode_language_ok(texts: list[str], config: StationConfig) -> bool:
+def _normal_mode_language_ok(texts: list[str], config: StationConfig, *, surface: str | None = None) -> bool:
     """Apply the shared language policy using the station's active mode."""
-    return _normal_mode_language_policy_ok(texts, super_italian=config.super_italian_mode)
+    return _normal_mode_language_policy_ok(
+        texts,
+        super_italian=config.super_italian_mode,
+        min_english_share=NORMAL_MODE_TRANSITION_MIN_ENGLISH if surface == "transition" else None,
+    )
 
 
 def assess_spoken_texts(texts: list[str], config: StationConfig) -> dict[str, object]:
@@ -2144,12 +2164,14 @@ async def _generate_json_response_with_language_guard(
         # invariant entirely.
         if surface == "ad" and required_role and not _json_has_spoken_role(data, required_role):
             return data
-        if _normal_mode_language_ok(_speech_texts_from_json(data, surface=surface), config):
+        if _normal_mode_language_ok(_speech_texts_from_json(data, surface=surface), config, surface=surface):
             return data
         if attempt == 0:
+            state.language_guard_rejections += 1
             logger.warning("Normal Mode language guard rejected %s response; retrying once", surface)
             current_prompt = f"{prompt}\n\n{_NORMAL_MODE_LANGUAGE_REPAIR}"
             continue
+        state.language_guard_failures += 1
         raise ValueError(f"{surface} response violated Normal Mode language mix")
 
     raise RuntimeError("unreachable language guard state")
@@ -3249,6 +3271,7 @@ Return JSON:
         # post-processing must not turn an accepted response into Italian-heavy
         # Normal Mode copy.
         if not _normal_mode_language_ok([line.text for line in result], config):
+            state.language_guard_failures += 1
             raise ValueError("banter response violated Normal Mode language mix after post-processing")
         # Producer consumes this one-shot handoff only after a successful render;
         # the director is reserved at queue admission, never at prompt selection.
@@ -3516,6 +3539,7 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
         ):
             return None
     if not _normal_mode_language_ok([line.text for line in result], config):
+        state.language_guard_failures += 1
         return None
     if not _banter_turn_taking_ok(result):
         return None
@@ -3758,6 +3782,7 @@ Return JSON:
         )
         callback_landed = bool(data.get("callback_used"))
         if not _normal_mode_language_ok([text], config):
+            state.language_guard_failures += 1
             logger.warning("News flash failed final Normal Mode language check; using stock copy")
             text = _news_flash_fallback(config)
             callback_landed = False
@@ -3894,7 +3919,8 @@ Return JSON:
         if not _transition_text_usable(text):
             logger.warning("Massaged transition response was unusable; using deterministic stock copy")
             return (host, _transition_fallback_text(config, next_segment), None)
-        if not _normal_mode_language_ok([text], config):
+        if not _normal_mode_language_ok([text], config, surface="transition"):
+            state.language_guard_failures += 1
             logger.warning("Massaged transition failed final Normal Mode language check; using stock copy")
             return (host, _transition_fallback_text(config, next_segment), None)
         logger.info("Generated transition: %s", text[:50])
@@ -4085,7 +4111,7 @@ Return JSON:
             config=config,
             state=state,
             model=resolve_model(config.models, "ad", "anthropic"),
-            max_tokens=800,
+            max_tokens=1100,
             caller="ad",
             role="ad_spot",
             required_role=direct_primary_role,
@@ -4175,6 +4201,7 @@ Return JSON:
 
         voice_texts = [p.text for p in parts if p.type == "voice" and p.text]
         if not _normal_mode_language_ok(voice_texts, config):
+            state.language_guard_failures += 1
             logger.warning("Ad failed final Normal Mode language check; using deterministic fallback")
             fallback_parts = [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)]
             if brand.category == "pharma":
