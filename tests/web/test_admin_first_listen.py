@@ -1131,6 +1131,14 @@ def test_stopping_a_guide_invalidates_pending_playback_before_teardown() -> None
     assert invalidate < stop.index("audio.pause()")
 
 
+def test_pausing_a_loading_guide_invalidates_pending_playback_before_pause() -> None:
+    toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    manual_pause = toggle[
+        toggle.index("if(_firstListenUi.guideKey===key") : toggle.index("if(_firstListenUi.guideButton!==button)")
+    ]
+    assert manual_pause.index("++_firstListenGuideAttempt;") < manual_pause.index("audio.pause()")
+
+
 def test_leaving_first_listen_releases_the_station_audio_element() -> None:
     """Completion and direct listener opening do not own station teardown.
 

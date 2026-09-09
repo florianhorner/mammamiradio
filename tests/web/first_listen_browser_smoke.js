@@ -1488,6 +1488,29 @@ async (page) => {
       }
     }
 
+    smokeStage = 'same-guide-pause-during-load';
+    const loadingGuideStation = await prepareOwnedStation();
+    const loadingGuideGate = responseGate();
+    guideResponseGate = loadingGuideGate;
+    try {
+      await page.evaluate(() => {
+        const button = document.querySelector('.guide-audio[data-guide="welcome"] .guide-audio-play');
+        window.__pendingGuideAttempt = toggleFirstListenGuide('welcome', button);
+      });
+      await loadingGuideGate.arrived;
+      assert(await welcomeGuide.getAttribute('data-state') === 'loading', 'same-guide fixture did not hold the guide load');
+      await assertStationPreserved(loadingGuideStation, smokeStage, { playing: false });
+      await welcomeGuideButton.click();
+      await page.evaluate(() => window.__pendingGuideAttempt);
+      assert(await welcomeGuide.getAttribute('data-state') === 'paused', 'same-guide pause during load stamped a false guide error');
+      assert(await welcomeGuideButton.innerText() === 'Continue example', 'same-guide pause during load lost its continue label');
+      assert(await welcomeGuideButton.getAttribute('aria-pressed') === 'false', 'same-guide pause during load left the button pressed');
+      assert(await page.locator('#firstListenGuideAudio').getAttribute('src') !== null, 'same-guide pause during load reset its source');
+      await assertStationPreserved(loadingGuideStation, smokeStage, { playing: false });
+    } finally {
+      loadingGuideGate.release();
+    }
+
     smokeStage = 'guide-playback-rejection';
     const rejectedGuideStation = await prepareOwnedStation();
     await page.evaluate(async () => {
@@ -1926,6 +1949,7 @@ async (page) => {
         'music-source-exit-during-guide',
         'admin-tab-during-guide-load',
         'music-source-during-guide-load',
+        'same-guide-pause-during-load',
         'guide-playback-rejection',
         'privacy-receipt-repair',
         'ambient-only-preview',

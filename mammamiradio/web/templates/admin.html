@@ -2990,6 +2990,8 @@ async function toggleFirstListenGuide(key,button){
   if(!guide||!audio||!button)return;
   firstListenGuideIdleLabel(button);
   if(_firstListenUi.guideKey===key&&_firstListenUi.guideButton===button&&!audio.paused){
+    // pause() can reject a still-pending play(); retire that attempt before it settles.
+    ++_firstListenGuideAttempt;
     audio.pause();
     button.textContent='Continue example';
     button.setAttribute('aria-pressed','false');
