@@ -384,21 +384,27 @@ def test_release_workflow_build_needs_preflight():
 
 
 def test_release_workflow_proves_both_sha_images_before_promotion():
-    """Stable promotion must inspect both exact per-arch SHA images with QEMU."""
+    """Stable promotion must inspect each exact SHA image on its native runner."""
     text = _workflow_text()
     proof_section = re.search(r"\n  media-proof:\n((?:    .+\n|\n)*)", text)
     assert proof_section, "Could not locate 'media-proof:' job in addon-release.yml"
     proof_block = proof_section.group(1)
 
     assert "needs: pre-flight" in proof_block
-    assert "docker/setup-qemu-action@" in proof_block
-    assert 'docker pull --platform linux/amd64 "$AMD64_IMAGE"' in proof_block
-    assert 'docker pull --platform linux/arm64 "$AARCH64_IMAGE"' in proof_block
-    assert "--amd64-image" in proof_block
-    assert "--aarch64-image" in proof_block
-    assert "--output media-proof.json" in proof_block
+    assert "runs-on: ${{ matrix.runner }}" in proof_block
+    assert "timeout-minutes: 30" in proof_block
+    assert "fail-fast: false" in proof_block
+    assert "- arch: amd64\n            runner: ubuntu-latest\n            image_option: --amd64-image" in proof_block
+    assert (
+        "- arch: aarch64\n            runner: ubuntu-24.04-arm\n            image_option: --aarch64-image"
+    ) in proof_block
+    assert "docker/setup-qemu-action@" not in proof_block
+    assert 'run: docker pull "$IMAGE_REF"' in proof_block
+    assert '--image-arch "$IMAGE_ARCH"' in proof_block
+    assert '"$IMAGE_OPTION" "$IMAGE_REF"' in proof_block
+    assert '--output "$PROOF_OUTPUT"' in proof_block
     assert "if: always()" in proof_block
-    assert "name: media-proof-stable-${{ github.sha }}" in proof_block
+    assert "name: media-proof-stable-${{ matrix.arch }}-${{ github.sha }}" in proof_block
     assert "if-no-files-found: error" in proof_block
 
 

@@ -1,0 +1,14 @@
+# Test evidence — revert of the 3.0.0 cut (commit ab454262)
+# Recorded 2026-09-02T21:59:05Z on tree 28107baf7d8d145a40a1165c43ee90ecf06d6764
+
+$ .venv/bin/python -m pytest tests/ -q -n auto --no-cov -p no:cacheprovider
+8630 passed, 4 skipped, 18 warnings in 175.24s (0:02:55)
+
+$ bash scripts/pre-release-check.sh
+  Passed: 20  Failed: 0  Waived: 1
+
+$ bash scripts/check-advertised-version.sh
+VERDICT: pass
+
+$ ruff check . && ruff format --check .
+499 files already formatted

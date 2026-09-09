@@ -19,7 +19,13 @@
 #                                                  integration (git merge / update-branch),
 #                                                  with no re-review — refused unless HEAD
 #                                                  is exactly the reviewed content merged
-#                                                  with the base and nothing else
+#                                                  with the base and nothing else.
+#                                                  OPTIONAL for landing: PR verification
+#                                                  accepts the pre-integrate receipt under
+#                                                  the same witness, so a clean integrate
+#                                                  does not need this. Use it to make the
+#                                                  branch's evidence name the integrated
+#                                                  content and retire superseded receipts
 #
 # --v2 is accepted as a no-op compatibility flag for callers written during the v1/v2
 # phase. Run only from a clean, committed tree.

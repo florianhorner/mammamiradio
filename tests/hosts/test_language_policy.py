@@ -99,3 +99,19 @@ def test_unclassified_nonempty_copy_fails_closed():
 
 def test_super_italian_bypasses_normal_mode_ratio():
     assert normal_mode_language_ok("Ciao amici, grazie", super_italian=True)
+
+
+def test_transition_override_keeps_empty_and_marker_rules_without_changing_defaults():
+    from mammamiradio.hosts.language_policy import NORMAL_MODE_TRANSITION_MIN_ENGLISH
+
+    assert NORMAL_MODE_TRANSITION_MIN_ENGLISH == 0.0
+    for text in (
+        "Just, ma prima delle pubblicità.",
+        "Modus just melted us, ma prima delle pubblicità—una cosa veloce.",
+    ):
+        assert not normal_mode_language_ok(text)
+        assert normal_mode_language_ok(text, min_english_share=NORMAL_MODE_TRANSITION_MIN_ENGLISH)
+    for text in ("Questa canzone di Vivaldi ci porta verso la pubblicità.", "Xylophone quasar"):
+        assert not normal_mode_language_ok(text, min_english_share=0.0)
+        assert normal_mode_language_ok(text, min_english_share=0.0, super_italian=True)
+    assert normal_mode_language_ok("", min_english_share=0.0)

@@ -593,6 +593,19 @@ def test_listener_phone_radio_illustration_stays_in_bounds() -> None:
     )
 
 
+def test_listener_desktop_radio_illustration_has_bounded_centered_box() -> None:
+    text = _read_listener_css()
+    base_blocks = _rule_bodies_for_selector(text, ".mmr-hero-art")
+    assert base_blocks, "Base listener CSS must declare `.mmr-hero-art`."
+    base = "\n".join(base_blocks)
+    assert re.search(r"width\s*:\s*min\(100%,\s*720px\s*\)", base), (
+        "Desktop artwork must be fluid in its column but capped at 720px."
+    )
+    assert re.search(r"max-width\s*:\s*720px", base), "Desktop artwork must have an explicit 720px upper bound."
+    assert re.search(r"min-width\s*:\s*0", base), "Desktop artwork must be allowed to shrink inside its grid cell."
+    assert re.search(r"justify-self\s*:\s*center", base), "Desktop artwork must be centered in its grid cell."
+
+
 def test_listener_template_bakes_initial_stopped_state() -> None:
     """First server paint must reflect session_stopped.
 

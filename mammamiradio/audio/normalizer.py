@@ -125,13 +125,23 @@ def refresh_track_metadata(
 
 
 def load_track_metadata(norm_path: Path) -> dict[str, str | int] | None:
-    """Return public norm-cache metadata from a valid title/artist sidecar."""
+    """Return public norm-cache metadata from an identifiable sidecar.
+
+    The title is the identity; the artist is optional. An untagged local file
+    has a real, checkable identity of ``("", title)`` — treating it as
+    unidentified is what let a banned title-only song stay selectable for
+    rescue, because ``norm_cache._is_blocklisted`` reads "no sidecar" as
+    "cannot prove it is banned" and fails open.
+
+    ``artist`` is always present in the returned dict (possibly ``""``) so
+    callers may index it directly, as the rescue path does.
+    """
     # Reuse _load_sidecar so a non-UTF8/non-dict/corrupt sidecar returns None
     # cleanly instead of raising (same failure mode guarded in the reconcile path).
     data = _load_sidecar(_norm_sidecar_path(norm_path))
     title = data.get("title")
     artist = data.get("artist")
-    if isinstance(title, str) and isinstance(artist, str) and title and artist:
+    if isinstance(title, str) and isinstance(artist, str) and title:
         metadata: dict[str, str | int] = {"title": title, "artist": artist}
         duration_ms = _positive_finite_number(data.get("duration_ms"))
         if duration_ms is not None:

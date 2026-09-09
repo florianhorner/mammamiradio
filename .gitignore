@@ -45,3 +45,9 @@ output/
 # Contract-window marker — created only by Florian to open a contract
 # maintenance window (see CONTRACT.md). Never committed.
 .contract-window
+
+# uv.lock — no build, workflow, or image reads it (the add-on installs from
+# pyproject.toml, CI from requirements*.txt). Tracking it only produced
+# Dependabot alerts for a dependency graph that never ships. Regenerate
+# locally with `uv lock` if you want one; it stays untracked.
+uv.lock

@@ -1,0 +1,76 @@
+Dependabot release-window guard: local regression checks
+GitHub writes are mocked in the gate test.
+$ bash tests/workflows/test_dependabot_automerge_gate.sh
+PASS: workflow authorization, current-main checkout, shared concurrency, metadata and CI wiring
+PASS: both workflow verdict steps survive fail/unknown/error exits
+PASS: direct and sweep disarm: eligible PRs only, idempotent labels, every API failure visible
+PASS: pass/unknown sweeps and unknown PR verdict do not mutate state
+PASS: arming requires verified update type, exact head, fresh main, eligible PR and successful APIs
+PASS: delayed pre-cut arming cannot undo the cut sweep
+PASS: freeze admission rejects active, armed, incomplete, malformed and unreadable state
+PASS: freeze disables, drains a late arming run, disarms afterward and refuses timeout/API errors
+PASS: thaw validates current release proof, blocks pending cuts and reports ambiguous enable without claiming success
+PASS: real landing path gates pinned version changes after evidence; ordinary PRs retain existing behavior
+PASS: landing hydrates shallow history before evidence and refuses unavailable history
+All dependabot automerge gate cases passed.
+Exit code: 0
+
+$ bash tests/workflows/test_advertised_version.sh
+PASS: published tag on both arches exits 0
+PASS: missing tag exits 1 (the uninstallable-stable state)
+PASS: failure names the version and a recovery that actually works
+PASS: unreachable registry exits 0 as UNKNOWN
+PASS: unreachable registry reports UNKNOWN explicitly
+PASS: partial promotion exits 1
+PASS: crashing probe degrades to UNKNOWN, not to a false failure
+PASS: --version overrides config.yaml
+PASS: usage error exits 2, distinct from drift failure
+PASS: reads a semver version from the real config.yaml
+PASS: absent from the whole cut-PR gate closure (6 files)
+PASS: not in the make pre-release recipe (cut-PR deadlock guard)
+PASS: real probe: HTTP 200 -> PASS
+PASS: real probe: HTTP 404 -> FAIL (the only definitive answer)
+PASS: real probe: 401/403/429/500/503/000 -> UNKNOWN, exit 0
+PASS: real probe: null token -> UNKNOWN, not a false FAIL
+PASS: real probe: missing/empty/non-JSON token body -> UNKNOWN
+PASS: emits a machine-readable VERDICT for all three outcomes
+PASS: workflow branches on VERDICT, so UNKNOWN cannot close a live drift issue
+
+All 19 advertised-version cases passed.
+Exit code: 0
+
+$ bash tests/workflows/test_dependabot_automation_guard.sh
+PASS: Dependabot nudge workflow stays retired
+PASS: guard catches renamed and indirect Dependabot command automation
+PASS: workflows and scripts do not automate Dependabot comment commands
+Exit code: 0
+
+$ bash tests/workflows/test_land_pr.sh
+All 22 land-pr cases passed.
+Exit code: 0
+
+$ bash tests/workflows/test_land_queue.sh
+All 35 land-queue cases passed.
+Exit code: 0
+
+$ bash tests/workflows/test_preship_squad_gate.sh
+All 33 pre-ship squad gate cases passed.
+Exit code: 0
+
+$ .venv/bin/python -m pytest tests/repo/test_repo_scripts.py -q -n 4 --no-cov -p no:cacheprovider
+96 passed.
+Exit code: 0
+
+$ shellcheck -x scripts/dependabot-window-hold.sh scripts/land-pr.sh scripts/check-advertised-version.sh tests/workflows/test_dependabot_automerge_gate.sh
+Exit code: 0
+
+$ actionlint .github/workflows/dependabot-automerge.yml .github/workflows/quality.yml
+Exit code: 0
+
+$ bash scripts/check-docs-safety.sh
+Documentation safety lint clean.
+Exit code: 0
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+Exit code: 0

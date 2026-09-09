@@ -367,6 +367,11 @@ Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall b
 
 To inspect script-side OpenAI behavior (banter/ads/news/transitions/post-air memory extraction), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_max_tokens_truncated`, `anthropic_max_tokens_truncated_retrying`, `anthropic_nonretryable`, `anthropic_transient`, `anthropic_transient_blocked`, `anthropic_usage_limit`, `anthropic_usage_limit_blocked`, `anthropic_exception`, `openai_empty_or_length`; the reason fields land in the provenance ledger / Show Memory rows — the default log format renders only the message line). A truncated Anthropic response (cut off at the token budget, partial or empty JSON) now gets ONE in-house retry at a ~1.75× budget before any provider fallback, and after a truncation-exhausted fallback OpenAI's visible-output floor inherits the escalated (not original) budget. The OpenAI side has its own single retry: a completion cut at its cap (`finish_reason="length"`, reasoning tokens starving the visible JSON) or a genuinely empty one retries once with a bigger cap — unless the model reports it finished or refused (`stop`/`content_filter`), which a bigger budget can't fix — before the stock-copy fallback. When hosts sound generic, grep the log for `truncated at max_tokens`, `retrying with escalated budget`, `escalation retry succeeded`, and the early-warning `budget pressure` WARNING (fires when a successful generation used ≥80% of its budget — raise the budget before the next truncation, don't wait for it); with the ledger enabled, the Show Memory rows carry the `fallback_reason` values above. Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
 
+For repeated stock host lines, check `/status` → `provider_health.script_guard`.
+`rejections` counts the first language failure in a generation, which triggers a repair; `failures` counts terminal or final-text language failures. Both reset on restart. Provider failures and JSON parsing errors do not increment them. Normal Mode transitions accept an English marker followed by an Italian handoff; banter, news and ads keep their existing English floors. This is a word-marker heuristic: English words in titles or artist names also count. Normal Mode has four stock exchanges selected at random, so consecutive repeats remain possible.
+
+Home label requests allow 1,200–4,000 output tokens, scaled to the candidate count. A truncated response gets one retry with the first half of the batch, for at most two application-level requests. SDK-level retries are off, so each request is one attempt under its own deadline, scaled to the tokens it asked for: 45 seconds at 1,200 rising to 120 at 4,000, the same scaling the script generator uses. The deadline is per attempt rather than shared, because a shared one expires while the half-batch retry is still working and throws away labels it has already produced. Each call rechecks the original privacy permission. A provider blip costs one poll interval, not the catalog. A second truncation preserves the catalog; successful labels leave the pending set so later polls advance. Persistent truncation does not guarantee progress. Logs contain counts and fixed failure categories, never household output. Memory extraction starts at 900 output tokens and ads at 1,100; their existing truncation escalation still applies.
+
 Voice validation now runs at config load, not at synthesis time:
 
 - Every configured voice is checked against `mammamiradio/audio/voice_catalog.py` (OpenAI catalog for `engine = "openai"`, Italian edge-tts catalog for `engine = "edge"`, and the curated Azure catalog for known Azure Italian voices). Ad voices and sonic-brand sweepers can also carry their own `engine` plus `edge_fallback_voice`.
@@ -374,7 +379,12 @@ Voice validation now runs at config load, not at synthesis time:
 - If OpenAI, Azure, or ElevenLabs is missing credentials or fails at runtime, the segment falls back to the configured Edge voice. Each cloud route carries a circuit breaker: when a route-wide failure lands (timeout, 5xx, revoked key), every waiting and later part skips straight to Edge — at most the one or two requests already in flight pay the timeout, and healthy concurrent voices on the same provider keep rendering in parallel (dialogue lines are never serialized behind each other). Transient route failures cool down for 30 seconds and then exactly one call probes the provider (a successful probe reopens the route for everyone); non-retryable credential errors stay sidelined until the route changes or the station restarts. A single bad voice ID (HTTP 400 or 404) only sidelines that one voice, not the whole provider route — other configured voices on the same Azure/ElevenLabs/OpenAI credential keep trying the cloud normally. If Edge synthesis also fails (endpoint down, throttle), the failing voice ID is memoized for the session and the next segment goes straight to the fallback voice — one attempt per voice per session, not one per segment.
 - Every runtime cloud fallback now emits a route record such as `TTS fallback provider=elevenlabs ... effective_provider=edge ... reason=...` followed by `Synthesized (Edge fallback): ...`. A plain `Synthesized: ...` line means the voice was intentionally configured for Edge, not that a cloud route silently failed. Ad lines also include the configured character name.
 - The admin runtime card uses those route records: `tts_provider.current_provider` becomes `edge` and `fallback_active` becomes `true` after a live cloud-to-Edge fallback, even when all provider keys are configured. This is runtime evidence, while `Mixed TTS` by itself remains a configuration summary. That runtime state is tracked per provider engine, not per voice: on a station with several voices on the same cloud engine, one voice's successful render clears the degraded state for that engine even if a different voice on the same engine is still falling back to Edge every segment. Grep logs for the specific character name in `Synthesized (Edge fallback)` lines to see which voice is actually degraded.
-- When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
+- When any voice was substituted at load or during live synthesis, `/api/capabilities`
+  reports `tts_degraded: true`. The Engine Room "Voices" line separately reports live
+  cloud-breaker evidence: a rejected key reads *key not working*, exhausted quota reads
+  *quota exhausted*, and a single bad voice reads *1 voice on Edge* without claiming the
+  whole provider is down. A route-wide rejected-key or exhausted-quota response stays off until the key is saved again in
+  **First Listen → Change AI services → Voice providers**; saving it rearms the route live.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
 ## First Listen does not play on this device
@@ -524,6 +534,23 @@ On the Pi these are single-threaded full-file re-encodes, so a music track that
 needs both a normalize pass and a loudness-reconcile re-encode is the usual
 culprit. A normalization cache hit on an already-reconciled file skips both and
 should log near-instant stages.
+
+## A station page asset returns "not found" instead of loading
+
+A request under `/static/` answers `404` when the station cannot resolve the
+name to a real file inside its own asset directory. That covers a name that
+does not exist, a name that tries to climb out of the directory, a file the
+station is not allowed to follow, and a name carrying characters a path cannot
+hold.
+
+Previously some of those cases produced a server error and a stack trace in
+the add-on log instead of the `404`. If you are reading an older log and see
+one, the request was already being refused; only the way it was reported has
+changed.
+
+Nothing to fix on your side unless a page element is genuinely missing. If one
+is, reinstall or update the add-on so the packaged assets are restored, and
+check the add-on log for the file name the station could not resolve.
 
 ## Tests fail during collection
 

@@ -411,30 +411,42 @@ def test_listener_moment_receipts_stay_private_and_readable():
     assert "casa_moment_stale" in html
 
 
+# This list is the single source of truth for the listener ban list, but nothing imports
+# it at runtime: scripts/ui_copy_lint.py declares its own copy of the same tuple, and
+# tests/repo/test_ui_copy_lint.py::test_tech_lingo_listener_terms_match_the_copy_guard
+# asserts the two are equal. Edit this one; that test fails until the other matches.
+#
+# The two guards then apply DIFFERENT matchers to the terms, neither strictly stronger.
+# The check below is a plain substring scan, so it catches "rebuffering" and a bare "500".
+# The lint uses word boundaries with an inflection suffix, so it catches "Buffering" but
+# not "rebuffering", and it only counts a digit in a status-code context. Between them
+# the coverage is wider than either alone, which is why both exist.
+TECH_LINGO_LISTENER = (
+    "rate limit",
+    "429",
+    "503",
+    "500",
+    "buffer",
+    "timeout",
+    "rejected",
+    "degraded",
+    "null",
+    "undefined",
+    "traceback",
+    "exception",
+)
+
+
 def test_no_tech_lingo_reaches_the_listener():
     """Leadership principle #5: no machine words in listener-facing copy.
 
     Guards every swappable string in both languages against the dev-lingo that
     has leaked to the UI before ("rate limit", "buffer", HTTP codes, etc.).
     """
-    banned = (
-        "rate limit",
-        "429",
-        "503",
-        "500",
-        "buffer",
-        "timeout",
-        "rejected",
-        "degraded",
-        "null",
-        "undefined",
-        "traceback",
-        "exception",
-    )
     for lang in ("en", "it"):
         for key, value in COPY[lang].items():
             low = value.lower()
-            for term in banned:
+            for term in TECH_LINGO_LISTENER:
                 assert term not in low, f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
 
 

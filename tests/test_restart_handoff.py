@@ -645,7 +645,12 @@ def test_write_spool_skips_ephemeral_dynamic_temp_outside_and_non_music_candidat
             "Listener handoff",
             metadata={LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True},
         ),
-        RestartHandoffCandidate(good, 180.0, "", "Missing Artist"),
+        RestartHandoffCandidate(
+            good,
+            180.0,
+            "Artist",
+            "",
+        ),
         RestartHandoffCandidate(good, 180.0, "Artist", "Blocked"),
         RestartHandoffCandidate(temp, 180.0, "Artist", "Temp"),
         RestartHandoffCandidate(outside, 180.0, "Artist", "Outside"),
@@ -662,6 +667,21 @@ def test_write_spool_skips_ephemeral_dynamic_temp_outside_and_non_music_candidat
     )
 
     assert [entry.title for entry in manifest.entries] == ["Good"]
+
+
+def test_write_spool_keeps_a_title_only_local_candidate(tmp_path):
+    """An untagged operator MP3 is spool-eligible; only a missing TITLE is not."""
+    cache_dir = tmp_path / "cache"
+    good = _write_cache_file(cache_dir, "norm_good_192k.mp3", b"good")
+
+    manifest = write_restart_handoff_spool(
+        cache_dir,
+        [RestartHandoffCandidate(good, 180.0, "", "Salvatore On Everything")],
+        now=100.0,
+        duration_probe=_duration,
+    )
+
+    assert [entry.title for entry in manifest.entries] == ["Salvatore On Everything"]
 
 
 def test_write_spool_rejects_symlinked_cache_candidate(tmp_path):
@@ -1027,15 +1047,39 @@ def test_admission_rejects_exact_equivalent_blocklisted_identity(tmp_path):
     assert [rejection.reason for rejection in admission.rejected] == ["blocklisted"]
 
 
-def test_admission_rejects_missing_identity(tmp_path):
+def test_admission_accepts_a_title_only_local_entry(tmp_path):
+    """An untagged operator MP3 has no artist and must still survive a restart.
+
+    The title is the identity here, same as everywhere else. Requiring an artist
+    meant an operator whose library is untagged files got nothing at all from the
+    continuity spool — the exact population the local-metadata scan serves.
+    """
     path = _write_spooled_file(tmp_path)
-    entry = _entry_for_path(tmp_path, path, artist="", title="Song")
+    entry = _entry_for_path(tmp_path, path, artist="", title="Salvatore On Everything")
 
     admission = admit_restart_handoff_manifest(
         tmp_path, RestartHandoffManifest(entries=(entry,), created_at=100.0), now=120.0, duration_probe=_duration
     )
 
-    assert [rejection.reason for rejection in admission.rejected] == ["missing_identity"]
+    assert [rejection.reason for rejection in admission.rejected] == []
+    assert [entry.title for entry in admission.accepted] == ["Salvatore On Everything"]
+    assert len(admission.to_segments(tmp_path)) == 1
+
+
+def test_admission_still_rejects_a_banned_title_only_entry(tmp_path):
+    """("", title) is a real key, so the ban check must still bite."""
+    path = _write_spooled_file(tmp_path)
+    entry = _entry_for_path(tmp_path, path, artist="", title="Salvatore On Everything")
+
+    admission = admit_restart_handoff_manifest(
+        tmp_path,
+        RestartHandoffManifest(entries=(entry,), created_at=100.0),
+        blocklist={("", "salvatore on everything"): {"display": "Salvatore On Everything"}},
+        now=120.0,
+        duration_probe=_duration,
+    )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["blocklisted"]
 
 
 def test_admission_rejects_missing_title(tmp_path):

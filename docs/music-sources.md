@@ -107,8 +107,30 @@ checkouts use `./music`. The scanner runs every minute; use **Rotazione → Loca
 music → Scan now** for an immediate refresh.
 
 Discovery recursively accepts MP3, M4A, MP4 audio, AAC, FLAC, OGG, Opus, and WAV.
-`Artist - Title.ext` produces the best label; other filenames use `Unknown` as
-artist. Operators remain responsible for provenance, licenses, and permitted use.
+
+Labels come from the file's own embedded title/artist tags first (read with
+`ffprobe`, audio streams only, so embedded cover art can never name the song).
+A missing tag falls back to an `Artist - Title.ext` filename, then to the
+filename alone with a leading track number stripped and separators tidied —
+`29-salvatore-on-everything.mp3` becomes **Salvatore On Everything**. An artist
+is only ever taken from a tag or from an explicit `Artist - Title` filename,
+never guessed out of a one-part filename, so a song with no artist anywhere
+shows its title alone rather than a placeholder. Untaggable files stay
+playable: a probe failure, a missing `ffprobe`, or an absurdly long tag just
+falls through to the filename.
+
+Tags are re-read only when a file's size or timestamp changes, so the
+once-a-minute rescan costs nothing on a settled library. A first scan of a very
+large or slow folder stops reading tags after 90 seconds and labels the rest
+from filenames for that pass; already-read files keep their tag labels, and the
+next pass picks up where it left off, so the folder settles over a few minutes
+instead of holding up the station.
+
+Renaming a file or editing its tags changes how the station identifies that
+song. A ban placed before this release still holds — the previous identity is
+derived from the path and checked alongside the new one — but a ban placed on
+one spelling will not follow a later rename. Operators remain responsible for
+provenance, licenses, and permitted use.
 
 ## Optional transient Jamendo expansion
 

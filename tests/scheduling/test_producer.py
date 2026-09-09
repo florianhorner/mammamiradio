@@ -697,3 +697,37 @@ def test_norm_cache_bridge_scrubs_foreign_title_prefix():
     with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=real):
         metadata, _ = _norm_cache_bridge_payload(Path("norm_xyz_128k.mp3"), "idle_bridge", "Mamma Mi Radio")
     assert metadata["title"] == "Radio Ga Ga"
+
+
+@pytest.mark.asyncio
+async def test_producer_wires_ha_publish_heartbeat_loop(tmp_path):
+    started = asyncio.Event()
+    results: list[bool | None] = []
+
+    async def fake_loop(push, is_enabled):
+        started.set()
+        assert is_enabled()
+        results.append(await push())
+        await asyncio.Event().wait()
+
+    state = StationState(listeners_active=0, session_stopped=False)
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.homeassistant.url = "http://ha.local:8123"
+    config.ha_token = "test-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    with (
+        patch(f"{PRODUCER_MODULE}.run_ha_publish_heartbeat", fake_loop),
+        patch(f"{PRODUCER_MODULE}.push_state_to_ha", new_callable=AsyncMock, return_value=False) as push,
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    assert results == [False]
+    push.assert_awaited_once()

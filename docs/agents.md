@@ -22,12 +22,15 @@ This file supplements the global instructions for the `mammamiradio` repository.
   `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
 - Before opening any PR (ANY runtime — Claude, Codex, Cursor): commit and
   review the implementation, run `scripts/emit-review-evidence.sh`, and commit
-  the immutable receipt it writes under `proof/preship-reviews/v2/`. After
-  integrating the base locally (`git merge origin/main`), run
-  `scripts/emit-review-evidence.sh --reattest` and commit what it changed (the
-  derived receipt plus the superseded branch receipts it removes) — it succeeds
-  only when HEAD is exactly the reviewed content cleanly merged with the base;
-  any other change needs a fresh review and a fresh receipt.
+  the immutable receipt it writes under `proof/preship-reviews/v2/`. Integrating
+  the base locally (`git merge origin/main`) does not burn that receipt:
+  verification accepts it when HEAD is exactly the reviewed content cleanly
+  merged with a landed base, so integrate, push, and land. Any other change —
+  a conflict, a hand-edited merge, new work after the review — needs a fresh
+  review and a fresh receipt. `scripts/emit-review-evidence.sh --reattest`
+  applies the same rule and is optional; run it when you want the branch's
+  evidence to name the integrated content, and commit what it changed (the
+  derived receipt plus the superseded branch receipts it removes).
   Receipts are content-addressed additions, so parallel PRs never conflict on
   evidence (the legacy fixed-name `proof/preship-review.json` is retired). CI
   checks the receipt from trusted base code and remains report-only during
@@ -103,8 +106,15 @@ Hard rules agents must not invent around:
   next PR only when it is actually ready to land.
 - Let pure patch/minor Python Dependabot PRs with auto-merge armed land through
   Dependabot when they remain current and fresh required checks pass. A stale
-  PR parks until an authenticated maintainer updates it; this is deliberate. If
-  quality fails on an unrelated one-test timeout, verify the focused test
+  PR parks until an authenticated maintainer updates it; this is deliberate.
+  The workflow adds `cut-window-hold` to PRs it disarms during a release cut.
+  After publication, use a fresh PR event with verified Dependabot metadata or
+  the landing workflow to resume them. The sweep only disarms. PR events can
+  re-arm a PR you disarmed by hand. Before a cut, the release operator uses
+  `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` and keeps human landings paused until both
+  architecture promotions succeed. Resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`;
+  see the add-on runbook for the required proof and recovery.
+  If quality fails on an unrelated one-test timeout, verify the focused test
   locally before treating it as a rerunnable flake; stop on any deterministic
   dependency break.
 - Treat semver-major GitHub Actions PRs as manual landings: inspect the fresh

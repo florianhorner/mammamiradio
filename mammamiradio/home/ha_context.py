@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -2902,6 +2902,243 @@ def _get_ha_push_lock() -> asyncio.Lock:
 _GHOST_MEDIA_PLAYER_EID = "media_player.mammamiradio"
 _media_player_ghost_purged = False
 
+HA_PUBLISH_HEARTBEAT_INITIAL_S = 30.0
+HA_PUBLISH_HEARTBEAT_MAX_S = 300.0
+_HA_PUBLISH_REASON_RANK = {
+    "unexpected": 0,
+    "transport": 1,
+    "http_error": 2,
+    "auth_denied": 3,
+}
+_HA_PUBLISH_COPY = {
+    "disabled": (
+        "Home Assistant publishing is turned off.",
+        "Turn on Home Assistant publishing in radio.toml if you want station entities.",
+    ),
+    "unconfigured": (
+        "Home Assistant publishing is not configured.",
+        "Set HA_URL and HA_TOKEN in .env, then restart the station.",
+    ),
+    "idle": (
+        "The station has not tried to publish entities yet.",
+        "Wait for the next track change or the next heartbeat.",
+    ),
+    "ok": ("Home Assistant entity updates are working.", ""),
+    "recovered": ("Home Assistant entity updates recovered.", ""),
+    "auth_denied": (
+        "Home Assistant rejected the station token.",
+        "Check the Home Assistant long-lived token and save it again.",
+    ),
+    "http_error": (
+        "Home Assistant did not accept an entity update.",
+        "Check that Home Assistant is reachable, then wait for the next retry.",
+    ),
+    "transport": (
+        "The station could not reach Home Assistant.",
+        "Check that Home Assistant is running, then wait for the next retry.",
+    ),
+    "unexpected": (
+        "Home Assistant entity updates are failing.",
+        "Wait for the next retry, then check Home Assistant if this continues.",
+    ),
+}
+_HA_PUBLISH_ADDON_NEXT_STEPS = {
+    "disabled": "Turn on Home Assistant in add-on options if you want station entities.",
+    "unconfigured": "Check the add-on Home Assistant connection so Supervisor can provide its token.",
+    "auth_denied": "Check the add-on Home Assistant connection, then retry the station.",
+}
+
+
+@dataclass
+class _HaPublishHealth:
+    failure_streak: int = 0
+    last_success_at: float = 0.0
+    last_failure_at: float = 0.0
+    last_attempt_at: float = 0.0
+    reason: str = ""
+    outage_active: bool = False
+
+
+_ha_publish_health = _HaPublishHealth()
+_ha_publish_health_lock = threading.Lock()
+
+
+def _snapshot_ha_publish_health() -> _HaPublishHealth:
+    with _ha_publish_health_lock:
+        return replace(_ha_publish_health)
+
+
+def _ha_publish_reason_for_status(status_code: int) -> str:
+    if status_code in (401, 403):
+        return "auth_denied"
+    return "http_error"
+
+
+def _worse_ha_publish_reason(current: str, incoming: str) -> str:
+    if _HA_PUBLISH_REASON_RANK.get(incoming, -1) > _HA_PUBLISH_REASON_RANK.get(current, -1):
+        return incoming
+    return current or incoming
+
+
+def _ha_publish_copy(key: str, config: object | None) -> tuple[str, str]:
+    if getattr(config, "is_addon", False) and key in _HA_PUBLISH_ADDON_NEXT_STEPS:
+        return _HA_PUBLISH_COPY[key][0], _HA_PUBLISH_ADDON_NEXT_STEPS[key]
+    return _HA_PUBLISH_COPY[key]
+
+
+def next_ha_publish_heartbeat_interval(current: float, result: bool | None) -> float:
+    """Return the next heartbeat sleep from a real push result."""
+    baseline = current if current > 0 else HA_PUBLISH_HEARTBEAT_INITIAL_S
+    if result is True:
+        return HA_PUBLISH_HEARTBEAT_INITIAL_S
+    if result is None:
+        return baseline
+    return min(max(baseline, HA_PUBLISH_HEARTBEAT_INITIAL_S) * 2, HA_PUBLISH_HEARTBEAT_MAX_S)
+
+
+async def run_ha_publish_heartbeat(
+    push: Callable[[], Awaitable[bool | None]],
+    is_enabled: Callable[[], bool],
+    *,
+    sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+    initial_interval: float = HA_PUBLISH_HEARTBEAT_INITIAL_S,
+) -> None:
+    """Sleep, push, and back off until cancelled."""
+    interval = initial_interval if initial_interval > 0 else HA_PUBLISH_HEARTBEAT_INITIAL_S
+    while True:
+        await sleep(interval)
+        if not is_enabled():
+            continue
+        try:
+            result = await push()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            result = False
+        interval = next_ha_publish_heartbeat_interval(interval, result)
+
+
+def _note_ha_publish_failure(reason: str) -> None:
+    now = time.time()
+    safe_reason = reason if reason in _HA_PUBLISH_REASON_RANK else "unexpected"
+    with _ha_publish_health_lock:
+        health = _ha_publish_health
+        health.last_attempt_at = now
+        health.last_failure_at = now
+        health.failure_streak += 1
+        health.reason = safe_reason
+        emit_outage = not health.outage_active
+        health.outage_active = True
+    if emit_outage:
+        logger.warning(
+            "Home Assistant entity updates are failing (%s). The station will retry with backoff.",
+            safe_reason,
+        )
+
+
+def _note_ha_publish_success() -> None:
+    now = time.time()
+    with _ha_publish_health_lock:
+        health = _ha_publish_health
+        health.last_attempt_at = now
+        health.last_success_at = now
+        streak = health.failure_streak
+        emit_recovery = health.outage_active
+        health.failure_streak = 0
+        health.reason = "ok"
+        health.outage_active = False
+    if emit_recovery:
+        logger.info("Home Assistant entity updates recovered after %d failed attempt(s).", streak)
+
+
+def ha_publish_status_payload(config: object | None = None) -> dict[str, object]:
+    """Return operator-safe publishing health for authenticated ``/status``."""
+    ha = getattr(config, "homeassistant", None) if config is not None else None
+    enabled_flag = bool(getattr(ha, "enabled", False))
+    url = str(getattr(ha, "url", "") or "").strip()
+    token = str(getattr(config, "ha_token", "") or "").strip() if config is not None else ""
+    publishing_ready = bool(enabled_flag and url and token)
+    health = _snapshot_ha_publish_health()
+
+    def _payload(
+        *,
+        enabled: bool,
+        status: str,
+        reason: str,
+        message: str,
+        next_step: str,
+        failure_streak: int = 0,
+        last_success_at: float | None = None,
+        last_failure_at: float | None = None,
+        last_attempt_at: float | None = None,
+    ) -> dict[str, object]:
+        return {
+            "enabled": enabled,
+            "status": status,
+            "reason": reason,
+            "failure_streak": failure_streak,
+            "last_success_at": last_success_at,
+            "last_failure_at": last_failure_at,
+            "last_attempt_at": last_attempt_at,
+            "message": message,
+            "next_step": next_step,
+        }
+
+    if not enabled_flag:
+        message, next_step = _ha_publish_copy("disabled", config)
+        return _payload(enabled=False, status="disabled", reason="", message=message, next_step=next_step)
+    if not publishing_ready:
+        message, next_step = _ha_publish_copy("unconfigured", config)
+        # `enabled` reflects the config toggle, not readiness: the operator did
+        # turn Home Assistant on here, they just haven't finished the URL/token
+        # yet. Reporting False would make "unconfigured" indistinguishable from
+        # "disabled" to anything reading this field.
+        return _payload(enabled=enabled_flag, status="unconfigured", reason="", message=message, next_step=next_step)
+
+    last_success = health.last_success_at or None
+    last_failure = health.last_failure_at or None
+    last_attempt = health.last_attempt_at or None
+    if health.outage_active:
+        copy_key = health.reason if health.reason in _HA_PUBLISH_COPY else "unexpected"
+        message, next_step = _ha_publish_copy(copy_key, config)
+        return _payload(
+            enabled=True,
+            status="degraded",
+            reason=health.reason or "unexpected",
+            message=message,
+            next_step=next_step,
+            failure_streak=health.failure_streak,
+            last_success_at=last_success,
+            last_failure_at=last_failure,
+            last_attempt_at=last_attempt,
+        )
+    if last_success and last_failure and last_success >= last_failure:
+        message, next_step = _ha_publish_copy("recovered", config)
+        return _payload(
+            enabled=True,
+            status="ok",
+            reason="ok",
+            message=message,
+            next_step=next_step,
+            last_success_at=last_success,
+            last_failure_at=last_failure,
+            last_attempt_at=last_attempt,
+        )
+    if last_success:
+        message, next_step = _ha_publish_copy("ok", config)
+        return _payload(
+            enabled=True,
+            status="ok",
+            reason="ok",
+            message=message,
+            next_step=next_step,
+            last_success_at=last_success,
+            last_failure_at=last_failure,
+            last_attempt_at=last_attempt,
+        )
+    message, next_step = _ha_publish_copy("idle", config)
+    return _payload(enabled=True, status="idle", reason="", message=message, next_step=next_step)
+
 
 def _ha_payload_fingerprint(payload: dict) -> str:
     """Stable payload fingerprint for unchanged HA sensor writes."""
@@ -2934,20 +3171,12 @@ def _remember_ha_entity_write(eid: str, payload: dict, now: float) -> None:
 
 
 def _media_player_push_enabled() -> bool:
-    """Whether to push ``media_player.mammamiradio`` (default on).
-
-    Operators who install the HACS ``mammamiradio`` integration set the add-on's
-    ``ha_media_player_push`` option to false (-> ``MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH``).
-    The registered ``MediaPlayerEntity`` then owns the id; a 30s REST push to the
-    same id would clobber it (the HA state machine is last-writer-wins) and flap
-    the card between real and ghost state. The three sensor/binary_sensor pushes
-    have no registered backing and keep flowing regardless.
-    """
+    """Whether the REST push owns ``media_player.mammamiradio`` (default on)."""
     val = os.getenv("MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH", "").strip().lower()
     return val not in ("0", "false", "no", "off")
 
 
-async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.AsyncClient) -> None:
+async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.AsyncClient) -> str | None:
     """Delete the stale ghost ``media_player.mammamiradio`` once.
 
     REST ``/api/states`` entries never expire, so when the push is turned off the
@@ -2958,17 +3187,31 @@ async def _purge_ghost_media_player(base_url: str, headers: dict, client: httpx.
     """
     global _media_player_ghost_purged
     if _media_player_ghost_purged:
-        return
+        return None
     _media_player_ghost_purged = True
     try:
-        await client.delete(
+        response = await client.delete(
             f"{base_url}/api/states/{_GHOST_MEDIA_PLAYER_EID}",
             headers=headers,
             timeout=5.0,
         )
-    except Exception as e:
+        if response.status_code >= 400 and response.status_code != 404:
+            _media_player_ghost_purged = False
+            return _ha_publish_reason_for_status(response.status_code)
+    except asyncio.CancelledError:
+        _media_player_ghost_purged = False
+        raise
+    except httpx.TransportError:
+        _media_player_ghost_purged = False
+        return "transport"
+    except Exception as exc:
         _media_player_ghost_purged = False  # allow a retry on the next push
-        logger.warning("HA ghost media_player purge failed: %s: %r", type(e).__name__, e)
+        # Exception class name only, never str(exc)/repr(exc), which could
+        # carry a response body, URL, or token. See push_state_to_ha's own
+        # sanitization boundary tests.
+        logger.debug("HA ghost media_player purge failed unexpectedly: %s", type(exc).__name__)
+        return "unexpected"
+    return None
 
 
 async def push_state_to_ha(
@@ -2981,8 +3224,10 @@ async def push_state_to_ha(
     queue_depth: int = 0,
     station_name: str = DEFAULT_STATION_NAME,
     artwork_url: str = "",
-) -> None:
-    """Push radio state to HA as media_player + sensor entities. Fire-and-forget.
+) -> bool | None:
+    """Push radio state to HA as media_player + sensor entities.
+
+    Returns True for all-success, False for any failure, or None when no write is due.
 
     ``station_name`` is the listener-facing name used for media_player/sensor
     friendly names and the station ``media_artist``. Entity IDs and the
@@ -2992,17 +3237,51 @@ async def push_state_to_ha(
     whenever the current segment has no real cover (voice/ad/idle); blank falls
     back to ``_DEFAULT_STATION_ARTWORK_URL``.
     """
-    global _last_ha_push, _last_ha_stop_push
-
     # Floor to the canonical name so a blank value can never reach an HA label.
     station_name = station_name or DEFAULT_STATION_NAME
+
+    try:
+        return await _push_state_to_ha_locked(
+            ha_url,
+            ha_token,
+            now_streaming,
+            current_track,
+            listeners_active,
+            session_stopped,
+            queue_depth,
+            station_name,
+            artwork_url,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Exception class name only, see the docstring above and the
+        # ha_publish log-sanitization tests for why the message/repr never
+        # gets logged here.
+        logger.debug("HA publish saw an unexpected exception type: %s", type(exc).__name__)
+        _note_ha_publish_failure("unexpected")
+        return False
+
+
+async def _push_state_to_ha_locked(
+    ha_url: str,
+    ha_token: str,
+    now_streaming: dict,
+    current_track: object | None,
+    listeners_active: int,
+    session_stopped: bool,
+    queue_depth: int,
+    station_name: str,
+    artwork_url: str,
+) -> bool | None:
+    global _last_ha_push, _last_ha_stop_push
 
     async with _get_ha_push_lock():
         now = time.time()
         if not session_stopped and now - _last_ha_push < 2.0:
-            return
+            return None
         if session_stopped and now - _last_ha_stop_push < 2.0:
-            return
+            return None
         if session_stopped:
             _last_ha_stop_push = now
         else:
@@ -3113,25 +3392,17 @@ async def push_state_to_ha(
             ),
         ]
 
-        # When the HACS integration owns media_player.mammamiradio, stop pushing
-        # it (last-writer-wins would clobber the real entity) and purge the stale
-        # ghost once. The sensors/binary_sensor keep flowing — no registered
-        # backing, no collision, and the integration doesn't provide them.
+        attempted = 0
+        worst_reason = ""
         if not _media_player_push_enabled():
             entities = [e for e in entities if e[0] != _GHOST_MEDIA_PLAYER_EID]
-            await _purge_ghost_media_player(base_url, headers, client)
+            attempted += int(not _media_player_ghost_purged)
+            purge_failure = await _purge_ghost_media_player(base_url, headers, client)
+            if purge_failure:
+                worst_reason = _worse_ha_publish_reason(worst_reason, purge_failure)
 
-        async def _push_one(eid: str, p: dict) -> bool:
-            # Always log the exception TYPE + repr. A bare str() on a timeout or
-            # cancellation-style exception is empty, which is what produced the
-            # unreadable "HA push failed for <eid>: " lines in production. Include
-            # the HTTP body on a 4xx/5xx so the operator can see *why* it failed.
-            #
-            # One bounded retry, transient network errors only. The whole push
-            # runs inside _get_ha_push_lock(), so a newer push cannot interleave
-            # and replay stale state behind this one. HTTP errors are not retried
-            # (they will not fix themselves within 5s); the 30s heartbeat re-pushes.
-            last_exc: httpx.TransportError | None = None
+        async def _push_one(eid: str, p: dict) -> str | None:
+            saw_transport = False
             for _attempt in range(2):
                 try:
                     resp = await client.post(
@@ -3141,36 +3412,31 @@ async def push_state_to_ha(
                         timeout=5.0,
                     )
                     if resp.status_code >= 400:
-                        raw = getattr(resp, "text", "")
-                        body = raw.strip().replace("\n", " ")[:200] if isinstance(raw, str) else ""
-                        logger.warning(
-                            "HA push failed for %s: HTTP %d%s",
-                            eid,
-                            resp.status_code,
-                            f" — {body}" if body else "",
-                        )
-                        return False
-                    return True
-                except httpx.TransportError as e:
-                    last_exc = e
+                        return _ha_publish_reason_for_status(resp.status_code)
+                    return None
+                except asyncio.CancelledError:
+                    raise
+                except httpx.TransportError:
+                    saw_transport = True
                     continue
-                except Exception as e:
-                    logger.warning("HA push failed for %s: %s: %r", eid, type(e).__name__, e)
-                    return False
-            logger.warning(
-                "HA push failed for %s after retry: %s: %r",
-                eid,
-                type(last_exc).__name__,
-                last_exc,
-            )
-            return False
+                except Exception as exc:
+                    logger.debug("HA entity push saw an unexpected exception type: %s", type(exc).__name__)
+                    return "unexpected"
+            return "transport" if saw_transport else "unexpected"
 
-        # Keep state writes ordered. Supervisor's API proxy can report noisy
-        # request-body errors when all entity updates hit it at once during HA
-        # slowness; the outer push lock already serializes push cycles, so this
-        # preserves freshness while smoothing each cycle.
         for eid, payload in entities:
             if not _ha_entity_write_due(eid, payload, now):
                 continue
-            if await _push_one(eid, payload):
+            attempted += 1
+            failure = await _push_one(eid, payload)
+            if failure is None:
                 _remember_ha_entity_write(eid, payload, now)
+            else:
+                worst_reason = _worse_ha_publish_reason(worst_reason, failure)
+        if attempted == 0:
+            return None
+        if worst_reason:
+            _note_ha_publish_failure(worst_reason)
+            return False
+        _note_ha_publish_success()
+        return True

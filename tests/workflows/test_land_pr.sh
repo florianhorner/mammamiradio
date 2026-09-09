@@ -137,6 +137,7 @@ run_land() {
       GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
       GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" GH_MOCK_COMMENT_JSON="$EMPTY_COMMENTS" \
       MMR_LAND_REVIEW_READER="$reader" \
+      MMR_LAND_SKIP_FETCH="${MMR_LAND_SKIP_FETCH:-1}" \
       MMR_LAND_SKIP_EVIDENCE_CHECK="${MMR_LAND_SKIP_EVIDENCE_CHECK:-1}" \
       MMR_LAND_SKIP_THREAD_CHECK="${MMR_LAND_SKIP_THREAD_CHECK:-1}" \
       "$@" bash "$LAND" 7 2>&1)" || RUN_RC=$?
@@ -179,7 +180,8 @@ run_land "$(empty_reader)" GH_MOCK_MERGE_STATE=BEHIND \
 never_merged || fail "behind PR must never merge"
 ! grep -q "pr update-branch" "$GH_MOCK_LOG" || fail "landing seat must not update a behind branch"
 printf '%s' "$RUN_OUT" | grep -q "feature workspace" || fail "deny message should name the owning workspace"
-printf '%s' "$RUN_OUT" | grep -q -- "--reattest" || fail "deny message should give the reattest command"
+printf '%s' "$RUN_OUT" | grep -q "git merge origin/main" || fail "deny message should give the integrate command"
+printf '%s' "$RUN_OUT" | grep -q "no reattest needed" || fail "deny message should say a clean integrate keeps the receipt"
 ! printf '%s' "$RUN_OUT" | grep -q "committed v2 pre-ship evidence does not cover" || fail "behind handling must run before evidence verification"
 pass "real divergent BEHIND graph parks before evidence or mutation"
 
@@ -331,6 +333,56 @@ never_merged || fail "skipped v2 evidence without ledger must never merge"
 printf '%s' "$RUN_OUT" | grep -q "committed evidence was skipped" \
   || fail "deny message should explain that skipped evidence requires a ledger"
 pass "evidence skip without local ledger denies"
+
+# =============================================================================
+# The landed-ref refresh. The merge witness trusts a base only if it is landed in
+# origin/main; a landing seat that has not fetched since main advanced would
+# refuse GitHub's real base. The wrapper must refresh the ref before it verifies,
+# and the refresh must never be the thing that fails the landing.
+# =============================================================================
+GIT_SHIM_DIR="$TMPDIR_T/gitshim"; mkdir -p "$GIT_SHIM_DIR"
+GIT_SHIM_LOG="$TMPDIR_T/git-shim.log"; : > "$GIT_SHIM_LOG"
+REAL_GIT="$(command -v git)"
+cat > "$GIT_SHIM_DIR/git" <<GITEOF
+#!/usr/bin/env bash
+if [ "\$1" = "fetch" ]; then
+  printf '%s\\n' "\$*" >> "$GIT_SHIM_LOG"
+  [ "\${GIT_SHIM_FETCH_FAIL:-0}" = "1" ] && exit 128
+  exit 0
+fi
+exec "$REAL_GIT" "\$@"
+GITEOF
+chmod +x "$GIT_SHIM_DIR/git"
+
+READER_OK="$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
+: > "$GIT_SHIM_LOG"
+# The base must be one the local origin/main does NOT cover, or nothing fetches.
+# HEAD~1 is off-main in a branch checkout but is main's tip in CI's merge-commit
+# checkout; the suite's synthetic BEHIND_BASE_FULL is off-main in both.
+PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL"
+[ "$RUN_RC" -eq 0 ] || fail "clean PR should still arm with the fetch enabled: $RUN_OUT"
+grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "wrapper must refresh origin/main before verifying"
+merged_with "$HEAD_FULL" || fail "arming must still happen after the refresh"
+pass "wrapper refreshes origin/main before verifying the base"
+
+: > "$GIT_SHIM_LOG"
+PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL" GIT_SHIM_FETCH_FAIL=1
+[ "$RUN_RC" -eq 0 ] || fail "a failed refresh must not itself fail the landing (the evidence gate decides): $RUN_OUT"
+grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "refresh must still be attempted"
+merged_with "$HEAD_FULL" || fail "with valid evidence, a failed refresh must not block the arm"
+pass "a failed refresh is tolerated; the evidence gate remains the decider"
+
+# Complete history: a base the local origin/main already covers must not fetch.
+# This mirrors the invariant tests/workflows/test_dependabot_automerge_gate.sh
+# holds against this same wrapper, so the property lives with its owner too.
+: > "$GIT_SHIM_LOG"
+if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+  COVERED_BASE="$(git rev-parse origin/main)"
+  PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$COVERED_BASE"
+  [ "$(grep -c '^fetch -q origin main' "$GIT_SHIM_LOG")" = "0" ] \
+    || fail "a base already covered by local origin/main must not trigger a fetch"
+  pass "complete history never fetches (base already covered by origin/main)"
+fi
 
 echo
 echo "All $PASS_COUNT land-pr cases passed."

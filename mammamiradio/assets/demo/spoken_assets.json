@@ -231,6 +231,52 @@
       "mode": "normal",
       "required_previous_starter_id": "",
       "special": true
+    },
+    {
+      "path": "first_listen/first_listen_admin_show.mp3",
+      "sha256": "c715c7c0419dc24fbc71cbc21f8e61ef7a2b90ce5631d74b1e14928d515b2b3a",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Mamma Mi Radio, live from Studio B. The coffee is back where it belongs. Everyone’s happy. Giulia: The coffee’s happy. I’m reserving judgment. Marco: Our newest regular deserves a proper welcome. Giulia: Then put a record on, Marco.",
+      "duration_seconds": 15.096,
+      "speakers": [
+        "Marco",
+        "Giulia",
+        "Marco",
+        "Giulia"
+      ],
+      "canonical_render_receipt": {
+        "schema_version": 1,
+        "source": "radio.toml",
+        "provider": "elevenlabs",
+        "fallback": false,
+        "hosts": [
+          {
+            "name": "Marco",
+            "voice_id": "o4b57JYAECRMJyCEXyIE",
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+              "stability": 0.6,
+              "similarity_boost": 0.78,
+              "style": 0.45,
+              "use_speaker_boost": true
+            },
+            "delivery_profile": "none"
+          },
+          {
+            "name": "Giulia",
+            "voice_id": "fNmw8sukfGuvWVOp33Ge",
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+              "stability": 0.42,
+              "similarity_boost": 0.78,
+              "style": 0.45,
+              "use_speaker_boost": true
+            },
+            "delivery_profile": "none"
+          }
+        ]
+      }
     }
   ]
 }

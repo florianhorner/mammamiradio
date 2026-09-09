@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import os
 import re
 import subprocess
@@ -1260,12 +1261,31 @@ async def test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next(tmp_pat
             await asyncio.gather(task, return_exceptions=True)
 
     queued_at_boundary = observed["queue"]
-    assert observed == {
-        "active": None,
-        "accepted": True,
-        "queue": [successor, forced],
-    }
-    assert queued_at_boundary == [successor, forced]
+    assert isinstance(queued_at_boundary, list)
+    assert observed["active"] is None
+    assert observed["accepted"] is True
+
+    # The guarantee is ordering, not queue contents at one exact tick. The
+    # snapshot is taken from a call_soon callback racing the playback loop's
+    # own queue.get(), so whether the successor is still queued depends on
+    # event-loop dispatch order:
+    #
+    #   3.11   queue == [successor, forced]   successor not yet taken
+    #   3.14   queue == [forced]              successor already taken
+    # (measured at those two points; the exact interpreter where dispatch
+    #  order changes was not pinned down, which is why neither shape is
+    #  asserted as the expected one.)
+    #
+    # Both satisfy "successor ahead of air-next" -- already dequeued is further
+    # ahead, not behind. Pin the invariant, and let the listener assertions
+    # below prove the order actually reached air.
+    # Assert on both shapes, not just the one this interpreter happens to
+    # produce. A bare `if successor in queue` guard is vacuous exactly on
+    # 3.14, where the successor is already dequeued.
+    assert queued_at_boundary[-1] is forced, "air-next must land behind whatever is still queued, never ahead of it"
+    if successor in queued_at_boundary:
+        assert queued_at_boundary.index(successor) < queued_at_boundary.index(forced)
+
     assert listener_queue.get_nowait() == b"head-audio"
     assert listener_queue.get_nowait() == b"speech-audio"
     assert sum(segment is music for segment in emitted) == 1
@@ -4989,8 +5009,9 @@ async def test_audio_generator_preserves_persisted_session_stopped_on_connect(tm
     assert flag.exists()
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscription(tmp_path):
+async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscription(tmp_path, first_listen):
     """The mini-show is client-local and hands off to the ordinary live hub."""
     import threading
 
@@ -5000,7 +5021,8 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
     app.state.first_listen_receipt = None
     show = tmp_path / "first-listen-show.mp3"
-    show.write_bytes(b"authored-mini-show")
+    opening_bytes = b"english-mini-show" if first_listen else b"italian-mini-show"
+    show.write_bytes(opening_bytes)
 
     mock_request = MagicMock()
     mock_request.app = app
@@ -5009,21 +5031,22 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     approval_threads: list[int] = []
     read_threads: list[int] = []
 
-    def approve_show():
+    def approve_show(*, english):
+        assert english is first_listen
         approval_threads.append(threading.get_ident())
         return show
 
     def chunks(_path):
         read_threads.append(threading.get_ident())
-        yield b"authored-mini-show"
+        yield opening_bytes
 
     with (
         patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
         patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=approve_show),
         patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=chunks),
     ):
-        generator = _audio_generator(mock_request)
-        assert await anext(generator) == b"authored-mini-show"
+        generator = _audio_generator(mock_request, first_listen=first_listen)
+        assert await anext(generator) == opening_bytes
         assert app.state.station_state.listeners_active == 0
 
         live_chunk = asyncio.create_task(anext(generator))
@@ -5040,6 +5063,67 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     assert app.state.station_state.listeners_active == 0
     assert approval_threads and approval_threads[0] != event_loop_thread
     assert read_threads and read_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_first_listen_receipt_completion_keeps_the_connected_live_stream(tmp_path):
+    """Heard/privacy receipts never terminate or replay an attached stream."""
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"authored-mini-show")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True) as show_required,
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch(
+            "mammamiradio.web.streamer.iter_first_listen_show_chunks",
+            return_value=iter([b"authored-mini-show"]),
+        ) as show_chunks,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        assert await anext(generator) == b"authored-mini-show"
+
+        before_receipt = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("First Listen did not attach to the live hub")
+            await asyncio.sleep(0)
+        await app.state.stream_hub.broadcast(b"live-before-receipt")
+        assert await asyncio.wait_for(before_receipt, timeout=1.0) == b"live-before-receipt"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+        )
+        after_heard = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-heard")
+        assert await asyncio.wait_for(after_heard, timeout=1.0) == b"live-after-heard"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+            privacy_reviewed_at=102.0,
+        )
+        after_privacy = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-privacy")
+        assert await asyncio.wait_for(after_privacy, timeout=1.0) == b"live-after-privacy"
+        assert app.state.station_state.listeners_active == 1
+        await generator.aclose()
+
+    assert app.state.station_state.listeners_active == 0
+    show_required.assert_called_once_with(app.state)
+    show_chunks.assert_called_once_with(show)
 
 
 @pytest.mark.asyncio
@@ -5268,8 +5352,9 @@ async def test_password_configured_active_setup_still_rejects_a_rebound_host_wit
     assert response.status_code in (401, 403)
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path):
+async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path, first_listen):
     """A truncated packaged mini-show must hand off to live audio, never silence."""
     from mammamiradio.web.streamer import _audio_generator
 
@@ -5290,7 +5375,7 @@ async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_pa
         patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
         patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=broken_chunks),
     ):
-        generator = _audio_generator(mock_request)
+        generator = _audio_generator(mock_request, first_listen=first_listen)
         assert await anext(generator) == b"partial-show"
 
         live_chunk = asyncio.create_task(anext(generator))
@@ -5307,8 +5392,9 @@ async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_pa
     assert app.state.station_state.listeners_active == 0
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_first_listen_package_approval_timeout_falls_through_to_live_audio():
+async def test_first_listen_package_approval_timeout_falls_through_to_live_audio(first_listen, caplog):
     """Slow package I/O never consumes the instant-audio startup guarantee."""
     import threading
 
@@ -5316,8 +5402,10 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
 
     app = _make_test_app()
     release_approval = threading.Event()
+    selections = []
 
-    def stalled_approval():
+    def stalled_approval(*, english):
+        selections.append(english)
         release_approval.wait(timeout=1)
         return None
 
@@ -5331,7 +5419,7 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
             patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=stalled_approval),
             patch("mammamiradio.web.streamer.FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS", 0.01),
         ):
-            generator = _audio_generator(mock_request)
+            generator = _audio_generator(mock_request, first_listen=first_listen)
             live_chunk = asyncio.create_task(anext(generator))
             deadline = time.monotonic() + 0.5
             while app.state.station_state.listeners_active == 0:
@@ -5345,6 +5433,8 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
     finally:
         release_approval.set()
 
+    assert selections == [first_listen]
+    assert "First Listen package approval exceeded the first-audio budget" in caplog.text
     assert app.state.station_state.listeners_active == 0
 
 
@@ -5399,6 +5489,233 @@ async def test_skip_route_succeeds_when_skip_history_persistence_fails():
     assert app.state.skip_event.is_set()
     assert app.state.station_state.now_streaming["type"] == "skipping"
     persona_store.record_play.assert_awaited_once()
+
+
+def _skip_latency_percentile(samples: list[float], percentile: float) -> float:
+    """Nearest-rank percentile for the probe's delay samples."""
+    if not samples:
+        return 0.0
+    ordered = sorted(samples)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = max(1, min(len(ordered), math.ceil(percentile / 100.0 * len(ordered))))
+    return ordered[rank - 1]
+
+
+def _skip_latency_probe_cycles() -> int:
+    """Read the optional probe cycle count with a useful configuration error."""
+    raw_cycles = os.environ.get("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", "10")
+    try:
+        return max(1, int(raw_cycles))
+    except (TypeError, ValueError):
+        pytest.fail(
+            "Invalid MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES configuration: expected an integer, got " + repr(raw_cycles)
+        )
+
+
+@pytest.mark.parametrize(
+    ("configured_cycles", "expected_cycles"),
+    [(None, 10), ("0", 1), ("-2", 1), ("3", 3)],
+)
+def test_skip_latency_probe_cycles_preserves_default_and_minimum(monkeypatch, configured_cycles, expected_cycles):
+    if configured_cycles is None:
+        monkeypatch.delenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", raising=False)
+    else:
+        monkeypatch.setenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", configured_cycles)
+
+    assert _skip_latency_probe_cycles() == expected_cycles
+
+
+@pytest.mark.parametrize("configured_cycles", ["", "not-a-number"])
+def test_skip_latency_probe_cycles_fails_clearly_for_invalid_configuration(monkeypatch, configured_cycles):
+    monkeypatch.setenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", configured_cycles)
+
+    with pytest.raises(
+        pytest.fail.Exception,
+        match=r"Invalid MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES configuration: expected an integer",
+    ):
+        _skip_latency_probe_cycles()
+
+
+@pytest.mark.asyncio
+async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
+    """Repeated skip probe at the accepted-listener boundary (no new production fields).
+
+    Seeds deterministic current/next segments, POSTs ``/api/skip``, and records
+    command acceptance → ``skipping`` → playback-epoch change → the next
+    segment's accepted-listener audible commit. Collects pacing/underrun/drop
+    counters and reports P50/P95 app-to-listener handoff delay. Opt into a longer run with
+    ``MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES`` (default 10).
+    """
+    cycles = _skip_latency_probe_cycles()
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    state = app.state.station_state
+    listener_id, listener_queue = app.state.stream_hub.subscribe()
+
+    segments: list[Segment] = []
+    for index in range(cycles + 1):
+        path = tmp_path / f"skip-probe-{index}.mp3"
+        # Enough packets that a held first-chunk pacing wait cannot race EOF.
+        path.write_bytes(b"x" * (4096 * 8))
+        segment = Segment(
+            type=SegmentType.MUSIC,
+            path=path,
+            duration_sec=30.0,
+            metadata={
+                "title": f"Probe Artist – Probe {index}",
+                "title_only": f"Probe {index}",
+                "artist": "Probe Artist",
+                "queue_id": f"skip-probe-{index}",
+                "duration_ms": 30_000,
+            },
+            ephemeral=False,
+        )
+        segments.append(segment)
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {
+            "id": segment.metadata["queue_id"],
+            "type": "music",
+            "label": segment.metadata["title"],
+            "duration_sec": 30.0,
+        }
+        for segment in segments
+    ]
+
+    hold_for_skip = asyncio.Event()
+    hold_for_skip.set()
+    real_sleep = asyncio.sleep
+
+    async def _hold_after_audible_chunk(seconds: float) -> None:
+        if hold_for_skip.is_set() and state.current_stream_audible:
+            await app.state.skip_event.wait()
+            return
+        await real_sleep(0)
+
+    handoffs: list[dict] = []
+    seen_titles: list[str] = []
+    playback_task = asyncio.create_task(run_playback_loop(app))
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    try:
+        with (
+            patch("mammamiradio.web.streamer.asyncio.sleep", side_effect=_hold_after_audible_chunk),
+            patch("mammamiradio.playlist.song_cues.detect_skip_bit", new=AsyncMock(return_value=False)),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                for index in range(cycles):
+                    expected_current = f"Probe {index}"
+                    expected_next = f"Probe {index + 1}"
+                    deadline = time.monotonic() + 2.0
+                    while True:
+                        label = str((state.now_streaming or {}).get("label") or "")
+                        if state.current_stream_audible and expected_current in label:
+                            break
+                        if time.monotonic() > deadline:
+                            raise AssertionError(
+                                f"cycle {index}: current segment never became listener-audible "
+                                f"(label={label!r}, audible={state.current_stream_audible})"
+                            )
+                        await real_sleep(0)
+
+                    epoch_before = state.playback_epoch
+                    audible_before = state.audible_playback_epoch
+                    command_started = time.perf_counter()
+                    response = await client.post("/api/skip")
+                    command_accepted_at = time.perf_counter()
+                    assert response.status_code == 200, response.text
+                    body = response.json()
+                    assert body.get("ok") is True, body
+                    assert body.get("bridged") is False, body
+                    assert (state.now_streaming or {}).get("type") == "skipping"
+                    skipping_at = time.perf_counter()
+
+                    deadline = time.monotonic() + 2.0
+                    while state.playback_epoch <= epoch_before:
+                        if time.monotonic() > deadline:
+                            raise AssertionError(
+                                f"cycle {index}: playback epoch did not advance after skip "
+                                f"(before={epoch_before}, now={state.playback_epoch})"
+                            )
+                        await real_sleep(0)
+                    epoch_changed_at = time.perf_counter()
+
+                    deadline = time.monotonic() + 2.0
+                    while True:
+                        label = str((state.now_streaming or {}).get("label") or "")
+                        if (
+                            state.current_stream_audible
+                            and expected_next in label
+                            and state.audible_playback_epoch > audible_before
+                        ):
+                            break
+                        if time.monotonic() > deadline:
+                            raise AssertionError(
+                                f"cycle {index}: next segment never reached an accepted listener "
+                                f"(label={label!r}, audible={state.current_stream_audible}, "
+                                f"audible_epoch={state.audible_playback_epoch})"
+                            )
+                        # Drain prior chunks while waiting so the harness cannot
+                        # manufacture a synthetic slow-listener drop.
+                        with contextlib.suppress(asyncio.QueueEmpty):
+                            while True:
+                                chunk = listener_queue.get_nowait()
+                                assert chunk, "listener received an empty/sentinel chunk mid-probe"
+                        await real_sleep(0)
+                    listener_at = time.perf_counter()
+                    seen_titles.append(str((state.now_streaming or {}).get("label") or ""))
+
+                    accepted_chunks = 0
+                    while True:
+                        try:
+                            chunk = listener_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        assert chunk, "listener received an empty/sentinel chunk mid-probe"
+                        accepted_chunks += 1
+                    assert accepted_chunks > 0, f"cycle {index}: audible commit had no accepted listener chunk"
+
+                    handoffs.append(
+                        {
+                            "command_ms": (command_accepted_at - command_started) * 1000,
+                            "skipping_ms": (skipping_at - command_started) * 1000,
+                            "epoch_ms": (epoch_changed_at - command_started) * 1000,
+                            "listener_ms": (listener_at - command_started) * 1000,
+                            "playback_epoch": state.playback_epoch,
+                            "audible_playback_epoch": state.audible_playback_epoch,
+                        }
+                    )
+    finally:
+        hold_for_skip.clear()
+        if not app.state.skip_event.is_set():
+            app.state.skip_event.set()
+        playback_task.cancel()
+        await asyncio.gather(playback_task, return_exceptions=True)
+        app.state.stream_hub.unsubscribe(listener_id)
+
+    assert not app.state.stream_hub.has_listener(listener_id)
+    assert len(handoffs) == cycles
+    assert len(seen_titles) == cycles
+    for index, title in enumerate(seen_titles):
+        assert f"Probe {index + 1}" in title, f"duplicate/late segment at cycle {index}: {title!r}"
+
+    delivery = state.stream_delivery_snapshot()
+    session = delivery["session"]
+    assert session.get("underrun", 0) == 0, delivery
+    assert delivery["slow_listener_drops"]["session"] == 0, delivery
+    assert all(event.get("kind") != "underrun" for event in delivery["recent"]), delivery
+
+    listener_delays = [item["listener_ms"] for item in handoffs]
+    p50 = _skip_latency_percentile(listener_delays, 50)
+    p95 = _skip_latency_percentile(listener_delays, 95)
+    # Bound is for missing transitions / dead air, not Sonos-audibility. Instant
+    # test pacing should hand off well under a second; keep headroom for CI load.
+    assert p95 < 1000.0, f"skip listener handoff too slow: p50={p50:.1f}ms p95={p95:.1f}ms samples={listener_delays}"
+    print(
+        f"skip_latency_probe cycles={cycles} "
+        f"p50_listener_ms={p50:.1f} p95_listener_ms={p95:.1f} "
+        f"samples_ms={','.join(f'{value:.1f}' for value in listener_delays)}"
+    )
 
 
 @pytest.mark.asyncio
@@ -10307,7 +10624,7 @@ async def test_homeassistant_entity_policy_hard_mute_blocks_late_label_catalog_p
     }
     provider_entered = asyncio.Event()
 
-    async def cancellation_resistant_provider(candidates, _config, *, role):
+    async def cancellation_resistant_provider(candidates, _config, *, role, policy_epoch):
         assert role == "fast"
         provider_entered.set()
         try:
@@ -13578,3 +13895,170 @@ async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
     # Only the clean track counts; the banned queued segment (which the playback
     # loop discards before its first byte) must not inflate the honest readout.
     assert admin_status["buffered_audio_sec"] == 180.0
+
+
+def _voice_health_config(*, openai="", azure="", region="", elevenlabs="", model=None, host_engine=""):
+    return SimpleNamespace(
+        anthropic_api_key="",
+        openai_api_key=openai,
+        azure_speech_key=azure,
+        azure_speech_region=region,
+        elevenlabs_api_key=elevenlabs,
+        models=SimpleNamespace(tts_model=lambda _engine: model),
+        hosts=[SimpleNamespace(engine=host_engine)] if host_engine else [],
+        ads=SimpleNamespace(voices=[]),
+        sonic_brand=SimpleNamespace(sweeper_voice="", sweeper_engine="edge"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "key_status", "quota_exhausted"),
+    [
+        ("HTTP 401 — quota_exceeded", "unverified", True),
+        ("HTTP 401 — invalid_api_key", "rejected", False),
+    ],
+)
+def test_provider_health_distinguishes_quota_401_from_rejected_key(reason, key_status, quota_exhausted):
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_route(
+        ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
+        retryable=False,
+        reason=reason,
+    )
+    health = _provider_health_snapshot(_voice_health_config(elevenlabs="x"), StationState())["elevenlabs"]
+    assert health["configured"] is health["disabled"] is True
+    assert health["cooldown"] is False
+    assert health["quota_exhausted"] is quota_exhausted
+    assert health["key_status"] == key_status
+    assert health["last_error"] == reason
+
+
+def test_provider_health_marks_voice_cooldown_separately_from_session_disable():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_route(("azure", "westeurope", "fp", ""), retryable=True)
+    config = _voice_health_config(openai="sk", azure="az", region="westeurope", model="gpt-4o-mini-tts")
+    health = _provider_health_snapshot(config, StationState())
+    azure = health["azure_speech"]
+    assert azure["configured"] is azure["cooldown"] is True
+    assert azure["key_status"] == "unverified"
+    assert health["openai_speech"]["configured"] is True
+
+
+def test_provider_health_surfaces_one_failed_voice_without_disabling_route():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_voice
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_voice(
+        ("azure", "bad-voice", "westeurope:fp", ""),
+        reason="HTTP 404 — voice not found",
+    )
+    health = _provider_health_snapshot(_voice_health_config(azure="az", region="westeurope"), StationState())[
+        "azure_speech"
+    ]
+    assert health["disabled"] is False
+    assert health["failed_voices"] == 1
+    assert health["last_error"] == "HTTP 404 — voice not found"
+
+
+def test_provider_health_openai_speech_requires_model_and_inherits_key_rejection():
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    config = _voice_health_config(openai="sk")
+    state = StationState()
+    assert _provider_health_snapshot(config, state)["openai_speech"]["configured"] is False
+
+    config.models = SimpleNamespace(tts_model=lambda _engine: "gpt-4o-mini-tts")
+    state.openai_key_status = "rejected"
+    health = _provider_health_snapshot(config, state)["openai_speech"]
+    assert health["configured"] is True
+    assert health["key_status"] == "rejected"
+
+
+def test_tts_reason_copy_never_promises_a_retry_for_a_session_disable():
+    from mammamiradio.web.streamer import _tts_single_reason_label
+
+    for token in (
+        "provider_disabled_session",
+        "provider_disabled_session:HTTP 401 — x",
+        "provider_disabled:HTTP 401",
+        "provider_disabled_session:HTTP 401 — quota_exceeded",
+    ):
+        label = _tts_single_reason_label(token)
+        assert "temporarily" not in label.lower()
+        assert "will retry" not in label.lower()
+        assert "restart the add-on" not in label.lower()
+        assert "first listen → change ai services → voice providers" in label.lower()
+        if "quota" in token:
+            assert "quota" in label.lower() and "rejected" not in label.lower()
+
+
+def test_tts_runtime_reason_keeps_each_mixed_provider_remedy():
+    from mammamiradio.web.streamer import _tts_runtime_reason_label
+
+    reason = (
+        "Runtime TTS fallback: azure=provider_disabled:HTTP 401 — invalid_api_key; "
+        "elevenlabs=provider_disabled_session:HTTP 429 — insufficient_quota"
+    )
+
+    label = _tts_runtime_reason_label(reason)
+
+    assert "Azure Speech:" in label
+    assert "Save a working key" in label
+    assert "ElevenLabs:" in label
+    assert "quota or credits" in label
+
+
+def test_tts_reason_copy_does_not_assume_every_404_is_a_voice_id():
+    from mammamiradio.web.streamer import _tts_single_reason_label
+
+    reason = "provider_disabled:HTTP 404 — model_not_found"
+    label = _tts_single_reason_label(reason).lower()
+
+    assert "voice id was not found" not in label
+    assert "one configured cloud voice route" in label
+    for setting in ("voice", "model", "region"):
+        assert setting in label
+
+
+def test_tts_provider_status_does_not_duplicate_reason_as_action_guidance():
+    from mammamiradio.web.streamer import _tts_provider_status
+
+    config = _voice_health_config(elevenlabs="x", host_engine="elevenlabs")
+    state = StationState()
+    state.runtime_provider_state["tts_provider"] = {
+        "fallback_active": True,
+        "current_provider": "edge",
+        "reason": "Runtime TTS fallback: elevenlabs=provider_disabled_session:HTTP 401",
+    }
+    status = _tts_provider_status(config, state)
+    assert "Save a working key" in status["current_reason"]
+    assert status["action_guidance"] == ""
+
+    state.runtime_provider_state["tts_provider"]["invalidated_by_credential_save"] = True
+    assert _tts_provider_status(config, state)["fallback_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_script_guard_counters_stay_in_admin_diagnostics():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.language_guard_rejections, state.language_guard_failures = 4, 2
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for path in ("/status", "/api/capabilities"):
+            response = await client.get(path)
+            assert response.status_code == 200
+            body = response.json()
+            health = body["provider_health"]
+            assert health["script_guard"] == {"rejections": 4, "failures": 2}
+            assert {"anthropic", "openai_speech", "azure_speech", "elevenlabs", "chaos"} <= health.keys()
+            if path == "/status":
+                assert "ha_publish" in body["runtime_health"]
+        response = await client.get("/public-status")
+        assert response.status_code == 200
+        assert "script_guard" not in response.text
+        assert "language_guard" not in response.text

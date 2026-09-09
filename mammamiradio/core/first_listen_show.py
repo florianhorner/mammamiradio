@@ -18,6 +18,7 @@ from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
 from mammamiradio.core.spoken_assets import is_approved_spoken_asset
 
 FIRST_LISTEN_SHOW_RELATIVE_PATH = Path("first_listen/first_listen_show.mp3")
+ADMIN_FIRST_LISTEN_SHOW_RELATIVE_PATH = Path("first_listen/first_listen_admin_show.mp3")
 FIRST_LISTEN_SHOW_CHUNK_BYTES = 16 * 1024
 
 
@@ -64,10 +65,10 @@ def first_listen_show_required(app_state: object) -> bool:
     return load_status is FirstListenReceiptLoadStatus.PRESENT and receipt is not None
 
 
-def approved_first_listen_show_path(*, assets_root: Path = DEMO_ASSETS_DIR) -> Path | None:
+def approved_first_listen_show_path(*, assets_root: Path = DEMO_ASSETS_DIR, english: bool = False) -> Path | None:
     """Return the reviewed, hash-bound mini-show, or fail closed."""
 
-    path = Path(assets_root) / FIRST_LISTEN_SHOW_RELATIVE_PATH
+    path = Path(assets_root) / (ADMIN_FIRST_LISTEN_SHOW_RELATIVE_PATH if english else FIRST_LISTEN_SHOW_RELATIVE_PATH)
     if is_approved_spoken_asset(path, assets_root=Path(assets_root)):
         return path
     return None

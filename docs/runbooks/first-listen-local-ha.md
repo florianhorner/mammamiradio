@@ -140,8 +140,8 @@ This lab remains the way to exercise the optional Home Assistant speaker path.
 
 Then, in **First Listen** (the automatic fresh-install landing):
 
-1. Confirm that the opening card leads with the authored 27-second mini-show:
-   station music, the privacy-aware Marco/Giulia opening, then the live stream.
+1. Confirm that the opening card leads with the recorded English mini-show:
+   station music, the Marco/Giulia opening, then the live stream.
    It must say that no AI key or Home context is used. Expand **What plays after
    the welcome** only as supporting detail. Local music should be ready; live
    charts are unavailable in this lab; Jamendo is optional and off; bundled

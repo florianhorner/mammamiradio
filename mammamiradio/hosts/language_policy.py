@@ -33,6 +33,7 @@ NORMAL_MODE_ENGLISH_MAX = 0.85
 # entirely Italian.
 NORMAL_MODE_SHORT_COPY_LIMIT = 8
 NORMAL_MODE_SHORT_COPY_MIN_ENGLISH = 0.50
+NORMAL_MODE_TRANSITION_MIN_ENGLISH = 0.0
 
 LANGUAGE_TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÖØ-öø-ÿ']+")
 
@@ -315,6 +316,7 @@ def normal_mode_language_ok(
     texts: str | Iterable[str],
     *,
     super_italian: bool = False,
+    min_english_share: float | None = None,
 ) -> bool:
     """Return whether spoken text satisfies the Normal Mode language contract.
 
@@ -324,7 +326,8 @@ def normal_mode_language_ok(
     copy must contain at least one English word; this removes the old short-copy
     all-Italian bypass.  Long copy must be at least 70% English; 75% remains the
     product target and 85% the upper edge of its preferred band, not a rejection
-    threshold.
+    threshold. A surface-specific minimum overrides either floor but still
+    requires an English marker; it does not change empty/unclassified handling.
     """
 
     if super_italian:
@@ -335,6 +338,8 @@ def normal_mode_language_ok(
         return True
     if not assessment.classified_tokens:
         return False
+    if min_english_share is not None:
+        return assessment.english_tokens > 0 and assessment.english_share >= min_english_share
     if assessment.is_short:
         return assessment.english_tokens > 0 and assessment.english_share >= NORMAL_MODE_SHORT_COPY_MIN_ENGLISH
     return assessment.english_share >= NORMAL_MODE_ENGLISH_MIN
@@ -347,6 +352,7 @@ __all__ = [
     "NORMAL_MODE_ENGLISH_TARGET",
     "NORMAL_MODE_SHORT_COPY_LIMIT",
     "NORMAL_MODE_SHORT_COPY_MIN_ENGLISH",
+    "NORMAL_MODE_TRANSITION_MIN_ENGLISH",
     "_NORMAL_MODE_AMBIGUOUS_ENGLISH_MARKERS",
     "_NORMAL_MODE_ENGLISH_MARKERS",
     "_NORMAL_MODE_ITALIAN_MARKERS",

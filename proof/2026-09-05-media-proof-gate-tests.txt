@@ -1,0 +1,18 @@
+# Test evidence — media-proof gate fix (commit c11c135b)
+# Recorded 2026-09-05T21:36:03Z on tree b1b6f51f6227f4203b74ace73a71d94e0ac1b666
+
+$ .venv/bin/python -m pytest tests/ -q -n auto --no-cov -p no:cacheprovider
+8702 passed, 4 skipped, 18 warnings in 98.98s (0:01:38)
+
+$ uv build --sdist && _sdist_starter_files(<sdist>)
+dir entries under starter in sdist: 2
+starter files read: 13 | mp3s: 12 | catalog: True
+
+$ .venv/bin/python scripts/media-proof.py --quick
+MEDIA-PROOF-RESULT ok=true exit_code=0
+
+$ bash scripts/pre-release-check.sh
+  Passed: 20  Failed: 0  Waived: 1
+
+$ ruff check . && ruff format --check .
+500 files already formatted

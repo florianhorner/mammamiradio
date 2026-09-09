@@ -68,7 +68,7 @@ async def test_extract_banter_memory_applies_persona_and_pinned_song_cue(config,
 
     async def _fake_generate(**kwargs):
         assert kwargs["caller"] == MEMORY_EXTRACT_CALLER
-        assert kwargs["max_tokens"] == MEMORY_EXTRACT_MAX_TOKENS
+        assert kwargs["max_tokens"] == MEMORY_EXTRACT_MAX_TOKENS == 900
         assert kwargs["model"] == resolve_model(config.models, MEMORY_EXTRACT_CALLER, "anthropic")
         assert "actually aired" in kwargs["prompt"]
         assert "yt_memory_1" not in kwargs["prompt"]  # model never gets to choose the row key

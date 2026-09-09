@@ -415,13 +415,12 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-key-banner[data-state="incomplete"] .setup-key-banner-label{color:var(--warning);}
 .setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
 .setup-snippet.show { display: block; }
-/* position+z-index are load-bearing: .setup-strip is a child of the sticky
-   .mmr-deck, whose ::before paints an opaque var(--bg) rectangle over the
-   whole deck. Its siblings .mmr-console and .mmr-tabbar each escape that
-   overlay with z-index:1; without the same lift this strip renders *under*
-   it — an invisible block that still takes layout height and still hands
-   keyboard focus to its "Add AI key" button. */
-.setup-strip{display:none;position:relative;z-index:1;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
+/* The z-index:1 lift this strip used to carry is gone with the .mmr-deck::before
+   overlay that made it necessary. The deck now paints its own background, and a
+   background always paints below in-flow descendants, so the strip needs no
+   escape hatch. `position:relative` stays as the containing block for the
+   absolutely-positioned chip affordances. */
+.setup-strip{display:none;position:relative;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
 .setup-strip.show{display:flex}
 .setup-strip-title{font-size:12px;font-weight:800;color:var(--cream);min-width:0;white-space:nowrap}
 .setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
@@ -1492,8 +1491,9 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   padding: 24px 24px 72px;
 }
 .a-content.producer-main {
+  --mmr-producer-gap: 18px;
   padding: 0;
-  gap: 18px;
+  gap: var(--mmr-producer-gap, 18px);
 }
 .producer-header {
   display: flex;
@@ -1787,17 +1787,58 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 }
 /* ══════════ Producer Desk — Concept B: pinned console + tabbed work area ══════════ */
 .producer-desk .producer-main{max-width:1100px}
-/* Sticky deck — console + tab bar pin together (one sticky unit, never overlap) */
-.mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate;background:var(--bg);padding-top:8px;margin-bottom:16px}
-.mmr-deck::before{content:"";position:absolute;inset:0 0 -16px 0;background:var(--bg);z-index:0;pointer-events:none}
+/* Sticky deck: console + tab bar pin together (one sticky unit, never overlap).
+   The opaque backdrop is state-driven. `html` carries the page atmosphere (gold
+   radial glow + grain + warm top gradient, the Sun Glow block in
+   docs/design/system.md), and the deck sits where that atmosphere is warmest. A
+   flat var(--bg) fill painted here at rest stamps a hard-edged patch over it,
+   measured as a 17/255 step at the deck's bottom edge. At scrollTop 0 nothing is
+   behind the deck yet, so it carries no fill; `.is-pinned` arms one once panel
+   chrome passes underneath. The 16px below the deck is padding, not margin, so
+   the armed fill covers it without a second paint layer. */
+.mmr-deck{position:sticky;top:0;z-index:40;isolation:isolate;background:transparent;
+  padding-top:8px;padding-bottom:16px;margin-bottom:0;
+  box-shadow:0 6px 16px -12px rgba(0,0,0,0);
+  transition:box-shadow 180ms ease}
+/* The tab bar already ends in its own --line-strong border 16px up, so the
+   design system's 1px sticky hairline (system.md "Listener site composition")
+   would read as a railroad track here. A shadow says "content is passing under
+   me" without a competing line.
+   The fill is absent from the transition. .mmr-tabbar carries no background of
+   its own, so during a cross-fade the page scrolls through the tab row and the
+   8/10/16px bands around it. That is the same bleed the permanent backdrop
+   existed to stop, narrowed to each pin crossing. The mask snaps; only the
+   elevation cue fades, which is why the resting shadow is the same geometry at
+   zero alpha (box-shadow does not interpolate from none).
+   Armed at every width where the deck is sticky, and disarmed inside the
+   max-width:768px block below rather than scoped to a min-width twin: a
+   768px/769px pair leaves fractional viewport widths (routine under browser
+   zoom) matching neither, and the deck would pin there with no fill. */
+.mmr-deck.is-pinned{background:var(--bg);box-shadow:0 6px 16px -12px rgba(0,0,0,.85)}
+/* 1px probe directly above the deck. While it is on screen the deck is at rest;
+   once it scrolls out, the deck is pinned. Cheaper than reading scrollY, and it
+   needs no threshold tuning.
+   It is an in-flow flex child of .producer-main, so the trailing margin cancels
+   the extra --mmr-producer-gap it would otherwise insert between header and deck.
+   A wrapper is unsafe: it would become the sticky containing block and the deck
+   could no longer pin. */
+.mmr-deck-sentinel{height:1px;margin:0 0 calc(-1px - var(--mmr-producer-gap, 18px));padding:0;pointer-events:none;overflow:hidden}
 @media (max-width:768px){
+  /* Static deck scrolls away with the page, so nothing passes underneath it and
+     the atmosphere stays continuous at every mobile width. The sentinel
+     still leaves the viewport, so the class can still be set; this is where it
+     is disarmed, so no viewport width is left both sticky and unmasked. */
   .mmr-deck{position:static;top:auto;z-index:auto}
-  .mmr-deck::before{display:none}
+  .mmr-deck.is-pinned{background:transparent;box-shadow:0 6px 16px -12px rgba(0,0,0,0)}
+}
+@media (prefers-reduced-motion: reduce){
+  /* The mask already snaps; this drops the elevation cue's fade too. */
+  .mmr-deck{transition:none}
 }
 /* Pinned live console */
 .mmr-console{position:relative;border:1px solid var(--line-strong);border-radius:12px;
   background:linear-gradient(180deg,#2b231d 0%,#221b16 100%);box-shadow:0 8px 24px -16px rgba(0,0,0,.7);
-  overflow:hidden;margin-bottom:10px;z-index:1}
+  overflow:hidden;margin-bottom:10px}
 /* Inner top accent: keep the real 1px rounded border visible. Placing this at
    top:0 made the accent replace the border, so the corner read as broken. */
 .mmr-console::before{content:"";position:absolute;top:1px;left:1px;right:1px;height:2px;border-radius:11px 11px 0 0;background:linear-gradient(90deg,var(--lancia2),var(--sun));z-index:1;pointer-events:none}
@@ -1833,7 +1874,11 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-console-triggers .a-trigger .hi{display:none}
 .mmr-console-cooking{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 /* Tab bar */
-.mmr-tabbar{position:relative;z-index:1;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
+/* position:relative stays because the active tab's ::after underline anchors
+   to it.
+   The z-index:1 that used to lift it over .mmr-deck::before is gone with that
+   overlay. */
+.mmr-tabbar{position:relative;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px;border-bottom:1px solid var(--line-strong);overflow:visible;scrollbar-width:none}
 .mmr-tabbar::-webkit-scrollbar{display:none}
 .mmr-tab{position:relative;display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:44px;min-height:44px;padding:9px 8px;font-family:var(--font-body);font-size:14px;font-weight:600;color:var(--muted);background:none;border:0;cursor:pointer;white-space:nowrap;text-align:center}
 .mmr-tab:hover{color:var(--cream-dk)}
@@ -1955,6 +2000,8 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
     <div class="stopped-banner" id="stoppedBanner" role="status" aria-live="polite">&#9632; Station paused · press Start when you're ready.</div>
 
     <!-- ══ Sticky deck — console + tab bar pin together so the tabs never hide behind the console ══ -->
+    <!-- Probe for the deck's pinned state; see initDeckPinned(). -->
+    <div class="mmr-deck-sentinel" aria-hidden="true"></div>
     <div class="mmr-deck">
 
     <!-- ══ Pinned live console — transport + triggers + cooking feed, always in view ══ -->
@@ -1975,7 +2022,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
             </div>
           </div>
           <div class="mmr-air-controls">
-            <button type="button" class="btn-icon" id="skipBtn" title="Next track" onclick="doSkip(this)">
+            <button type="button" class="btn-icon" id="skipBtn" title="Next segment" aria-label="Skip to next segment" onclick="doSkip(this)">
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 3v10l7-5zM11 3h2v10h-2z"/></svg>
             </button>
             <button type="button" id="prefUpNowBtn" class="btn-icon pref-btn" title="Play this song more often" aria-label="Like this song" aria-pressed="false" data-preference-target="now" data-preference-vote="up" style="display:none">
@@ -2418,7 +2465,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               the way a real broadcast sounds versus a clean studio file. It is deliberately understated — on
               good speakers you may not hear any difference at all; it is most noticeable on small or phone
               speakers. Toggling it does not change the track that is playing now: it takes effect on the next
-              few tracks as the buffered queue cycles through, so give it a moment before you judge the change.
+              few tracks, so give it a moment before you judge the change.
             </div>
           </div>
         </div>
@@ -2914,7 +2961,9 @@ function resetFirstListenGuideSource(audio){
   audio.removeAttribute('src');
   audio.load();
 }
-function stopFirstListenGuide({reset=true}={}){
+function stopFirstListenGuide({reset=true,resumeStation=true}={}){
+  // Invalidate pending playback before pause/load can settle its continuation.
+  ++_firstListenGuideAttempt;
   if(_firstListenGuideWatchdog){clearTimeout(_firstListenGuideWatchdog);_firstListenGuideWatchdog=null;}
   const audio=firstListenGuideAudio();
   const button=_firstListenUi.guideButton;
@@ -2932,7 +2981,7 @@ function stopFirstListenGuide({reset=true}={}){
   if(_firstListenUi.stationPausedForGuide){
     _firstListenUi.stationPausedForGuide=false;
     const stationAudio=firstListenStationAudio();
-    if(stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
+    if(resumeStation&&stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
   }
 }
 async function toggleFirstListenGuide(key,button){
@@ -2941,6 +2990,8 @@ async function toggleFirstListenGuide(key,button){
   if(!guide||!audio||!button)return;
   firstListenGuideIdleLabel(button);
   if(_firstListenUi.guideKey===key&&_firstListenUi.guideButton===button&&!audio.paused){
+    // pause() can reject a still-pending play(); retire that attempt before it settles.
+    ++_firstListenGuideAttempt;
     audio.pause();
     button.textContent='Continue example';
     button.setAttribute('aria-pressed','false');
@@ -3145,6 +3196,23 @@ function formatHomeSnapshotTimestamp(ts){
   if(Number.isNaN(d.getTime()))return'—';
   return d.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'});
 }
+function homePublishPresentation(p){
+  const pub=p||{};
+  const status=String(pub.status||'');
+  const reason=String(pub.reason||'');
+  const message=String(pub.message||'');
+  const nextStep=String(pub.next_step||'');
+  if(status==='disabled')return{state:'idle',label:'off',detail:message,nextStep};
+  if(status==='unconfigured')return{state:'idle',label:'not configured',detail:message,nextStep};
+  if(status==='idle')return{state:'idle',label:'not tested yet',detail:message,nextStep};
+  if(status==='ok'){
+    if(pub.last_failure_at)return{state:'ready',label:'recovered',detail:message,nextStep};
+    return{state:'ready',label:'working',detail:message,nextStep};
+  }
+  if(reason==='auth_denied')return{state:'blocked',label:'token rejected',detail:message,nextStep};
+  if(status==='degraded')return{state:'degraded',label:'retrying',detail:message,nextStep};
+  return{state:'idle',label:'not tested yet',detail:message,nextStep};
+}
 function homeSnapshotPresentation(refresh){
   const r=refresh||{};
   const age=formatHomeSnapshotAge(r.age_seconds);
@@ -3333,12 +3401,18 @@ function adminTabsForNav(){
 function finalizeFirstListenCompletion(){
   if(document.body.dataset.firstListenEntry!=='completing')return false;
   _firstListenUi.showSuccess=false;
-  stopFirstListenGuide();
-  stopFirstListenStationAudio();
   updateFirstListenSuccess();
   document.body.dataset.firstListenEntry='complete';
   syncFirstListenSetupMount();
   return true;
+}
+function exitFirstListenFlow(){
+  // Music-source setup replaces the journey without changing tabs. Suppress
+  // the ordinary guide-resume handoff because this same-tab exit releases the
+  // station itself; tab-away teardown remains owned by showAdminTab().
+  finalizeFirstListenCompletion();
+  stopFirstListenGuide({resumeStation:false});
+  stopFirstListenStationAudio();
 }
 function showAdminTab(name,{render=true,persist=true}={}){
   const setupContext=document.getElementById('firstListenSetupContext');
@@ -3464,6 +3538,44 @@ function initOnAirSticky(){
 }
 initOnAirSticky();
 
+// The deck's opaque backdrop is armed only while the deck is pinned. At
+// scrollTop 0 nothing is behind it, and a fill there stamps a flat rectangle
+// over the page atmosphere that `html` carries. This is not the same signal as
+// data-sticky-onair above: that one watches the console leave the viewport,
+// which on desktop never happens because the deck pins it in place, so it is
+// the mobile compact-strip trigger. This one watches the deck leave its
+// resting place.
+//
+// scroll-padding-top is derived from the live deck height rather than hardcoded,
+// because the console collapses and expands with `is-idle`; a fixed number would
+// be wrong half the time and would leave keyboard focus under the deck.
+function initDeckPinned(){
+  const deck=document.querySelector('.mmr-deck');
+  const sentinel=document.querySelector('.mmr-deck-sentinel');
+  if(!deck)return;
+  const syncScrollPadding=()=>{
+    // Reads 'sticky' only above the 768px breakpoint, so the CSS owns the
+    // breakpoint and JS never duplicates it.
+    const pinned=getComputedStyle(deck).position==='sticky';
+    document.documentElement.style.scrollPaddingTop=
+      pinned?`${Math.round(deck.getBoundingClientRect().height)+8}px`:'';
+  };
+  syncScrollPadding();
+  window.addEventListener('resize',syncScrollPadding);
+  if('ResizeObserver' in window)new ResizeObserver(syncScrollPadding).observe(deck);
+  if(!sentinel||!('IntersectionObserver' in window))return;
+  new IntersectionObserver(entries=>{
+    const entry=entries[entries.length-1];
+    // Off-screen alone does not mean pinned: the sentinel is also off-screen
+    // before it has been reached, which is the state on load whenever the deck
+    // starts below the fold (short viewport, tall header, zoomed browser).
+    // Treating that as pinned would arm the opaque fill at rest, which is the
+    // band this change removes. Pinned means the sentinel left past the top.
+    deck.classList.toggle('is-pinned',!entry.isIntersecting&&entry.boundingClientRect.top<0);
+  },{threshold:0}).observe(sentinel);
+}
+initDeckPinned();
+
 // ── Transport ──
 async function doSkip(el){
   flash(el);
@@ -3473,7 +3585,11 @@ async function doSkip(el){
       toast((r&&r.error)||wayOut('skip that segment'));
       return;
     }
-    toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
+    // Honest handoff: a bridged skip has only requested future music, while an
+    // unbridged skip already has playable runway. Neither claims room audibility.
+    toast(r.bridged
+      ? 'DJ handoff in progress — cueing the next segment.'
+      : 'DJ handoff in progress — next segment queued.');
   }catch(_){toast(offlineMsg());}
 }
 // Keep-this stays reachable for a beat after a host break ends, because the
@@ -3954,12 +4070,14 @@ function updateNow(ns){
   const titleEl=document.getElementById('nowTitle');
   const artistEl=document.getElementById('nowArtist');
   let title=(ns.label && ns.label !== ns.type) ? ns.label : 'Preparing...';
-  if(typeKey==='music'&&ns.metadata?.artist){
-    artistEl.textContent=ns.metadata.artist;
-  }else if(typeKey==='music'&&ns.label){
-    const parts=ns.label.split(/\s[—–-]\s/);
-    if(parts.length>1){title=parts[0];artistEl.textContent=parts[1];}
-    else{artistEl.textContent='';}
+  if(typeKey==='music'){
+    if(ns.label && ns.label !== ns.type){
+      const parts=splitTrackLabel({...ns,type:'music'});
+      title=parts.title||'Preparing...';
+      artistEl.textContent=parts.artist||'';
+    }else{
+      artistEl.textContent='';
+    }
   }else{
     artistEl.textContent='';
   }
@@ -4020,15 +4138,36 @@ function setProgrammeFilter(filter, btn){
 // ── Scaletta (forward-only live queue) ──
 let _lastLogHash='';
 // Music segments carry labels as "Artist \u2014 Title" AND metadata.artist.
-// Rendering both doubles the artist on screen. Split for music, keep raw otherwise.
+// Rendering both doubles the artist on screen. Split all supported dash forms
+// for music, keep raw otherwise.
+// `source_kind` sits at the top level on queue rows but under `metadata` on
+// now_streaming. Read both, or the legacy-`Unknown` suppression silently does
+// nothing for the song actually on air.
+function segmentSourceKind(seg){
+  const metadata=seg&&seg.metadata&&typeof seg.metadata==='object'?seg.metadata:{};
+  return String(metadata.source_kind||(seg&&seg.source_kind)||'').trim().toLowerCase();
+}
 function splitTrackLabel(seg){
   const label=(seg&&seg.label)||'';
+  const sourceKind=segmentSourceKind(seg);
   if(seg&&seg.type==='music'){
-    const sep=' \u2014 ';
-    const idx=label.indexOf(sep);
-    if(idx>0) return {title:label.slice(idx+sep.length),artist:label.slice(0,idx)};
+    const metadata=seg.metadata&&typeof seg.metadata==='object'?seg.metadata:{};
+    const metadataTitle=String(metadata.title_only||'').trim();
+    const metadataArtist=String(metadata.artist||'').trim();
+    const cleanArtist=sourceKind==='local'&&metadataArtist.toLowerCase()==='unknown'?'':metadataArtist;
+    if(metadataTitle)return {title:metadataTitle,artist:cleanArtist};
+    for(const sep of [' \u2014 ',' \u2013 ',' - ']){
+      const idx=label.indexOf(sep);
+      if(idx<0)continue;
+      const artist=label.slice(0,idx).trim();
+      return {title:label.slice(idx+sep.length).trim(),artist:sourceKind==='local'&&artist.toLowerCase()==='unknown'?'':artist};
+    }
   }
-  return {title:label,artist:(seg&&seg.metadata&&seg.metadata.artist)||''};
+  const metadataArtist=String(seg&&seg.metadata&&seg.metadata.artist||'').trim();
+  return {title:label,artist:sourceKind==='local'&&metadataArtist.toLowerCase()==='unknown'?'':metadataArtist};
+}
+function normaliseSegmentLabel(value){
+  return String(value||'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');
 }
 // Subtitle line shown under the NEXT row's title: artist·source / hosts / brand / category.
 // Surfaces the "what is it" detail even on narrow viewports where the Fonte column hides.
@@ -4242,7 +4381,9 @@ function renderProgramme(st){
     const parts=splitTrackLabel(it);
     // Hide title when it equals the bare segment type — prevents rows like
     // "BANTER banter" if a producer code path ever forgets to set a title.
-    const titleText=(parts.title && parts.title.toLowerCase()!==typeKey)?parts.title:'';
+    const bareSegmentLabel=normaliseSegmentLabel(segmentText(typeKey));
+    const titleIsBareSegment=typeKey!=='music'&&normaliseSegmentLabel(parts.title)===bareSegmentLabel;
+    const titleText=parts.title&&!titleIsBareSegment?parts.title:'';
     const source=it.source||'rendered_queue';
     const actionable=source==='rendered_queue';
     const rowClass=[it._queueIndex===0?'next':'', actionable?'rendered-queue':'predicted'].filter(Boolean).join(' ');
@@ -4252,8 +4393,8 @@ function renderProgramme(st){
     const action=actionable
       ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" data-queue-remove-id="${esc(it.id||'')}"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
-    const subtitle=it._queueIndex===0?buildSubtitle(it,typeKey,parts):'';
-    const titleCell=`${esc(titleText||segmentText(typeKey))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
+    const subtitle=it._queueIndex===0&&!titleIsBareSegment?buildSubtitle(it,typeKey,parts):'';
+    const titleCell=`${esc(titleText||(typeKey==='music'?segmentText(typeKey):''))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
     rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${titleCell}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });
 
@@ -4700,11 +4841,6 @@ function setupRow(label, detail, status){
   return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div>${statusChip(pill.state,pill.label)}</div>`;
 }
 function openListener(){
-  // The First Listen element is `hidden`, which is display:none and does NOT
-  // pause media. Without this the admin tab keeps its own hub subscription
-  // while /listen opens a second one, and the operator hears two
-  // unsynchronized copies of the same live stream at the celebration moment.
-  stopFirstListenStationAudio();
   window.open((_base||'')+'/listen','_blank','noopener');
 }
 let _lastJamendoAnnouncementKey='';
@@ -4715,7 +4851,7 @@ const JAMENDO_ERROR_COPY={
   jamendo_client_id_invalid:'Enter a valid Jamendo client ID.',
   jamendo_client_id_conflict:'Replace or clear the client ID, not both.',
   jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
-  jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
+  jamendo_ack_required:'Confirm non-commercial use before enabling Jamendo.',
   jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
   jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check that the station storage has free space and is writable, then try again.',
 };
@@ -4733,7 +4869,7 @@ const JAMENDO_ERROR_COPY={
 // on the add-on that advice would name a step the reader cannot take.
 function jamendoFailureHint(code){
   return {
-    api_auth_failed:"Jamendo rejected the current access — check setup: use your own client ID, or replace the one you added.",
+    api_auth_failed:"Jamendo did not accept the current access — check setup: use your own client ID, or replace the one you added.",
     rate_limited:"Jamendo asked the station to pause — retrying automatically. No action needed.",
     temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
     api_failed:"Jamendo didn't respond — retrying automatically.",
@@ -5069,13 +5205,15 @@ async function turnOffJamendo(){
 }
 function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
-  finalizeFirstListenCompletion();
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
     updateFirstListenSuccess();
     document.body.dataset.firstListenFocus='source';
   }
   const firstListenRequired=document.body.dataset.firstListenEntry==='required';
+  // Music-source setup replaces the required journey without changing tabs.
+  // Treat that same-tab route as an explicit exit before hiding its player.
+  if(focus==='music-sources'&&firstListenRequired)exitFirstListenFlow();
   showAdminTab(firstListenRequired?'setup':'motore',{render:true,persist:true});
   if(focus==='music-sources')document.body.dataset.firstListenSetupView='music-sources';else delete document.body.dataset.firstListenSetupView;
   setFirstListenSetupView(focus);
@@ -6577,7 +6715,7 @@ async function copySetupSnippet(){
     await navigator.clipboard.writeText(txt);
     toast('Snippet copied');
   }catch(_){
-    toast('Clipboard unavailable');
+    toast('Your browser would not let us copy it — select the snippet above and copy it by hand.');
   }
 }
 
@@ -7082,6 +7220,13 @@ function sourceChip(source){
   const chip=SOURCE_CHIPS[source]||SOURCE_CHIPS.local;
   return `<span class="pl-src ${chip.cls}">${esc(chip.label)}</span>`;
 }
+function trackDisplayLabel(track){
+  const rawArtist=String(track&&track.artist||'').trim();
+  const artist=track&&track.source==='local'&&rawArtist.toLowerCase()==='unknown'?'':rawArtist;
+  const title=String(track&&track.title||'').trim();
+  if(artist&&title)return `${artist} – ${title}`;
+  return title||String(track&&track.display||'').trim()||'?';
+}
 // Selection survives the 3s poll re-render: track chosen songs by a stable key
 // (artist|title, matching the backend blocklist key) and re-apply on every rebuild.
 let _plSelected=new Set();
@@ -7139,7 +7284,7 @@ function updatePl(tracks,page,force){
     const huntChip=huntMatch?'<span class="hunt-pick">Hunt pick</span>':'';
     const rowClass=huntMatch?'pl-row record-hunt-match':'pl-row';
     const rowTitle=huntMatch?` title="${huntTitle}"`:'';
-    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(t.display||t.title||'?')}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
+    return `<div class="${rowClass}"${rowTitle} draggable="true" data-i="${idx}" data-id="${esc(t.id||'')}" data-revision="${esc(String(_plPage.revision??''))}" data-heading-id="${esc(t.heading_id||'')}" data-artist="${esc(t.artist||'')}" data-title="${esc(t.title||'')}"><label class="pl-check-hit"><input type="checkbox" class="pl-check" data-i="${idx}" onclick="onPlCheck(event)" draggable="false" aria-label="Select song to ban"${_plSelected.has(_plKey(t.artist,t.title))?' checked':''}></label><span class="pl-grip" title="Drag to reorder" tabindex="0" role="button" aria-label="Drag to reorder"><svg class="grip-dots" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="8" r="1.2"/><circle cx="7" cy="8" r="1.2"/><circle cx="3" cy="13" r="1.2"/><circle cx="7" cy="13" r="1.2"/></svg></span><span class="pl-n">${idx+1}</span>${trackThumb(t)}<span class="pl-t">${esc(trackDisplayLabel(t))}</span><div class="pl-meta"><div class="pl-chips">${huntChip}${eraPill}${sourceChip(t.source)}</div>${prefControls}</div><div class="pl-a"><button class="pl-btn" data-playlist-action="next" aria-label="Move to next">&#9654; Next</button></div><button class="pl-btn pl-ban" data-playlist-action="ban" aria-label="Ban from rotation" title="Ban for good — won't come back">&#10005; Ban</button></div>`;
   }).join('')+(!_plFilter&&_plPage.has_more?'<div class="load-more-row"><button type="button" class="load-more-btn" id="plMoreBtn" onclick="loadMorePlaylist()">Load more tracks</button></div>':'');
   initDragDrop();
   // Rows are re-checked from _plSelected above, so selection survives the 3s poll
@@ -8155,10 +8300,34 @@ function updateEngineRoom(st,caps){
     }else{
       openaiLine=statusInline('ready','available');
     }
+    // Voices use breaker evidence. A configured key alone is not connectivity proof.
+    // openai_speech is the TTS breaker (LLM OpenAI key status stays on the OpenAI line).
+    const ph=caps.provider_health||{};
+    const voiceLines=[];
+    for(const [key,label] of [['elevenlabs','ElevenLabs'],['azure_speech','Azure'],['openai_speech','OpenAI']]){
+      const p=ph[key]||{};
+      if(!p.configured)continue;
+      if(p.quota_exhausted){
+        voiceLines.push(label+' '+statusInline('blocked','quota exhausted','Restore provider quota or credits, then save the key under First Listen → Change AI services → Voice providers'));
+      }else if(p.key_status==='rejected'){
+        voiceLines.push(label+' '+statusInline('blocked','key not working','Save a working key under First Listen → Change AI services → Voice providers'));
+      }else if(p.cooldown){
+        voiceLines.push(label+' '+statusInline('degraded','retrying','Temporary provider trouble; will retry automatically'));
+      }else if(p.disabled){
+        voiceLines.push(label+' '+statusInline('degraded','off this session','Save the key again under First Listen → Change AI services → Voice providers to retry'));
+      }else if(p.failed_voices>0){
+        const voiceCount=p.failed_voices+' voice'+(p.failed_voices===1?'':'s')+' on Edge';
+        voiceLines.push(label+' '+statusInline('degraded',voiceCount,'Check the configured provider voice, model, and region settings, then restart the station'));
+      }else{
+        voiceLines.push(label+' '+statusInline('idle','configured','No cloud voice failure is currently recorded'));
+      }
+    }
+    const voicesLine=voiceLines.length?voiceLines.join(' · '):statusInline('idle','Edge only');
     ce.innerHTML=[
       'Tier: <strong>'+(caps.tier_label||caps.tier||'—')+'</strong>',
       'Anthropic: '+anthropicLine,
       'OpenAI: '+openaiLine,
+      'Voices: '+voicesLine,
       'Home Assistant: '+statusInline(c.ha?'ready':'idle',c.ha?'connected':'disabled'),
     ].join('<br>');
   }
@@ -8166,45 +8335,53 @@ function updateEngineRoom(st,caps){
   const haCard=document.getElementById('ha-details-card');
   const haEl=document.getElementById('haDetails');
   const hd=st.ha_details;
-  if(hd){
+  const pub=st.runtime_health&&st.runtime_health.ha_publish;
+  if(pub||hd){
     haCard.style.display='';
     const lines=[];
-    const refresh=hd.refresh||{};
-    const snapshot=homeSnapshotPresentation(refresh);
-    lines.push('Home snapshot: '+statusInline(snapshot.state,snapshot.label)+' '+snapshot.detail);
-    if(refresh.last_success_at){
-      lines.push('Last success: '+formatHomeSnapshotTimestamp(refresh.last_success_at)+' · '+formatHomeSnapshotAge(refresh.age_seconds));
+    if(pub){
+      const publish=homePublishPresentation(pub);
+      lines.push('Publishing: '+statusInline(publish.state,publish.label)+' '+esc(publish.detail));
+      if(publish.nextStep)lines.push(esc(publish.nextStep));
     }
-    if(refresh.last_attempt_at)lines.push('Last attempt: '+formatHomeSnapshotTimestamp(refresh.last_attempt_at));
-    if(refresh.in_flight&&refresh.active_foreground_timed_out){
-      lines.push('The replacement is still catching up; the show kept moving.');
+    if(hd){
+      const refresh=hd.refresh||{};
+      const snapshot=homeSnapshotPresentation(refresh);
+      lines.push('Home snapshot: '+statusInline(snapshot.state,snapshot.label)+' '+snapshot.detail);
+      if(refresh.last_success_at){
+        lines.push('Last success: '+formatHomeSnapshotTimestamp(refresh.last_success_at)+' · '+formatHomeSnapshotAge(refresh.age_seconds));
+      }
+      if(refresh.last_attempt_at)lines.push('Last attempt: '+formatHomeSnapshotTimestamp(refresh.last_attempt_at));
+      if(refresh.in_flight&&refresh.active_foreground_timed_out){
+        lines.push('The replacement is still catching up; the show kept moving.');
+      }
+      const latestRefresh=homeRefreshResultLine(refresh);
+      if(latestRefresh&&!refresh.adoption_pending)lines.push('Latest refresh: '+latestRefresh);
+      if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+esc(hd.mood_en||hd.mood)+'</strong>');
+      if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+esc(hd.weather_arc_en||hd.weather_arc));
+      if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
+      if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
+      lines.push('Recent events: '+(hd.recent_event_count||0));
+      lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
+      if(hd.context_last_updated&&!refresh.last_success_at)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
+      const director=hd.home_context_director;
+      if(director){
+        const rotation=director.operator_message||director.mode||'Waiting for a safe home cue';
+        const counts=[['eligible',director.eligible_count],['resting',director.cooling_count],['queued',director.reserved_count]].filter(([,v])=>v!=null).map(([k,v])=>esc(k)+': '+Number(v||0)).join(' · ');
+        lines.push('Home context rotation: <strong>'+esc(rotation)+'</strong>'+(counts?'<br><span style="color:var(--muted)">'+counts+'</span>':''));
+      }
+      lines.push('First home moment: '+(hd.first_home_context_moment_fired?'fired':'waiting'));
+      if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
+      if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
+        const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
+        lines.push('Sent to prompt:<br>'+scored.join('<br>'));
+      }
+      if(hd.denylist_hits&&Object.keys(hd.denylist_hits).length){
+        const denied=Object.entries(hd.denylist_hits).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))).map(([k,v])=>esc(k)+': <strong>'+Number(v||0)+'</strong>');
+        lines.push('Filtered for privacy:<br>'+denied.join('<br>'));
+      }
+      if(hd.catalog_hit_rate!=null)lines.push('Label catalog: <strong>'+Math.round(Number(hd.catalog_hit_rate||0)*100)+'%</strong>');
     }
-    const latestRefresh=homeRefreshResultLine(refresh);
-    if(latestRefresh&&!refresh.adoption_pending)lines.push('Latest refresh: '+latestRefresh);
-    if(hd.mood_en||hd.mood)lines.push('Mood: <strong>'+esc(hd.mood_en||hd.mood)+'</strong>');
-    if(hd.weather_arc_en||hd.weather_arc)lines.push('Weather: '+esc(hd.weather_arc_en||hd.weather_arc));
-    if(hd.events_summary_en||hd.events_summary)lines.push('Events:<br>'+esc(hd.events_summary_en||hd.events_summary).replace(/\n/g,'<br>'));
-    if(hd.pending_directive)lines.push('Directive pending: <strong style="color:var(--warning)">'+esc(hd.pending_directive.substring(0,80))+'...</strong>');
-    lines.push('Recent events: '+(hd.recent_event_count||0));
-    lines.push('Prompt slice: '+Number(hd.context_entity_count||0)+' entities, '+Number(hd.context_char_count||0)+' chars');
-    if(hd.context_last_updated&&!refresh.last_success_at)lines.push('Updated: '+new Date(Number(hd.context_last_updated)*1000).toLocaleTimeString());
-    const director=hd.home_context_director;
-    if(director){
-      const rotation=director.operator_message||director.mode||'Waiting for a safe home cue';
-      const counts=[['eligible',director.eligible_count],['resting',director.cooling_count],['queued',director.reserved_count]].filter(([,v])=>v!=null).map(([k,v])=>esc(k)+': '+Number(v||0)).join(' · ');
-      lines.push('Home context rotation: <strong>'+esc(rotation)+'</strong>'+(counts?'<br><span style="color:var(--muted)">'+counts+'</span>':''));
-    }
-    lines.push('First home moment: '+(hd.first_home_context_moment_fired?'fired':'waiting'));
-    if(hd.last_event_label_en||hd.last_event_label)lines.push('Last event: '+esc(hd.last_event_label_en||hd.last_event_label));
-    if(Array.isArray(hd.scored_entities)&&hd.scored_entities.length){
-      const scored=hd.scored_entities.slice(0,6).map(e=>esc(e.label||e.entity_id||'Entity')+' <span style="color:var(--muted)">'+Number(e.score||0).toFixed(2)+'</span>');
-      lines.push('Sent to prompt:<br>'+scored.join('<br>'));
-    }
-    if(hd.denylist_hits&&Object.keys(hd.denylist_hits).length){
-      const denied=Object.entries(hd.denylist_hits).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))).map(([k,v])=>esc(k)+': <strong>'+Number(v||0)+'</strong>');
-      lines.push('Filtered for privacy:<br>'+denied.join('<br>'));
-    }
-    if(hd.catalog_hit_rate!=null)lines.push('Label catalog: <strong>'+Math.round(Number(hd.catalog_hit_rate||0)*100)+'%</strong>');
     haEl.innerHTML=lines.join('<br>')||'No HA data';
   }else{
     haCard.style.display='none';

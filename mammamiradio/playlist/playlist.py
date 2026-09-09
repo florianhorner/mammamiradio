@@ -18,9 +18,8 @@ from urllib.request import urlopen
 from mammamiradio.core.config import StationConfig, jamendo_source_configured
 from mammamiradio.core.models import Heading, PlaylistSource, SourceReadinessEvidence, Track
 from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
-from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
-from mammamiradio.playlist.local_library import scan_local_library
+from mammamiradio.playlist.local_library import local_track_is_blocklisted, scan_local_library
 
 _DEMO_ASSETS_RECOVERY_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "recovery"
 _CLASSIC_ERA_QUERIES: dict[str, tuple[str, int]] = {
@@ -225,10 +224,14 @@ def filter_blocklisted(tracks: Sequence[Track], blocklist: Mapping[tuple[str, st
     Applied at bulk ingest doorways; direct audio gates share the underlying
     song-identity comparison. Returns a fresh list; a falsy blocklist is a cheap
     passthrough.
+
+    A local file is additionally checked under the identity it had before the
+    scanner read embedded tags, so a ban placed on an operator MP3 survives the
+    upgrade that changed how that file is labelled.
     """
     if not blocklist:
         return list(tracks)
-    return [track for track in tracks if not song_identity_key_is_blocklisted(_normalized_track_key(track), blocklist)]
+    return [track for track in tracks if not local_track_is_blocklisted(track, blocklist)]
 
 
 def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Track]) -> int:

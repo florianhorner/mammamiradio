@@ -8220,12 +8220,19 @@ def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
         (("Ordinary", "Alex Warren"), None),
         (None, None),
         (("Safe Song", "Safe Artist"), "song"),
-        # A sidecar missing the artist yields no durable identity (load_track_metadata
-        # requires both fields), so the bed fails closed while a ban is active —
-        # whether or not the title collides with a ban. This is a deliberate, safe
-        # conservatism; loosening it would mean bypassing the identity contract.
+        # An untagged local file legitimately has no artist, so a missing artist
+        # alone is a real identity and does NOT disqualify the bed — refusing on
+        # that alone made every banter and ad air dry, permanently, for an
+        # operator with an untagged library and one banned song.
+        #
+        # This path stays stricter than `norm_cache._is_blocklisted` in exactly
+        # one case: an artist-less sidecar whose TITLE collides with a ban is
+        # plausibly the banned recording with a stripped sidecar, and this decides
+        # whether audio is reused as a bed UNDER speech. That case refuses; an
+        # artist-less title that collides with nothing is allowed. Keep the two
+        # gates different on purpose.
         (("Ordinary", ""), None),
-        (("Safe Song", ""), None),
+        (("Safe Song", ""), "song"),
     ],
     ids=["blocked", "unidentified", "identified-safe", "artist-missing-title-banned", "artist-missing-title-safe"],
 )
@@ -9407,7 +9414,7 @@ async def test_starter_bridge_preserves_pin_and_uses_starter_from_mixed_pool(tmp
         queued.append(segment)
         return True
 
-    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered):
+    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered) as render_music:
         ok = await producer._queue_starter_catalog_bridge_segment(
             _accept,
             state,
@@ -9417,9 +9424,70 @@ async def test_starter_bridge_preserves_pin_and_uses_starter_from_mixed_pool(tmp
         )
 
     assert ok is True
+    assert render_music.await_args is not None
+    assert render_music.await_args.args[0] is starter
     assert [segment.metadata.get("audio_source") for segment in queued] == ["starter"]
     assert state.pinned_track is pinned
     assert state.pinned_track_revision == pinned_revision
+
+
+@pytest.mark.asyncio
+async def test_starter_bridge_asks_the_selector_for_starter_media():
+    """Deterministic guard for the restrict_to_source wiring.
+
+    The mixed-pool test above cannot do this job: without the restriction the
+    weighted selector still returns a starter most of the time, so deleting the
+    argument leaves it green in the large majority of runs.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    state.playlist.append(Track(title="Operator Local", artist="Operator", duration_ms=180_000, source="local"))
+    state.playlist_revision += 1
+    captured: dict = {}
+
+    def _select(*_args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    with patch(f"{PRODUCER_MODULE}._select_accepted_music_track", side_effect=_select):
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            AsyncMock(return_value=True),
+            state,
+            _make_config(),
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert ok is False
+    assert captured.get("restrict_to_source") == "starter"
+
+
+@pytest.mark.asyncio
+async def test_starter_bridge_declines_when_the_crate_holds_no_starter_media():
+    """The restriction emptying the pool must fall through, not raise.
+
+    Reachable on a starter crate the scanner overlaid with locals once the
+    operator has per-row-banned every starter. Unlike the parametrized test
+    below, this runs the real selector rather than injecting the error.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    state.playlist[:] = [Track(title="Operator Local", artist="Operator", duration_ms=180_000, source="local")]
+    state.playlist_revision += 1
+
+    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock) as render_music:
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            AsyncMock(return_value=True),
+            state,
+            _make_config(),
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert ok is False
+    render_music.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -10018,7 +10086,10 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
 
     norm_file = tmp_path / "norm_abc123.mp3"
     norm_file.write_bytes(b"pre-normalized audio")
-    save_track_metadata(norm_file, title="Abc123", artist="", source_kind="local")
+    # Title deliberately UNLIKE humanize_norm_filename("norm_abc123.mp3") ("Abc123"),
+    # so this asserts the sidecar branch was taken. With a matching title the test
+    # passes identically whether or not a title-only sidecar is readable at all.
+    save_track_metadata(norm_file, title="Salvatore On Everything", artist="", source_kind="local")
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -10044,7 +10115,7 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
     assert seg.path == norm_file
     assert seg.duration_sec > 0
     assert seg.metadata.get("duration_ms") == round(seg.duration_sec * 1000)
-    assert seg.metadata.get("title") == "Abc123"
+    assert seg.metadata.get("title") == "Salvatore On Everything"
     assert seg.metadata.get("artist") == ""
     # #547: the norm-cache resume bridge fire is recorded.
     assert state.bridge_fires_total >= 1

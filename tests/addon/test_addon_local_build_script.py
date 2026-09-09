@@ -120,6 +120,38 @@ def test_ytdlp_is_only_in_the_standalone_external_media_extra():
     assert "Direct yt_dlp import found outside playlist/downloader.py" in validator
 
 
+# yt-dlp 2026.7.4 is the first release that fixes CVE-2026-55404.
+_YTDLP_MIN_SAFE = (2026, 7, 4)
+
+
+def test_external_media_ytdlp_floor_stays_at_or_above_the_patched_release():
+    """The standalone extra must never admit a yt-dlp below the CVE-2026-55404 fix.
+
+    Every other check on this requirement is structural: the test above and
+    ``_yt_dlp_metadata_is_optional`` in scripts/media-proof.py both assert only that
+    exactly one yt-dlp requirement exists and is confined to the optional extra. A
+    floor lowered back to a vulnerable release would satisfy all of them, so this is
+    the one place that reads the version itself.
+    """
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]
+    requirements = [
+        requirement
+        for requirement in project["optional-dependencies"]["external-media"]
+        if requirement.startswith("yt-dlp")
+    ]
+    assert len(requirements) == 1, f"expected exactly one yt-dlp requirement, found {requirements}"
+
+    floor = re.fullmatch(r"yt-dlp\s*>=\s*(\d+)\.(\d+)\.(\d+)", requirements[0].strip())
+    assert floor, f"yt-dlp must stay a plain '>=' floor so this guard can read the version, found {requirements[0]!r}"
+
+    version = tuple(int(part) for part in floor.groups())
+    expected = ".".join(str(part) for part in _YTDLP_MIN_SAFE)
+    assert version >= _YTDLP_MIN_SAFE, (
+        f"yt-dlp floor {requirements[0]!r} admits a release vulnerable to CVE-2026-55404; "
+        f"it must be >={expected} or newer"
+    )
+
+
 def test_addon_run_sh_uses_guarded_file_backed_provider_secrets_parser():
     run_sh = (REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
 

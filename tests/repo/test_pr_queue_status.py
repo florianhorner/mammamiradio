@@ -398,7 +398,7 @@ def test_pr_queue_status_does_not_recommend_land_now_without_evidence(tmp_path: 
     pr["mergeStateStatus"] = "BEHIND"
     _fake_gh(tmp_path.parent / f"{tmp_path.name}-bin", [pr])
     result = _run(["bash", str(PR_QUEUE_STATUS)], cwd=tmp_path, env=env)
-    assert "recommendation: integrate + reattest" in result.stdout
+    assert "recommendation: integrate + push" in result.stdout
     assert "recommendation: emit/review evidence" not in result.stdout
 
 

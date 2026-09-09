@@ -279,3 +279,36 @@ async def test_listener_request_blocked_name_not_split_by_truncation():
     assert by_message.status_code == 400
     assert by_message.json() == {"ok": False, "error": "request not accepted"}
     assert app.state.station_state.pending_requests == []
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["a\x00b", "\x00", "nope-does-not-exist.js"],
+)
+def test_static_route_answers_none_for_unresolvable_names(filename):
+    """An unresolvable static name is a 404, never an exception.
+
+    /static/ is unauthenticated and reachable on the LAN through add-on
+    ingress. A raise here becomes a 500 plus a full traceback in the add-on
+    log, which is both an operator-facing stack trace and, on a Pi, needless
+    SD-card writes for anyone looping the request.
+    """
+
+    from mammamiradio.web.streamer import _resolve_static_file
+
+    assert _resolve_static_file(filename) is None
+
+
+def test_static_route_refuses_a_symlink_cycle(tmp_path, monkeypatch):
+    """A cycle under static/ resolves to nothing servable, and does not raise."""
+
+    from mammamiradio.web import streamer
+
+    static = tmp_path / "static"
+    static.mkdir()
+    loop = static / "loop.svg"
+    loop.symlink_to(loop.name)
+    monkeypatch.setattr(streamer, "_STATIC_DIR", static)
+
+    assert streamer._resolve_static_file("loop.svg") is None
+    assert streamer._resolve_static_file("../../etc/passwd") is None

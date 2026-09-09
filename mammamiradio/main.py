@@ -317,7 +317,7 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
         # queued — resolved to match how _prune_unreferenced_segments compares.
         try:
             state.restart_handoff_admitted_paths.add(segment.path.resolve(strict=False))
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
             state.restart_handoff_admitted_paths.add(segment.path)
         state.last_enqueued_type = segment.type
         state.last_music_file = segment.path

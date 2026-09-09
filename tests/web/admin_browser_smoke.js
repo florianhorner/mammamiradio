@@ -162,6 +162,59 @@ async (page) => {
   // producer desk, so open it the way the operator does — through the page's
   // own tab navigation (render-free, exactly like initTabs' landing call).
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
+  const stationCategoryRow = await page.evaluate(() => {
+    document.body.removeAttribute('data-stopped');
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-station-id',
+        type: 'station_id',
+        label: 'Station ID',
+        metadata: {},
+        source: 'rendered_queue',
+        duration_ms: 7000,
+      }],
+      current_source: { kind: 'demo', label: 'Demo Radio' },
+      playlist_source: { kind: 'demo', label: 'Demo Radio' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      badge: row?.cells[1]?.textContent.trim() || '',
+      title: row?.cells[2]?.textContent.trim() || '',
+      rowText: row?.textContent.trim() || '',
+    };
+  });
+  const stationCategoryCount = (stationCategoryRow.rowText.match(/station id/gi) || []).length;
+  assert(
+    stationCategoryRow.badge.toLowerCase().includes('station id')
+      && stationCategoryRow.title === ''
+      && stationCategoryCount === 1,
+    `station category labels are not duplicated: ${JSON.stringify(stationCategoryRow)}`,
+  );
+  const localQueueRow = await page.evaluate(() => {
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-local-track',
+        type: 'music',
+        label: ' – Salvatore On Everything',
+        source_kind: 'local',
+        source: 'rendered_queue',
+        duration_ms: 240000,
+      }],
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      title: row?.cells[2]?.firstChild?.textContent.trim() || '',
+      source: row?.cells[3]?.textContent.trim() || '',
+    };
+  });
+  assert(
+    localQueueRow.title === 'Salvatore On Everything' && localQueueRow.source === 'local',
+    `local queue metadata was not rendered title-only: ${JSON.stringify(localQueueRow)}`,
+  );
   await exerciseListenerSongFailureRows();
   const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Music','ready','Ready'],['Sources','checking','Checking'],['Hosts','waiting_ai','Waiting for AI'],['Setup','blocked','Blocked'],['AI','not_configured','Optional']].map(([label,status,display_status])=>({label,status,display_status,shape:'BAD'}))}}};
   const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent,name:el.getAttribute('aria-label')}))},setupStatusFixture);
@@ -455,7 +508,11 @@ async (page) => {
       });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"bridged":false}' });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, bridged: skipScenario === 'bridged' }),
+    });
   });
   await page.route('**/api/resume*', async (route) => {
     const request = route.request();
@@ -952,8 +1009,73 @@ async (page) => {
   skipScenario = 'success';
   await page.evaluate(() => doSkip(skipBtn));
   assert(
-    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'Skip — moving to the next segment',
+    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'DJ handoff in progress — next segment queued.',
     'successful skip lost its confirmation',
+  );
+  skipScenario = 'bridged';
+  await page.evaluate(() => doSkip(skipBtn));
+  const bridgedSkipToast = await page.evaluate(() => window.__adminSmokeToasts.at(-1));
+  assert(
+    bridgedSkipToast === 'DJ handoff in progress — cueing the next segment.',
+    `bridged skip falsely claimed playable runway: ${bridgedSkipToast}`,
+  );
+  assert(
+    !bridgedSkipToast.toLowerCase().includes('queued')
+      && !bridgedSkipToast.toLowerCase().includes('audible'),
+    `bridged skip claimed queued or audible delivery: ${bridgedSkipToast}`,
+  );
+  skipScenario = 'success';
+  await page.evaluate(() => doSkip(skipBtn));
+
+  // Truthful handoff theater: success means the next segment is queued, not that
+  // it is already audible. The skipping chip and queue row must stay honest.
+  const handoffUi = await page.evaluate(() => {
+    updateStopState(false);
+    updateNow({ type: 'skipping', label: 'Skipping...', started: Date.now() / 1000, metadata: {} });
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-skip-next',
+        type: 'music',
+        label: 'Queued Next Segment Song',
+        source_kind: 'local',
+        source: 'rendered_queue',
+        duration_ms: 180000,
+      }],
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    });
+    const skip = document.getElementById('skipBtn');
+    const queueRow = document.querySelector('#programmeList tbody tr');
+    return {
+      toast: window.__adminSmokeToasts.at(-1),
+      skipTitle: skip ? skip.getAttribute('title') : '',
+      skipAria: skip ? skip.getAttribute('aria-label') : '',
+      typeText: document.getElementById('nowType')?.textContent || '',
+      typeAria: document.getElementById('nowType')?.getAttribute('aria-label') || '',
+      nowTitle: document.getElementById('nowTitle')?.textContent || '',
+      queueWhen: queueRow?.cells[0]?.textContent.trim() || '',
+      queueTitle: queueRow?.cells[2]?.firstChild?.textContent.trim() || '',
+    };
+  });
+  assert(handoffUi.skipTitle === 'Next segment', `skip control still says track: ${handoffUi.skipTitle}`);
+  assert(
+    handoffUi.skipAria === 'Skip to next segment',
+    `skip control lost its segment aria-label: ${handoffUi.skipAria}`,
+  );
+  assert(handoffUi.typeText === 'Switching…', `skipping chip drifted: ${handoffUi.typeText}`);
+  assert(handoffUi.typeAria === 'status: working', `skipping chip lost working status: ${handoffUi.typeAria}`);
+  assert(
+    handoffUi.nowTitle === 'Skipping...' && !handoffUi.nowTitle.includes('Queued Next Segment Song'),
+    `skipping now-playing falsely presented the queued item as audible: ${handoffUi.nowTitle}`,
+  );
+  assert(
+    handoffUi.queueWhen === 'next' && handoffUi.queueTitle === 'Queued Next Segment Song',
+    `queued next segment was not shown as upcoming during handoff: ${JSON.stringify(handoffUi)}`,
+  );
+  assert(
+    handoffUi.toast.includes('queued') && !handoffUi.toast.toLowerCase().includes('audible'),
+    `skip toast claimed audibility instead of a queued handoff: ${handoffUi.toast}`,
   );
 
   const searchResponseQueue = [];
@@ -1796,6 +1918,123 @@ async (page) => {
   const desktopCatalogue=await page.evaluate(()=>{const grip=document.querySelector('.pl-grip'),style=getComputedStyle(document.getElementById('plBody'));return{gripVisible:Boolean(grip?.getClientRects().length),maxHeight:style.maxHeight,overflowY:style.overflowY}});
   assert(desktopCatalogue.gripVisible&&desktopCatalogue.maxHeight==='400px'&&desktopCatalogue.overflowY==='auto',`desktop catalogue lost drag or bounded scrolling: ${JSON.stringify(desktopCatalogue)}`);
 
+  // The live deck's backdrop is state-driven: transparent while the page sits
+  // at rest so the html atmosphere runs through it, opaque once real content
+  // passes underneath. CSS-source assertions cannot tell those two states
+  // apart, so this drives the real observer and reads the rendered colour.
+  // The reservation is written by a resize listener and a ResizeObserver, both
+  // of which are delivered a frame or more after setViewportSize resolves.
+  // Sample it without waiting and the read races the write.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  try {
+    await page.waitForFunction(
+      () => getComputedStyle(document.querySelector('.mmr-deck')).position !== 'sticky'
+        || getComputedStyle(document.documentElement).scrollPaddingTop.endsWith('px'),
+      null,
+      { timeout: 5000 },
+    );
+  } catch (error) {
+    throw new Error('admin-browser-smoke: the sticky deck never reserved scroll padding, so keyboard focus lands underneath it');
+  }
+  const deckAtRest = await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const deck = document.querySelector('.mmr-deck');
+    const style = getComputedStyle(deck);
+    return {
+      sticky: style.position === 'sticky',
+      pinned: deck.classList.contains('is-pinned'),
+      background: style.backgroundColor,
+      scrollPadding: getComputedStyle(document.documentElement).scrollPaddingTop,
+      deckHeight: Math.round(deck.getBoundingClientRect().height),
+      scrollable: document.documentElement.scrollHeight - window.innerHeight,
+    };
+  });
+  assert(deckAtRest.sticky, 'the desktop deck is not sticky, so the pinned-state check below proves nothing');
+  assert(deckAtRest.scrollable > 200, `admin page is not scrollable enough to pin the deck: ${JSON.stringify(deckAtRest)}`);
+  assert(!deckAtRest.pinned, 'the deck armed its backdrop at scrollTop 0, where nothing is behind it');
+  assert(
+    /rgba\(\d+,\s*\d+,\s*\d+,\s*0\)|transparent/.test(deckAtRest.background),
+    `the resting deck painted an opaque backdrop over the page atmosphere: ${deckAtRest.background}`,
+  );
+  // scroll-padding-top must track the live deck, not a hardcoded number, or
+  // tabbing into a scrolled panel parks the focused control under the deck.
+  const restPadding = parseFloat(deckAtRest.scrollPadding);
+  assert(
+    Number.isFinite(restPadding) && restPadding >= deckAtRest.deckHeight,
+    `scroll padding did not reserve the deck height: ${JSON.stringify(deckAtRest)}`,
+  );
+
+  await page.evaluate(() => window.scrollTo(0, 400));
+  try {
+    await page.waitForFunction(() => document.querySelector('.mmr-deck')?.classList.contains('is-pinned'), null, { timeout: 5000 });
+  } catch (error) {
+    throw new Error('admin-browser-smoke: scrolling past the sentinel never armed the deck backdrop');
+  }
+  const deckPinned = await page.evaluate(() => {
+    const style = getComputedStyle(document.querySelector('.mmr-deck'));
+    return { background: style.backgroundColor, shadow: style.boxShadow, transition: style.transition };
+  });
+  const pinnedAlpha = deckPinned.background.match(/rgba?\(([^)]*)\)/);
+  const pinnedParts = pinnedAlpha ? pinnedAlpha[1].split(',').map((part) => part.trim()) : [];
+  assert(
+    pinnedParts.length === 3 || pinnedParts[3] === '1',
+    `the pinned deck did not paint a fully opaque mask: ${deckPinned.background}`,
+  );
+  assert(deckPinned.shadow && deckPinned.shadow !== 'none', 'the pinned deck lost its elevation cue');
+  // The mask must snap. .mmr-tabbar has no background of its own, so a fading
+  // fill lets the page scroll through the tab row for the length of the fade.
+  assert(
+    !/background/.test(deckPinned.transition),
+    `the deck cross-fades its mask, so content bleeds through the tab bar: ${deckPinned.transition}`,
+  );
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  try {
+    await page.waitForFunction(() => !document.querySelector('.mmr-deck')?.classList.contains('is-pinned'), null, { timeout: 5000 });
+  } catch (error) {
+    throw new Error('admin-browser-smoke: returning to the top left the deck backdrop armed over the page atmosphere');
+  }
+
+  // The reservation must stay derived from the live deck rather than frozen at
+  // the height the page loaded with: the console collapses and expands with
+  // is-idle, so one hardcoded number is right in one state and wrong in the
+  // other. Which product transition actually moves the deck depends on which
+  // console column is taller at the time, so this exercises the wiring itself.
+  // Grow the deck by a known amount; the reservation has to grow with it.
+  const deckBefore = await page.evaluate(() => ({
+    height: Math.round(document.querySelector('.mmr-deck').getBoundingClientRect().height),
+    padding: getComputedStyle(document.documentElement).scrollPaddingTop,
+  }));
+  await page.evaluate(() => {
+    const probe = document.createElement('div');
+    probe.id = 'deck-height-probe';
+    probe.style.height = '60px';
+    document.querySelector('.mmr-deck').appendChild(probe);
+  });
+  try {
+    await page.waitForFunction(
+      (before) => getComputedStyle(document.documentElement).scrollPaddingTop !== before.padding,
+      deckBefore,
+      { timeout: 5000 },
+    );
+  } catch (error) {
+    throw new Error(`admin-browser-smoke: scroll padding did not follow the deck growing, so it goes stale whenever the console changes height: ${JSON.stringify(deckBefore)}`);
+  }
+  const deckGrown = await page.evaluate(() => ({
+    height: Math.round(document.querySelector('.mmr-deck').getBoundingClientRect().height),
+    padding: getComputedStyle(document.documentElement).scrollPaddingTop,
+  }));
+  assert(
+    deckGrown.height > deckBefore.height && parseFloat(deckGrown.padding) >= deckGrown.height,
+    `scroll padding stopped covering the grown deck: ${JSON.stringify({ deckBefore, deckGrown })}`,
+  );
+  await page.evaluate(() => document.getElementById('deck-height-probe').remove());
+  await page.waitForFunction(
+    (before) => getComputedStyle(document.documentElement).scrollPaddingTop === before.padding,
+    deckBefore,
+    { timeout: 5000 },
+  );
+
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const normalMotionRows = await page.evaluate(() => {
     updateRecent({
@@ -1850,7 +2089,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 57,
+    checks: 61,
     viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

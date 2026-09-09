@@ -184,14 +184,14 @@ else
     ok "producer recovery paths do not call generate_silence"
 fi
 
-if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py" \
     --assets-root "$PWD/mammamiradio/assets/demo"; then
     ok "packaged spoken assets are manifest/hash/transcript approved"
 else
     fail "packaged spoken-asset manifest/hash/transcript validation failed"
 fi
 
-if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py" \
     --browser-assets-root "$PWD/mammamiradio/web/static/audio" \
     --static-root "$PWD/mammamiradio/web/static" \
     --admin-template "$PWD/mammamiradio/web/templates/admin.html" \

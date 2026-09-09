@@ -154,14 +154,11 @@ body[data-first-listen-entry="required"]:is(
   top: auto;
   z-index: auto;
   padding-top: 0;
+  /* The desk deck reserves its trailing 16px as padding so the pinned fill
+     covers it. This fallback owns its spacing as margin, so the padding is
+     cleared instead of adding to it. */
+  padding-bottom: 0;
   margin-bottom: var(--space-3);
-}
-
-body[data-first-listen-entry="required"]:is(
-  [data-active-admin-tab="setup"],
-  :not([data-active-admin-tab])
-) .mmr-deck::before {
-  display: none;
 }
 
 body[data-first-listen-entry="required"]:is(
@@ -203,7 +200,7 @@ body[data-first-listen-entry="required"]:is(
 body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
   [data-active-admin-tab="setup"],
   :not([data-active-admin-tab])
-) .mmr-deck {
+) :is(.mmr-deck, .mmr-deck-sentinel) {
   display: none;
 }
 
@@ -214,7 +211,7 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
 body[data-first-listen-entry="required"] .setup-music-sources {
   display: none;
 }
-body[data-first-listen-entry="completing"] :is(.producer-clock,.mmr-console,.setup-strip,.mmr-deck,.setup-music-sources){display:none!important}
+body[data-first-listen-entry="completing"] :is(.producer-clock,.mmr-console,.setup-strip,.mmr-deck,.mmr-deck-sentinel,.setup-music-sources){display:none!important}
 body[data-first-listen-entry="completing"] .first-listen-station-controls{display:inline-flex}
 
 /* ── One opaque First Listen surface ────────────────────────────────────── */

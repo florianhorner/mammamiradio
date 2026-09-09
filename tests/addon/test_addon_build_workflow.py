@@ -349,14 +349,7 @@ def test_ci_emits_strict_quick_media_proof_before_build() -> None:
 
 
 def test_ci_proves_both_unpushed_images_before_any_publish() -> None:
-    """The full both-image proof runs before either architecture is published.
-
-    While the twelve starter-catalog tracks are absent by design the job is
-    report-only (missing content prints a NOTICE instead of failing, so image
-    publish and the edge channel keep flowing); the stable promotion media-proof
-    job in addon-release.yml and scripts/pre-release-check.sh section 10 keep
-    the hard gate on the release path.
-    """
+    """Blocking per-arch proofs run natively before either image is published."""
     text = _workflow_text()
     build_block = _extract_job_block(text, "build")
     proof_block = _extract_job_block(text, "media-proof")
@@ -367,14 +360,20 @@ def test_ci_proves_both_unpushed_images_before_any_publish() -> None:
     assert "docker save --output" in build_block
     assert "packages: write" not in build_block
     assert "needs: [validate, build]" in proof_block
-    assert "docker/setup-qemu-action@" in proof_block
-    assert "addon-image-amd64-${{ github.sha }}" in proof_block
-    assert "addon-image-aarch64-${{ github.sha }}" in proof_block
-    assert "--amd64-image" in proof_block
-    assert "--aarch64-image" in proof_block
-    assert "--output media-proof.json" in proof_block
-    assert "NOTICE: media-proof reported missing content" in proof_block
-    assert "name: media-proof-full-${{ github.sha }}" in proof_block
+    assert "runs-on: ${{ matrix.runner }}" in proof_block
+    assert "timeout-minutes: 30" in proof_block
+    assert "fail-fast: false" in proof_block
+    assert "- arch: amd64\n            runner: ubuntu-latest\n            image_option: --amd64-image" in proof_block
+    assert (
+        "- arch: aarch64\n            runner: ubuntu-24.04-arm\n            image_option: --aarch64-image"
+    ) in proof_block
+    assert "docker/setup-qemu-action@" not in proof_block
+    assert "addon-image-${{ matrix.arch }}-${{ github.sha }}" in proof_block
+    assert '--image-arch "$IMAGE_ARCH"' in proof_block
+    assert '"$IMAGE_OPTION" "$IMAGE_REF"' in proof_block
+    assert '--output "$PROOF_OUTPUT"' in proof_block
+    assert "NOTICE: media-proof reported missing content" not in proof_block
+    assert "name: media-proof-full-${{ matrix.arch }}-${{ github.sha }}" in proof_block
     assert "needs: [validate, media-proof]" in push_block
     assert "packages: write" in push_block
     assert 'docker push "$SHA_REF"' in push_block
