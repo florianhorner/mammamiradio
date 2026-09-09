@@ -80,19 +80,44 @@ A successful thaw enables future PR events; it does not re-arm held PRs itself.
 
 ## First-listen operator check
 
-Open the add-on Web UI. A fresh unfinished install opens **First Listen** with a
-recorded English Marco/Giulia station opening, then a source-aware handoff to
-the live stream. It needs no AI key or Home context. Ordinary listener playback
-retains its existing opening. Source readiness is supporting detail under that
-opening; verify that charts, Jamendo, local music, bundled demo music, and
-recovery cover are described honestly. The listening cue must distinguish a
+Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+authored Marco/Giulia welcome. Starting the station plays a separate English
+opening before the music. Neither recording needs an AI key or Home context.
+Music readiness is an unnumbered status above the
+three human steps: **1 Play it here → 2 Can you hear us? → 3 Home details**.
+Expand **Music details** to see the playable source first. When music is ready,
+**Add more music** offers Jamendo, local music, and charts only where supported.
+Unavailable legacy demo files and idle backup audio stay in Technical details.
+A confirmed empty local library is optional; failed scans retain repair guidance.
+The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
+Recovery audio alone must say **Music needs attention**, never **Music is ready**.
+A failed station check must show a connection/reload action, preserve saved
+choices, and clear its warning when polling succeeds.
+During the final privacy save, a background completion check must keep First
+Listen open, retain keyboard focus, and leave its station audio connected.
 
 Required First Listen proof is hearing the station on this device in the add-on
-Web UI. Select **Start sound check**, then **Yes, I hear it** only after you hear
+Web UI. Select **Play my station**, then **I hear you** only after you hear
 the opening, or use the [this-device repair
 steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
+
+Music continues beneath the recorded hosts at a lower level, then returns to
+normal. The same player stays available through Home details, completion,
+music-source setup and station controls. **Pause music** pauses this device;
+**Continue music** resumes it without changing saved choices. If the browser
+cannot mix the hosts over music, use the transcript or pause music explicitly
+before playing the recording. **Listen elsewhere** offers Music Assistant and
+AirPlay/Bluetooth guidance. Copying a stream address is offered outside
+localhost and Home Assistant ingress; the other player must be able to reach
+the station. Completion plays the existing host celebration once, unless music
+was deliberately paused. **Listen to the station** opens the existing `/listen`
+page; **Open station controls** opens `/admin`. Both keep the same stream.
+In **Motore**, **Restart First Listen** reopens the welcome and all three steps.
+It preserves music and saved settings; existing Home sharing stays active until
+the operator explicitly changes it. Old receipts do not skip the repeated steps.
+The listener page uses its own familiar controls; no second player starts.
 
 Home Assistant speakers remain optional and are no longer part of First Listen.
 The add-on has no speaker picker; the route is Home Assistant's own media
@@ -110,6 +135,12 @@ Home state, or a fresh filtered preview before **Let Marco and Giulia use these
 details**. If only generic daylight is available, verify that it is disclosed as
 ambient-only and not meaningful personalization, with the private path
 recommended. AI-host setup comes later.
+
+**Hear the studio voices** plays a recording. With the default setup, new
+conversations use those studio voices only after an ElevenLabs key is added
+under **Voice quality**. Without that key, new conversations use free voices.
+The English Admin opening is a bundled recording of the studio voices; it needs
+no key to play. The existing Italian opening for ordinary listeners is unchanged. The optional example never counts toward required progress.
 
 If saving the privacy-review receipt fails, verify that the live choice remains
 truthful and AI setup stays locked: the private path retries without a preview;

@@ -78,12 +78,12 @@ GUIDE_CLIPS = (
         (
             GuideLine(
                 "Marco",
-                "Benvenuti! Sono Marco, and this is Mamma Mi Radio, "
-                "your new favourite station, live from that device right there.",
+                "Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee.",
             ),
             GuideLine(
                 "Giulia",
-                "Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.",
+                "Touch it again and you’re reading the weather from the corridor. "
+                "Three small steps. Then we’re on air.",
             ),
         ),
         station_sting=True,

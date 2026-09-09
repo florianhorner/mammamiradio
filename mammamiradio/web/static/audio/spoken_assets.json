@@ -37,11 +37,11 @@
   "assets": [
     {
       "path": "first_listen/welcome.mp3",
-      "sha256": "1971b4d1bc724bdccb82b90785aea119099003a3c3a5b33188a1edfabd3426a6",
+      "sha256": "dd31f04724119647c9152b9f9e7d7a0e5abf266d2b9d7d4e368fee4e789c126a",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. Giulia: Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.",
-      "duration_seconds": 16.464,
+      "transcript": "Marco: Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee. Giulia: Touch it again and you’re reading the weather from the corridor. Three small steps. Then we’re on air.",
+      "duration_seconds": 12.528,
       "speakers": [
         "Marco",
         "Giulia"

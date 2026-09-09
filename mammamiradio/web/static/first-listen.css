@@ -1,5 +1,5 @@
 /*
- * Mamma Mi Radio — First Listen calm journey
+ * Mamma Mi Radio — First Listen, your place in Studio B
  *
  * This file deliberately defines no palette, spacing, type, radius, or motion
  * primitives. Volare Refined tokens in tokens.css remain the single source of
@@ -8,6 +8,41 @@
  */
 
 /* ── First Listen boundary and type rendering ───────────────────────────── */
+
+html { scroll-padding-bottom: calc(var(--local-player-height, 0px) + 24px); }
+body[data-local-player="on"] { padding-bottom: calc(var(--local-player-height, 126px) + 24px); }
+body[data-local-player="on"] :is(.toast, .undo-stack) { bottom: calc(var(--local-player-height, 126px) + 24px); }
+body[data-local-player="on"] .undo-stack { max-height: calc(100dvh - var(--local-player-height, 126px) - 48px); overflow-y: auto; }
+body[data-local-player="on"] .undo-toast-btn { min-width: 44px; min-height: 44px; }
+.first-listen-player {
+  position: fixed;
+  z-index: 40;
+  bottom: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  width: min(680px, calc(100% - 24px));
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--cream);
+  font: 0.875rem/1.5 var(--font-body);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+}
+.first-listen-player[hidden], .first-listen-player [hidden] { display: none; }
+.first-listen-player-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.first-listen-player p { margin: var(--space-2) 0; overflow-wrap: anywhere; }
+.first-listen-player-bar p { margin: 0; color: var(--cream-dk); }
+.first-listen-player :is(button, summary, a) { min-height: 44px; touch-action: manipulation; }
+.first-listen-player button { flex-shrink: 0; white-space: normal; color: var(--cream); border-color: var(--line-strong); }
+.first-listen-player summary { display: list-item; align-content: center; cursor: pointer; color: var(--sun); }
+.first-listen-player a { display: inline-block; align-content: center; color: var(--sun); }
+.first-listen-player :is(button, summary, a):focus-visible { outline: 3px solid var(--sun); outline-offset: 3px; }
+.guide-audio-error { color: var(--cream); }
+.guide-audio:not([data-state="error"]) .guide-audio-error { display: none; }
 
 .first-listen-panel,
 .first-listen-success,
@@ -24,6 +59,7 @@
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
+
 
 .first-listen-panel,
 .first-listen-panel *,
@@ -75,7 +111,7 @@
   cursor: pointer;
 }
 
-.first-listen-panel :is(button, select, input):disabled,
+.first-listen-panel :is(button, select, input):is(:disabled, [aria-disabled="true"]),
 .first-listen-success button:disabled,
 .success-surface button:disabled {
   cursor: not-allowed;
@@ -347,16 +383,16 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   width: 2.625rem;
   height: 2.625rem;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--sun) 46%, transparent);
-  border-radius: var(--radius-full);
+  border: 0;
+  border-radius: var(--radius-sm);
   color: var(--bg);
-  background: var(--sun2);
-  box-shadow: inset 0 0 0 var(--space-1) color-mix(in srgb, var(--bg) 12%, transparent);
+  background: transparent;
+  box-shadow: none;
 }
 .first-listen-panel .program-mark img {
   display: block;
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 100%;
+  height: 100%;
 }
 
 .first-listen-panel .program-label {
@@ -896,10 +932,10 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   max-width: 100%;
   min-height: 0;
   margin: 0;
-  padding: var(--space-1) 0.625rem;
-  border: 1px solid currentColor;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--cream) 4%, transparent);
+  padding: var(--space-1) 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   font-size: 0.75rem;
   font-weight: 600;
   line-height: 1.3;
@@ -924,6 +960,19 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
 
 .first-listen-panel .status-chip.working::before {
   animation: first-listen-status-pulse 1.4s ease-in-out infinite;
+}
+
+.first-listen-panel .first-listen-other-sources > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: var(--space-2);
+  color: var(--cream-dk);
+}
+
+.first-listen-panel .first-listen-other-sources > summary > span {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
 .first-listen-panel .status-chip.degraded {
@@ -1325,11 +1374,11 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   list-style: none;
 }
 
-.first-listen-panel .technical-details > summary::-webkit-details-marker {
+.first-listen-panel :is(.setup-advanced, .technical-details, .guide-transcript, .first-listen-other-sources, .ha-preview-details) > summary::-webkit-details-marker {
   display: none;
 }
 
-.first-listen-panel .technical-details > summary::before {
+.first-listen-panel :is(.setup-advanced, .technical-details, .guide-transcript, .first-listen-other-sources, .ha-preview-details) > summary::before {
   content: "›";
   flex: 0 0 auto;
   margin-right: 0.5625rem;
@@ -1339,7 +1388,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   transition: transform var(--transition-fast);
 }
 
-.first-listen-panel .technical-details[open] > summary::before {
+.first-listen-panel :is(.setup-advanced, .technical-details, .guide-transcript, .first-listen-other-sources, .ha-preview-details)[open] > summary::before {
   transform: rotate(90deg);
 }
 
@@ -1462,6 +1511,30 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   padding-top: 0;
 }
 
+/* Music readiness stays outside the numbered human journey. */
+
+.first-listen-panel .first-listen-readiness {
+  margin: 0 var(--space-4) var(--space-3);
+}
+
+.first-listen-panel .first-listen-readiness > details {
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+
+.first-listen-panel .first-listen-readiness > details > summary {
+  list-style-position: inside;
+}
+
+.first-listen-panel .readiness-details-label {
+  margin-left: var(--space-2);
+}
+
+.first-listen-panel .first-listen-readiness-body {
+  padding: var(--space-3);
+}
+
 /* ── Full completion reward ─────────────────────────────────────────────── */
 
 .first-listen-panel :is(.first-listen-success, .success-surface) {
@@ -1508,10 +1581,10 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
-  width: min(28.75rem, 78%);
+  width: min(20rem, 70%);
   max-width: 100%;
   aspect-ratio: 250 / 168;
-  margin: -1.125rem auto 0;
+  margin: 0 auto var(--space-3);
 }
 
 .first-listen-panel .broadcast-lock {
@@ -1599,7 +1672,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
 }
 
 .first-listen-panel .on-air-dot {
-  fill: var(--lancia2);
+  fill: var(--ok);
   opacity: 0;
   transform: scale(0);
   transform-origin: 173px 122px;
@@ -1890,8 +1963,8 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   }
 
   .first-listen-panel .program-mark img {
-    width: 1.125rem;
-    height: 1.125rem;
+    width: 100%;
+    height: 100%;
   }
 
   .first-listen-panel .program-strip .first-listen-opening-copy {
@@ -1905,24 +1978,24 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   }
 
   .first-listen-panel .first-listen-surface:is(
+    [data-current-step="2"],
     [data-current-step="3"],
-    [data-current-step="4"],
     [data-current-step="complete"]
   ) .first-listen-opening {
     padding-block: 0.375rem;
   }
 
   .first-listen-panel .first-listen-surface:is(
+    [data-current-step="2"],
     [data-current-step="3"],
-    [data-current-step="4"],
     [data-current-step="complete"]
   ) :is(.opening-kicker, .program-strip) {
     display: none;
   }
 
   .first-listen-panel .first-listen-surface:is(
+    [data-current-step="2"],
     [data-current-step="3"],
-    [data-current-step="4"],
     [data-current-step="complete"]
   ) .first-listen-opening-title {
     max-width: none;
@@ -1930,9 +2003,8 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   }
 
   .first-listen-panel .first-listen-surface:is(
+    [data-current-step="2"],
     [data-current-step="3"],
-    [data-current-step="4"],
-    [data-current-step="5"],
     [data-current-step="complete"]
   ) .progress-line {
     margin-top: 0.1875rem;
@@ -2051,7 +2123,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
 
   .first-listen-panel .first-listen-body {
     margin-right: 0.625rem;
-    margin-left: 2.75rem;
+    margin-left: min(2.75rem, 14vw);
   }
 
   .first-listen-panel .semantic-visual,
@@ -2241,6 +2313,13 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   line-height: 1.55;
 }
 
+.first-listen-panel .guide-transcript a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--sun2);
+}
+
 .first-listen-panel #firstListenSourceChip {
   grid-column: 2;
   grid-row: 3;
@@ -2279,6 +2358,22 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
 
   .first-listen-panel .first-listen-source-row > .status-chip {
     justify-self: start;
+  }
+
+  .first-listen-panel .first-listen-readiness {
+    margin-inline: 8px;
+  }
+
+  .first-listen-panel .first-listen-readiness-body {
+    padding-inline: 8px;
+  }
+
+  .first-listen-panel .first-listen-readiness .first-listen-source-list {
+    padding-inline: 0;
+  }
+
+  .first-listen-panel .first-listen-readiness .status-chip {
+    overflow-wrap: normal;
   }
 
   .first-listen-panel .first-listen-source-detail {
@@ -2327,9 +2422,8 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   }
 
   .first-listen-panel .first-listen-surface:is(
+    [data-current-step="2"],
     [data-current-step="3"],
-    [data-current-step="4"],
-    [data-current-step="5"],
     [data-current-step="complete"]
   ) .first-listen-opening > .guide-audio {
     display: none;
@@ -2346,4 +2440,216 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   .first-listen-panel .guide-transcript > p {
     font-size: 0.875rem;
   }
+}
+
+/* The welcome is an invitation. Its recording remains optional; the three
+ * human steps below keep ownership of playback, hearing and privacy. */
+.first-listen-panel .invitation-stage { display: none; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation {
+  padding: var(--space-6) var(--space-6) var(--space-4);
+  text-align: center;
+  background: radial-gradient(ellipse at 50% 18%, color-mix(in srgb, var(--sun) 8%, transparent), transparent 65%);
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] .invitation-stage {
+  display: grid;
+  place-items: center;
+  width: 7rem;
+  height: 7rem;
+  margin: 0 auto var(--space-3);
+  border-radius: 50%;
+  transition: box-shadow var(--transition);
+}
+.first-listen-panel .invitation-stage img { display: block; width: 5.25rem; height: 5.25rem; }
+.first-listen-panel .first-listen-invitation:has(.guide-audio[data-state="playing"]) .invitation-stage {
+  box-shadow: 0 0 4rem color-mix(in srgb, var(--sun) 25%, transparent);
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-opening-title {
+  max-width: none;
+  margin: var(--space-3) auto 0;
+  font-size: clamp(2.25rem, 5vw, 3.25rem);
+  line-height: 1.12;
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] .program-strip {
+  display: block;
+  max-width: 36ch;
+  margin: var(--space-4) auto var(--space-5);
+  padding: 0;
+  background: transparent;
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] :is(.program-mark, .program-label) { display: none; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .program-strip .first-listen-opening-copy {
+  font-size: 1rem;
+  line-height: 1.6;
+  text-wrap: balance;
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation > .guide-audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio-play {
+  justify-content: center;
+  gap: var(--space-3);
+  min-width: min(15rem, 100%);
+  min-height: 56px;
+  padding: var(--space-3) var(--space-5);
+  color: var(--bg);
+  background: var(--sun2);
+  border: 1px solid var(--sun2);
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  box-shadow: 0 4px 0 color-mix(in srgb, var(--sun2) 35%, var(--bg));
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+.first-listen-panel .first-listen-invitation .guide-audio-play::before { content: '▶'; font-size: .75em; }
+.first-listen-panel .first-listen-invitation .guide-audio[data-state="playing"] .guide-audio-play::before { content: 'Ⅱ'; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio-play:hover { background: var(--sun); }
+.first-listen-panel .first-listen-invitation .guide-audio-play:active { transform: translateY(2px); }
+.first-listen-panel .first-listen-invitation .guide-audio[data-state="loading"] .guide-audio-play::after { display: none; }
+.first-listen-panel .first-listen-invitation .invitation-next { display: none; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation:has(.guide-audio[data-state="ended"]) :is(.invitation-stage, .program-strip, .guide-audio-copy) { display: none; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation:has(.guide-audio[data-state="ended"]) .first-listen-opening-title { font-size: 1.75rem; margin-bottom: var(--space-4); }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio[data-state="ended"] .guide-audio-play {
+  min-height: 44px;
+  min-width: 0;
+  color: var(--sun);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--sun) 46%, transparent);
+  box-shadow: none;
+  font-size: .8125rem;
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio[data-state="ended"] .invitation-next { display: block; margin: var(--space-3) 0 0; color: var(--cream-dk); font-size: .9375rem; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio-copy {
+  margin: var(--space-2) 0 0;
+  text-align: center;
+  font-size: .75rem;
+}
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio-copy strong { font-weight: 500; color: var(--cream-dk); }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio-copy span { display: block; margin-top: var(--space-1); font-size: .6875rem; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-transcript { width: 100%; border: 0; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-transcript > summary { justify-content: center; }
+.first-listen-panel .first-listen-invitation .guide-transcript > p { text-align: left; }
+.first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .progress-line { justify-content: center; margin-top: var(--space-3); text-align: center; }
+@media (max-width: 430px) {
+  .first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation { padding: var(--space-4) var(--space-3) var(--space-3); }
+  .first-listen-panel .first-listen-surface[data-current-step="1"] .invitation-stage { width: 5rem; height: 5rem; margin-bottom: var(--space-2); }
+  .first-listen-panel .invitation-stage img { width: 4.25rem; height: 4.25rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .first-listen-panel :is(.invitation-stage, .first-listen-invitation .guide-audio-play) { transition: none; }
+  .first-listen-panel .first-listen-invitation .guide-audio-play:active { transform: none; }
+}
+@media (forced-colors: active) {
+  .first-listen-panel .first-listen-surface[data-current-step="1"] .first-listen-invitation .guide-audio-play { color: ButtonText; background: ButtonFace; border-color: ButtonText; }
+}
+
+.first-listen-panel .listening-invitation { margin: var(--space-2) 0 var(--space-4); }
+.first-listen-panel .listening-invitation p { margin: 0 0 var(--space-3); }
+.first-listen-panel .listening-invitation strong { display: block; margin-bottom: var(--space-1); color: var(--sun); font-size: .6875rem; letter-spacing: .12em; text-transform: uppercase; }
+.first-listen-panel .listening-invitation span { color: var(--cream); font-family: var(--font-display); font-size: 1.25rem; font-style: italic; line-height: 1.45; }
+.first-listen-panel .sound-check-help { margin-top: var(--space-3); }
+
+/* The finale rewards the listener before handing over to an existing page. */
+.first-listen-panel .first-listen-success {
+  container-type: inline-size;
+  width: min(52rem, 100%);
+  padding: clamp(1.5rem, 5vw, 3rem);
+  border-color: color-mix(in srgb, var(--sun) 35%, var(--line-strong));
+  background: radial-gradient(ellipse at 50% 0, color-mix(in srgb, var(--sun) 5%, transparent), transparent 62%), var(--surface);
+}
+.first-listen-panel .first-listen-success::before {
+  inset: -30%;
+  background: radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--sun) 17%, transparent), transparent 58%);
+}
+.first-listen-panel .success-stage {
+  width: min(24rem, 88%);
+  margin-bottom: 0;
+}
+.first-listen-panel #firstListenSuccessTitle {
+  max-width: 13ch;
+  margin-inline: auto;
+  font-size: min(clamp(3rem, 7vw, 4.25rem), 22cqw);
+  overflow-wrap: normal;
+  line-height: .98;
+}
+.first-listen-panel .success-kicker {
+  color: var(--ok-text);
+  margin-top: .5rem;
+}
+.first-listen-panel .success-duet {
+  display: grid;
+  gap: .35rem;
+  margin: 1.5rem auto;
+  font-size: 1rem;
+  color: var(--cream);
+}
+.first-listen-panel .success-duet b {
+  display: inline-block;
+  margin-right: .5rem;
+  color: var(--sun);
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.first-listen-panel .success-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 1.5rem;
+}
+.first-listen-panel .success-actions button { min-height: 3.5rem; }
+.first-listen-panel .success-destinations {
+  margin: .75rem 0 0;
+  color: var(--text-secondary);
+  font-size: .8125rem;
+}
+.first-listen-panel #firstListenHandoffStatus:empty { display: none; }
+.first-listen-panel .first-listen-success .guide-audio {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 1.25rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.first-listen-panel .first-listen-success .guide-audio .guide-audio-play {
+  width: auto;
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--cream-dk);
+}
+.first-listen-panel .first-listen-success .guide-audio-copy { flex-basis: 100%; font-size: .8125rem; }
+.first-listen-panel .first-listen-success .guide-transcript { flex-basis: 100%; }
+.first-listen-panel .success-saved { margin-top: .5rem; }
+.first-listen-panel .success-saved summary { min-height: 44px; padding: .75rem; cursor: pointer; color: var(--text-secondary); }
+.first-listen-panel .success-saved .success-receipt { margin-top: 0; }
+#firstListenRestartBtn { min-height: 44px; }
+body[data-listener-view="active"] { overflow: hidden; }
+body[data-listener-view="active"] .a-app { display: none; }
+#firstListenListenerFrame {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100%;
+  height: 100dvh;
+  border: 0;
+  background: var(--bg);
+}
+#firstListenListenerFrame[hidden] { display: none; }
+@media (max-width: 480px) {
+  .first-listen-panel .success-actions { grid-template-columns: 1fr; }
+  .first-listen-panel .success-stage { width: min(19rem, 90%); }
+  .first-listen-panel .success-duet { margin-block: 1rem; }
+}
+@media (max-width: 360px) {
+  .first-listen-player-bar strong { display: none; }
+  .first-listen-panel .first-listen-success { padding: 1rem; }
+  .first-listen-panel .success-stage { width: min(9rem, 60%); }
+  .first-listen-panel #firstListenSuccessTitle { font-size: min(2.5rem, 22cqw); }
+  .first-listen-panel .success-duet { margin-block: .75rem; font-size: .875rem; }
 }

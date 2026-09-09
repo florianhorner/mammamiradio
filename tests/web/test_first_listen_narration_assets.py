@@ -590,6 +590,16 @@ def test_admin_guide_metadata_matches_shipped_manifest() -> None:
     assert VALIDATOR._validate_admin_guide_metadata(manifest) == []
 
 
+def test_welcome_transcript_duration_and_cache_binding_are_synchronized() -> None:
+    manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    welcome = next(entry for entry in manifest["assets"] if entry["path"] == "first_listen/welcome.mp3")
+    assert welcome["transcript"] == GENERATOR.GUIDE_CLIPS[0].transcript
+    assert "Three small steps" in welcome["transcript"]
+    assert f"version:'{welcome['sha256'][:12]}'" in template
+    assert f"{round(welcome['duration_seconds'])} seconds on this device" in template
+
+
 def test_admin_guide_metadata_rejects_hash_and_transcript_drift(tmp_path: Path) -> None:
     manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
     source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
@@ -669,7 +679,7 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     welcome_button = (
         '<button type="button" class="guide-audio-play" data-guide-key="welcome" '
         'aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide(\'welcome\',this)">'
-        "Preview 16-second welcome</button>"
+        "Take your seat</button>"
     )
     assert source.count(welcome_button) == 1
     source = source.replace(welcome_button, f"{welcome_button}{welcome_button}", 1)

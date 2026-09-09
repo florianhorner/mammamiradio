@@ -1982,7 +1982,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
 
     <header class="producer-header">
       <div class="a-brand">
-        <img src="/static/icon-192.svg" alt="" width="36" height="36">
+        <img src="/static/favicon.svg" alt="" width="36" height="36">
         <div>
           <h1 class="wm">Mamma <span class="mi">Mi</span> Radio</h1>
           <div class="tricolor-stripe" aria-hidden="true"></div>
@@ -2391,6 +2391,8 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
     <!-- Motore zone -->
     <section class="a-panel producer-zone mmr-tabpanel" id="drawer-diagnostics" data-panel="motore" role="tabpanel" aria-labelledby="tab-motore" tabindex="0">
       <header class="mmr-panel-head"><h2>Motore</h2><div class="sub">Station health, runtime, costs, and settings. <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></div></header>
+      <button type="button" class="btn btn-util" id="firstListenRestartBtn" data-stopped-exempt onclick="restartFirstListen()">Restart First Listen</button>
+      <p class="sub">Walk through the welcome and three steps again. Your settings stay saved.</p>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
 
@@ -2465,7 +2467,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               the way a real broadcast sounds versus a clean studio file. It is deliberately understated — on
               good speakers you may not hear any difference at all; it is most noticeable on small or phone
               speakers. Toggling it does not change the track that is playing now: it takes effect on the next
-              few tracks, so give it a moment before you judge the change.
+              few tracks as the buffered queue cycles through, so give it a moment before you judge the change.
             </div>
           </div>
         </div>
@@ -2486,58 +2488,53 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               <span id="setupNext">Preparing First Listen.</span>
             </div>
             <section class="first-listen-surface" id="journeySurface" aria-labelledby="firstListenShowTitle" data-current-step="1">
-              <header class="first-listen-opening" id="firstListenShowCard">
-                <p class="opening-kicker" id="firstListenShowKicker">First Listen: Marco + Giulia</p>
-                <h3 class="first-listen-opening-title" id="firstListenShowTitle" tabindex="-1">Hear Mamma Mi Radio right here.</h3>
+              <header class="first-listen-opening first-listen-invitation" id="firstListenShowCard">
+                <div class="invitation-stage" aria-hidden="true"><img src="/static/favicon.svg" alt=""></div>
+                <p class="opening-kicker" id="firstListenShowKicker">Welcome to Mamma Mi Radio</p>
+                <h3 class="first-listen-opening-title" id="firstListenShowTitle" tabindex="-1">Your seat’s ready.</h3>
                 <div class="program-strip">
                   <span class="program-mark" aria-hidden="true"><img src="/static/favicon.svg" alt="" aria-hidden="true"></span>
                   <div>
-                    <span class="program-label" id="firstListenShowNextLabel">What you get</span>
-                    <p class="first-listen-opening-copy" id="firstListenShowCopy">Marco and Giulia welcome you, then live radio begins.</p>
+                    <span class="program-label" id="firstListenShowNextLabel">Meet your hosts</span>
+                    <p class="first-listen-opening-copy" id="firstListenShowCopy">Marco’s made room for you.<br>Giulia’s wondering where her coffee went.</p>
                     <span class="sr-only" id="firstListenShowNext">Live radio</span>
                     <span class="sr-only" id="firstListenShowThen">Your station</span>
                   </div>
                 </div>
                 <div class="guide-audio" data-guide="welcome">
-                    <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Preview 16-second welcome</button>
-                    <p class="guide-audio-copy" id="guideWelcomeNote"><strong>16 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
-                  <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. <strong>Giulia:</strong> Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.</p></details>
+                    <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Take your seat</button>
+                    <p class="guide-audio-copy" id="guideWelcomeNote"><strong>Sound on. Meet Marco &amp; Giulia.</strong><span>Recorded welcome · 13 seconds on this device</span></p>
+                    <p class="invitation-next">Now, let’s get your station playing.</p>
+                  <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee. <strong>Giulia:</strong> Touch it again and you’re reading the weather from the corridor. Three small steps. Then we’re on air.</p></details>
                 </div>
-                <p class="progress-line" id="firstListenProgressLine">Checking your next step…</p>
+                <p class="progress-line" id="firstListenProgressLine">Step 1 of 3. Next: play it here.</p>
+                <p class="use-copy" id="firstListenRestartNote" hidden></p>
               </header>
 
-              <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
-              <section class="first-listen-step" id="firstListenSourceStep" data-state="current" aria-labelledby="firstListenSourceHeading">
-                <div class="first-listen-head">
-                  <span class="first-listen-number" aria-hidden="true">1</span>
-                  <h3 class="first-listen-heading" id="firstListenSourceHeading" tabindex="-1">Check music can continue</h3>
-                  <span class="status-chip working" id="firstListenSourceChip" aria-label="Source status: checking">Checking</span>
-                  <div class="first-listen-summary" id="firstListenSourceSummary">The welcome is ready. We’re checking that music can continue afterward.</div>
-                  <button type="button" class="first-listen-review" data-review-step="source" aria-expanded="false" aria-controls="firstListenSourceBody" onclick="toggleFirstListenReview('source',this)" hidden>Review music readiness</button>
-                </div>
-                <div class="first-listen-body" id="firstListenSourceBody" role="region" aria-labelledby="firstListenSourceHeading" aria-hidden="false">
-                  <h4 class="benefit-heading">Music after the welcome.</h4>
-                  <p class="use-copy">Marco and Giulia open the show in the 16-second welcome. This step checks that a song or backup music can follow.</p>
-                  <details class="first-listen-source-preview" id="firstListenSourcePreviewDetails" hidden>
-                    <summary>What plays after the welcome</summary>
+              <section class="first-listen-readiness" id="firstListenSourceStep" aria-label="Music readiness">
+                <details class="first-listen-source-preview" id="firstListenSourcePreviewDetails">
+                  <summary id="firstListenSourceHeading"><span class="status-chip working" id="firstListenSourceChip" role="status" aria-live="polite" aria-atomic="true">Still checking</span> <span class="readiness-details-label">Music details</span></summary>
+                  <div class="first-listen-readiness-body" id="firstListenSourceBody">
+                    <p class="use-copy" id="firstListenSourceSummary">The welcome is ready. We’re checking that music can continue afterward.</p>
                     <div class="first-listen-source-list" id="firstListenSourcePreview"><div class="empty">Checking what can play…</div></div>
-                  </details>
                   <div class="first-listen-status" id="firstListenSourceRepair"></div>
                   <div class="first-listen-actions" id="firstListenSourceActions" hidden>
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
+                    <button type="button" class="btn btn-util first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
                   </div>
-                </div>
+                  </div>
+                </details>
               </section>
 
-              <section class="first-listen-step" id="firstListenSpeakerStep" data-state="upcoming" aria-labelledby="firstListenSpeakerHeading">
+              <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
+              <section class="first-listen-step" id="firstListenSpeakerStep" data-state="current" aria-current="step" aria-labelledby="firstListenSpeakerHeading">
                 <div class="first-listen-head">
-                  <span class="first-listen-number" aria-hidden="true">2</span>
-                  <h3 class="first-listen-heading" id="firstListenSpeakerHeading" tabindex="-1">Play it on this device</h3>
+                  <span class="first-listen-number" aria-hidden="true">1</span>
+                  <h3 class="first-listen-heading" id="firstListenSpeakerHeading" tabindex="-1">Play it here</h3>
                   <span class="status-chip idle" id="firstListenSpeakerChip" aria-label="Playback status: waiting" hidden>Waiting</span>
                   <div class="first-listen-summary" id="firstListenSpeakerSummary">The station plays right here, on whatever you are reading this on.</div>
                   <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review playback</button>
                 </div>
-                <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
+                <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" aria-hidden="false">
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
                   <p class="use-copy">The station plays on this device. Choose headphones, Bluetooth, or this device’s speaker. Hearing it here is enough to finish setup.</p>
                   <details class="guide-transcript" id="firstListenHomeAssistantGuide">
@@ -2547,7 +2544,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <p><a href="https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback" target="_blank" rel="noopener noreferrer">Open the full Home Assistant speaker guide</a></p>
                   </details>
                   <div class="first-listen-actions" style="margin-top:0">
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)">Start sound check</button>
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)" disabled>Play my station</button>
                   </div>
                   <div class="setup-note" id="firstListenSpeakerHelp">A new play starts a new sound check.</div>
                   <div class="first-listen-status" id="firstListenSpeakerStatus" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -2556,28 +2553,29 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
 
               <section class="first-listen-step" id="firstListenVerifyStep" data-state="upcoming" aria-labelledby="firstListenVerifyHeading">
                 <div class="first-listen-head">
-                  <span class="first-listen-number" aria-hidden="true">3</span>
-                  <h3 class="first-listen-heading" id="firstListenVerifyHeading" tabindex="-1">Check the sound</h3>
+                  <span class="first-listen-number" aria-hidden="true">2</span>
+                  <h3 class="first-listen-heading" id="firstListenVerifyHeading" tabindex="-1">Can you hear us?</h3>
                   <span class="status-chip idle" id="firstListenVerifyChip" aria-label="Listening check: waiting" hidden>Waiting</span>
                   <div class="first-listen-summary" id="firstListenVerifySummary">Tell us when you hear the station on this device.</div>
                   <button type="button" class="first-listen-review" data-review-step="verify" aria-expanded="false" aria-controls="firstListenVerifyBody" onclick="toggleFirstListenReview('verify',this)" hidden>Review sound check</button>
                 </div>
                 <div class="first-listen-body" id="firstListenVerifyBody" role="region" aria-labelledby="firstListenVerifyHeading" hidden aria-hidden="true" inert>
-                  <h4 class="benefit-heading">Can you hear Marco and Giulia?</h4>
-                  <div class="semantic-visual evidence-line" aria-label="Station playback and human sound check">
-                    <div class="evidence-stage"><span class="evidence-icon" aria-hidden="true">✓</span><strong>Sent</strong><span id="firstListenEvidenceSpeaker">This device</span></div>
-                    <span class="evidence-arrow" aria-hidden="true">›</span>
-                    <div class="evidence-stage pending"><span class="evidence-icon" aria-hidden="true">?</span><strong>Heard?</strong><span>Only you can confirm</span></div>
+                  <div class="listening-invitation">
+                    <p><strong>Marco</strong><span>“Is this thing on?”</span></p>
+                    <p><strong>Giulia</strong><span>“Let them answer, Marco.”</span></p>
                   </div>
+                  <p class="use-copy">Hear the hosts or music? Let us know.</p>
+                  <div class="first-listen-actions" id="firstListenVerifyActions" style="margin-top:0">
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>I hear you</button>
+                    <button type="button" class="btn btn-util first-listen-action" id="firstListenNotYetBtn" data-stopped-exempt onclick="verifyFirstListen(false,this)" disabled>No sound yet</button>
+                  </div>
+                  <details class="guide-transcript sound-check-help" id="firstListenSoundHelp" ontoggle="if(!this.open&&_firstListenUi.guideKey==='sound-check'){stopFirstListenGuide();renderFirstListenProgress();}"><summary>A note from the hosts</summary>
                   <div class="guide-audio" data-guide="sound-check">
                     <button type="button" class="guide-audio-play" data-guide-key="sound-check" aria-describedby="guideSoundNote" onclick="toggleFirstListenGuide('sound-check',this)">Hear why we ask</button>
-                    <p class="guide-audio-copy" id="guideSoundNote"><strong>14 seconds on this device</strong><span>This example cannot complete the listening check.</span></p>
+                    <p class="guide-audio-copy" id="guideSoundNote"><strong>Recorded help · 14 seconds on this device</strong><span>The buttons above are for your station.</span></p>
                     <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> We are on! Right now, out of that little speaker in your hand. If you can hear me, and you should, say yes. <strong>Giulia:</strong> The machine knows it pressed play. It cannot hear your room. That part is yours, not his.</p></details>
                   </div>
-                  <div class="first-listen-actions" id="firstListenVerifyActions" style="margin-top:0">
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>Yes, I hear it</button>
-                    <button type="button" class="btn btn-util first-listen-action" id="firstListenNotYetBtn" data-stopped-exempt onclick="verifyFirstListen(false,this)" disabled>Not yet</button>
-                  </div>
+                  </details>
                   <div class="first-listen-status" id="firstListenVerifyStatus" role="status" aria-live="polite" aria-atomic="true"></div>
                   <div class="first-listen-repair" id="firstListenReceiptRepair" hidden>
                     <h4 class="benefit-heading">Restore the sound check.</h4>
@@ -2587,7 +2585,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                       <p class="guide-audio-copy" id="guideReceiptNote"><strong>10 seconds on this device</strong><span>This will not replay the station.</span></p>
                       <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Giulia:</strong> You already heard us. The station just forgot to write it down. Embarrassing. <strong>Marco:</strong> This only saves the sound check. It does not put me back on air. Tragico.</p></details>
                     </div>
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenSaveAttemptBtn" data-stopped-exempt onclick="saveFirstListenAttempt(this)">Restore sound check</button>
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenSaveAttemptBtn" data-stopped-exempt onclick="saveFirstListenAttempt(this)">Save my sound check</button>
                   </div>
                   <div class="first-listen-repair" id="firstListenRepair" hidden>
                     <h4 class="benefit-heading">Get this device playing.</h4>
@@ -2599,22 +2597,22 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <ol>
                       <li>Wait a few seconds, then check mute and volume on this device.</li>
                       <li>Confirm the sound is coming from this tab, not another app.</li>
-                      <li>Try this device again. Technical help is below the journey.</li>
+                      <li>Play on this device again. Technical help is below the journey.</li>
                     </ol>
                     <div class="first-listen-actions">
-                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRetryBtn" data-stopped-exempt onclick="startFirstListen(this)">Try this device again</button>
+                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRetryBtn" data-stopped-exempt onclick="startFirstListen(this)">Play on this device again</button>
                     </div>
                   </div>
                   <div class="first-listen-review-action" id="firstListenRetestWrap" hidden>
-                    <button type="button" class="btn btn-util first-listen-action" id="firstListenRetestBtn" data-stopped-exempt onclick="retestFirstListenSpeaker(this)">Test this device again</button>
+                    <button type="button" class="btn btn-util first-listen-action" id="firstListenRetestBtn" data-stopped-exempt onclick="retestFirstListenSpeaker(this)">Check this device again</button>
                   </div>
                 </div>
               </section>
 
               <section class="first-listen-step" id="firstListenPrivacyStep" data-state="upcoming" aria-labelledby="firstListenPrivacyHeading">
                 <div class="first-listen-head">
-                  <span class="first-listen-number" aria-hidden="true">4</span>
-                  <h3 class="first-listen-heading" id="firstListenPrivacyHeading" tabindex="-1">Choose whether the hosts can use Home details</h3>
+                  <span class="first-listen-number" aria-hidden="true">3</span>
+                  <h3 class="first-listen-heading" id="firstListenPrivacyHeading" tabindex="-1">Home details</h3>
                   <span class="status-chip idle" id="firstListenPrivacyChip" aria-label="Home context: waiting" hidden>Off</span>
                   <div class="first-listen-summary" id="firstListenPrivacySummary">We won’t request Home details unless you ask for a preview.</div>
                   <button type="button" class="first-listen-review" data-review-step="privacy" aria-expanded="false" aria-controls="firstListenPrivacyBody" onclick="toggleFirstListenReview('privacy',this)" hidden>Review privacy choice</button>
@@ -2629,7 +2627,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                       <p class="privacy-promise">Keep Home private and we request nothing. To share details, preview exactly what the hosts would receive, then decide.</p>
                     </div>
                     <div class="guide-audio" data-guide="privacy">
-                      <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Hear the example</button>
+                      <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Hear how Home details work</button>
                       <p class="guide-audio-copy" id="guidePrivacyNote"><strong>8 seconds on this device</strong><span>The clip uses fictional weather, not your Home data.</span></p>
                       <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Give me the weather and I will make it radio. <strong>Giulia:</strong> Only after you preview the exact details. Keep Home private and we read nothing.</p></details>
                     </div>
@@ -2654,7 +2652,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <h4 class="first-listen-heading" id="firstListenAiHeading" tabindex="-1">Add new conversations between songs</h4>
                   <span class="status-chip idle" id="firstListenAiChip" aria-label="AI hosts: optional" hidden>Optional</span>
                   <div class="first-listen-summary" id="firstListenAiSummary">You can add new host conversations later.</div>
-                  <button type="button" class="first-listen-review" data-review-step="ai" aria-expanded="false" aria-controls="firstListenAiBody" onclick="toggleFirstListenOptional('ai',this)">Set up new conversations</button>
+                  <button type="button" class="first-listen-review" data-review-step="ai" aria-expanded="false" aria-controls="firstListenAiBody" onclick="toggleFirstListenOptional('ai',this)">Add new host conversations</button>
                 </div>
                 <div class="first-listen-body" id="firstListenAiBody" role="region" aria-labelledby="firstListenAiHeading" hidden aria-hidden="true" inert>
                   <p class="benefit-heading">Marco and Giulia can create new conversations between songs.</p>
@@ -2664,8 +2662,8 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <div><span class="visual-label">Optional</span><strong>New host conversations</strong><span>Connect Anthropic or OpenAI.</span></div>
                   </div>
                   <div class="guide-audio" data-guide="ai">
-                    <button type="button" class="guide-audio-play" data-guide-key="ai" aria-describedby="guideAiNote" onclick="toggleFirstListenGuide('ai',this)">Hear a new host conversation</button>
-                    <p class="guide-audio-copy" id="guideAiNote"><strong>12 seconds on this device</strong><span>The station already works without AI.</span></p>
+                    <button type="button" class="guide-audio-play" data-guide-key="ai" aria-describedby="guideAiNote" onclick="toggleFirstListenGuide('ai',this)">Hear the studio voices</button>
+                    <p class="guide-audio-copy" id="guideAiNote"><strong>12 seconds on this device</strong><span>A recording with the hosts’ studio voices.</span></p>
                       <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Connect an AI provider and the conversations keep changing. <strong>Giulia:</strong> Optional. The station already works. Saved keys stay hidden, and an empty field changes nothing.</p></details>
                   </div>
                   <fieldset class="first-listen-ai-fieldset" id="firstListenAiFieldset" disabled>
@@ -2688,7 +2686,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                         </section>
                         <section class="setup-sound-lane" aria-labelledby="setupVoiceQualityHeading">
                           <h4 id="setupVoiceQualityHeading">Voice quality</h4>
-                          <p>Choose the clarity, warmth, and presence of Marco and Giulia.</p>
+                          <p>With the default setup, add an ElevenLabs key for the studio voices in the recorded examples. Without it, new conversations use the free voices.</p>
                           <details class="setup-advanced" id="setupPremiumVoices">
                             <summary>Voice providers</summary>
                             <div class="setup-note">These providers shape how the hosts sound when they speak.</div>
@@ -2729,32 +2727,38 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 </div>
               </details>
               <audio id="firstListenGuideAudio" preload="none" playsinline></audio>
-              <audio id="firstListenStationAudio" preload="none" playsinline hidden></audio>
             </section>
 
             <section class="first-listen-success success-surface" id="firstListenSuccess" aria-labelledby="firstListenSuccessTitle" hidden aria-hidden="true" inert>
               <div class="success-stage" aria-hidden="true">
                 <svg class="broadcast-lock" viewBox="0 0 250 168" role="presentation">
-                  <circle class="reward-orbit" cx="125" cy="86" r="62"/>
-                  <g class="reward-rays"><path d="M125 8 V23"/><path d="M125 149 V164"/><path d="M47 86 H29"/><path d="M203 86 H221"/><path d="M69 31 L81 43"/><path d="M181 129 L193 141"/><path d="M181 43 L193 31"/><path d="M69 141 L81 129"/></g>
                   <path class="tuning-line" d="M18 87 H66 C78 87 79 61 92 61 C105 61 106 111 120 111 C134 111 135 87 148 87 H232"/>
-                  <path class="tricolor-line green" d="M47 127 C71 149 94 151 111 144"/><path class="tricolor-line cream" d="M69 137 C88 153 107 154 121 148"/><path class="tricolor-line red" d="M92 142 C108 153 124 153 136 147"/>
-                  <g class="broadcast-seal"><circle class="seal-disc" cx="125" cy="86" r="47"/><circle class="seal-ring" cx="125" cy="86" r="38"/><text class="seal-mi" x="125" y="98">Mi</text></g>
+                  <image class="broadcast-seal" href="/static/favicon.svg" x="77" y="38" width="96" height="96"/>
                   <path class="broadcast-wave" d="M179 61 C196 72 196 99 179 110"/><path class="broadcast-wave" d="M191 49 C219 68 219 103 191 122"/>
                   <circle class="on-air-dot" cx="173" cy="122" r="6"/><text class="on-air-label" x="184" y="125">ON AIR</text>
                 </svg>
               </div>
               <div class="success-content">
-                <p class="success-kicker">Bravo! Your first broadcast is complete.</p>
-                <h3 id="firstListenSuccessTitle" tabindex="-1">Your station is on air.</h3>
+                <p class="success-kicker">Mamma Mi Radio · You’re in</p>
+                <h3 id="firstListenSuccessTitle" tabindex="-1">You’re part of the show.</h3>
                 <p class="success-copy" id="firstListenSuccessCopy">You heard Marco and Giulia, and your privacy choice is saved.</p>
-                <div class="success-receipt" aria-label="Saved First Listen choices"><div><span>Heard on</span><strong id="firstListenSuccessSpeaker">This device</strong></div><div><span>Home choice</span><strong id="firstListenSuccessPrivacy">Home stays private</strong></div></div>
-                <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openFirstListenListener()">Open full listener</button><button type="button" class="btn btn-util first-listen-action" onclick="openFirstListenStation()">Station controls</button><button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Repair music source</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
+                <p class="success-duet"><span><b>Marco</b> “I was magnificent.”</span><span><b>Giulia</b> “He was adequate.”</span></p>
+                <div class="success-actions">
+                  <button type="button" class="btn btn-trigger first-listen-action" id="firstListenListenerBtn" onclick="openFirstListenListener()">Listen to the station</button>
+                  <button type="button" class="btn btn-util first-listen-action" onclick="openFirstListenStation()">Open station controls</button>
+                </div>
+                <p class="success-destinations">The show, or behind the scenes.</p>
+                <p id="firstListenHandoffStatus" role="status" aria-live="polite"></p>
+                <button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Check music sources</button>
                 <div class="guide-audio" data-guide="success">
-                  <button type="button" class="guide-audio-play" data-guide-key="success" aria-describedby="guideSuccessNote" onclick="toggleFirstListenGuide('success',this)">Play the celebration</button>
-                  <p class="guide-audio-copy" id="guideSuccessNote"><strong>11 seconds on this device</strong><span>This celebration plays only on this device.</span></p>
+                  <button type="button" class="guide-audio-play" data-guide-key="success" aria-describedby="guideSuccessNote" onclick="toggleFirstListenGuide('success',this)">Hear the celebration</button>
+                  <p class="guide-audio-copy" id="guideSuccessNote">Marco has a closing statement. Giulia has a correction.</p>
                   <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Siamo in onda! Your first broadcast is live and I was magnificent. <strong>Giulia:</strong> Sound checked, privacy saved. Mamma Mi Radio is yours now. He was adequate.</p></details>
                 </div>
+                <details class="success-saved"><summary>Your saved choices</summary>
+                  <div class="success-receipt" aria-label="Saved First Listen choices"><div><span>Heard on</span><strong id="firstListenSuccessSpeaker">This device</strong></div><div><span>Home choice</span><strong id="firstListenSuccessPrivacy">Home stays private</strong></div></div>
+                  <button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button>
+                </details>
               </div>
             </section>
             <div class="sr-only" id="firstListenLiveRegion" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -2774,8 +2778,8 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
                   <span class="jamendo-secret-saved" id="jamendoSecretLabel">Checking Jamendo access…</span>
                   <div class="jamendo-secret-actions">
-                    <button type="button" class="btn btn-util" id="jamendoOwnClientIdAction" data-stopped-exempt onclick="replaceJamendoClientId()">Use own ID</button>
-                    <button type="button" class="btn btn-util" id="jamendoClearClientId" data-stopped-exempt onclick="clearJamendoClientId(this)" hidden>Clear</button>
+                    <button type="button" class="btn btn-util" id="jamendoOwnClientIdAction" data-stopped-exempt onclick="replaceJamendoClientId()">Use my Jamendo ID</button>
+                    <button type="button" class="btn btn-util" id="jamendoClearClientId" data-stopped-exempt onclick="clearJamendoClientId(this)" hidden>Remove my Jamendo ID</button>
                   </div>
                 </div>
                 <div id="jamendoClientField" hidden>
@@ -2807,6 +2811,25 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
 
     </div><!-- /mmr-tabpanels -->
 
+    <section class="first-listen-player" id="firstListenPlayer" aria-label="Listening on this device" hidden>
+      <div class="first-listen-player-bar">
+        <div><strong>Mamma Mi Radio</strong><p id="firstListenPlayerStatus" role="status" aria-live="polite"></p></div>
+        <button type="button" class="btn btn-util" id="firstListenPlayerToggle" data-stopped-exempt onclick="toggleFirstListenStation()">Pause music</button>
+      </div>
+      <div id="firstListenListenerRecovery" hidden>
+        <p id="firstListenListenerRecoveryStatus" role="status" aria-live="polite"></p>
+        <button type="button" class="btn btn-util" id="firstListenListenerRetry" data-stopped-exempt onclick="openFirstListenListener()">Try listener again</button>
+      </div>
+      <details id="firstListenDestinations">
+        <summary>Listen elsewhere</summary>
+        <p>Keep listening here while you choose. These options don’t transfer or stop this player.</p>
+        <p><strong>Music Assistant:</strong> add the Mamma Mi Radio provider with your station’s network address. <a href="https://www.music-assistant.io/music-providers/mamma-mi-radio/" target="_blank" rel="noopener noreferrer">Connection guide</a></p>
+        <p><strong>AirPlay or Bluetooth:</strong> choose a speaker in your device’s audio output controls.</p>
+        <p id="firstListenStreamAddressNote"></p>
+        <button type="button" class="btn btn-util" id="firstListenCopyStream" data-stopped-exempt onclick="copyFirstListenStream()" hidden>Copy stream address</button>
+      </details>
+      <audio id="firstListenStationAudio" preload="none" playsinline hidden></audio>
+    </section>
   </main>
 
 </div><!-- /a-app -->
@@ -2857,6 +2880,7 @@ const SOURCE_CHIPS={
 };
 let _lastSetupJson=null;
 const FIRST_LISTEN_STREAM='/stream?first_listen=1';
+const FIRST_LISTEN_LIVE_STREAM='/stream?first_listen=live';
 const FIRST_LISTEN_ERRORS={
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then try again.'},
   ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
@@ -2867,15 +2891,16 @@ const FIRST_LISTEN_ERRORS={
   player_unavailable:{title:'That speaker is not available now',message:'The selected player changed or went offline.',action:'Choose an available target, then try again.'},
   service_rejected:{title:'Home Assistant did not start playback',message:'The speaker could not start the station this time.',action:'Check the target and test the exact Live source in Home Assistant, then retry once.'},
   request_in_flight:{title:'We’re still waiting for the station',message:'The first attempt has not finished yet.',action:'Give it a moment before trying again.'},
-  receipt_unavailable:{title:'The station started, but the sound check was not saved',message:'Restoring the sound check will not start playback again.',action:'Choose “Restore sound check.”'},
-  receipt_recovery_missing:{title:'That sound check can no longer be restored',message:'The station did not play again.',action:'Refresh First Listen, then select “Start sound check” on this device once more.'},
+  receipt_unavailable:{title:'The station started, but the sound check was not saved',message:'Restoring the sound check will not start playback again.',action:'Choose “Save my sound check.”'},
+  receipt_recovery_missing:{title:'That sound check can no longer be restored',message:'The station did not play again.',action:'Refresh First Listen, then select “Play my station” on this device once more.'},
   attempt_mismatch:{title:'This sound check belongs to an earlier play',message:'A newer play replaced it in this tab.',action:'Listen to the latest play, or start this device again.'},
-  preview_unavailable:{title:'Your Home details are not available right now',message:'The hosts received nothing, and Home context stays off.',action:'Keep Home context off, or reconnect Home Assistant and try the preview again.'},
+  preview_unavailable:{title:'Your Home details are not available right now',message:'Opening a preview does not change your sharing choice.',action:'Try the preview again, or choose to keep Home private.'},
   preview_required:{title:'Check your Home details again before turning this on',message:'The earlier preview is out of date.',action:'Show a new preview, then choose whether Marco and Giulia may use it.'},
   first_listen_required:{title:'Finish First Listen first',message:'Home context stays off until you confirm sound on this device.',action:'Return to “Check the sound,” then review your Home details.'},
   privacy_persist_failed:{title:'Mamma Mi Radio could not save that choice',message:'Home context stays off for now.',action:'Try again. Home context will stay off until the choice is saved.'},
   privacy_receipt_unavailable:{title:'Your choice is active, but First Listen did not save this step',message:'The station is following your privacy choice now.',action:'Use the action below to save the choice again.'},
   persistence_failed:{title:'Mamma Mi Radio could not save that change',message:'The station kept the safer choice shown below.',action:'Try saving the choice again.'},
+  privacy_save_unconfirmed:{title:'We could not confirm your choice',message:'The save may already have reached the station.',action:'Reload this page to check your current choice before trying again.'},
   invalid_request:{title:'This setup view is out of date',message:'This setup screen no longer matches the running station.',action:'Refresh Setup, then try the action again.'},
 };
 // Every First Listen mutation needs a deadline. apiResponse only arms an
@@ -2883,7 +2908,7 @@ const FIRST_LISTEN_ERRORS={
 // hydrate from the server while _firstListenUi.busy is set — so a request that
 // never settles used to freeze the whole journey until the operator reloaded,
 // with nothing on screen saying so.
-const FIRST_LISTEN_TIMEOUTS={play:30000,receipt:15000,verify:15000};
+const FIRST_LISTEN_TIMEOUTS={play:30000,receipt:15000,verify:15000,preview:30000,privacy:15000};
 function firstListenTimedOut(error){return Boolean(error&&error.name==='AbortError')}
 const _firstListenUi={
   projection:null,
@@ -2909,16 +2934,19 @@ const _firstListenUi={
   optionalStep:'',
   reviewTrigger:null,
   showSuccess:false,
+  successAnnounced:false,
+  restarting:false,
   guideKey:'',
   guideButton:null,
-  stationPausedForGuide:false,
   firstUnresolvedRenderedAt:0,
   activationStartedAt:0,
   activationMs:null,
 };
+const _firstListenPlayback={intent:false,phase:'idle',epoch:0,context:null,source:null,gain:null,mixTask:null,mixReady:false,mixUnavailable:false,unrecoverable:false};
+const _firstListenHandoff={frame:null,binding:null,ready:false,timer:null,push:true,title:'',error:'',mediaSessionOwned:false};
 
 const FIRST_LISTEN_GUIDES={
-  welcome:{file:'welcome.mp3',version:'1971b4d1bc72'},
+  welcome:{file:'welcome.mp3',version:'dd31f0472411'},
   'sound-check':{file:'sound-check.mp3',version:'c536e915090d'},
   'not-yet':{file:'not-yet.mp3',version:'4b1dd8838a00'},
   'receipt-recovery':{file:'receipt-recovery.mp3',version:'7c5baaceebb8'},
@@ -2926,6 +2954,11 @@ const FIRST_LISTEN_GUIDES={
   ai:{file:'ai.mp3',version:'9a0975774b35'},
   success:{file:'success.mp3',version:'17b854587398'},
 };
+const FIRST_LISTEN_GUIDE_NOUNS={welcome:'welcome','sound-check':'explanation','not-yet':'advice','receipt-recovery':'explanation',privacy:'privacy example',ai:'voice example',success:'celebration'};
+function firstListenGuideLabel(button,state){
+  const noun=FIRST_LISTEN_GUIDE_NOUNS[button?.dataset.guideKey]||'recording';
+  return {loading:`Starting ${noun}…`,playing:`Pause ${noun}`,paused:`Continue ${noun}`,ended:'Hear it again',error:`Try ${noun} again`}[state];
+}
 // One <audio> serves the remaining First Listen clips, so a click that supersedes an in-flight
 // one must not let the older attempt tidy up the shared element underneath it.
 // Every attempt takes a ticket and drops out if it is no longer the current one.
@@ -2936,9 +2969,8 @@ const FIRST_LISTEN_GUIDE_LOAD_MS=8000;
 // Measured live: sound-check.mp3 stalls ~0.7s before its own reported duration
 // in some browsers and never fires 'ended' at all -- currentTime freezes,
 // paused flips true, and nothing else ever runs. Once playback has actually
-// started, arm a second time-box keyed to the clip's own duration so a stall
-// still recovers (and, critically, still resumes any station audio this
-// clip paused) instead of leaving First Listen silently stuck.
+// started, bound the wait by its measured duration so a stall restores normal
+// music gain and releases the narration controls.
 const FIRST_LISTEN_GUIDE_STALL_BUFFER_MS=2500;
 let _firstListenGuideWatchdog=null;
 function firstListenGuideAudio(){return document.getElementById('firstListenGuideAudio')}
@@ -2946,13 +2978,13 @@ function firstListenGuideContainer(button){return button?.closest('.guide-audio'
 function firstListenGuideLocksRoomProof(){
   // Narration decorates the journey, it never gates it. Only a clip that is
   // genuinely playing holds the room proof; a slow or missing one leaves
-  // "Yes, I hear it" and "Not yet" exactly where the operator left them.
+  // "I hear you" and "No sound yet" exactly where the operator left them.
   const state=firstListenGuideContainer(_firstListenUi.guideButton)?.dataset.state||'';
   return state==='playing';
 }
 function firstListenGuideIdleLabel(button){
   if(!button)return'';
-  if(!button.dataset.idleLabel)button.dataset.idleLabel=button.textContent||'Play hosts';
+  if(!button.dataset.idleLabel)button.dataset.idleLabel=button.textContent||'Play recording';
   return button.dataset.idleLabel;
 }
 function resetFirstListenGuideSource(audio){
@@ -2964,6 +2996,7 @@ function resetFirstListenGuideSource(audio){
 function stopFirstListenGuide({reset=true,resumeStation=true}={}){
   // Invalidate pending playback before pause/load can settle its continuation.
   ++_firstListenGuideAttempt;
+  setFirstListenMusicGain(false);
   if(_firstListenGuideWatchdog){clearTimeout(_firstListenGuideWatchdog);_firstListenGuideWatchdog=null;}
   const audio=firstListenGuideAudio();
   const button=_firstListenUi.guideButton;
@@ -2973,16 +3006,6 @@ function stopFirstListenGuide({reset=true,resumeStation=true}={}){
   if(container)container.dataset.state='idle';
   _firstListenUi.guideKey='';
   _firstListenUi.guideButton=null;
-  // Every guide-narration exit (switch clip, tab hide, leave step) funnels
-  // through here, so this is the one place a station pause taken to avoid
-  // layering audio gets undone. Leaving the step also calls
-  // stopFirstListenStationAudio(), which clears the flag itself — so a
-  // resume attempted here is immediately superseded there, never left racing.
-  if(_firstListenUi.stationPausedForGuide){
-    _firstListenUi.stationPausedForGuide=false;
-    const stationAudio=firstListenStationAudio();
-    if(resumeStation&&stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
-  }
 }
 async function toggleFirstListenGuide(key,button){
   const guide=FIRST_LISTEN_GUIDES[key];
@@ -2993,7 +3016,8 @@ async function toggleFirstListenGuide(key,button){
     // pause() can reject a still-pending play(); retire that attempt before it settles.
     ++_firstListenGuideAttempt;
     audio.pause();
-    button.textContent='Continue example';
+    setFirstListenMusicGain(false);
+    button.textContent=firstListenGuideLabel(button,'paused');
     button.setAttribute('aria-pressed','false');
     const pausedContainer=firstListenGuideContainer(button);
     if(pausedContainer)pausedContainer.dataset.state='paused';
@@ -3001,20 +3025,12 @@ async function toggleFirstListenGuide(key,button){
     return;
   }
   if(_firstListenUi.guideButton!==button)stopFirstListenGuide();
-  // Host narration must not layer on top of the live station, but a hard
-  // teardown left steps 4-5 (no Play control) with no way back to audio.
-  // Pause instead, and let stopFirstListenGuide() resume it on every exit.
-  const stationAudio=firstListenStationAudio();
-  if(stationAudio&&!stationAudio.paused){
-    stationAudio.pause();
-    _firstListenUi.stationPausedForGuide=true;
-  }
   const attempt=++_firstListenGuideAttempt;
   _firstListenUi.guideKey=key;
   _firstListenUi.guideButton=button;
   const container=firstListenGuideContainer(button);
   if(container)container.dataset.state='loading';
-  button.textContent='Loading example…';
+  button.textContent=firstListenGuideLabel(button,'loading');
   button.setAttribute('aria-pressed','true');
   renderFirstListenProgress();
   if(!audio.getAttribute('src')){
@@ -3023,20 +3039,26 @@ async function toggleFirstListenGuide(key,button){
   }
   let deadline=null;
   try{
+    if(_firstListenPlayback.intent){
+      const mixed=await ensureFirstListenMix(_firstListenPlayback.epoch);
+      if(attempt!==_firstListenGuideAttempt)return;
+      if(!mixed)throw new Error('guide_music_mix_unavailable');
+      setFirstListenMusicGain(true);
+    }
     await Promise.race([
       audio.play(),
       new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('guide_audio_timeout')),FIRST_LISTEN_GUIDE_LOAD_MS)}),
     ]);
     if(attempt!==_firstListenGuideAttempt)return;
     if(container)container.dataset.state='playing';
-    button.textContent='Pause example';
+    button.textContent=firstListenGuideLabel(button,'playing');
     renderFirstListenProgress();
     if(Number.isFinite(audio.duration)&&audio.duration>0){
       _firstListenGuideWatchdog=setTimeout(()=>{
         // A deliberate manual pause (or a resumed play that re-armed a newer
         // ticket) must never be mistaken for a stall -- only force a stop
         // while the app still believes this exact attempt is actively
-        // playing. "Continue example" restarts play() and takes a fresh
+        // playing. The continue control restarts play() and takes a fresh
         // ticket, so this stays scoped to the one attempt that armed it.
         if(attempt!==_firstListenGuideAttempt||audio.ended)return;
         if(container?.dataset.state!=='playing')return;
@@ -3048,11 +3070,12 @@ async function toggleFirstListenGuide(key,button){
   }catch(error){
     if(attempt!==_firstListenGuideAttempt)return;
     console.error('first_listen_guide_audio',error);
-    // stopFirstListenGuide() resets the source AND resumes any station audio
-    // this attempt paused -- a failed load/play must not strand it paused.
     stopFirstListenGuide();
     if(container)container.dataset.state='error';
-    button.textContent='Try example again';
+    let help=container?.querySelector('.guide-audio-error');
+    if(container&&!help){help=document.createElement('p');help.className='guide-audio-error';help.setAttribute('role','status');container.appendChild(help);}
+    if(help)help.textContent=error.message==='guide_music_mix_unavailable'?'The hosts can’t speak over the music on this device. Read the transcript below, or pause music with the player before trying the hosts again.':'The recording couldn’t play. Try again or read the transcript below.';
+    button.textContent=firstListenGuideLabel(button,'error');
     button.setAttribute('aria-pressed','false');
     renderFirstListenProgress();
   }finally{
@@ -3063,14 +3086,17 @@ function initFirstListenGuideAudio(){
   const audio=firstListenGuideAudio();
   if(!audio||audio.dataset.ready==='true')return;
   audio.dataset.ready='true';
+  audio.addEventListener('waiting',()=>setFirstListenMusicGain(false));
+  audio.addEventListener('pause',()=>{if(audio.paused)setFirstListenMusicGain(false);});
+  audio.addEventListener('playing',()=>{
+    if(!_firstListenUi.guideButton){audio.pause();return;}
+    if(_firstListenPlayback.intent)setFirstListenMusicGain(true);
+  });
   audio.addEventListener('ended',()=>{
     const button=_firstListenUi.guideButton;
-    // Route through stopFirstListenGuide() rather than hand-rolling the same
-    // teardown, so a clip that finishes on its own also resumes the station
-    // audio it paused -- letting a 12-second clip simply finish is the most
-    // common exit, not an edge case.
+    // Natural completion uses the same gain-restoration boundary as dismissal.
     stopFirstListenGuide();
-    if(button){button.textContent='Play again';button.setAttribute('aria-pressed','false');}
+    if(button){button.textContent=firstListenGuideLabel(button,'ended');button.setAttribute('aria-pressed','false');}
     const container=firstListenGuideContainer(button);
     if(container)container.dataset.state='ended';
     renderFirstListenProgress();
@@ -3078,7 +3104,7 @@ function initFirstListenGuideAudio(){
   audio.addEventListener('error',()=>{
     const button=_firstListenUi.guideButton;
     stopFirstListenGuide();
-    if(button){button.textContent='Try example again';button.setAttribute('aria-pressed','false');}
+    if(button){button.textContent=firstListenGuideLabel(button,'error');button.setAttribute('aria-pressed','false');}
     const container=firstListenGuideContainer(button);
     if(container)container.dataset.state='error';
     renderFirstListenProgress();
@@ -3291,7 +3317,7 @@ async function apiResponse(m,p,b,timeoutMs){
   try{
     const response=await fetch(_base+p,options);
     let payload=null;
-    try{payload=await response.json();}catch(_){}
+    try{payload=await response.json();}catch(error){if(error?.name==='AbortError')throw error;}
     return {response,payload};
   }finally{
     if(deadline)clearTimeout(deadline);
@@ -3407,12 +3433,8 @@ function finalizeFirstListenCompletion(){
   return true;
 }
 function exitFirstListenFlow(){
-  // Music-source setup replaces the journey without changing tabs. Suppress
-  // the ordinary guide-resume handoff because this same-tab exit releases the
-  // station itself; tab-away teardown remains owned by showAdminTab().
   finalizeFirstListenCompletion();
-  stopFirstListenGuide({resumeStation:false});
-  stopFirstListenStationAudio();
+  stopFirstListenGuide();
 }
 function showAdminTab(name,{render=true,persist=true}={}){
   const setupContext=document.getElementById('firstListenSetupContext');
@@ -3433,12 +3455,6 @@ function showAdminTab(name,{render=true,persist=true}={}){
   }
   if(name!=='setup'){
     stopFirstListenGuide();
-    // The hidden First Listen element holds its own hub subscription. Any
-    // tab away from Setup must release it, or it plays on indefinitely as a
-    // phantom listener with no visible control (nav clicks, the repair-music
-    // shortcut, and every other showAdminTab caller, not just the two exits
-    // that already call this explicitly).
-    stopFirstListenStationAudio();
   }
   if(persist){try{sessionStorage.setItem('adminTab',name);}catch(_){}}
   // Render the newly-shown panel immediately from cached state so switching
@@ -3578,6 +3594,7 @@ initDeckPinned();
 
 // ── Transport ──
 async function doSkip(el){
+  const playbackEpoch=_firstListenPlayback.epoch;
   flash(el);
   try{
     const r=await api('POST','/api/skip');
@@ -3585,6 +3602,7 @@ async function doSkip(el){
       toast((r&&r.error)||wayOut('skip that segment'));
       return;
     }
+    if(_firstListenPlayback.intent)void continueFirstListenStation(playbackEpoch);
     // Honest handoff: a bridged skip has only requested future music, while an
     // unbridged skip already has playable runway. Neither claims room audibility.
     toast(r.bridged
@@ -3688,6 +3706,7 @@ async function doUnkeep(id,el){
   refreshKeptMoments();
 }
 async function doBanNowPlaying(el){
+  const playbackEpoch=_firstListenPlayback.epoch;
   // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
   // the segment leaves the air the instant the skip lands.
   const ns=_st&&_st.now_streaming;
@@ -3701,6 +3720,7 @@ async function doBanNowPlaying(el){
   flash(el);
   const r=await api('POST','/api/track/ban-now-playing');
   if(!(r&&r.ok)){const m=(r&&r.error)||wayOut('ban this song');toast(m);return;}
+  if(_firstListenPlayback.intent)void continueFirstListenStation(playbackEpoch);
   await refreshFast();refreshBanCount();
   // Prefer the server-resolved key so Undo lifts exactly what was banned, even if
   // the segment advanced between our last poll and the server read.
@@ -3846,7 +3866,7 @@ async function doPurge(el){
 const STOP_FAILURE_COPY="We couldn't pause the station. Give the studio a few seconds, then press Stop again.";
 const RESUME_FAILURE_COPY="We couldn't resume the station. Give the studio a few seconds, then press Start again.";
 const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? The station may be quiet briefly while the studio rebuilds.";
-const FIRST_LISTEN_RESUME_FAILURE_COPY="The station could not start just now. Give it a few seconds, then tap Start sound check again.";
+const FIRST_LISTEN_RESUME_FAILURE_COPY="The station could not start just now. Give it a few seconds, then tap Play my station again.";
 // Stop and Resume answer with the precise reason they refused. Prefer it over
 // the generic line because it names the way out. An assetless Resume may also
 // offer the separately confirmed force-start below; it is never sent implicitly.
@@ -3855,6 +3875,7 @@ function transportFailureCopy(payload,fallback){
   return reported||fallback;
 }
 async function doStop(el){
+  stopFirstListenStationAudio();
   flash(el);
   try{
     const {response,payload}=await apiResponse('POST','/api/stop');
@@ -3867,10 +3888,12 @@ async function doStop(el){
   }
 }
 async function doResume(el){
+  const playbackEpoch=_firstListenPlayback.epoch;
   flash(el);
   try{
     const {response,payload}=await apiResponse('POST','/api/resume');
     if(response.ok&&payload?.ok===true){
+      void continueFirstListenStation(playbackEpoch);
       toast('Station resumed');
     }else if(response.status===503&&payload?.force_available===true){
       if(!window.confirm(FORCE_RESUME_CONFIRM_COPY)){
@@ -3878,8 +3901,9 @@ async function doResume(el){
         return;
       }
       const {response:forceResponse,payload:forcePayload}=await apiResponse('POST','/api/resume?force=true');
-      if(forceResponse.ok&&forcePayload?.ok===true&&forcePayload?.recovering===true){
-        toast('Station is recovering. A host break is being prepared.');
+      if(forceResponse.ok&&forcePayload?.ok===true){
+        void continueFirstListenStation(playbackEpoch);
+        toast(forcePayload.recovering?'Station is recovering. A host break is being prepared.':'Station resumed');
       }else{
         toast(transportFailureCopy(forcePayload,RESUME_FAILURE_COPY));
       }
@@ -5113,7 +5137,7 @@ function renderJamendoSettings(status,force){
   if(label&&configured)label.textContent=status.enabled?(ownsId?'✓ Using your own client ID':'✓ Using Mamma Mi Radio’s included Jamendo access'):(ownsId?'Your own client ID is saved':'Jamendo access included — no account needed');
   if(secret)secret.hidden=!configured;
   if(field)field.hidden=configured&&!_jamendoReplaceMode;
-  if(ownIdAction)ownIdAction.textContent=ownsId?'Replace':'Use own ID';
+  if(ownIdAction)ownIdAction.textContent=ownsId?'Replace my Jamendo ID':'Use my Jamendo ID';
   if(clear)clear.hidden=!ownsId;
 }
 async function mediaSourceRequest(method,path,payload){
@@ -5203,7 +5227,9 @@ async function turnOffJamendo(){
     applyJamendoResponse(result,'Jamendo turned off. Starter and local music continue.');
   }catch(_){setJamendoFormMessage(offlineMsg()+' The saved setting was not changed.','degraded');}
 }
-function openSetupPanel(focus=''){
+function openSetupPanel(focus='',{preserveFocus=false}={}){
+  const focused=preserveFocus&&document.getElementById('setupMusicSources')?.contains(document.activeElement)?document.activeElement:null;
+  if(preserveFocus)syncFirstListenSetupMount();
   _adminTabUserInteracted=true;
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
@@ -5219,6 +5245,7 @@ function openSetupPanel(focus=''){
   setFirstListenSetupView(focus);
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
+  if(focused?.isConnected){focused.focus();return;}
   const summary=details?.querySelector('summary');
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
@@ -5229,8 +5256,20 @@ function openSetupPanel(focus=''){
     else summary?.focus({preventScroll:true});
   },50);
 }
+function firstListenRestartBusy(){return _firstListenUi.busy||_firstListenUi.receiptSaving||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';}
+function restartFirstListen(){
+  if(firstListenRestartBusy())return;
+  cancelFirstListenHandoff();stopFirstListenGuide();
+  Object.assign(_firstListenUi,{restarting:true,selectionDirty:true,retestPending:true,selectedEntityId:'',selectedName:'',attemptId:'',dispatch:'ready',verification:'awaiting',privacyChoice:null,privacyReceiptChoice:null,privacyPreview:'untouched',privacyPreviewValid:false,privacyPreviewUseful:false,repairOpen:false,reviewStep:'',optionalStep:'',reviewTrigger:null,showSuccess:false,successAnnounced:false,activationStartedAt:0,activationMs:null,firstUnresolvedRenderedAt:performance.now()});
+  document.querySelectorAll('#journeySurface details,.success-saved').forEach(details=>{details.open=false;});
+  document.querySelectorAll('.guide-audio').forEach(card=>{card.dataset.state='idle';const button=card.querySelector('.guide-audio-play');if(button){button.textContent=firstListenGuideIdleLabel(button);button.setAttribute('aria-pressed','false');}});
+  renderHomeContextPreview({ok:true,status:'review',entities:[]});
+  _lastSetupJson='';document.body.dataset.firstListenEntry='required';
+  syncFirstListenSetupMount();showAdminTab('setup',{render:true,persist:true});renderFirstListenProgress();
+  window.scrollTo({top:0,behavior:'instant'});document.getElementById('firstListenShowTitle').focus({preventScroll:true});
+}
 function firstListenMusicSourceAction(){
-  if(_capsState==='checking')return{target:'checking',button:'Checking music sources…'};
+  if(_capsState==='checking')return{target:'checking',button:'Checking music options…'};
   const chartsAvailable=_capsState==='ready'&&sourceControlVisibility(_caps).charts_reload;
   return chartsAvailable
     ?{target:'tools',button:'Open music source tools'}
@@ -5257,6 +5296,7 @@ function firstListenInstallNeedsOnboarding(first){
 }
 function firstListenEntryRequired(setup){
   const first=setup?.guided_setup?.first_listen||{};
+  if(_firstListenUi.restarting)return true;
   const needsOnboarding=firstListenInstallNeedsOnboarding(first);
   return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete&&first.continuity_available);
 }
@@ -5265,8 +5305,9 @@ function resolveFirstListenLanding(setup){
   if(first.bootstrap_ready!==true)return;
   const required=firstListenEntryRequired(setup);
   const previous=document.body.dataset.firstListenEntry;
-  const preserveSuccess=!required&&(
-    previous==='completing'||(previous==='required'&&_activeTab==='setup'&&_firstListenUi.showSuccess)
+  const musicSources=document.body.dataset.firstListenSetupView==='music-sources';
+  const preserveSuccess=!required&&!musicSources&&(
+    previous==='completing'||(previous==='required'&&_activeTab==='setup')
   );
   if(required&&previous==='completing'){
     _firstListenUi.showSuccess=false;
@@ -5275,9 +5316,11 @@ function resolveFirstListenLanding(setup){
     setTimeout(()=>focusCurrentFirstListenStep(),0);
   }
   document.body.dataset.firstListenEntry=preserveSuccess?'completing':required?'required':'complete';
-  syncFirstListenSetupMount();
-  if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess){
-    showAdminTab('scaletta',{render:true,persist:true});
+  if(previous==='required'&&!required&&_activeTab==='setup'&&musicSources){
+    openSetupPanel('music-sources',{preserveFocus:true});
+  }else{
+    syncFirstListenSetupMount();
+    if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess)showAdminTab('scaletta',{render:true,persist:true});
   }
   if(_firstListenLandingResolved)return;
   _firstListenLandingResolved=true;
@@ -5321,9 +5364,9 @@ function firstListenSetChip(id,state,label){
   const el=document.getElementById(id);
   if(!el)return;
   const safe=statusState(state);
-  el.className='status-chip '+safe;
-  el.textContent=label;
-  el.setAttribute('aria-label',label+': status '+safe);
+  if(el.className!=='status-chip '+safe)el.className='status-chip '+safe;
+  if(el.textContent!==label)el.textContent=label;
+  if(el.getAttribute('aria-label')!==label+': status '+safe)el.setAttribute('aria-label',label+': status '+safe);
   // The markup ships these chips hidden so nothing stale shows before the first
   // render. Once we have a real state to report the chip has to be visible, or
   // every degraded signal is written into an element the operator never sees.
@@ -5358,17 +5401,16 @@ function firstListenErrorMessage(response){
   return `${copy.title}. ${copy.message} ${copy.action}`;
 }
 function showSetupRequestError(response=null){
-  const el=document.getElementById('setupAccessError');if(!el)return;el.hidden=!response;el.textContent=response?firstListenErrorMessage(response).replace(/First Listen/g,'Setup'):'';
+  const el=document.getElementById('setupAccessError');if(!el)return;const recovering=!el.hidden&&!response;el.hidden=!response;el.textContent=response?firstListenErrorMessage(response).replace(/First Listen/g,'Setup'):'';
+  if(response||recovering)renderFirstListenProgress();
 }
 const FIRST_LISTEN_STEP_KEYS={
-  firstListenSourceStep:'source',
   firstListenSpeakerStep:'speaker',
   firstListenVerifyStep:'verify',
   firstListenPrivacyStep:'privacy',
   firstListenAiStep:'ai',
 };
 const FIRST_LISTEN_REVIEW_LABELS={
-  source:'Review music readiness',
   speaker:'Review playback',
   verify:'Review sound check',
   privacy:'Review privacy choice',
@@ -5376,7 +5418,7 @@ const FIRST_LISTEN_REVIEW_LABELS={
 };
 function firstListenRequiredCount(){
   const path=document.getElementById('firstListenPath');
-  return path?[...path.children].filter(el=>el.classList.contains('first-listen-step')).length:4;
+  return path?[...path.children].filter(el=>el.classList.contains('first-listen-step')).length:3;
 }
 function firstListenSetStep(id,state){
   const step=document.getElementById(id);
@@ -5390,7 +5432,7 @@ function firstListenSetStep(id,state){
   const body=step.querySelector(':scope > .first-listen-body');
   if(body){
     const anotherExpansion=Boolean(_firstListenUi.reviewStep||_firstListenUi.optionalStep);
-    const visible=reviewing||optionalOpen||(current&&!anotherExpansion);
+    const visible=reviewing||optionalOpen||(current&&!anotherExpansion)||(key==='privacy'&&_firstListenUi.privacySaving);
     body.hidden=!visible;
     body.setAttribute('aria-hidden',visible?'false':'true');
     body.toggleAttribute('inert',!visible);
@@ -5408,6 +5450,14 @@ function focusCurrentFirstListenStep(){
   return false;
 }
 function focusFirstListenStep(key){
+  if(key==='source'){
+    const details=document.getElementById('firstListenSourcePreviewDetails');
+    if(!details)return false;
+    details.open=true;
+    details.querySelector('summary')?.focus({preventScroll:true});
+    details.scrollIntoView({block:'center',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+    return true;
+  }
   const step=Object.entries(FIRST_LISTEN_STEP_KEYS).find(([,value])=>value===key)?.[0];
   const section=step?document.getElementById(step):null;
   if(!section)return false;
@@ -5485,7 +5535,7 @@ function updateFirstListenSuccess(){
   const backupFollowUp=sourceState.continuityAvailable&&!sourceState.healthy;
   if(copy)copy.textContent=backupFollowUp
     ?`You heard Marco and Giulia on ${speaker}. Backup audio is keeping the station playing; primary music still needs attention.`
-    :`You heard Marco and Giulia on ${speaker}. Your privacy choice is saved.`;
+    :'The station’s yours. Make yourself at home.';
   if(speakerEl)speakerEl.textContent=speaker;
   if(privacyEl)privacyEl.textContent=privacy;
   if(repair)repair.hidden=!backupFollowUp;
@@ -5499,17 +5549,105 @@ function updateFirstListenSuccess(){
   if(live)live.textContent=backupFollowUp
     ?'First Listen complete. Backup audio is keeping the station playing; primary music still needs attention.'
     :'First Listen complete. Your station is on air.';
+  if(!_firstListenUi.successAnnounced){
+    _firstListenUi.successAnnounced=true;
+    if(_firstListenPlayback.intent&&_firstListenPlayback.phase==='playing')void toggleFirstListenGuide('success',success.querySelector('.guide-audio-play'));
+  }
 }
 function reviewFirstListenChoices(){
   openSetupPanel('choices');
 }
-function openFirstListenListener(){
-  showAdminTab('scaletta',{render:true,persist:true});
-  openListener();
+// The existing listener page borrows controls, never the stream's lifecycle.
+// Keeping the owner document mounted avoids unloading the playing media element.
+function firstListenPlaybackSnapshot(){
+  const p=_firstListenPlayback;
+  return {intent:p.intent,phase:p.phase,reloadRequired:p.unrecoverable||Boolean(p.source&&p.context?.state==='closed')};
 }
-function openFirstListenStation(){
-  showAdminTab('scaletta',{render:true,persist:true});
+function publishFirstListenPlayback(){
+  const h=_firstListenHandoff;
+  if(h.binding?.notify)try{h.binding.notify(firstListenPlaybackSnapshot());}catch(_){cancelFirstListenHandoff('The listener lost its controls. Try opening it again.');}
+  if(!('mediaSession' in navigator))return;
+  const owned=_firstListenPlayback.phase!=='idle';
+  try{
+    if(owned!==h.mediaSessionOwned){
+      h.mediaSessionOwned=owned;
+      navigator.mediaSession.setActionHandler('play',owned?()=>{if(!_firstListenPlayback.intent||_firstListenPlayback.phase==='interrupted')toggleFirstListenStation();}:null);
+      for(const action of ['pause','stop'])navigator.mediaSession.setActionHandler(action,owned?stopFirstListenStationAudio:null);
+      if(!owned){navigator.mediaSession.metadata=null;navigator.mediaSession.playbackState='none';}
+    }
+    if(owned)navigator.mediaSession.playbackState=_firstListenPlayback.phase==='playing'?'playing':'paused';
+  }catch(_){}
 }
+function setFirstListenDestination(view,push=true){
+  const path=`${_base}/${view==='listen'?'listen':'admin'}`;
+  const state={...history.state,firstListenDestination:view};
+  if(push&&location.pathname!==path)history.pushState(state,'',path);
+  else history.replaceState(state,'',path);
+}
+function cancelFirstListenHandoff(message='',navigate=true){
+  const h=_firstListenHandoff;
+  clearTimeout(h.timer);h.timer=null;h.binding=null;h.ready=false;h.error=message;
+  const frame=h.frame;h.frame=null;frame?.remove();
+  if(frame&&'mediaSession' in navigator)navigator.mediaSession.metadata=null;
+  document.body.removeAttribute('data-listener-view');
+  const app=document.querySelector('.a-app');app?.removeAttribute('inert');app?.removeAttribute('aria-hidden');
+  if(h.title){document.title=h.title;h.title='';}
+  if(navigate&&location.pathname===`${_base}/listen`)setFirstListenDestination('admin',false);
+  const button=document.getElementById('firstListenListenerBtn');
+  button.textContent='Listen to the station';button.removeAttribute('aria-busy');
+  document.getElementById('firstListenHandoffStatus').textContent=message;
+  renderFirstListenPlayer();
+  if(message)(button.getClientRects().length?button:document.getElementById('firstListenListenerRetry'))?.focus();
+}
+function openFirstListenListener(pushHistory=true){
+  const h=_firstListenHandoff;
+  if(h.frame){if(!h.ready)cancelFirstListenHandoff();return;}
+  stopFirstListenGuide();
+  h.push=pushHistory;h.title=document.title;h.error='';
+  const frame=document.createElement('iframe');h.frame=frame;
+  frame.id='firstListenListenerFrame';frame.title='Mamma Mi Radio listener';frame.hidden=true;
+  frame.allow='autoplay';frame.src=`${_base}/listen`;
+  document.getElementById('firstListenHandoffStatus').textContent='Opening the listener. Your music stays here until it is ready.';
+  const button=document.getElementById('firstListenListenerBtn');
+  button.textContent='Cancel opening';button.setAttribute('aria-busy','true');
+  h.timer=setTimeout(()=>{if(h.frame===frame&&!h.ready)cancelFirstListenHandoff('The listener could not open. Try again, or open station controls.');},10000);
+  document.body.appendChild(frame);
+  renderFirstListenPlayer();
+}
+function mmrConnectListener(view){
+  const h=_firstListenHandoff,frame=h.frame;
+  if(!frame||view!==frame.contentWindow||view.location.origin!==location.origin||view.location.pathname!==`${_base}/listen`)return null;
+  const binding={notify:null};h.binding=binding;
+  const active=()=>h.frame===frame&&h.binding===binding;
+  return {
+    play:()=>{if(active()&&(!_firstListenPlayback.intent||_firstListenPlayback.phase==='interrupted'))return toggleFirstListenStation();},
+    pause:()=>{if(active()&&(_firstListenPlayback.intent||!firstListenStationAudio().paused))stopFirstListenStationAudio();},
+    metadata:data=>{if(active()&&'mediaSession' in navigator)try{navigator.mediaSession.metadata=new MediaMetadata(data);}catch(_){}},
+    subscribe:notify=>{
+      if(!active())return()=>{};
+      binding.notify=notify;notify(firstListenPlaybackSnapshot());
+      clearTimeout(h.timer);h.timer=null;h.ready=true;
+      showAdminTab('scaletta',{render:true,persist:true});
+      setFirstListenDestination('listen',h.push);
+      document.body.dataset.listenerView='active';
+      const app=document.querySelector('.a-app');app.setAttribute('inert','');app.setAttribute('aria-hidden','true');
+      frame.hidden=false;document.title=view.document.title;
+      document.getElementById('firstListenHandoffStatus').textContent='';
+      view.document.getElementById('content')?.focus();
+      return()=>{if(active())cancelFirstListenHandoff('The listener closed. Your music is still available here.');};
+    },
+  };
+};
+function openFirstListenStation(pushHistory=true){
+  cancelFirstListenHandoff('',false);
+  showAdminTab('scaletta',{render:true,persist:true});
+  setFirstListenDestination('admin',pushHistory);
+  document.getElementById('tab-scaletta')?.focus();
+}
+window.addEventListener('popstate',event=>{
+  if(event.state?.firstListenDestination==='listen'){if(!_firstListenHandoff.frame)openFirstListenListener(false);}
+  else if(_firstListenHandoff.frame)openFirstListenStation(false);
+});
 function startFirstListenClock(){
   if(_firstListenUi.activationStartedAt)return;
   _firstListenUi.activationStartedAt=_firstListenUi.firstUnresolvedRenderedAt||performance.now();
@@ -5531,7 +5669,8 @@ function firstListenProjection(){
   const first=guided.first_listen||{};
   const verification=guided.verification||{};
   const privacy=guided.privacy||{};
-  const legacy=!Object.keys(first).length;
+  const replay=_firstListenUi.restarting;
+  const legacy=!replay&&Boolean(_firstListenUi.projection)&&!Object.keys(first).length;
   const serverSelection=String(first.selected_entity_id||guided.speaker?.selected_entity_id||'');
   const serverAttempt=String(first.accepted_attempt_id||verification.attempt_id||'');
   const localAttemptMatches=!_firstListenUi.attemptId||!serverAttempt||_firstListenUi.attemptId===serverAttempt;
@@ -5543,7 +5682,7 @@ function firstListenProjection(){
     _firstListenUi.dispatch==='receipt_failed'||
     (_firstListenUi.attemptId&&_firstListenUi.verification!=='heard')
   );
-  const serverProofMatches=!_firstListenUi.selectionDirty&&!proofPending&&localAttemptMatches&&(!_firstListenUi.selectedEntityId||!serverSelection||_firstListenUi.selectedEntityId===serverSelection);
+  const serverProofMatches=!replay&&!_firstListenUi.selectionDirty&&!proofPending&&localAttemptMatches&&(!_firstListenUi.selectedEntityId||!serverSelection||_firstListenUi.selectedEntityId===serverSelection);
   const pendingReceiptEntity=firstListenReceiptRecoveryEntity(first);
   const pendingReceiptProjected=Boolean(pendingReceiptEntity&&!_firstListenUi.selectionDirty&&_firstListenUi.selectedEntityId===pendingReceiptEntity);
   const accepted=Boolean(
@@ -5555,15 +5694,15 @@ function firstListenProjection(){
     localHeard
   );
   const privacyReviewed=Boolean(
-    first.privacy_complete||first.setup_reviewed||first.privacy_reviewed_at||
-    privacy.reviewed||privacy.status==='enabled'||privacy.status==='off'||_firstListenUi.privacyChoice!==null
+    (!replay&&(first.privacy_complete||first.setup_reviewed||first.privacy_reviewed_at||
+    privacy.reviewed||privacy.status==='enabled'||privacy.status==='off'))||_firstListenUi.privacyChoice!==null
   );
   const privacyEnabled=_firstListenUi.privacyChoice!==null
     ? _firstListenUi.privacyChoice
     : Boolean(privacy.enabled||privacy.status==='enabled');
   const haAccess=(privacy||{}).homeassistant_access!==false;
   const showAi=legacy||first.show_ai===true||(heard&&privacyReviewed)||!haAccess;
-  const existingAccess=legacy||first.install_origin==='existing';
+  const existingAccess=!replay&&(legacy||first.install_origin==='existing');
   const privacyUnlocked=heard||(existingAccess&&!_firstListenUi.selectionDirty&&!proofPending);
   return{guided,first,verification,privacy,legacy,accepted,heard,privacyReviewed,privacyEnabled,privacyUnlocked,showAi,haAccess,proofPending};
 }
@@ -5601,7 +5740,7 @@ const FIRST_LISTEN_PLAIN_SOURCE_DETAIL={
   unavailable:'Nothing playable came from here.',
   not_configured:'Not set up in this run.',
   not_bundled:'Not included in this installation.',
-  cover_only:'Backup music only. It keeps the station on while real music is found.',
+  cover_only:'Backup audio only. It keeps the station on while real music is found.',
   checking:'Checking…',
 };
 const FIRST_LISTEN_PLAIN_SOURCE_DETAIL_BY_KIND={
@@ -5619,7 +5758,7 @@ const FIRST_LISTEN_PLAIN_SOURCE_DETAIL_BY_KIND={
     not_bundled:'No demo songs are included here. Use Jamendo or add local music instead.',
   },
   recovery:{
-    not_bundled:'No backup music is included here. Use Jamendo or add local music instead.',
+    not_bundled:'No backup audio is included here. Use Jamendo or add local music instead.',
   },
 };
 const FIRST_LISTEN_PLAIN_SOURCE_LABEL={
@@ -5633,8 +5772,8 @@ function firstListenPlainSourceDetail(kind,status){
   const value=String(status||'checking').toLowerCase();
   if(kind==='recovery'&&value==='on_air'){
     const sourceAction=firstListenMusicSourceAction();
-    if(sourceAction.target==='checking')return'Backup music is playing, so the station stays on. We’re checking which primary-music repair is available.';
-    return `Backup music is playing, so the station stays on. Real music still needs a source — ${sourceAction.button.toLowerCase()}.`;
+    if(sourceAction.target==='checking')return'Backup audio is playing, so the station stays on. We’re checking which primary-music repair is available.';
+    return `Backup audio is playing, so the station stays on. Real music still needs a source — ${sourceAction.button.toLowerCase()}.`;
   }
   if(kind==='live_charts'&&['not_configured','unavailable'].includes(value)){
     if(_capsState==='checking')return'Checking whether live charts are available…';
@@ -5677,25 +5816,36 @@ function firstListenSourceState(projection){
 }
 function firstListenSourcesHtml(source,plain=false){
   const rows=firstListenSourceRows(source);
-  const requiredHtml=rows.map(item=>{
-    const rawStatus=item.row.status||item.row.state||'checking';
-    const view=firstListenSourceStatus(item.kind,rawStatus);
-    const detail=plain?firstListenPlainSourceDetail(item.kind,rawStatus):(item.row.detail||item.row.headline||'');
-    const label=plain?(FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]||view.label):view.label;
-    const chip=plain?statusChipNamed(view.state,label,label,`${item.label}: ${label}`):statusChip(view.state,label);
-    return `<div class="first-listen-source-row" data-source-kind="${esc(item.kind)}"><div><div class="first-listen-source-name">${esc(item.label)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${chip}</div>`;
-  }).join('');
+  const healthy=firstListenSourceHealthy(source,rows);
   const advancedRows=Array.isArray(source?.advanced)?source.advanced:Array.isArray(source?.advanced?.rows)?source.advanced.rows:source?.advanced&&typeof source.advanced==='object'?[source.advanced]:[];
-  const advancedHtml=advancedRows.length?`<div class="setup-subhead">Current or custom rotation</div>${advancedRows.slice(0,8).map(row=>{
-    const rawStatus=row.status||row.state;
-    const view=firstListenSourceStatus(String(row.kind||''),rawStatus);
-    const detail=plain?firstListenPlainSourceDetail(String(row.kind||''),rawStatus):(row.detail||row.headline||'Shown separately from live charts.');
-    const label=plain?(FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]||view.label):view.label;
-    const sourceLabel=String(row.label||row.kind||'Custom source');
-    const chip=plain?statusChipNamed(view.state,label,label,`${sourceLabel}: ${label}`):statusChip(view.state,label);
-    return `<div class="first-listen-source-row"><div><div class="first-listen-source-name">${esc(sourceLabel)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${chip}</div>`;
-  }).join('')}`:'';
-  return requiredHtml+advancedHtml;
+  rows.push(...advancedRows.slice(0,8).map(row=>({kind:String(row.kind||''),label:plain&&row.kind==='custom'&&source?.current_rotation?.kind==='starter'?'Included music':String(row.label||row.kind||'Custom source'),row})));
+  const visible=plain?rows.filter(({kind,row})=>{
+    const status=String(row.status||row.state||'checking').toLowerCase();
+    if(kind==='recovery')return status==='on_air'||(!healthy&&['playable','cover_only'].includes(status));
+    if(['on_air','playable'].includes(status))return true;
+    if(kind==='bundled_demo')return false;
+    if(kind==='live_charts')return _capsState==='ready'&&sourceControlVisibility(_caps).charts_reload;
+    return ['jamendo','local_music'].includes(kind)||!healthy;
+  }):rows;
+  const rendered=visible.map(item=>{
+    const name=plain&&item.kind==='recovery'?'Backup audio':item.label;
+    const scan=_st?.local_library;
+    const failedLocal=plain&&item.kind==='local_music'&&item.row.status==='not_configured'&&item.row.attempted===true&&Boolean(item.row.failure);
+    const rawStatus=failedLocal?'unavailable':item.row.status||item.row.state||'checking';
+    const view=firstListenSourceStatus(item.kind,rawStatus);
+    const emptyLocal=!failedLocal&&item.kind==='local_music'&&rawStatus==='unavailable'&&scan?.complete===true&&scan.in_progress===false&&!scan.error
+      &&scan.files_found===0&&scan.active===0&&item.row.candidates===0&&item.row.playable===0&&!item.row.on_air;
+    const optional=plain&&(emptyLocal||(rawStatus==='not_configured'&&['jamendo','local_music','live_charts'].includes(item.kind)));
+    const detail=plain?(item.kind==='recovery'&&rawStatus==='on_air'&&healthy?'Backup audio is playing right now. Music is ready to take over.':firstListenPlainSourceDetail(item.kind,emptyLocal?'not_configured':rawStatus)):(item.row.detail||item.row.headline||'');
+    const label=optional?'Optional':plain?(FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]||view.label):view.label;
+    const chip=plain?statusChipNamed(optional?'idle':view.state,label,label,`${name}: ${label}`):statusChip(view.state,label);
+    return{current:item.kind==='recovery'||['on_air','playable'].includes(rawStatus),html:`<div class="first-listen-source-row" data-source-kind="${esc(item.kind)}"><div><div class="first-listen-source-name">${esc(name)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${chip}</div>`};
+  });
+  if(!plain||!healthy)return rendered.map(item=>item.html).join('');
+  const current=rendered.filter(item=>item.current).map(item=>item.html).join('');
+  const other=rendered.filter(item=>!item.current).map(item=>item.html).join('');
+  const action=firstListenMusicSourceAction();
+  return current+(other?`<details class="first-listen-other-sources"><summary><span>Add more music</span></summary><p class="use-copy">Your station can already play. Add another source whenever you like.</p>${other}<button type="button" class="btn btn-util first-listen-action" onclick="openMusicSourceTools()" ${action.target==='checking'?'disabled':''}>${esc(action.button)}</button></details>`:'');
 }
 function renderFirstListenSources(source){
   const sourceKnown=Array.isArray(source?.rows)&&source.rows.length>0;
@@ -5703,10 +5853,20 @@ function renderFirstListenSources(source){
   const preview=document.getElementById('firstListenSourcePreview');
   const previewDetails=document.getElementById('firstListenSourcePreviewDetails');
   const technical=document.getElementById('firstListenSources');
-  if(preview)preview.innerHTML=sourceKnown?firstListenSourcesHtml(source,true):'<div class="empty">Checking what can play…</div>';
+  if(preview){
+    const markup=sourceKnown?firstListenSourcesHtml(source,true):'<div class="empty">Checking what can play…</div>';
+    if(preview._sourceMarkup!==markup){
+      const othersOpen=preview.querySelector('.first-listen-other-sources')?.open===true;
+      const restoreFocus=preview.contains(document.activeElement);
+      preview.innerHTML=markup;
+      preview._sourceMarkup=markup;
+      const others=preview.querySelector('.first-listen-other-sources');
+      if(others)others.open=othersOpen;
+      if(restoreFocus)(others?.querySelector('summary')||previewDetails?.querySelector('summary'))?.focus({preventScroll:true});
+    }
+  }
   if(previewDetails){
     const previousHealth=previewDetails.dataset.sourceHealth||'unknown';
-    previewDetails.hidden=!sourceKnown;
     if(sourceHealth==='degraded'&&previousHealth!=='degraded')previewDetails.open=true;
     previewDetails.dataset.sourceHealth=sourceHealth;
   }
@@ -5738,19 +5898,16 @@ function renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,rec
   const kicker=document.getElementById('firstListenShowKicker');
   const title=document.getElementById('firstListenShowTitle');
   const copy=document.getElementById('firstListenShowCopy');
-  if(kicker)kicker.textContent='First Listen: Marco + Giulia';
-  if(title)title.textContent=priorInstall?'Review your First Listen choices.':'Hear Mamma Mi Radio right here.';
+  if(kicker)kicker.textContent='Welcome to Mamma Mi Radio';
+  if(title)title.textContent=priorInstall?'Review your First Listen choices.':'Your seat’s ready.';
   if(!copy)return;
   if(priorInstall)copy.textContent='Your saved listening path and privacy choice stay in place until you change them.';
-  else if(!sourceKnown)copy.textContent='Marco and Giulia welcome you while we check that music can continue afterward.';
-  else if(healthy)copy.textContent='Marco and Giulia welcome you, then live music begins.';
-  else if(recoveryOnAir||recoveryAvailable)copy.textContent='Marco and Giulia welcome you, then backup music keeps the station playing.';
-  else copy.textContent='Marco and Giulia welcome you. Music needs attention after the opening.';
+  else copy.innerHTML='Marco’s made room for you.<br>Giulia’s wondering where her coffee went.';
 }
 function firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable}){
   if(healthy)return 'Listen for Marco and Giulia, then the first song.';
-  if(recoveryOnAir)return 'Listen for Marco and Giulia, then backup music.';
-  if(recoveryAvailable)return 'Listen for Marco and Giulia. Backup music is ready while the main music needs attention.';
+  if(recoveryOnAir)return 'Listen for Marco and Giulia, then backup audio. Music still needs attention.';
+  if(recoveryAvailable)return 'Listen for Marco and Giulia. Backup audio is available while music needs attention.';
   return 'Listen for Marco and Giulia. The opening may end before music because the music needs attention.';
 }
 function firstListenPendingPrivacyChoice(projection,localChoice=_firstListenUi.privacyReceiptChoice){
@@ -5770,7 +5927,11 @@ function renderFirstListenProgress(){
   const {healthy,recoveryOnAir,recoveryAvailable,continuityAvailable}=sourceState;
   renderFirstListenSources(source);
 
-  const priorInstall=projection.legacy||projection.first.install_origin==='existing';
+  const priorInstall=!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
+  document.getElementById('firstListenRestartBtn').disabled=firstListenRestartBusy();
+  const restartNote=document.getElementById('firstListenRestartNote');
+  restartNote.hidden=!_firstListenUi.restarting;
+  restartNote.textContent=projection.privacyEnabled?'Your saved Home context is still on. You can change it in step 3.':'Your saved settings stay in place. Home stays private until you choose otherwise.';
   const existingProof=priorInstall&&!_firstListenUi.selectionDirty&&!projection.proofPending;
   const receiptRepairRequired=_firstListenUi.dispatch==='receipt_failed';
   const listenAccepted=projection.accepted||existingProof||receiptRepairRequired;
@@ -5780,10 +5941,7 @@ function renderFirstListenProgress(){
   const configuredKeys=[...new Set(llmEssentials.flatMap(e=>e.configured_keys||[]))];
   renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,recoveryAvailable,priorInstall});
   const privacyMilestone=projection.privacyReviewed;
-  const sourceMilestone=sourceKnown||listenAccepted||listenComplete||privacyMilestone||priorInstall;
-  const sourceComplete=sourceMilestone&&continuityAvailable;
-  firstListenSetStep('firstListenSourceStep',sourceComplete?'complete':'current');
-  firstListenSetStep('firstListenSpeakerStep',listenAccepted?'complete':sourceMilestone?'current':'upcoming');
+  firstListenSetStep('firstListenSpeakerStep',listenAccepted?'complete':'current');
   firstListenSetStep('firstListenVerifyStep',listenComplete?'complete':receiptRepairRequired||listenAccepted?'current':'upcoming');
   firstListenSetStep('firstListenPrivacyStep',privacyMilestone?'complete':existingPrivacyReview||listenComplete?'current':'upcoming');
   firstListenSetStep('firstListenAiStep',configuredKeys.length?'complete':'optional');
@@ -5791,39 +5949,45 @@ function renderFirstListenProgress(){
   const surface=document.getElementById('journeySurface');
   const progressLine=document.getElementById('firstListenProgressLine');
   const requiredCount=firstListenRequiredCount();
-  const currentStep=document.querySelector('#firstListenPath > .first-listen-step[data-state="current"]');
-  const currentNumber=currentStep?Number(currentStep.querySelector('.first-listen-number')?.textContent||0):0;
-  const nextLabels={1:sourceKnown&&!continuityAvailable?'repair the music source':'play it on this device',2:'check the sound',3:'choose whether the hosts can use Home details'};
+  const requiredSteps=[...document.querySelectorAll('#firstListenPath > .first-listen-step')];
+  const currentNumber=requiredSteps.findIndex(step=>step.dataset.state==='current')+1;
+  const currentKey=FIRST_LISTEN_STEP_KEYS[requiredSteps[currentNumber-1]?.id];
+  const nextLabels={speaker:'play it here',verify:'tell us how it sounds',privacy:'choose whether the hosts can use Home details'};
   if(surface)surface.dataset.currentStep=currentNumber?String(currentNumber):'complete';
-  if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of ${requiredCount}. Next: ${nextLabels[currentNumber]||'finish'}.`:'First Listen complete. Review any choice below.';
+  if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of ${requiredCount}. Next: ${nextLabels[currentKey]||'finish'}.`:!continuityAvailable&&!priorInstall?'Your three choices are saved. Music still needs attention.':'First Listen complete. Review any choice below.';
 
   const sourceSummary=document.getElementById('firstListenSourceSummary');
   const sourceRepair=document.getElementById('firstListenSourceRepair');
   const sourceAction=firstListenMusicSourceAction();
   if(!sourceKnown){
-    firstListenSetChip('firstListenSourceChip','working','Checking');
+    firstListenSetChip('firstListenSourceChip','working','Still checking');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready. We’re checking that music can continue afterward.';
     if(sourceRepair)sourceRepair.textContent='';
   }else if(healthy){
-    firstListenSetChip('firstListenSourceChip','ready','Opening ready');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Music will continue when it ends.';
+    firstListenSetChip('firstListenSourceChip','ready','Music is ready');
+    if(sourceSummary)sourceSummary.textContent='Music will continue after the opening. You don’t need to set up another source.';
     if(sourceRepair)sourceRepair.textContent='';
   }else if(recoveryOnAir){
-    firstListenSetChip('firstListenSourceChip','degraded','Backup playing');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup music will keep the station playing.';
-    if(sourceRepair)sourceRepair.textContent='You can continue and finish First Listen. Backup music will play after the welcome. Primary music still needs attention.';
+    firstListenSetChip('firstListenSourceChip','degraded','Music needs attention');
+    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup audio is keeping the station on.';
+    if(sourceRepair)sourceRepair.textContent='You can continue First Listen with backup audio. Check music sources to hear songs afterward.';
   }else if(recoveryAvailable){
-    firstListenSetChip('firstListenSourceChip','degraded','Backup audio available');
+    firstListenSetChip('firstListenSourceChip','degraded','Music needs attention');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup audio can keep the station playing while primary music is repaired.';
     if(sourceRepair)sourceRepair.textContent=sourceAction.target==='checking'
-      ?'You can continue and finish First Listen with backup audio. Backup music is ready after the welcome. We’re checking which primary-music repair is available.'
-      :`You can continue and finish First Listen with backup audio. Backup music is ready after the welcome. Primary music still needs attention; ${sourceAction.button.toLowerCase()} when you are ready.`;
+      ?'You can continue First Listen with backup audio. We’re checking which music-source repair is available.'
+      :`You can continue First Listen with backup audio. Music still needs attention; ${sourceAction.button.toLowerCase()} when you are ready.`;
   }else{
-    firstListenSetChip('firstListenSourceChip','degraded','Music still needed');
+    firstListenSetChip('firstListenSourceChip','degraded','Music needs attention');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready, but music cannot continue afterward yet.';
     if(sourceRepair)sourceRepair.textContent=sourceAction.target==='checking'
       ?'The welcome can still play, but there is no audio ready afterward. We’re checking which music-source repair is available.'
       :`The welcome can still play, but there is no audio ready afterward. ${sourceAction.button} to continue.`;
+  }
+  // A later capabilities refresh must not overwrite an unresolved setup error.
+  if(document.getElementById('setupAccessError')?.hidden===false){
+    firstListenSetChip('firstListenSourceChip','degraded','Couldn’t check music');
+    if(sourceSummary)sourceSummary.textContent=(sourceKnown?'These are the last music details we received. ':'We couldn’t check music yet. ')+'Check your connection, then reload this page or wait for the next check.';
   }
   const sourceActions=document.getElementById('firstListenSourceActions');
   if(sourceActions)sourceActions.hidden=!sourceKnown||healthy;
@@ -5837,23 +6001,21 @@ function renderFirstListenProgress(){
   const retryBtn=document.getElementById('firstListenRetryBtn');
   const saveAttemptBtn=document.getElementById('firstListenSaveAttemptBtn');
   const speakerSummary=document.getElementById('firstListenSpeakerSummary');
-  const speakerBusy=_firstListenUi.dispatch==='starting'||_firstListenUi.receiptSaving;
+  const speakerBusy=_firstListenUi.dispatch==='starting'||_firstListenUi.receiptSaving||_firstListenUi.privacySaving;
   const browserGuidePlaying=firstListenGuideLocksRoomProof();
   const deliberateRetry=_firstListenUi.verification==='not_yet'&&!listenComplete;
   if(playBtn){
     playBtn.disabled=!sourceKnown||speakerBusy||browserGuidePlaying||(listenAccepted&&!deliberateRetry);
-    playBtn.textContent=_firstListenUi.dispatch==='starting'?'Starting the station…':deliberateRetry?'Start sound check again':'Start sound check';
+    playBtn.textContent=_firstListenUi.dispatch==='starting'?'Starting your station…':deliberateRetry?'Play my station again':'Play my station';
     firstListenSetActionTone(playBtn,!listenAccepted);
   }
   if(retryBtn)retryBtn.disabled=!deliberateRetry||speakerBusy||browserGuidePlaying;
   if(saveAttemptBtn){
     saveAttemptBtn.disabled=!receiptRepairRequired||_firstListenUi.busy||_firstListenUi.receiptSaving;
-    saveAttemptBtn.textContent=_firstListenUi.receiptSaving?'Restoring sound check…':'Restore sound check';
+    saveAttemptBtn.textContent=_firstListenUi.receiptSaving?'Saving your sound check…':'Save my sound check';
   }
   const speakerStep=document.getElementById('firstListenSpeakerStep');
   if(speakerStep)speakerStep.setAttribute('aria-busy',speakerBusy?'true':'false');
-  const evidenceSpeaker=document.getElementById('firstListenEvidenceSpeaker');
-  if(evidenceSpeaker)evidenceSpeaker.textContent=_firstListenUi.selectedName||'This device';
   if(existingProof){
     firstListenSetChip('firstListenSpeakerChip','ready','Existing setup');
     if(speakerSummary)speakerSummary.textContent='Your saved sound check stays as it is. You do not need to play the station again.';
@@ -5861,11 +6023,11 @@ function renderFirstListenProgress(){
     firstListenSetChip('firstListenSpeakerChip','ready','Played');
     if(speakerSummary)speakerSummary.textContent=`${_firstListenUi.selectedName||'This device'} is ready for Mamma Mi Radio.`;
   }else if(projection.accepted){
-    firstListenSetChip('firstListenSpeakerChip','ready','Sent');
-    if(speakerSummary)speakerSummary.textContent='The station is playing on this device. Listen now.';
+    firstListenSetChip('firstListenSpeakerChip','ready','Started');
+    if(speakerSummary)speakerSummary.textContent='Your station started on this device.';
   }else if(sourceKnown){
-    firstListenSetChip('firstListenSpeakerChip','working','Start here');
-    if(speakerSummary)speakerSummary.textContent='Tap Start sound check to hear it on this device.';
+    firstListenSetChip('firstListenSpeakerChip','idle','Your turn');
+    if(speakerSummary)speakerSummary.textContent='Tap Play my station to hear it on this device.';
   }else{
     firstListenSetChip('firstListenSpeakerChip','idle','Waiting');
   }
@@ -5881,12 +6043,12 @@ function renderFirstListenProgress(){
   if(receiptRepair)receiptRepair.hidden=!receiptRepairRequired;
   const repair=document.getElementById('firstListenRepair');
   if(repair)repair.hidden=!_firstListenUi.repairOpen||receiptRepairRequired;
-  const soundGuide=document.querySelector('#firstListenVerifyBody > .guide-audio[data-guide="sound-check"]');
+  const soundGuide=document.getElementById('firstListenSoundHelp');
   if(soundGuide)soundGuide.hidden=receiptRepairRequired||_firstListenUi.repairOpen||listenComplete;
   const retestWrap=document.getElementById('firstListenRetestWrap');
   const retestBtn=document.getElementById('firstListenRetestBtn');
   if(retestWrap)retestWrap.hidden=!(_firstListenUi.reviewStep==='verify'&&listenComplete);
-  if(retestBtn)retestBtn.hidden=false;
+  if(retestBtn){retestBtn.hidden=false;retestBtn.disabled=speakerBusy||_firstListenUi.busy;}
   const verifyStep=document.getElementById('firstListenVerifyStep');
   if(verifyStep)verifyStep.setAttribute('aria-busy',_firstListenUi.receiptSaving?'true':'false');
   const verifySummary=document.getElementById('firstListenVerifySummary');
@@ -5895,14 +6057,14 @@ function renderFirstListenProgress(){
     if(verifySummary)verifySummary.textContent='Your existing listening check still stands. Review your Home details next.';
   }else if(listenComplete){
     firstListenSetChip('firstListenVerifyChip','ready','Heard');
-    if(verifySummary)verifySummary.textContent=healthy?'Bella — Mamma Mi Radio is on this device.':recoveryOnAir?'The station is on this device. Backup music follows the opening.':recoveryAvailable?'The station is on this device. Backup audio is available, but primary music still needs attention.':'The opening reached this device; the music still needs attention.';
+    if(verifySummary)verifySummary.textContent=healthy?'Bella — Mamma Mi Radio is on this device.':recoveryOnAir?'The station is on this device. Backup audio follows the opening.':recoveryAvailable?'The station is on this device. Backup audio is available, but primary music still needs attention.':'The opening reached this device; the music still needs attention.';
     firstListenSetStatus('firstListenVerifyStatus','You heard the station on this device.','ready');
   }else if(receiptRepairRequired){
     firstListenSetChip('firstListenVerifyChip','degraded','Save check');
     if(verifySummary)verifySummary.textContent='The station was playing, but the sound check was not saved. Restore it without replaying the station.';
   }else if(listenAccepted){
     firstListenSetChip('firstListenVerifyChip','working','Listen now');
-    if(verifySummary)verifySummary.textContent=`${firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable})} Only you can confirm you actually heard it.`;
+    if(verifySummary)verifySummary.textContent=`${firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable})}`;
   }else{
     firstListenSetChip('firstListenVerifyChip','idle','Waiting');
   }
@@ -5917,21 +6079,24 @@ function renderFirstListenProgress(){
   const previewBox=document.getElementById('haContextPreview');
   const permissionPrimer=document.querySelector('#firstListenPrivacyBody .permission-primer');
   const pendingPrivacyChoice=firstListenPendingPrivacyChoice(projection);
+  const privacyReceiptFailed=_firstListenUi.privacyReceiptChoice!==null;
   if(previewBtn){
     previewBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';
     previewBtn.hidden=_firstListenUi.privacyPreviewValid;
-    previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Preparing preview…':pendingPrivacyChoice===true?'See what the hosts would receive again':'See what the hosts would receive';
+    previewBtn.textContent=_firstListenUi.privacyPreview==='previewing'?'Preparing preview…':privacyReceiptFailed&&pendingPrivacyChoice===true?'See what the hosts would receive again':'See what the hosts would receive';
   }
   if(keepOffBtn){
-    keepOffBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving;
-    keepOffBtn.textContent=pendingPrivacyChoice===false?'Save private choice again':projection.privacyReviewed&&projection.privacyEnabled?'Switch to private':'Keep Home private';
+    keepOffBtn.disabled=!projection.privacyUnlocked;
+    keepOffBtn.setAttribute('aria-disabled',_firstListenUi.privacySaving?'true':'false');
+    keepOffBtn.textContent=privacyReceiptFailed&&pendingPrivacyChoice===false?'Save private choice again':projection.privacyEnabled?'Switch to private':'Keep Home private';
     firstListenSetActionTone(keepOffBtn,!_firstListenUi.privacyPreviewValid);
   }
   if(enableBtn){
     const receiptRetry=pendingPrivacyChoice===true;
     enableBtn.hidden=!_firstListenUi.privacyPreviewValid;
-    enableBtn.disabled=!projection.privacyUnlocked||!_firstListenUi.privacyPreviewValid||_firstListenUi.privacySaving||(projection.privacyEnabled&&!receiptRetry);
-    enableBtn.textContent=receiptRetry?'Save shared choice again':_firstListenUi.privacyPreview==='ambient_only'?'Let the hosts use daylight only':'Let Marco and Giulia use these details';
+    enableBtn.disabled=!projection.privacyUnlocked||!_firstListenUi.privacyPreviewValid||(projection.privacyEnabled&&!receiptRetry&&!_firstListenUi.privacySaving);
+    enableBtn.setAttribute('aria-disabled',_firstListenUi.privacySaving?'true':'false');
+    enableBtn.textContent=receiptRetry?(privacyReceiptFailed?'Save shared choice again':'Save shared choice'):_firstListenUi.privacyPreview==='ambient_only'?'Let the hosts use daylight only':'Let Marco and Giulia use these details';
     firstListenSetActionTone(enableBtn,true);
   }
   const previewVisible=_firstListenUi.privacyPreview!=='untouched';
@@ -5940,7 +6105,7 @@ function renderFirstListenProgress(){
   const privacyStep=document.getElementById('firstListenPrivacyStep');
   if(privacyStep)privacyStep.setAttribute('aria-busy',_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing'?'true':'false');
   const privacySummary=document.getElementById('firstListenPrivacySummary');
-  if(pendingPrivacyChoice!==null){
+  if(privacyReceiptFailed){
     firstListenSetChip('firstListenPrivacyChip','degraded','Review not saved');
     if(privacySummary)privacySummary.textContent=pendingPrivacyChoice?'Home context is on, but First Listen did not save this step. Show your Home details again, then save the choice.':'Home context stays off, but First Listen did not save this step. Save the private choice again.';
   }else if(projection.privacyReviewed&&projection.privacyEnabled){
@@ -5949,6 +6114,9 @@ function renderFirstListenProgress(){
   }else if(projection.privacyReviewed){
     firstListenSetChip('firstListenPrivacyChip','ready','Stays off');
     if(privacySummary)privacySummary.textContent='Home stays private. The station keeps playing with Marco and Giulia.';
+  }else if(pendingPrivacyChoice===true){
+    firstListenSetChip('firstListenPrivacyChip','working','Review');
+    if(privacySummary)privacySummary.textContent='Home context is on. See what the hosts would receive, then save your choice.';
   }else if(projection.privacyUnlocked){
     if(_firstListenUi.privacyPreview==='ambient_only'){
       firstListenSetChip('firstListenPrivacyChip','degraded','Nothing useful yet');
@@ -5973,7 +6141,7 @@ function renderFirstListenProgress(){
   if(aiToggle){
     const aiOpen=_firstListenUi.optionalStep==='ai';
     aiToggle.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi;
-    aiToggle.textContent=aiOpen?'Close AI setup':configuredKeys.length?'Review AI setup':'Set up new conversations';
+    aiToggle.textContent=aiOpen?'Close AI setup':configuredKeys.length?'Review AI setup':'Add new host conversations';
     aiToggle.setAttribute('aria-expanded',aiOpen?'true':'false');
   }
   const aiSummary=document.getElementById('firstListenAiSummary');
@@ -6110,23 +6278,144 @@ function renderHomeContextPreview(data,targetId='haContextPreview'){
   }
 }
 function firstListenStationAudio(){return document.getElementById('firstListenStationAudio')}
+async function firstListenAudioDeadline(operation){
+  let timer;
+  try{return await Promise.race([operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('audio_timeout')),FIRST_LISTEN_GUIDE_LOAD_MS);})]);}
+  finally{clearTimeout(timer);}
+}
+function setFirstListenMusicGain(duck){
+  const {context,gain,mixReady}=_firstListenPlayback;
+  if(!context||!gain||!mixReady||context.state==='closed')return;
+  gain.gain.cancelScheduledValues(context.currentTime);
+  gain.gain.setValueAtTime(gain.gain.value,context.currentTime);
+  gain.gain.linearRampToValueAtTime(duck?0.12:1,context.currentTime+(duck?0.1:0.35));
+}
+async function ensureFirstListenMix(epoch){
+  const p=_firstListenPlayback;
+  if(p.mixUnavailable)return false;
+  if(p.context?.state==='running'&&p.source)return p.mixReady;
+  if(p.mixTask)return p.mixTask;
+  // Bind the element only after the context and downstream path work. Once
+  // bound, this context owns output for the element's entire lifetime.
+  p.mixTask=(async()=>{
+    try{
+      if(!p.context){
+        const AudioContext=window.AudioContext||window.webkitAudioContext;
+        if(!AudioContext)return false;
+        p.context=new AudioContext();
+        p.gain=p.context.createGain();
+        p.gain.connect(p.context.destination);
+        try{if(navigator.audioSession)navigator.audioSession.type='playback';}catch(_){}
+        p.context.addEventListener('statechange',()=>{
+          if(!p.source)return;
+          if(p.context.state!=='running'){
+            stopFirstListenGuide();
+            if(p.intent)p.phase='interrupted';
+          }else if(p.intent&&!firstListenStationAudio().paused)p.phase='playing';
+          renderFirstListenPlayer();
+        });
+      }
+      if(p.context.state==='closed')throw new Error('audio_context_closed');
+      await firstListenAudioDeadline(p.context.resume());
+      if(epoch!==p.epoch||!p.intent||p.context.state!=='running')return false;
+      if(!p.source){
+        p.source=p.context.createMediaElementSource(firstListenStationAudio());
+        try{p.source.connect(p.gain);p.mixReady=true;}
+        catch(_){
+          // Keep the bound source alive via a direct path; overlays cannot
+          // safely play on a path that has no gain control.
+          try{p.source.disconnect();p.source.connect(p.context.destination);}
+          catch(_){p.unrecoverable=true;throw new Error('audio_output_unavailable');}
+        }
+      }
+      return p.mixReady;
+    }catch(_){
+      if(!p.source)p.mixUnavailable=true;
+      if(p.source&&p.intent)p.phase='interrupted';
+      return false;
+    }
+  })();
+  try{return await p.mixTask;}finally{p.mixTask=null;renderFirstListenPlayer();}
+}
+function renderFirstListenPlayer(){
+  const p=_firstListenPlayback,player=document.getElementById('firstListenPlayer');
+  if(!player)return;
+  const h=_firstListenHandoff,opening=Boolean(h.frame&&!h.ready);
+  const recovery=document.getElementById('firstListenListenerRecovery');
+  recovery.hidden=!document.getElementById('firstListenSuccess').hidden||!(h.error||opening);
+  document.getElementById('firstListenListenerRecoveryStatus').textContent=opening?'Opening the listener…':h.error;
+  document.getElementById('firstListenListenerRetry').textContent=opening?'Cancel opening':'Try listener again';
+  player.hidden=p.phase==='idle'&&recovery.hidden;
+  player.querySelector('.first-listen-player-bar').hidden=p.phase==='idle';
+  document.getElementById('firstListenDestinations').hidden=p.phase==='idle';
+  document.body.dataset.localPlayer=player.hidden?'off':'on';
+  const reload=p.unrecoverable||Boolean(p.source&&p.context?.state==='closed');
+  const messages={starting:'Starting here…',playing:'Playing here',paused:'Paused here',interrupted:reload?'Sound was interrupted. Reload the player to reconnect.':'Sound was interrupted. Choose Continue music to reconnect.'};
+  document.getElementById('firstListenPlayerStatus').textContent=messages[p.phase]||'';
+  document.getElementById('firstListenPlayerToggle').textContent=reload?'Reload player':p.intent&&p.phase!=='interrupted'?'Pause music':'Continue music';
+  const address=firstListenShareAddress();
+  const note=document.getElementById('firstListenStreamAddressNote');
+  if(!note.dataset.copied)note.textContent=address?'Other players can use the stream address if they can reach this station.':'Use your station’s network address on other devices. This preview or Home Assistant address is only for the current browser.';
+  document.getElementById('firstListenCopyStream').hidden=!address;
+  publishFirstListenPlayback();
+}
+function firstListenShareAddress(){
+  const host=location.hostname;
+  return _base.includes('/hassio_ingress/')||host==='localhost'||host==='[::1]'||/^127\./.test(host)?'':`${location.origin}${_base}/stream`;
+}
+async function copyFirstListenStream(){
+  const address=firstListenShareAddress();
+  if(!address)return;
+  const note=document.getElementById('firstListenStreamAddressNote');
+  try{await navigator.clipboard.writeText(address);note.dataset.copied='true';note.textContent='Stream address copied. Playback continues here.';}
+  catch(_){note.textContent=`Select and copy this address: ${address}`;}
+}
+async function toggleFirstListenStation(){
+  const p=_firstListenPlayback,audio=firstListenStationAudio();
+  if(p.unrecoverable||(p.source&&p.context?.state==='closed')){location.reload();return;}
+  if(p.intent&&p.phase!=='interrupted'){stopFirstListenStationAudio();return;}
+  if(p.phase==='idle'||['ready','idle','rejected'].includes(_firstListenUi.dispatch)){startFirstListen(document.getElementById('firstListenPlayerToggle'));return;}
+  if(document.body.dataset.stopped==='true'){await doResume(document.getElementById('firstListenPlayerToggle'));return;}
+  await continueFirstListenStation(p.epoch);
+}
+async function continueFirstListenStation(expectedEpoch){
+  const p=_firstListenPlayback,audio=firstListenStationAudio();
+  if(expectedEpoch!==p.epoch||p.phase==='idle')return;
+  stopFirstListenGuide();
+  const epoch=++p.epoch;
+  p.intent=true;p.phase='starting';renderFirstListenPlayer();
+  // An explicit transport click rejoins the live station. Keep the same audio
+  // graph and saved proof, but discard buffered history and its old connection.
+  audio.removeAttribute('src');audio.load();
+  try{
+    await ensureFirstListenMix(epoch);
+    if(epoch!==p.epoch||!p.intent)return;
+    if(p.source&&(p.context.state!=='running'||p.unrecoverable))throw new Error('audio_interrupted');
+    audio.src=`${_base}${FIRST_LISTEN_LIVE_STREAM}`;
+    await firstListenAudioDeadline(audio.play());
+  }catch(_){if(epoch===p.epoch)p.phase='interrupted';}
+  finally{renderFirstListenPlayer();}
+}
 function stopFirstListenStationAudio(){
-  // A hard teardown leaves nothing to resume, so cancel any pending
-  // guide-narration resume rather than let it race this with a stray .play().
-  _firstListenUi.stationPausedForGuide=false;
+  const p=_firstListenPlayback;
+  ++p.epoch;p.intent=false;
+  if(p.phase!=='idle')p.phase='paused';
+  stopFirstListenGuide();
   const audio=firstListenStationAudio();
-  if(!audio)return;
-  audio.pause();
-  audio.removeAttribute('src');
-  audio.load();
+  if(audio){audio.pause();audio.removeAttribute('src');audio.load();}
+  if(_firstListenUi.dispatch==='starting'){_firstListenUi.dispatch='ready';_firstListenUi.busy=false;}
+  renderFirstListenPlayer();
+  renderFirstListenProgress();
 }
 function firstListenStationPlaying(){
-  // This fires far more often than a new listening attempt. stopFirstListenGuide()
-  // resumes the element with play() on every guide exit, and a live stream re-fires
-  // 'playing' after each rebuffer. Only a genuine start or retest sets dispatch to
-  // 'starting' first, so anything else is a resume and must change nothing: both
-  // repair panels host their own guide clip, and clearing repairOpen when one ends
-  // hides the only control that can still persist a failed sound check.
+  const p=_firstListenPlayback;
+  if(!p.intent){firstListenStationAudio().pause();return;}
+  if(firstListenStationAudio().paused)return;
+  p.phase=p.source&&(p.context.state!=='running'||p.unrecoverable)?'interrupted':'playing';
+  renderFirstListenPlayer();
+  if(p.phase!=='playing')return;
+  // Rebuffering and Continue must preserve proof, repair controls and focus.
+  // Only a deliberate new sound check sets dispatch to starting.
   if(_firstListenUi.dispatch!=='starting')return;
   _firstListenUi.selectionDirty=false;
   _firstListenUi.dispatch='accepted';
@@ -6136,21 +6425,35 @@ function firstListenStationPlaying(){
   firstListenSetStatus('firstListenSpeakerStatus','The station is playing on this device. Say whether you hear it.','ready');
   renderFirstListenProgress();
   document.getElementById('firstListenVerifyHeading')?.focus();
+  requestAnimationFrame(()=>{
+    const actions=document.getElementById('firstListenVerifyActions');
+    const player=document.getElementById('firstListenPlayer');
+    if(actions?.getClientRects().length&&player?.getClientRects().length){
+      const overlap=actions.getBoundingClientRect().bottom-player.getBoundingClientRect().top+12;
+      if(overlap>0)window.scrollBy({top:overlap,behavior:'instant'});
+    }
+  });
 }
 function initFirstListenStationAudio(){
   const audio=firstListenStationAudio();
   if(!audio||audio.dataset.wired==='true')return;
   audio.dataset.wired='true';
+  const player=document.getElementById('firstListenPlayer');
+  if(player&&window.ResizeObserver)new ResizeObserver(()=>document.documentElement.style.setProperty('--local-player-height',`${player.getBoundingClientRect().height}px`)).observe(player);
   audio.addEventListener('playing',firstListenStationPlaying);
+  audio.addEventListener('waiting',()=>{if(_firstListenPlayback.intent){_firstListenPlayback.phase='starting';renderFirstListenPlayer();}});
+  audio.addEventListener('pause',()=>{if(audio.paused&&_firstListenPlayback.intent){_firstListenPlayback.phase='interrupted';renderFirstListenPlayer();}});
+  audio.addEventListener('ended',()=>{if(_firstListenPlayback.intent){_firstListenPlayback.phase='interrupted';renderFirstListenPlayer();}});
   audio.addEventListener('error',()=>{
+    if(_firstListenPlayback.intent){_firstListenPlayback.phase='interrupted';renderFirstListenPlayer();}
     if(_firstListenUi.dispatch!=='starting')return;
     _firstListenUi.dispatch='rejected';
-    firstListenSetStatus('firstListenSpeakerStatus','This device could not start the station. Check volume, then try Start sound check again.','blocked');
+    firstListenSetStatus('firstListenSpeakerStatus','This device could not start the station. Check volume, then try Play my station again.','blocked');
     renderFirstListenProgress();
   });
 }
 function retestFirstListenSpeaker(el){
-  if(_firstListenUi.busy||_firstListenUi.receiptSaving)return;
+  if(_firstListenUi.busy||_firstListenUi.receiptSaving||_firstListenUi.privacySaving)return;
   _firstListenUi.selectionDirty=true;
   _firstListenUi.retestPending=true;
   _firstListenUi.attemptId='';
@@ -6163,10 +6466,13 @@ function retestFirstListenSpeaker(el){
   startFirstListen(el);
 }
 async function startFirstListen(el){
-  if(_firstListenUi.busy||_firstListenUi.receiptSaving)return;
+  if(_firstListenUi.busy||_firstListenUi.receiptSaving||_firstListenUi.privacySaving)return;
   stopFirstListenGuide();
   const audio=firstListenStationAudio();
   if(!audio)return;
+  const p=_firstListenPlayback,epoch=++p.epoch;
+  p.intent=true;p.phase='starting';renderFirstListenPlayer();
+  const mix=ensureFirstListenMix(epoch);
   _firstListenUi.busy=true;
   _firstListenUi.dispatch='starting';
   renderFirstListenProgress();
@@ -6175,18 +6481,20 @@ async function startFirstListen(el){
   try{
     startFirstListenClock();
     const {response,payload}=await apiResponse('POST','/api/resume',undefined,FIRST_LISTEN_TIMEOUTS.play);
+    if(epoch!==p.epoch||!p.intent)return;
     if(response.status===503&&payload?.force_available===true){
       // Force Start rebuilds the station with no playable runway. The producer
       // desk confirms before doing this; onboarding must not do it silently.
       if(!window.confirm(FORCE_RESUME_CONFIRM_COPY)){
-        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Start sound check again.','degraded');
+        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Play my station again.','degraded');
         _firstListenUi.dispatch='idle';
         return;
       }
       const {response:forceResponse,payload:forcePayload}=await apiResponse('POST','/api/resume?force=true',undefined,FIRST_LISTEN_TIMEOUTS.play);
+      if(epoch!==p.epoch||!p.intent)return;
       // ok:true with recovering:false still means the station is on air (#1022).
       if(!(forceResponse.ok&&forcePayload?.ok===true)){
-        const detail=transportFailureCopy(forcePayload,'The studio could not rebuild the station just now. Give it a few seconds, then tap Start sound check again.');
+        const detail=transportFailureCopy(forcePayload,'The studio could not rebuild the station just now. Give it a few seconds, then tap Play my station again.');
         firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');
         _firstListenUi.dispatch='idle';
         return;
@@ -6209,17 +6517,22 @@ async function startFirstListen(el){
       }
       firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');
     }
-    stopFirstListenStationAudio();
-    audio.src=`${_base}${FIRST_LISTEN_STREAM}`;
+    await mix;
+    if(epoch!==p.epoch||!p.intent)return;
+    if(p.source&&(p.context.state!=='running'||p.unrecoverable))throw new Error('audio_interrupted');
+    if(!audio.getAttribute('src')||audio.error)audio.src=`${_base}${FIRST_LISTEN_STREAM}`;
     const playResult=audio.play();
-    if(playResult&&typeof playResult.then==='function')await playResult;
+    if(playResult&&typeof playResult.then==='function')await firstListenAudioDeadline(playResult);
+    if(epoch===p.epoch&&p.intent&&!audio.paused)firstListenStationPlaying();
   }catch(error){
+    if(epoch!==p.epoch)return;
     console.error('first_listen_play',error);
     _firstListenUi.dispatch='rejected';
     firstListenSetStatus('firstListenSpeakerStatus',firstListenTimedOut(error)?'Starting the station on this device is taking longer than usual. Give it a moment, then try again.':firstListenErrorMessage({error:{code:'invalid_request'}}),'blocked');
   }finally{
-    _firstListenUi.busy=false;
-    if(el)el.removeAttribute('aria-busy');
+    if(epoch===p.epoch){_firstListenUi.busy=false;if(_firstListenUi.dispatch!=='accepted'&&p.phase==='starting')p.phase='interrupted';}
+    if(el&&(epoch===p.epoch||!p.intent))el.removeAttribute('aria-busy');
+    renderFirstListenPlayer();
     renderFirstListenProgress();
   }
 }
@@ -6269,7 +6582,7 @@ async function verifyFirstListen(heard,el){
   stopFirstListenGuide();
   _firstListenUi.busy=true;
   if(el)el.setAttribute('aria-busy','true');
-  firstListenSetStatus('firstListenVerifyStatus',requestedHeard?'Saving your listening check…':'Saving “Not yet” and opening help…');
+  firstListenSetStatus('firstListenVerifyStatus',requestedHeard?'Saving your listening check…':'Saving “No sound yet” and opening help…');
   try{
     const {response,payload}=await apiResponse('POST','/api/setup/first-listen/listener-confirm',{heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify);
     const resp=payload&&typeof payload==='object'?payload:{};
@@ -6305,7 +6618,7 @@ async function verifyFirstListen(heard,el){
 }
 async function loadHomeContextPreview(el){
   const projection=firstListenProjection();
-  if(!projection.privacyUnlocked||_firstListenUi.privacyPreview==='previewing')return;
+  if(!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing')return;
   _firstListenUi.privacyPreview='previewing';
   _firstListenUi.privacyPreviewValid=false;
   _firstListenUi.privacyPreviewUseful=false;
@@ -6313,7 +6626,7 @@ async function loadHomeContextPreview(el){
   if(el)el.setAttribute('aria-busy','true');
   firstListenSetStatus('firstListenPrivacyStatus','Preparing a fresh preview of your Home details…');
   try{
-    const {response,payload}=await apiResponse('POST','/api/setup/home-context-preview',{});
+    const {response,payload}=await apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview);
     const resp=payload&&typeof payload==='object'?payload:{};
     const detachedPreview=response.ok===true&&resp?.ok===true&&resp?.fresh===true&&Array.isArray(resp?.sent_now)&&resp.sent_now.length===0&&['useful','ambient_only','empty'].includes(resp?.context_value);
     if(!detachedPreview){
@@ -6364,7 +6677,7 @@ async function chooseFirstListenPrivacy(enabled,el){
   const requestedEnabled=Boolean(enabled);
   const projection=firstListenProjection();
   if(!projection.privacyUnlocked||_firstListenUi.privacySaving||(requestedEnabled&&!_firstListenUi.privacyPreviewValid))return;
-  const priorInstall=projection.legacy||projection.first.install_origin==='existing';
+  const priorInstall=!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
   const reviewingPrivacy=_firstListenUi.reviewStep==='privacy';
   const reviewTrigger=_firstListenUi.reviewTrigger;
   const continuityAvailable=firstListenSourceState(projection).continuityAvailable;
@@ -6375,13 +6688,14 @@ async function chooseFirstListenPrivacy(enabled,el){
   if(el)el.setAttribute('aria-busy','true');
   firstListenSetStatus('firstListenPrivacyStatus','Saving your choice…');
   try{
-    const {response,payload}=await apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled});
+    const {response,payload}=await apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy);
     const resp=payload&&typeof payload==='object'?payload:{};
     const code=String(resp?.error?.code||'');
     const enabledMatches=typeof resp?.enabled==='boolean'&&resp.enabled===requestedEnabled;
     const receiptRepairAccepted=response.ok===false&&response.status===503&&resp?.ok===false&&resp?.persisted===true&&enabledMatches&&code==='privacy_receipt_unavailable';
     const previewRequiredActiveOff=response.ok===false&&response.status===409&&resp?.ok===false&&resp?.persisted===true&&resp?.enabled===false&&code==='preview_required';
     const choiceSaved=response.ok===true&&resp?.ok===true&&resp?.persisted===true&&resp?.privacy_reviewed===true&&enabledMatches;
+    if(response.ok&&!choiceSaved)throw new Error('The privacy save could not be confirmed');
     if(!choiceSaved){
       if(receiptRepairAccepted){
         _firstListenUi.privacyReceiptChoice=requestedEnabled;
@@ -6411,8 +6725,11 @@ async function chooseFirstListenPrivacy(enabled,el){
     _firstListenUi.reviewStep='';
     _firstListenUi.optionalStep='';
     _firstListenUi.reviewTrigger=null;
-    const showCelebration=celebrate&&_activeTab==='setup';
-    if(celebrate){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';syncFirstListenSetupMount();}
+    const current=firstListenProjection(),musicSources=document.body.dataset.firstListenSetupView==='music-sources';
+    const canComplete=celebrate&&current.heard&&!current.proofPending&&firstListenSourceState(current).continuityAvailable;
+    const showCelebration=canComplete&&_activeTab==='setup'&&!musicSources;
+    _firstListenUi.restarting=false;
+    if(canComplete){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';if(musicSources&&_activeTab==='setup')openSetupPanel('music-sources',{preserveFocus:true});syncFirstListenSetupMount();}
     _firstListenUi.showSuccess=showCelebration;
     firstListenSetStatus('firstListenPrivacyStatus',requestedEnabled?'Marco and Giulia may use the Home details you approved.':'Home stays private.','ready');
     renderFirstListenProgress();
@@ -6423,9 +6740,18 @@ async function chooseFirstListenPrivacy(enabled,el){
     await refreshSlow();
   }catch(error){
     console.error('first_listen_privacy_choice',error);
-    firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage({error:{code:'persistence_failed'}}),'blocked');
+    // A lost response may follow a committed save. Use the last server evidence.
+    _firstListenUi.privacyChoice=null;
+    _firstListenUi.privacyReceiptChoice=null;
+    _firstListenUi.privacyPreviewValid=false;
+    _firstListenUi.privacyPreviewUseful=false;
+    _firstListenUi.privacyPreview='untouched';
+    _firstListenUi.reviewStep='privacy';
+    firstListenSetStatus('firstListenPrivacyStatus',firstListenErrorMessage({error:{code:'privacy_save_unconfirmed'}}),'blocked');
   }finally{
     _firstListenUi.privacySaving=false;
+    // Polls during the save skip hydration; the same payload must render again.
+    _lastSetupJson=null;
     if(el)el.removeAttribute('aria-busy');
     renderFirstListenProgress();
     if(focusTarget)document.getElementById(focusTarget)?.focus();
@@ -6476,7 +6802,7 @@ function renderFirstListen(setup,modeLabel,stationLabel){
   if(!_firstListenUi.firstUnresolvedRenderedAt&&!first.audio_complete){
     _firstListenUi.firstUnresolvedRenderedAt=performance.now();
   }
-  if(!_firstListenUi.busy&&!_firstListenUi.receiptSaving){
+  if(!_firstListenUi.restarting&&!_firstListenUi.busy&&!_firstListenUi.receiptSaving&&!_firstListenUi.privacySaving){
     const selected=String(first.selected_entity_id||speaker.selected_entity_id||'');
     if(selected&&!_firstListenUi.selectionDirty&&!_firstListenUi.selectedEntityId){
       _firstListenUi.selectedEntityId=selected;
@@ -6552,7 +6878,6 @@ function renderSetup(setup){
   if(!setup) return;
   const _json=JSON.stringify(setup);
   if(_json===_lastSetupJson) return;
-  _lastSetupJson=_json;
   renderGuidedSetupStrip(setup);
   resolveFirstListenLanding(setup);
   const mode=setup.available_modes?.find(m=>m.id===setup.detected_mode);
@@ -6643,6 +6968,7 @@ function renderSetup(setup){
   // collapse only when viewed later from another operator surface.
   if(typeof window.motoreSetupAutoCollapse==='function')window.motoreSetupAutoCollapse(!needsAction&&_activeTab!=='setup');
   renderHomeContextPreviewGate(setup);
+  _lastSetupJson=_json;
 }
 async function setupRecheck(el){
   flash(el);
@@ -8552,6 +8878,10 @@ async function fetchSlowJson(path,deadlineMs=SLOW_POLL_DEADLINE_MS){
     const payload=await response.json().catch(()=>null);
     if(!response.ok){const error=new Error(`${path} returned ${response.status}`);error.payload=payload;throw error;}
     if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
+    if(path==='/api/setup/status'){
+      const first=payload.guided_setup?.first_listen;
+      if(!first||!['bootstrap_ready','audio_complete','privacy_complete','continuity_available'].every(key=>typeof first[key]==='boolean')||!Array.isArray(payload.guided_setup?.source_readiness?.rows))throw new Error('Station check returned incomplete setup status');
+    }
     return payload;
   }finally{clearTimeout(deadline);}
 }
@@ -8582,11 +8912,14 @@ async function refreshSlow(){
   const setupPromise=fetchSlowJson('/api/setup/status')
     .then(setup=>{
       if(generation!==_slowPollGeneration)return;
-      showSetupRequestError();renderSetup(setup);
+      renderSetup(setup);showSetupRequestError();
     })
     .catch(e=>{
       if(generation!==_slowPollGeneration)return;
-      if(e.payload)showSetupRequestError(e.payload);
+      const detail=e.payload?.detail;
+      const code=e.payload?.error?.code||e.payload?.code||detail?.code;
+      const hasRecovery=detail?.title&&detail?.message&&detail?.action||typeof FIRST_LISTEN_ERRORS[code]?.action==='string';
+      showSetupRequestError(hasRecovery?e.payload:{detail:{title:'We couldn’t check your station',message:'Your saved choices are unchanged.',action:'Check your connection, then reload this page or wait for the next check.'}});
       console.error('refreshSlow setup',e);
     });
   await Promise.all([capabilitiesPromise,setupPromise]);
