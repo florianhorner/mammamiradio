@@ -17,7 +17,7 @@ GATE="$REPO_ROOT/scripts/model-registry-gate.sh"
 CHECKER="$REPO_ROOT/scripts/check_model_registry.py"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures/model_registry"
 PYTHON="$REPO_ROOT/.venv/bin/python"
-[ -x "$PYTHON" ] || PYTHON="python3"
+[ -x "$PYTHON" ] || PYTHON="$(command -v python3)"
 
 die() { echo "FAIL: $1" >&2; exit 1; }
 passed() { echo "PASS: $1"; }
@@ -26,21 +26,45 @@ cd "$REPO_ROOT"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Run the sourced section alone, with reporters shaped like the real script's, in a
-# subshell that carries only the test-only passthroughs.
+# Whole-script cases use a PATH-local interpreter shim. The production gate never
+# reads these test variables: only this shim appends explicit checker arguments.
+TEST_BIN="$TMP/test-bin"
+mkdir -p "$TEST_BIN"
+cat > "$TEST_BIN/python3" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "${MMR_TEST_CHECKER:-}" ]; then
+  case " $* " in
+    *" --providers "*)
+      exec "$MMR_TEST_REAL_PYTHON" "$@" --registry "$MMR_TEST_REGISTRY" --fixture-dir "$MMR_TEST_FIXTURES"
+      ;;
+    *)
+      exec "$MMR_TEST_REAL_PYTHON" "$@" --registry "$MMR_TEST_REGISTRY"
+      ;;
+  esac
+fi
+exec "$MMR_TEST_REAL_PYTHON" "$@"
+EOF
+chmod +x "$TEST_BIN/python3"
+
+# Run the sourced section alone with explicit test paths and reporters shaped like
+# the real script's.
 run_section() {  # $1 registry path, $2 fixture dir
   set +e
-  out="$(MMR_MODEL_REGISTRY="$1" MMR_MODEL_REGISTRY_FIXTURES="$2" MMR_MODEL_REGISTRY_GATE=always \
-    bash -c 'source "$0"; ok() { echo "  [PASS] $*"; }; fail() { echo "  [FAIL] $*"; }; waive() { echo "  [WAIVED] $*"; }; model_registry_gate "$1" "$2"' \
-    "$GATE" "$PYTHON" "$CHECKER" 2>&1)"
+  out="$(MMR_MODEL_REGISTRY_GATE=always \
+    bash -c 'source "$0"; ok() { echo "  [PASS] $*"; }; fail() { echo "  [FAIL] $*"; }; waive() { echo "  [WAIVED] $*"; }; model_registry_gate_for_test "$1" "$2" "$3" "$4"' \
+    "$GATE" "$PYTHON" "$CHECKER" "$1" "$2" 2>&1)"
   rc=$?
   set -e
 }
 
-# Run the whole release check (all sections) with the passthroughs.
+# Run the whole release check (all sections). Only the PATH-local test interpreter
+# knows how to append fixture inputs to the checker invocation.
 run_script() {  # $1 registry path, $2 fixture dir, $3 gate mode, $4 GITHUB_ACTIONS value
   set +e
-  out="$(GITHUB_ACTIONS="$4" MMR_MODEL_REGISTRY_GATE="$3" MMR_MODEL_REGISTRY="$1" MMR_MODEL_REGISTRY_FIXTURES="$2" MMR_REQUIRE_HA_RECEIPTS=0 bash "$SCRIPT" 2>&1)"
+  out="$(PATH="$TEST_BIN:$PATH" GITHUB_ACTIONS="$4" MMR_MODEL_REGISTRY_GATE="$3" \
+    MMR_TEST_REAL_PYTHON="$PYTHON" MMR_TEST_CHECKER="$CHECKER" \
+    MMR_TEST_REGISTRY="$1" MMR_TEST_FIXTURES="$2" MMR_REQUIRE_HA_RECEIPTS=0 \
+    bash "$SCRIPT" 2>&1)"
   rc=$?
   set -e
 }
@@ -152,5 +176,21 @@ run_script "$TMP/fresh.toml" "$FIXTURES" always true
 grep -q "\[PASS\] Model registry review age" <<<"$out" || die "always should run the review-age gate in CI"
 grep -q "\[PASS\] Pinned models are alive" <<<"$out" || die "always should run the liveness gate in CI"
 passed "MMR_MODEL_REGISTRY_GATE=always runs both gates in CI"
+
+# Case 14: the real release call passes no test inputs. Legacy ambient overrides must
+# not reach the checker even when a caller exports them.
+cat > "$TMP/record-args" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MMR_TEST_ARG_LOG"
+exit 2
+EOF
+chmod +x "$TMP/record-args"
+: > "$TMP/args.log"
+MMR_MODEL_REGISTRY="$TMP/stale.toml" MMR_MODEL_REGISTRY_FIXTURES="$FIXTURES" \
+  MMR_MODEL_REGISTRY_GATE=always MMR_TEST_ARG_LOG="$TMP/args.log" \
+  bash -c 'source "$0"; ok() { :; }; fail() { :; }; waive() { :; }; model_registry_gate "$1" "$2"' \
+  "$GATE" "$TMP/record-args" "$CHECKER" >/dev/null 2>&1
+grep -q -- '--registry\|--fixture-dir' "$TMP/args.log" && die "ambient test overrides reached the production gate call"
+passed "ambient variables cannot replace the release registry or provider docs"
 
 echo "All model registry gate cases passed."

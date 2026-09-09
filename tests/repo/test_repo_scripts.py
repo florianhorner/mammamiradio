@@ -18,6 +18,7 @@ CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
 CHECK_UI_COPY_LINT = ROOT / "scripts" / "check-ui-copy-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
+MODEL_REGISTRY_GATE_SELF_TEST = ROOT / "tests" / "workflows" / "test_model_registry_gate.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 ADDON_BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "addon-build.yml"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
@@ -417,6 +418,13 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "browser narration assets and admin metadata match the release manifest" in result.stdout
+
+
+def test_model_registry_gate_workflow_contract() -> None:
+    result = _run(["bash", str(MODEL_REGISTRY_GATE_SELF_TEST)], cwd=ROOT)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "All model registry gate cases passed." in result.stdout
 
 
 def test_pre_release_check_fails_on_manifest_version_mismatch(

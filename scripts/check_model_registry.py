@@ -19,9 +19,9 @@ could not be read, lost the anchors this parser relies on, or the checker itself
 Exit 2 is deliberate: a broken scraper must look broken, never green.
 
 Where it runs: scripts/pre-release-check.sh section 11 (release cuts and `make
-pre-release`) runs --age and --providers --gate liveness; a weekly workflow runs
---report. It is never an every-PR pytest assertion: a calendar gate on unrelated PRs
-gets bumped reflexively.
+pre-release`) runs --age and --providers --gate liveness. --report is ready for the
+planned weekly workflow, which is not in this slice. It is never an every-PR pytest
+assertion: a calendar gate on unrelated PRs gets bumped reflexively.
 
 Parsing is deliberately dumb and anchored: tables are read by their own header row,
 never by position on the page. Fixtures for offline tests are trimmed real captures
@@ -49,6 +49,7 @@ FUTURE_TOLERANCE_DAYS = 1  # a stamp written after UTC midnight from a later tim
 FETCH_TIMEOUT_SECONDS = 10.0
 FETCH_ATTEMPTS = 2
 RETRY_DELAY_SECONDS = 2.0
+MAX_SOURCE_BYTES = 4 * 1024 * 1024
 USER_AGENT = "mammamiradio-model-registry-watch/1 (+https://github.com/florianhorner/mammamiradio)"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = REPO_ROOT / "model_registry.toml"
@@ -91,10 +92,38 @@ _TEXT_MODEL = re.compile(r"^gpt-\d+(?:\.\d+)?(?:-[a-z]+)?$")
 _HTML_TABLE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
 _TABLE_ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
 _TABLE_CELL = re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
+_HTML_CODE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.IGNORECASE | re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
-_MODEL_ID_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]*")
+_CLAUDE_MODEL_ID = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9.\-]*")
+_OPENAI_CODE_ID = re.compile(r"[A-Za-z0-9/][A-Za-z0-9._:/=\-]*")
+_OPENAI_PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/=\-]*")
+_OPENAI_API_LABEL = re.compile(r"(?:[A-Za-z][A-Za-z0-9-]*\s+){1,3}API")
+_OPENAI_BETA_ID = re.compile(r"OpenAI-Beta:\s*[A-Za-z0-9_-]+=[A-Za-z0-9._-]+", re.IGNORECASE)
 _SEPARATOR_CELL = re.compile(r":?-{2,}:?")
-_NOISE_TOKENS = frozenset({"or", "and", "n", "a"})
+_OPENAI_PLACEHOLDERS = frozenset({"n/a", "na", "none", "null", "tbd"})
+_OPENAI_SOURCE_HEADERS = frozenset(
+    {
+        "model",
+        "model / system",
+        "model family / snapshot",
+        "model snapshot",
+        "model id",
+        "system",
+        "api id",
+        "deprecated model",
+        "deprecated model snapshot",
+        "deprecated model id",
+        "deprecated api id",
+        "legacy model",
+        "legacy model snapshot",
+        "legacy model id",
+        "legacy api id",
+        "retired model",
+        "retired model snapshot",
+        "retired model id",
+        "retired api id",
+    }
+)
 
 
 class RegistryError(Exception):
@@ -160,22 +189,30 @@ def load_registry(path: Path) -> dict:
 def registry_entries(raw: dict) -> list[Entry]:
     entries: list[Entry] = []
     models = raw.get("models")
-    catalog = models.get("catalog") if isinstance(models, dict) else None
-    if isinstance(catalog, dict):
-        for provider, keys in catalog.items():
-            if not isinstance(keys, dict):
-                continue
-            for key, model_id in keys.items():
-                if isinstance(model_id, str) and model_id.strip():
-                    entries.append(Entry(f"{provider}.{key}", str(provider), model_id.strip()))
-    tts = raw.get("tts")
-    if isinstance(tts, dict):
-        for provider, section in tts.items():
-            model_id = section.get("model") if isinstance(section, dict) else None
-            if isinstance(model_id, str) and model_id.strip():
-                entries.append(Entry(f"tts.{provider}", str(provider), model_id.strip()))
-    if not entries:
+    if not isinstance(models, dict):
+        raise RegistryError("model_registry.toml has no [models] table")
+    catalog = models.get("catalog")
+    if catalog is None or catalog == {}:
         raise RegistryError("model_registry.toml names no models under [models.catalog] or [tts]")
+    if not isinstance(catalog, dict):
+        raise RegistryError("model_registry.toml [models].catalog must be a table")
+    for provider, keys in catalog.items():
+        if not isinstance(keys, dict) or not keys:
+            raise RegistryError(f"model_registry.toml [models.catalog.{provider}] must be a non-empty table")
+        for key, model_id in keys.items():
+            if not isinstance(model_id, str) or not model_id.strip():
+                raise RegistryError(f"model_registry.toml [models.catalog.{provider}].{key} must be a non-empty string")
+            entries.append(Entry(f"{provider}.{key}", str(provider), model_id.strip()))
+    tts = raw.get("tts")
+    if not isinstance(tts, dict) or not tts:
+        raise RegistryError("model_registry.toml [tts] must be a non-empty table")
+    for provider, section in tts.items():
+        if not isinstance(section, dict):
+            raise RegistryError(f"model_registry.toml [tts.{provider}] must be a table")
+        model_id = section.get("model")
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise RegistryError(f"model_registry.toml [tts.{provider}].model must be a non-empty string")
+        entries.append(Entry(f"tts.{provider}", str(provider), model_id.strip()))
     return entries
 
 
@@ -265,7 +302,13 @@ def _markdown_tables(text: str) -> list[list[list[str]]]:
 def _html_tables(text: str) -> list[list[list[str]]]:
     tables: list[list[list[str]]] = []
     for table in _HTML_TABLE.findall(text):
-        rows = [[_normalize_cell(cell) for cell in _TABLE_CELL.findall(row)] for row in _TABLE_ROW.findall(table)]
+        rows = [
+            [
+                _normalize_cell(_HTML_CODE.sub(lambda match: f"`{_normalize_cell(match.group(1))}`", cell))
+                for cell in _TABLE_CELL.findall(row)
+            ]
+            for row in _TABLE_ROW.findall(table)
+        ]
         rows = [row for row in rows if row]
         if rows:
             tables.append(rows)
@@ -315,18 +358,24 @@ def parse_anthropic_deprecations(text: str) -> dict[str, AnthropicRow]:
         if not stripped.startswith("|"):
             continue
         cells = _split_pipe_row(stripped)
-        if len(cells) <= max(columns.values()) or _is_separator(cells):
+        if _is_separator(cells):
             continue
+        if len(cells) <= max(columns.values()):
+            raise SourceError("Anthropic deprecations: malformed row in the 'Model status' table")
         state_text = cells[columns["state"]]
         state = state_text.lower()
         retirement = cells[columns["retirement"]]
-        for token in re.split(r"[,\s|]+", cells[columns["model"]]):
-            model_id = token.strip("`")
-            if not model_id:
-                continue
+        model_ids = [token.strip("`") for token in re.split(r"[,\s|]+", cells[columns["model"]]) if token]
+        if not model_ids or any(_CLAUDE_MODEL_ID.fullmatch(model_id) is None for model_id in model_ids):
+            raise SourceError(f"Anthropic deprecations: invalid API model name cell {cells[columns['model']]!r}")
+        for model_id in model_ids:
             if state not in ANTHROPIC_STATES:
                 raise SourceError(f"Anthropic deprecations: unknown lifecycle state {state_text!r} for {model_id}")
-            rows[model_id] = AnthropicRow(state=state, retirement=retirement)
+            row = AnthropicRow(state=state, retirement=retirement)
+            known = rows.get(model_id)
+            if known is not None and known != row:
+                raise SourceError(f"Anthropic deprecations: conflicting lifecycle rows for {model_id}")
+            rows[model_id] = row
     if not rows:
         raise SourceError("Anthropic deprecations: the 'Model status' table has no rows")
     return rows
@@ -351,25 +400,36 @@ def parse_openai_models(text: str) -> frozenset[str]:
 
 
 def _openai_deprecation_source_columns(header: list[str], date_col: int) -> tuple[int, ...]:
-    model_cells = ("model", "system", "snapshot")
-    metadata_cells = (
-        "replacement",
-        "substitute",
-        "recommended",
-        "successor",
-        "suggested",
-        "alternative",
-        "price",
-        "pricing",
-        "cost",
-    )
     return tuple(
         index
         for index, raw_cell in enumerate(header)
-        if index != date_col
-        and any(model_cell in (cell := _normalize_cell(raw_cell).lower()) for model_cell in model_cells)
-        and not any(metadata in cell for metadata in metadata_cells)
+        if index != date_col and _normalize_cell(raw_cell).lower() in _OPENAI_SOURCE_HEADERS
     )
+
+
+def _openai_source_ids(cell: str) -> tuple[str, ...]:
+    """Structured IDs from one shutdown-table source cell, never arbitrary prose."""
+    identifiers: list[str] = []
+    for code_span in _BACKTICKED.findall(cell):
+        for candidate in re.split(r"\s*(?:,|\|)\s*", _normalize_cell(code_span)):
+            candidate = candidate.rstrip(".")
+            if candidate and candidate.lower() not in _OPENAI_PLACEHOLDERS and _OPENAI_CODE_ID.fullmatch(candidate):
+                identifiers.append(candidate)
+    if identifiers:
+        return tuple(dict.fromkeys(identifiers))
+
+    normalized = _normalize_cell(cell).strip("` ").rstrip(".")
+    if (
+        (
+            normalized.lower() not in _OPENAI_PLACEHOLDERS
+            and _OPENAI_PLAIN_ID.fullmatch(normalized)
+            and re.search(r"(?:\d|[-._/:=])", normalized)
+        )
+        or _OPENAI_API_LABEL.fullmatch(normalized)
+        or _OPENAI_BETA_ID.fullmatch(normalized)
+    ):
+        return (normalized,)
+    return ()
 
 
 def parse_openai_deprecations(text: str) -> dict[str, Shutdown]:
@@ -383,7 +443,7 @@ def parse_openai_deprecations(text: str) -> dict[str, Shutdown]:
     calendar date still counts as an announced shutdown with an unreadable date.
     """
     shutdowns: dict[str, Shutdown] = {}
-    qual_tables = 0
+    shutdown_tables = 0
     tables = _markdown_tables(text)
     if "<table" in text.lower():
         tables += _html_tables(text)
@@ -392,28 +452,33 @@ def parse_openai_deprecations(text: str) -> dict[str, Shutdown]:
         date_col = next((index for index, cell in enumerate(header) if "shutdown date" in cell), None)
         if date_col is None:
             continue
+        shutdown_tables += 1
         model_cols = _openai_deprecation_source_columns(header, date_col)
         if not model_cols:
-            continue
-        qual_tables += 1
+            raise SourceError("OpenAI deprecations page: no recognized source-model column in a Shutdown date table")
         if len(model_cols) != 1:
             raise SourceError("OpenAI deprecations page: ambiguous source-model columns in a Shutdown date table")
         model_col = model_cols[0]
+        table_shutdowns: dict[str, Shutdown] = {}
         for cells in table[1:]:
             if len(cells) <= max(date_col, model_col):
-                continue
+                raise SourceError("OpenAI deprecations page: malformed row in a Shutdown date table")
             shutdown = Shutdown(date=parse_docs_date(cells[date_col]), text=cells[date_col])
-            for raw_token in _MODEL_ID_TOKEN.findall(cells[model_col]):
-                token = raw_token.rstrip(".")
-                if not token or token.lower() in _NOISE_TOKENS or not re.search(r"[A-Za-z]", token):
-                    continue
-                known = shutdowns.get(token)  # keep the earliest readable date
+            identifiers = _openai_source_ids(cells[model_col])
+            if not identifiers:
+                raise SourceError(f"OpenAI deprecations page: unparseable source-model cell {cells[model_col]!r}")
+            for identifier in identifiers:
+                known = table_shutdowns.get(identifier)  # keep the earliest readable date
                 if known is None or (shutdown.date is not None and (known.date is None or shutdown.date < known.date)):
-                    shutdowns[token] = shutdown
-    if qual_tables == 0:
+                    table_shutdowns[identifier] = shutdown
+        if not table_shutdowns:
+            raise SourceError("OpenAI deprecations page: no model shutdown rows in a Shutdown date table")
+        for identifier, shutdown in table_shutdowns.items():
+            known = shutdowns.get(identifier)
+            if known is None or (shutdown.date is not None and (known.date is None or shutdown.date < known.date)):
+                shutdowns[identifier] = shutdown
+    if shutdown_tables == 0:
         raise SourceError("OpenAI deprecations page: no table with 'Shutdown date' and model columns found")
-    if not shutdowns:
-        raise SourceError("OpenAI deprecations page: no model shutdown rows")
     return shutdowns
 
 
@@ -429,7 +494,18 @@ def fetch_text(url: str) -> str:
                 status = getattr(response, "status", 200)
                 if status != 200:
                     raise SourceError(f"could not read {url}: HTTP {status}")
-                return response.read().decode("utf-8", errors="replace")
+                headers = getattr(response, "headers", {})
+                raw_length = headers.get("Content-Length") if hasattr(headers, "get") else None
+                try:
+                    content_length = int(raw_length) if raw_length is not None else None
+                except (TypeError, ValueError):
+                    content_length = None
+                if content_length is not None and content_length > MAX_SOURCE_BYTES:
+                    raise SourceError(f"could not read {url}: response exceeds {MAX_SOURCE_BYTES} bytes")
+                payload = response.read(MAX_SOURCE_BYTES + 1)
+                if len(payload) > MAX_SOURCE_BYTES:
+                    raise SourceError(f"could not read {url}: response exceeds {MAX_SOURCE_BYTES} bytes")
+                return payload.decode("utf-8", errors="replace")
         except SourceError:
             raise
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:

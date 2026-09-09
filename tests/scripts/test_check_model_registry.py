@@ -214,6 +214,29 @@ def test_anthropic_unknown_lifecycle_state_is_a_source_error() -> None:
         watch.parse_anthropic_deprecations(text)
 
 
+@pytest.mark.parametrize("model_cell", ["N/A", "No active models"])
+def test_anthropic_placeholder_model_rows_are_source_errors(model_cell: str) -> None:
+    page = (
+        "| API model name | Current state | Deprecated | Tentative retirement date |\n"
+        "|---|---|---|---|\n"
+        f"| {model_cell} | Active | N/A | N/A |\n"
+    )
+    with pytest.raises(watch.SourceError, match="invalid API model name"):
+        watch.parse_anthropic_deprecations(page)
+
+
+@pytest.mark.parametrize(("first_state", "second_state"), [("Deprecated", "Active"), ("Active", "Deprecated")])
+def test_anthropic_conflicting_duplicate_rows_are_source_errors(first_state: str, second_state: str) -> None:
+    page = (
+        "| API model name | Current state | Deprecated | Tentative retirement date |\n"
+        "|---|---|---|---|\n"
+        f"| claude-opus-4-8 | {first_state} | 2026-09-01 | 2026-12-01 |\n"
+        f"| claude-opus-4-8 | {second_state} | N/A | N/A |\n"
+    )
+    with pytest.raises(watch.SourceError, match="conflicting lifecycle rows"):
+        watch.parse_anthropic_deprecations(page)
+
+
 @pytest.mark.parametrize(
     ("parser", "match"),
     [
@@ -251,6 +274,7 @@ def test_openai_deprecations_capture_parses_dated_rows() -> None:
     assert shutdowns["gpt-3.5-turbo"].date == dt.date(2026, 10, 23)
     assert shutdowns["gpt-3.5-turbo-completions"].date == dt.date(2026, 10, 23)
     assert "gpt-5.5" not in shutdowns
+    assert not {"Videos", "API", "New", "fine-tuning", "training", "on"} & shutdowns.keys()
 
 
 def test_openai_deprecations_html_table_also_parses() -> None:
@@ -263,6 +287,43 @@ def test_openai_deprecations_html_table_also_parses() -> None:
 def test_openai_deprecations_header_only_table_raises_no_rows() -> None:
     page = "| Model / system | Shutdown date |\n|---|---|\n"
     with pytest.raises(watch.SourceError, match="no model shutdown rows"):
+        watch.parse_openai_deprecations(page)
+
+
+def test_openai_deprecations_empty_table_cannot_hide_behind_a_valid_table() -> None:
+    page = (
+        "| Model / system | Shutdown date |\n|---|---|\n"
+        "| `gpt-4o` | Sep 1, 2026 |\n\n"
+        "| Model snapshot | Shutdown date |\n|---|---|\n"
+    )
+    with pytest.raises(watch.SourceError, match="no model shutdown rows"):
+        watch.parse_openai_deprecations(page)
+
+
+def test_openai_deprecations_unknown_source_column_cannot_hide_behind_a_valid_table() -> None:
+    page = (
+        "| Model / system | Shutdown date |\n|---|---|\n"
+        "| `gpt-4o` | Sep 1, 2026 |\n\n"
+        "| Retiring asset | Shutdown date |\n|---|---|\n"
+        "| `gpt-5.5` | Sep 1, 2026 |\n"
+    )
+    with pytest.raises(watch.SourceError, match="no recognized source-model column"):
+        watch.parse_openai_deprecations(page)
+
+
+@pytest.mark.parametrize("source_cell", ["No retired models are affected", "N/A", "`N/A`"])
+def test_openai_deprecations_placeholder_source_row_is_a_source_error(source_cell: str) -> None:
+    page = f"| Model / system | Shutdown date |\n|---|---|\n| {source_cell} | TBD |\n"
+    with pytest.raises(watch.SourceError, match="unparseable source-model cell"):
+        watch.parse_openai_deprecations(page)
+
+
+def test_openai_deprecations_html_code_placeholder_is_a_source_error() -> None:
+    page = (
+        "<table><tr><th>Model / system</th><th>Shutdown date</th></tr>"
+        "<tr><td><code>N/A</code></td><td>TBD</td></tr></table>"
+    )
+    with pytest.raises(watch.SourceError, match="unparseable source-model cell"):
         watch.parse_openai_deprecations(page)
 
 
@@ -303,6 +364,16 @@ def test_openai_deprecations_replacement_column_is_not_retiring_model(
     shutdowns = watch.parse_openai_deprecations(page)
     assert shutdowns["gpt-5.5"] == watch.Shutdown(dt.date(2026, 9, 1), "Sep 1, 2026")
     assert "gpt-5.6-sol" not in shutdowns
+
+
+def test_openai_deprecations_prefers_deprecated_api_id_over_migration_model() -> None:
+    page = (
+        "| Shutdown date | Deprecated API ID | Migration model |\n"
+        "|---|---|---|\n"
+        "| Sep 1, 2026 | `gpt-5.5` | `gpt-5.6-sol` |\n"
+    )
+    shutdowns = watch.parse_openai_deprecations(page)
+    assert shutdowns == {"gpt-5.5": watch.Shutdown(dt.date(2026, 9, 1), "Sep 1, 2026")}
 
 
 def test_openai_deprecations_ambiguous_source_columns_are_source_errors() -> None:
@@ -643,8 +714,8 @@ def test_one_transient_failure_is_retried_and_the_run_completes(
         def __exit__(self, *_exc: object) -> None:
             return None
 
-        def read(self) -> bytes:
-            return self._body
+        def read(self, amount: int = -1) -> bytes:
+            return self._body if amount < 0 else self._body[:amount]
 
     def _flaky(request: object, **_kwargs: object) -> _Response:
         url = getattr(request, "full_url", "")
@@ -660,6 +731,29 @@ def test_one_transient_failure_is_retried_and_the_run_completes(
     assert code == watch.EXIT_FINDING
     assert "UNREADABLE" not in out and "FINDINGS (drift): 5 of 7" in out
     assert len(failed_once) == len(watch.SOURCES)
+
+
+@pytest.mark.parametrize("advertise_length", [False, True], ids=["bounded-read", "content-length"])
+def test_oversized_provider_response_is_a_source_error(monkeypatch: pytest.MonkeyPatch, advertise_length: bool) -> None:
+    class _Response:
+        status = 200
+
+        def __init__(self) -> None:
+            self.headers = {"Content-Length": str(watch.MAX_SOURCE_BYTES + 1)} if advertise_length else {}
+
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def read(self, amount: int = -1) -> bytes:
+            assert amount == watch.MAX_SOURCE_BYTES + 1
+            return b"x" * amount
+
+    monkeypatch.setattr(watch.urllib.request, "urlopen", lambda *_a, **_k: _Response())
+    with pytest.raises(watch.SourceError, match="exceeds"):
+        watch.fetch_text("https://example.test/provider-docs")
 
 
 def test_a_checker_bug_reads_as_not_verified(
@@ -781,3 +875,41 @@ def test_real_registry_carries_a_parseable_stamp_schema_only() -> None:
     raw = watch.load_registry(REPO_REGISTRY)
     assert isinstance(watch.parse_last_reviewed(raw["models"]), dt.date)
     assert len(watch.registry_entries(raw)) >= 5
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        REGISTRY_PINNED_2026.replace('large = "gpt-5.5"', "large = 55"),
+        (
+            '[models]\ndefault_profile = "balanced"\nlast_reviewed = "2026-09-08"\n'
+            'catalog = "broken"\n\n[tts.openai]\nmodel = "gpt-4o-mini-tts"\n'
+        ),
+        REGISTRY_PINNED_2026.replace('model = "gpt-4o-mini-tts"', "model = false"),
+    ],
+    ids=["catalog-entry", "catalog-table", "tts-model"],
+)
+def test_partially_malformed_registry_entries_fail_closed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    path = _registry(tmp_path, text)
+    code, out = _run(capsys, "--providers", "--registry", str(path), "--fixture-dir", str(FIXTURES))
+    assert code == watch.EXIT_FINDING
+    assert out.startswith("FAIL: model_registry.toml")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[models]\nlast_reviewed = "2026-09-08"\n\n[tts.openai]\nmodel = "gpt-4o-mini-tts"\n',
+        REGISTRY_PINNED_2026.split("[tts.openai]", 1)[0],
+    ],
+    ids=["missing-catalog", "missing-tts"],
+)
+def test_missing_required_registry_model_sections_fail_closed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    path = _registry(tmp_path, text)
+    code, out = _run(capsys, "--providers", "--registry", str(path), "--fixture-dir", str(FIXTURES))
+    assert code == watch.EXIT_FINDING
+    assert out.startswith("FAIL: model_registry.toml")

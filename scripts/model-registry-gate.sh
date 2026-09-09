@@ -38,20 +38,29 @@ model_registry_gate_applies() {
     grep -qE '^\+[[:space:]]*"?version"?[[:space:]]*[:=]' <<<"$version_diff"
 }
 
-# $1: python interpreter (3.11+), $2: path to check_model_registry.py.
-# MMR_MODEL_REGISTRY / MMR_MODEL_REGISTRY_FIXTURES are test-only passthroughs.
+# Production entry point: the canonical registry and live docs are not replaceable.
 model_registry_gate() {
-    local python="$1" checker="$2"
+    _model_registry_gate_impl "$1" "$2" "" ""
+}
+
+# Explicit test entry point: only the sourced self-test calls this with controlled
+# registry and fixture paths.
+model_registry_gate_for_test() {
+    _model_registry_gate_impl "$1" "$2" "$3" "$4"
+}
+
+_model_registry_gate_impl() {
+    local python="$1" checker="$2" test_registry="$3" test_fixtures="$4"
     if ! model_registry_gate_applies; then
         echo "  [NOTE] not a release cut (no version line changes against origin/main); the review-age and liveness gates run on cut PRs and under make pre-release"
         return 0
     fi
     local registry_args=() fixture_args=()
-    if [ -n "${MMR_MODEL_REGISTRY:-}" ]; then
-        registry_args=(--registry "$MMR_MODEL_REGISTRY")
+    if [ -n "$test_registry" ]; then
+        registry_args=(--registry "$test_registry")
     fi
-    if [ -n "${MMR_MODEL_REGISTRY_FIXTURES:-}" ]; then
-        fixture_args=(--fixture-dir "$MMR_MODEL_REGISTRY_FIXTURES")
+    if [ -n "$test_fixtures" ]; then
+        fixture_args=(--fixture-dir "$test_fixtures")
     fi
     # ${arr[@]+"${arr[@]}"} expands an empty array safely under set -u on bash 3.2.
     local age_rc=0
