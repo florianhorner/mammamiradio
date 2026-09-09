@@ -1123,6 +1123,22 @@ def test_a_superseded_guide_clip_never_tidies_up_the_shared_player() -> None:
     assert last_guard < toggle.index("stopFirstListenGuide()", last_guard)
 
 
+def test_stopping_a_guide_invalidates_pending_playback_before_teardown() -> None:
+    stop = _function("stopFirstListenGuide", "toggleFirstListenGuide")
+    # Both resetting the source and pause-only teardown can settle play().
+    invalidate = stop.index("++_firstListenGuideAttempt;")
+    assert invalidate < stop.index("resetFirstListenGuideSource(audio)")
+    assert invalidate < stop.index("audio.pause()")
+
+
+def test_pausing_a_loading_guide_invalidates_pending_playback_before_pause() -> None:
+    toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    manual_pause = toggle[
+        toggle.index("if(_firstListenUi.guideKey===key") : toggle.index("if(_firstListenUi.guideButton!==button)")
+    ]
+    assert manual_pause.index("++_firstListenGuideAttempt;") < manual_pause.index("audio.pause()")
+
+
 def test_leaving_first_listen_releases_the_station_audio_element() -> None:
     """Completion and direct listener opening do not own station teardown.
 

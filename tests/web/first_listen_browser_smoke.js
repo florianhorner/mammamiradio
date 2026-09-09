@@ -25,6 +25,7 @@ async (page) => {
   let nextPrivacyChoiceFailure = '';
   let ambientOnlyPreview = false;
   let failNextGuideKey = '';
+  let guideResponseGate = null;
   let failNextResume = false;
   let nextResumeResponse = '';
   let nextForceResponse = '';
@@ -253,6 +254,14 @@ async (page) => {
     const filename = requestPath.split('?', 1)[0].split('/').at(-1) || '';
     const guideKey = filename.replace(/\.mp3$/i, '');
     guideAudioRequests.push(requestPath);
+    if (guideResponseGate) {
+      const gate = guideResponseGate;
+      guideResponseGate = null;
+      gate.arrive();
+      await gate.wait;
+      await route.abort('failed');
+      return;
+    }
     if (failNextGuideKey === guideKey) {
       failNextGuideKey = '';
       await route.abort('failed');
@@ -943,6 +952,11 @@ async (page) => {
     assert(guideAudioRequests.length === soundGuideRequestBaseline + 2, 'guide retry did not request a fresh audio response');
     await soundGuideButton.click();
     await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="sound-check"]')?.dataset.state === 'paused');
+    await welcomeGuideButton.click();
+    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'playing');
+    assert(await soundGuide.getAttribute('data-state') === 'idle', 'switching clips did not reset the previous guide');
+    assert(await soundGuideButton.innerText() === 'Hear why we ask', 'switching clips lost the previous idle label');
+    assert((await page.locator('#firstListenGuideAudio').getAttribute('src')).includes('/welcome.mp3?'), 'switching clips did not load the new source');
 
     await resetUi(setupProjection({ primary: 'unavailable', recovery: 'cover_only' }));
     await assertUnfinished('firstListenSpeakerStep', 'firstListenPlayBtn');
@@ -1437,6 +1451,84 @@ async (page) => {
       `music-source exit resumed the station before releasing it: ${JSON.stringify(guideExitEvents)}`,
     );
 
+    for (const exit of ['admin-tab', 'music-source']) {
+      smokeStage = `${exit}-during-guide-load`;
+      const station = await prepareOwnedStation({
+        sourceOptions: { primary: 'unavailable', recovery: 'unavailable' },
+      });
+      const gate = responseGate();
+      guideResponseGate = gate;
+      try {
+        // Keep the real media play() pending until navigation aborts it.
+        await page.evaluate(() => {
+          const button = document.querySelector('.guide-audio[data-guide="welcome"] .guide-audio-play');
+          window.__pendingGuideAttempt = toggleFirstListenGuide('welcome', button);
+        });
+        await gate.arrived;
+        assert(await welcomeGuide.getAttribute('data-state') === 'loading', `${exit} fixture did not hold the guide load`);
+        const parked = await assertStationPreserved(station, smokeStage, { playing: false });
+        const checkpoint = { ...station, eventIndex: parked.events.length };
+        if (exit === 'admin-tab') {
+          await page.evaluate(() => document.getElementById('tab-rotazione').click());
+        } else {
+          await page.locator('#firstListenRepairMusicBtn').click();
+        }
+        await page.evaluate(() => window.__pendingGuideAttempt);
+        assert(await welcomeGuide.getAttribute('data-state') === 'idle', `${exit} interrupted load stamped a false guide error`);
+        assert(await welcomeGuideButton.innerText() === 'Preview 16-second welcome', `${exit} interrupted load overwrote the idle label`);
+        assert(await welcomeGuideButton.getAttribute('aria-pressed') === 'false', `${exit} interrupted load left the button pressed`);
+        assert(await page.locator('#firstListenGuideAudio').getAttribute('src') === null, `${exit} interrupted load retained its source`);
+        await assertStationReleasedOnce(checkpoint, smokeStage);
+        if (exit === 'music-source') {
+          const events = (await stationMediaSnapshot()).events.slice(checkpoint.eventIndex);
+          assert(!events.some(({ type }) => type === 'play'), 'pending guide music-source exit resumed the station');
+        }
+      } finally {
+        gate.release();
+      }
+    }
+
+    smokeStage = 'same-guide-pause-during-load';
+    const loadingGuideStation = await prepareOwnedStation();
+    const loadingGuideGate = responseGate();
+    guideResponseGate = loadingGuideGate;
+    try {
+      await page.evaluate(() => {
+        const button = document.querySelector('.guide-audio[data-guide="welcome"] .guide-audio-play');
+        window.__pendingGuideAttempt = toggleFirstListenGuide('welcome', button);
+      });
+      await loadingGuideGate.arrived;
+      assert(await welcomeGuide.getAttribute('data-state') === 'loading', 'same-guide fixture did not hold the guide load');
+      await assertStationPreserved(loadingGuideStation, smokeStage, { playing: false });
+      await welcomeGuideButton.click();
+      await page.evaluate(() => window.__pendingGuideAttempt);
+      assert(await welcomeGuide.getAttribute('data-state') === 'paused', 'same-guide pause during load stamped a false guide error');
+      assert(await welcomeGuideButton.innerText() === 'Continue example', 'same-guide pause during load lost its continue label');
+      assert(await welcomeGuideButton.getAttribute('aria-pressed') === 'false', 'same-guide pause during load left the button pressed');
+      assert(await page.locator('#firstListenGuideAudio').getAttribute('src') !== null, 'same-guide pause during load reset its source');
+      await assertStationPreserved(loadingGuideStation, smokeStage, { playing: false });
+    } finally {
+      loadingGuideGate.release();
+    }
+
+    smokeStage = 'guide-playback-rejection';
+    const rejectedGuideStation = await prepareOwnedStation();
+    await page.evaluate(async () => {
+      const audio = document.getElementById('firstListenGuideAudio');
+      const nativePlay = audio.play;
+      audio.play = () => Promise.reject(new DOMException('Playback denied', 'NotAllowedError'));
+      try {
+        const button = document.querySelector('.guide-audio[data-guide="welcome"] .guide-audio-play');
+        await toggleFirstListenGuide('welcome', button);
+      } finally {
+        audio.play = nativePlay;
+      }
+    });
+    assert(await welcomeGuide.getAttribute('data-state') === 'error', 'genuine playback rejection lost its error state');
+    assert(await welcomeGuideButton.innerText() === 'Try example again', 'genuine playback rejection lost its retry label');
+    assert(await page.locator('#firstListenGuideAudio').getAttribute('src') === null, 'genuine playback rejection retained its source');
+    await assertStationPreserved(rejectedGuideStation, smokeStage);
+
     smokeStage = 'explicit-listener-exit';
     const listenerExit = await prepareOwnedStation({ showSuccess: true });
     const openedWindowBaseline = await page.evaluate(() => window.__firstListenOpenedWindows.length);
@@ -1836,6 +1928,7 @@ async (page) => {
         'degraded-source',
         'accepted-not-heard',
         'guide-audio-lifecycle',
+        'guide-clip-switching',
         'receipt-recovery-no-replay',
         'receipt-recovery-retry',
         'receipt-recovery-reload',
@@ -1854,6 +1947,10 @@ async (page) => {
         'failed-privacy-keeps-stream',
         'explicit-exit-release',
         'music-source-exit-during-guide',
+        'admin-tab-during-guide-load',
+        'music-source-during-guide-load',
+        'same-guide-pause-during-load',
+        'guide-playback-rejection',
         'privacy-receipt-repair',
         'ambient-only-preview',
         'resume-unreachable',
