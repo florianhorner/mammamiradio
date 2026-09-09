@@ -4596,6 +4596,10 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "audio_failures": state.chaos_audio_failures,
             "last_degraded_reason": state.chaos_last_degraded_reason,
         },
+        "script_guard": {
+            "rejections": state.language_guard_rejections,
+            "failures": state.language_guard_failures,
+        },
     }
 
 

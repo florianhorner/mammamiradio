@@ -1530,6 +1530,12 @@ async (page) => {
 
   // Error retries collapse to one timer, and an explicit pause cancels the
   // scheduled retry so sound cannot restart behind the listener's back.
+  // Discard the finite MP3 from the previous scenario so Chrome cannot resume
+  // its buffered audio instead of making the failing request this probe needs.
+  await page.locator('#radio-audio').evaluate((el) => {
+    el.removeAttribute('src');
+    el.load();
+  });
   streamScenario = 'abort';
   const errorStartCount = playCount();
   await page.locator('#nav-cta').click();
