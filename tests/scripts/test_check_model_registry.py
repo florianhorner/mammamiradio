@@ -150,10 +150,12 @@ def test_age_boundary_is_the_max_age(
         assert "--providers" in out
 
 
-def test_age_unparseable_toml_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("mode", ["--age", "--providers", "--report"])
+def test_unparseable_toml_fails_closed(tmp_path: Path, capsys: pytest.CaptureFixture[str], mode: str) -> None:
     path = _registry(tmp_path, "[models\n")
-    code, out = _run(capsys, "--age", "--registry", str(path))
-    assert code == watch.EXIT_FINDING
+    code, out = _run(capsys, mode, "--registry", str(path))
+    assert code == watch.EXIT_SOURCE
+    assert out.startswith("UNREADABLE:")
     assert "could not be parsed" in out
 
 

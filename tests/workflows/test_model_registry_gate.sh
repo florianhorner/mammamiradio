@@ -71,7 +71,14 @@ grep -q "days old (max 45)" <<<"$out" || die "the stale failure must name the ag
 grep -q -- "--providers" <<<"$out" || die "the stale failure must point at the --providers step (the way out)"
 passed "stale, future, malformed and missing stamps fail on the review-age gate with the way out"
 
-# Case 5: a fresh stamp plus the real captures passes both gates. The repo pins are a
+# Case 5: malformed TOML is a checker/source failure, not a malformed review stamp.
+sed 's/^\[models\]$/[models/' model_registry.toml > "$TMP/malformed-toml.toml"
+run_section "$TMP/malformed-toml.toml" "$FIXTURES"
+grep -q "\[FAIL\] Model registry review age: the checker/source failed" <<<"$out" || die "malformed TOML should be reported as a checker failure"
+grep -q "last_reviewed is missing, malformed, or older" <<<"$out" && die "malformed TOML was misreported as a review-stamp finding"
+passed "malformed TOML fails closed as a checker/source error"
+
+# Case 6: a fresh stamp plus the real captures passes both gates. The repo pins are a
 # generation behind (drift), but every one is alive, and the cut asks only about liveness.
 run_section "$TMP/fresh.toml" "$FIXTURES"
 grep -q "\[PASS\] Model registry review age" <<<"$out" || die "a fresh stamp should pass the review-age gate"
@@ -79,7 +86,7 @@ grep -q "\[PASS\] Pinned models are alive" <<<"$out" || die "alive pins should p
 grep -q "\[FAIL\]" <<<"$out" && die "fresh stamp and alive pins still reported a failure"
 passed "fresh stamp and alive pins pass both gates"
 
-# Case 6: a deprecated pin fails the liveness gate, on the gate itself, and is named.
+# Case 7: a deprecated pin fails the liveness gate, on the gate itself, and is named.
 mkdir -p "$TMP/deprecated"
 cp "$FIXTURES"/*.md "$FIXTURES"/*.html "$TMP/deprecated/"
 sed 's/^| claude-haiku-4-5-20251001  | Active .*$/| claude-haiku-4-5-20251001  | Deprecated    | September 15, 2026 | November 15, 2026 |/' \
@@ -90,14 +97,14 @@ grep -q "\[FAIL\] A pinned model is deprecated or retired" <<<"$out" || die "a d
 grep -q "anthropic.haiku" <<<"$out" || die "the liveness report must name the deprecated pin"
 passed "deprecated pin fails on the liveness gate and is named"
 
-# Case 7: unreadable provider docs are WAIVED, named, and never a PASS or a FAIL.
+# Case 8: unreadable provider docs are WAIVED, named, and never a PASS or a FAIL.
 run_section "$TMP/fresh.toml" "$TMP/does-not-exist"
 grep -q "\[WAIVED\] NOT CHECKED: the provider docs could not be read" <<<"$out" || die "unreadable docs should waive the liveness gate, in plain words"
 grep -q "\[PASS\] Pinned models are alive" <<<"$out" && die "unreadable docs must never count as a liveness PASS"
 grep -q "\[FAIL\] A pinned model" <<<"$out" && die "unreadable docs must not be reported as a dead pin"
 passed "unreachable docs waive the liveness gate without passing or failing it"
 
-# Case 8: anything but auto|always is a hard error, never a silent skip (the receipt
+# Case 9: anything but auto|always is a hard error, never a silent skip (the receipt
 # gate's rule). One value through the whole script proves it stops before section 1.
 for bad in yes on 1 true; do
   set +e
@@ -111,7 +118,7 @@ run_script "$TMP/fresh.toml" "$FIXTURES" yes ""
 grep -q "1. Version consistency" <<<"$out" && die "an invalid gate value must stop the release check before its first section"
 passed "invalid MMR_MODEL_REGISTRY_GATE values are a hard error, before any section runs"
 
-# Case 9 (whole script): the section is wired in, the fresh stamp passes both gates, and the
+# Case 10 (whole script): the section is wired in, the fresh stamp passes both gates, and the
 # only waiver in the summary is section 9's receipt waiver.
 run_script "$TMP/fresh.toml" "$FIXTURES" always ""
 grep -q "11. Model registry" <<<"$out" || die "section 11 is not wired into the release check"
@@ -120,12 +127,12 @@ grep -q "\[PASS\] Pinned models are alive" <<<"$out" || die "whole-script run: t
 grep -qE "Waived: 1( |$)" <<<"$out" || die "expected only the receipt waiver, got: $(grep -E 'Waived:' <<<"$out")"
 passed "whole release check runs section 11 and counts no liveness waiver"
 
-# Case 10 (whole script): unreadable docs add exactly one waiver to the summary.
+# Case 11 (whole script): unreadable docs add exactly one waiver to the summary.
 run_script "$TMP/fresh.toml" "$TMP/does-not-exist" always ""
 grep -qE "Waived: 2( |$)" <<<"$out" || die "expected the receipt waiver plus the liveness waiver, got: $(grep -E 'Waived:' <<<"$out")"
 passed "unreachable docs are counted as a waiver in the summary"
 
-# Case 11 (whole script): in CI, a diff that changes no version line is not a cut; the
+# Case 12 (whole script): in CI, a diff that changes no version line is not a cut; the
 # section notes itself and skips, even with a stale stamp that would otherwise FAIL.
 if ! git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
   echo "SKIP: origin/main is not available, cannot assert the non-cut skip"
@@ -140,7 +147,7 @@ else
   passed "non-cut CI diff skips both gates and says so"
 fi
 
-# Case 12: MMR_MODEL_REGISTRY_GATE=always forces the section even in CI.
+# Case 13: MMR_MODEL_REGISTRY_GATE=always forces the section even in CI.
 run_script "$TMP/fresh.toml" "$FIXTURES" always true
 grep -q "\[PASS\] Model registry review age" <<<"$out" || die "always should run the review-age gate in CI"
 grep -q "\[PASS\] Pinned models are alive" <<<"$out" || die "always should run the liveness gate in CI"

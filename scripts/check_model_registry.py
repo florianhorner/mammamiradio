@@ -98,11 +98,11 @@ _NOISE_TOKENS = frozenset({"or", "and", "n", "a"})
 
 
 class RegistryError(Exception):
-    """model_registry.toml is missing, unparseable, or schema-invalid (exit 1)."""
+    """model_registry.toml is missing or schema-invalid (exit 1)."""
 
 
 class SourceError(Exception):
-    """Provider docs unreadable or missing an anchor (exit 2, fail closed)."""
+    """A registry or provider source is unreadable or missing an anchor (exit 2)."""
 
 
 @dataclass(frozen=True)
@@ -151,8 +151,10 @@ def load_registry(path: Path) -> dict:
             return tomllib.load(handle)
     except FileNotFoundError as exc:
         raise RegistryError(f"{path} not found") from exc
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise RegistryError(f"{path} could not be parsed: {exc}") from exc
+    except OSError as exc:
+        raise SourceError(f"{path} could not be read: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise SourceError(f"{path} could not be parsed: {exc}") from exc
 
 
 def registry_entries(raw: dict) -> list[Entry]:
@@ -602,6 +604,9 @@ def main(argv: list[str] | None = None) -> int:
     today = args.today or dt.datetime.now(dt.UTC).date()
     try:
         raw = load_registry(args.registry)
+    except SourceError as exc:
+        print(f"UNREADABLE: {exc}")
+        return EXIT_SOURCE
     except RegistryError as exc:
         print(f"FAIL: {exc}")
         return EXIT_FINDING
