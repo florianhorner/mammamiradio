@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ import pytest
 from mammamiradio.home.atomic_json import (
     atomic_write_json,
     chmod_owner_only,
+    prune_stale_atomic_json_tmp_files,
     unlink_legacy_fixed_tmp,
 )
 
@@ -57,6 +59,38 @@ def test_atomic_write_json_replace_failure_raises_and_leaves_destination(tmp_pat
         pytest.raises(OSError, match="disk full"),
     ):
         atomic_write_json(destination, {"k": "v"}, ensure_ascii=True)
+    assert destination.read_text(encoding="utf-8") == previous
+    assert list(tmp_path.glob(".household.json.*.tmp")) == []
+
+
+def test_atomic_write_json_write_failure_raises_and_leaves_destination(tmp_path):
+    destination = tmp_path / "household.json"
+    previous = '{"kept": true}'
+    destination.write_text(previous, encoding="utf-8")
+    real_fdopen = os.fdopen
+
+    class WriteFailingHandle:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self._handle.close()
+
+        def write(self, _body):
+            raise OSError("disk full during write")
+
+    def failing_fdopen(fd, *args, **kwargs):
+        return WriteFailingHandle(real_fdopen(fd, *args, **kwargs))
+
+    with (
+        patch("mammamiradio.home.atomic_json.os.fdopen", side_effect=failing_fdopen),
+        pytest.raises(OSError, match="disk full during write"),
+    ):
+        atomic_write_json(destination, {"k": "v"}, ensure_ascii=True)
+
     assert destination.read_text(encoding="utf-8") == previous
     assert list(tmp_path.glob(".household.json.*.tmp")) == []
 
@@ -133,3 +167,83 @@ def test_unlink_legacy_fixed_tmp_removes_shared_scratch(tmp_path):
     leftover.write_text("stale", encoding="utf-8")
     unlink_legacy_fixed_tmp(path)
     assert not leftover.exists()
+
+
+def test_prune_stale_atomic_json_tmp_files_removes_only_owned_old_scratch(tmp_path):
+    cache_dir = tmp_path / "cache"
+    destinations = (
+        cache_dir / "ha_registry.json",
+        cache_dir / "state" / "ha_entity_policy.json",
+        cache_dir / "moments.json",
+        cache_dir / "evening_ledger.json",
+    )
+    old_mtime = time.time() - 7 * 3600
+    old_unique = [path.parent / f".{path.name}.crashed.tmp" for path in destinations]
+    old_legacy = [path.with_suffix(".json.tmp") for path in destinations[2:]]
+    for path in (*old_unique, *old_legacy):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("household data", encoding="utf-8")
+        os.utime(path, (old_mtime, old_mtime))
+
+    fresh = cache_dir / ".moments.json.in-flight.tmp"
+    fresh.write_text("fresh", encoding="utf-8")
+    unrelated = cache_dir / ".other.json.crashed.tmp"
+    unrelated.write_text("unrelated", encoding="utf-8")
+
+    assert prune_stale_atomic_json_tmp_files(cache_dir, destinations) == 6
+    assert all(not path.exists() for path in (*old_unique, *old_legacy))
+    assert fresh.exists()
+    assert unrelated.exists()
+
+
+def test_prune_stale_atomic_json_tmp_files_bounds_scan_and_prune(tmp_path, caplog):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    destination = cache_dir / "moments.json"
+    old_mtime = time.time() - 7 * 3600
+    candidates = [cache_dir / f".moments.json.{index}.tmp" for index in range(4)]
+    for index, path in enumerate(candidates):
+        path.write_text("stale", encoding="utf-8")
+        os.utime(path, (old_mtime - index, old_mtime - index))
+
+    with (
+        patch("mammamiradio.home.atomic_json._MAX_SCRATCH_GLOB_CANDIDATES", 3),
+        patch("mammamiradio.home.atomic_json._MAX_SCRATCH_PRUNE_PER_DESTINATION", 2),
+    ):
+        assert prune_stale_atomic_json_tmp_files(cache_dir, (destination,)) == 2
+
+    assert sum(path.exists() for path in candidates) == 2
+    assert "exceeded 3 raw candidates" in caplog.text
+    assert "capping this pass at 2" in caplog.text
+
+
+@pytest.mark.parametrize("max_age_hours", [0, -1, float("nan"), float("inf")])
+def test_prune_stale_atomic_json_tmp_files_rejects_unsafe_age(tmp_path, max_age_hours):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    scratch = cache_dir / ".moments.json.crashed.tmp"
+    scratch.write_text("stale", encoding="utf-8")
+
+    assert (
+        prune_stale_atomic_json_tmp_files(
+            cache_dir,
+            (cache_dir / "moments.json",),
+            max_age_hours=max_age_hours,
+        )
+        == 0
+    )
+    assert scratch.exists()
+
+
+def test_prune_stale_atomic_json_tmp_files_rejects_symlinked_cache_root(tmp_path):
+    real_cache = tmp_path / "real-cache"
+    real_cache.mkdir()
+    scratch = real_cache / ".moments.json.crashed.tmp"
+    scratch.write_text("stale", encoding="utf-8")
+    old_mtime = time.time() - 7 * 3600
+    os.utime(scratch, (old_mtime, old_mtime))
+    cache_link = tmp_path / "cache-link"
+    cache_link.symlink_to(real_cache, target_is_directory=True)
+
+    assert prune_stale_atomic_json_tmp_files(cache_link, (cache_link / "moments.json",)) == 0
+    assert scratch.exists()
