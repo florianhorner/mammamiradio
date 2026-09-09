@@ -350,6 +350,28 @@ def parse_openai_models(text: str) -> frozenset[str]:
     return frozenset(tokens)
 
 
+def _openai_deprecation_source_columns(header: list[str], date_col: int) -> tuple[int, ...]:
+    model_cells = ("model", "system", "snapshot")
+    metadata_cells = (
+        "replacement",
+        "substitute",
+        "recommended",
+        "successor",
+        "suggested",
+        "alternative",
+        "price",
+        "pricing",
+        "cost",
+    )
+    return tuple(
+        index
+        for index, raw_cell in enumerate(header)
+        if index != date_col
+        and any(model_cell in (cell := _normalize_cell(raw_cell).lower()) for model_cell in model_cells)
+        and not any(metadata in cell for metadata in metadata_cells)
+    )
+
+
 def parse_openai_deprecations(text: str) -> dict[str, Shutdown]:
     """Announced shutdown per model ID, read from every table that has both a
     'Shutdown date' column and a model column, by that table's own header.
@@ -361,24 +383,22 @@ def parse_openai_deprecations(text: str) -> dict[str, Shutdown]:
     calendar date still counts as an announced shutdown with an unreadable date.
     """
     shutdowns: dict[str, Shutdown] = {}
-    saw_table = False
+    qual_tables = 0
     tables = _markdown_tables(text)
     if "<table" in text.lower():
         tables += _html_tables(text)
     for table in tables:
-        header = [cell.lower() for cell in table[0]]
+        header = [_normalize_cell(cell).lower() for cell in table[0]]
         date_col = next((index for index, cell in enumerate(header) if "shutdown date" in cell), None)
-        model_col = next(
-            (
-                index
-                for index, cell in enumerate(header)
-                if any(word in cell for word in ("model", "system", "snapshot"))
-            ),
-            None,
-        )
-        if date_col is None or model_col is None or date_col == model_col:
+        if date_col is None:
             continue
-        saw_table = True
+        model_cols = _openai_deprecation_source_columns(header, date_col)
+        if not model_cols:
+            continue
+        qual_tables += 1
+        if len(model_cols) != 1:
+            raise SourceError("OpenAI deprecations page: ambiguous source-model columns in a Shutdown date table")
+        model_col = model_cols[0]
         for cells in table[1:]:
             if len(cells) <= max(date_col, model_col):
                 continue
@@ -390,8 +410,10 @@ def parse_openai_deprecations(text: str) -> dict[str, Shutdown]:
                 known = shutdowns.get(token)  # keep the earliest readable date
                 if known is None or (shutdown.date is not None and (known.date is None or shutdown.date < known.date)):
                     shutdowns[token] = shutdown
-    if not saw_table:
+    if qual_tables == 0:
         raise SourceError("OpenAI deprecations page: no table with 'Shutdown date' and model columns found")
+    if not shutdowns:
+        raise SourceError("OpenAI deprecations page: no model shutdown rows")
     return shutdowns
 
 

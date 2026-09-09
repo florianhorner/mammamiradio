@@ -260,6 +260,71 @@ def test_openai_deprecations_html_table_also_parses() -> None:
     assert shutdowns["gpt-3.5-turbo"].date == dt.date(2026, 10, 23)
 
 
+def test_openai_deprecations_header_only_table_raises_no_rows() -> None:
+    page = "| Model / system | Shutdown date |\n|---|---|\n"
+    with pytest.raises(watch.SourceError, match="no model shutdown rows"):
+        watch.parse_openai_deprecations(page)
+
+
+def test_openai_deprecations_header_only_table_fails_liveness_with_exit_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    synthetic = tmp_path / "openai-deprecations-empty.md"
+    synthetic.write_text("| Model / system | Shutdown date |\n|---|---|\n", encoding="utf-8")
+    fixtures = _fixture_dir(tmp_path, openai_deprecations=synthetic)
+    path = _registry(tmp_path)
+    code, out = _run(
+        capsys,
+        "--providers",
+        "--gate",
+        "liveness",
+        "--registry",
+        str(path),
+        "--fixture-dir",
+        str(fixtures),
+        "--today",
+        "2026-09-08",
+    )
+    assert code == watch.EXIT_SOURCE
+    assert out.startswith("UNREADABLE:")
+    assert "no model shutdown rows" in out
+    assert "OK (liveness):" not in out
+
+
+@pytest.mark.parametrize("replacement_header", ["Recommended replacement model", "Substitute model"])
+def test_openai_deprecations_replacement_column_is_not_retiring_model(
+    replacement_header: str,
+) -> None:
+    page = (
+        f"| {replacement_header} | Shutdown date | Model |\n"
+        f"|---|---|---|\n"
+        "| `gpt-5.6-sol` | Sep 1, 2026 | `gpt-5.5` |\n"
+    )
+    shutdowns = watch.parse_openai_deprecations(page)
+    assert shutdowns["gpt-5.5"] == watch.Shutdown(dt.date(2026, 9, 1), "Sep 1, 2026")
+    assert "gpt-5.6-sol" not in shutdowns
+
+
+def test_openai_deprecations_ambiguous_source_columns_are_source_errors() -> None:
+    page = (
+        "| Model / system | Model family / snapshot | Shutdown date |\n"
+        "|---|---|---|\n"
+        "| `gpt-5.5` | `gpt-5.6-sol` | Sep 1, 2026 |\n"
+    )
+    with pytest.raises(watch.SourceError, match="ambiguous"):
+        watch.parse_openai_deprecations(page)
+
+
+def test_openai_deprecations_ignores_model_price() -> None:
+    page = (
+        "| Shutdown date | Deprecated model | Deprecated model price | Recommended replacement |\n"
+        "|---|---|---|---|\n"
+        "| Sep 1, 2026 | `gpt-5.5` | $1.50 / $6.00 | `gpt-5.6-sol` |\n"
+    )
+    shutdowns = watch.parse_openai_deprecations(page)
+    assert shutdowns == {"gpt-5.5": watch.Shutdown(dt.date(2026, 9, 1), "Sep 1, 2026")}
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
