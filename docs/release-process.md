@@ -119,6 +119,16 @@ there is a real discipline on top of it:
   what it ships. Under the old order the fold landed after the tag and `v2.17.0`'s tree
   has no `[2.17.0]` section at all.
 - **Preship V2 comes before HA runs.** It excludes validated HA receipts; HA includes V2 and excludes only HA receipts, keeping both proofs squash-safe.
+- **The cut asks whether the hosts' models were decided lately and are still alive.**
+  `scripts/pre-release-check.sh` section 11 refuses a `model_registry.toml` whose
+  `last_reviewed` stamp is missing, malformed, or older than 45 days, and refuses a
+  pinned model the provider has deprecated or retired (read live from the public
+  docs; unreachable docs are WAIVED and named, never passed). Refresh the stamp only
+  after reading `python scripts/check_model_registry.py --providers` and deciding each
+  pin; holding a legacy pin on purpose is a valid decision, say so in the comment. The
+  check runs in CI only when the PR changes a version line (other PRs that touch
+  `pyproject.toml` note it and skip) and always under `make pre-release`, so a stale
+  registry surfaces at the cut, not as a red Dependabot PR.
 
 ## Coordinating parallel workspaces
 
