@@ -2,9 +2,10 @@
 
 Workspace `kathmandu`. Branch `florianhorner/chore/h4-remaining-work`.
 Base at execution: `338ff96c` (#1118 squash). Implementation commit
-`ea9fb00c`, plus a follow-up copy fix if present. `origin/main` later
-moved (edge cut `c5552122` at last check) and was not re-integrated;
-do that cleanly before `/ship`.
+`ea9fb00c`, plus copy fix `1397db47`. Integrated current `origin/main`
+(`bb6c3aeb` #1123 and `c5552122` #1125) as merge `5b0b5040`. Product
+files did not change in that merge; `docs/runbooks/ha-addon.md`
+auto-merged. `origin/main` is now an ancestor of HEAD.
 
 This is the recovery candidate for **completing the First Listen journey**
 (invitation, continuous music, finale handoff, privacy/polling recovery, live
@@ -56,10 +57,11 @@ Generator welcome lines match the invitation transcript. No paid regeneration.
 
 ## Size
 
-`git diff --stat 338ff96c` on the product/test/docs write-set: 16 files,
-**2,135 insertions / 629 deletions = 2,764 changed text lines**, plus the
-welcome binary. This proof file is extra. Envelope was ~3,200 including tests
-and fresh proof (~30% stop). One v2 receipt remains after review.
+`git diff --stat origin/main` on the product/test/docs write-set: 17 files,
+**2,260 insertions / 629 deletions = 2,889 changed text lines**, plus the
+welcome binary. Envelope was ~3,200 including tests and fresh proof
+(~30% stop). One v2 receipt remains after the official review ledger
+covers HEAD.
 
 ## Checks that were actually run
 
@@ -118,6 +120,7 @@ and guarded in `test_admin_first_listen.py`.
 
 ## Still required before `/ship`
 
-1. `scripts/emit-review-evidence.sh` after the gstack review ledger covers HEAD.
-2. Integrate current `origin/main` if it is still ahead.
-3. Explicit `/ship`. Do not open the PR before that authorization.
+1. `scripts/emit-review-evidence.sh` after the official gstack review
+   ledger covers HEAD. Informal Cursor reviews of `ea9fb00c` / `1397db47`
+   are not a ledger; do not invent one.
+2. Explicit `/ship`. Do not open the PR before that authorization.
