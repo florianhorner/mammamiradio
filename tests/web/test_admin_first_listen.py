@@ -80,8 +80,10 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert 'id="firstListenSourcePreview"' in html
     assert "Play it here" in html
     assert "Play my station" in html
+    assert "Can you hear us?" in html
     assert "I hear you" in html
     assert 'id="firstListenPrivacyHeading" tabindex="-1">Home details</h3>' in html
+    assert "Return to “Can you hear us?”, then review your Home details." in html
     assert "Add new conversations between songs" in html
     assert "Hearing it here is enough to finish setup." in html
     assert 'id="firstListenHomeAssistantGuide"' in html

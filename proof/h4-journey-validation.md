@@ -1,9 +1,10 @@
 # H4 PR1 — First Listen journey validation
 
 Workspace `kathmandu`. Branch `florianhorner/chore/h4-remaining-work`.
-Base at execution: `338ff96c` (#1118 squash). Local `HEAD` remains that
-commit. `origin/main` later moved to `c5552122` during this work and was
-not re-integrated; do that cleanly before `/ship`.
+Base at execution: `338ff96c` (#1118 squash). Implementation commit
+`ea9fb00c`, plus a follow-up copy fix if present. `origin/main` later
+moved (edge cut `c5552122` at last check) and was not re-integrated;
+do that cleanly before `/ship`.
 
 This is the recovery candidate for **completing the First Listen journey**
 (invitation, continuous music, finale handoff, privacy/polling recovery, live
@@ -110,10 +111,13 @@ fill) and a few grandfathered setup strings. Those were restored from
 `338ff96c` without taking Scaletta/Slice D work. First Listen CSS now hides
 `.mmr-deck-sentinel` with the deck.
 
+Read-only reviews after `ea9fb00c`: no P0. Playback/transport clean. Privacy
+recovery clean on fail-closed behavior (three P2 copy/display notes). Tests/docs
+had one P1 stale “Check the sound” recovery action — fixed to **Can you hear us?**
+and guarded in `test_admin_first_listen.py`.
+
 ## Still required before `/ship`
 
-1. Conventional commits of this candidate (if not already on the branch).
-2. Parallel read-only reviews (privacy/recovery, playback/queue/binaries, tests/UI/docs).
-3. `scripts/emit-review-evidence.sh` and the receipt-only commit.
-4. Integrate current `origin/main` if it is still ahead.
-5. Explicit `/ship`. Do not open the PR before that authorization.
+1. `scripts/emit-review-evidence.sh` after the gstack review ledger covers HEAD.
+2. Integrate current `origin/main` if it is still ahead.
+3. Explicit `/ship`. Do not open the PR before that authorization.
