@@ -95,12 +95,17 @@ _TABLE_CELL = re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL
 _HTML_CODE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.IGNORECASE | re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
 _CLAUDE_MODEL_ID = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9.\-]*")
-_OPENAI_CODE_ID = re.compile(r"[A-Za-z0-9/][A-Za-z0-9._:/=\-]*")
-_OPENAI_PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/=\-]*")
-_OPENAI_API_LABEL = re.compile(r"(?:[A-Za-z][A-Za-z0-9-]*\s+){1,3}API")
+_OPENAI_MODEL_ID = re.compile(
+    r"(?:(?:gpt|chatgpt|ft|sora|whisper|dall-e|text|code|codex|computer-use)[-:]"
+    r"[A-Za-z0-9][A-Za-z0-9._:/=\-]*|o[1-9](?:-[A-Za-z0-9._:/=\-]+)?|"
+    r"(?:ada|babbage|curie|davinci)(?:-[A-Za-z0-9._:/=\-]+)?)"
+)
+_OPENAI_ENDPOINT_ID = re.compile(r"/v\d+/[A-Za-z0-9][A-Za-z0-9._/\-]*")
 _OPENAI_BETA_ID = re.compile(r"OpenAI-Beta:\s*[A-Za-z0-9_-]+=[A-Za-z0-9._-]+", re.IGNORECASE)
+_NEGATIVE_SOURCE = re.compile(r"^(?:no|none|not)(?:\b|[-_/])", re.IGNORECASE)
 _SEPARATOR_CELL = re.compile(r":?-{2,}:?")
 _OPENAI_PLACEHOLDERS = frozenset({"n/a", "na", "none", "null", "tbd"})
+_OPENAI_SYSTEM_LABELS = frozenset({"assistants api", "videos api"})
 _OPENAI_SOURCE_HEADERS = frozenset(
     {
         "model",
@@ -409,25 +414,33 @@ def _openai_deprecation_source_columns(header: list[str], date_col: int) -> tupl
 
 def _openai_source_ids(cell: str) -> tuple[str, ...]:
     """Structured IDs from one shutdown-table source cell, never arbitrary prose."""
+
+    def is_identifier(candidate: str) -> bool:
+        return bool(
+            _OPENAI_MODEL_ID.fullmatch(candidate)
+            or _OPENAI_ENDPOINT_ID.fullmatch(candidate)
+            or _OPENAI_BETA_ID.fullmatch(candidate)
+            or candidate.lower() in _OPENAI_SYSTEM_LABELS
+        )
+
     identifiers: list[str] = []
     for code_span in _BACKTICKED.findall(cell):
         for candidate in re.split(r"\s*(?:,|\|)\s*", _normalize_cell(code_span)):
             candidate = candidate.rstrip(".")
-            if candidate and candidate.lower() not in _OPENAI_PLACEHOLDERS and _OPENAI_CODE_ID.fullmatch(candidate):
+            if (
+                candidate
+                and candidate.lower() not in _OPENAI_PLACEHOLDERS
+                and _NEGATIVE_SOURCE.match(candidate) is None
+                and is_identifier(candidate)
+            ):
                 identifiers.append(candidate)
     if identifiers:
         return tuple(dict.fromkeys(identifiers))
 
     normalized = _normalize_cell(cell).strip("` ").rstrip(".")
-    if (
-        (
-            normalized.lower() not in _OPENAI_PLACEHOLDERS
-            and _OPENAI_PLAIN_ID.fullmatch(normalized)
-            and re.search(r"(?:\d|[-._/:=])", normalized)
-        )
-        or _OPENAI_API_LABEL.fullmatch(normalized)
-        or _OPENAI_BETA_ID.fullmatch(normalized)
-    ):
+    if normalized.lower() in _OPENAI_PLACEHOLDERS or _NEGATIVE_SOURCE.match(normalized):
+        return ()
+    if is_identifier(normalized):
         return (normalized,)
     return ()
 

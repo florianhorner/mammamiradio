@@ -311,7 +311,10 @@ def test_openai_deprecations_unknown_source_column_cannot_hide_behind_a_valid_ta
         watch.parse_openai_deprecations(page)
 
 
-@pytest.mark.parametrize("source_cell", ["No retired models are affected", "N/A", "`N/A`"])
+@pytest.mark.parametrize(
+    "source_cell",
+    ["No retired models are affected", "No API", "No affected API", "N/A", "`N/A`", "`no-models`"],
+)
 def test_openai_deprecations_placeholder_source_row_is_a_source_error(source_cell: str) -> None:
     page = f"| Model / system | Shutdown date |\n|---|---|\n| {source_cell} | TBD |\n"
     with pytest.raises(watch.SourceError, match="unparseable source-model cell"):
@@ -325,6 +328,12 @@ def test_openai_deprecations_html_code_placeholder_is_a_source_error() -> None:
     )
     with pytest.raises(watch.SourceError, match="unparseable source-model cell"):
         watch.parse_openai_deprecations(page)
+
+
+@pytest.mark.parametrize("source_cell", ["`gpt-oss`", "`davinci`", "Videos API", "OpenAI-Beta: realtime=v1"])
+def test_openai_deprecations_accepts_supported_identifier_shapes(source_cell: str) -> None:
+    page = f"| Model / system | Shutdown date |\n|---|---|\n| {source_cell} | Sep 1, 2026 |\n"
+    assert watch.parse_openai_deprecations(page)
 
 
 def test_openai_deprecations_header_only_table_fails_liveness_with_exit_source(
