@@ -92,6 +92,11 @@ BROWSER_GUIDE_PATHS = (
     "first_listen/success.mp3",
 )
 BROWSER_GUIDE_HOSTS = ("Marco", "Giulia")
+FREE_VOICE_PATH = "voice_examples/free-voices.mp3"
+FREE_VOICE_TRANSCRIPT = (
+    "Marco: Mah… Giulia, somebody’s changed my microphone. My cousin says it’s the future. "
+    "Giulia: Same us. Different voices. And your cousin still owes us the old microphone."
+)
 DEMO_BANTER_CODEC = "mp3"
 DEMO_BANTER_SAMPLE_RATE_HZ = 48_000
 DEMO_BANTER_CHANNELS = 2
@@ -615,6 +620,7 @@ _GUIDE_ENTRY_PATTERN = re.compile(
 def _validate_admin_guide_metadata(
     manifest: dict[str, object],
     *,
+    voice_manifest: dict[str, object] | None = None,
     admin_template_path: Path = ADMIN_TEMPLATE_PATH,
 ) -> list[str]:
     """Keep the admin's cache keys and visible transcripts bound to the manifest."""
@@ -635,6 +641,11 @@ def _validate_admin_guide_metadata(
         if not isinstance(relative_path, str) or not relative_path.startswith("first_listen/"):
             continue
         expected[Path(relative_path).stem] = raw_entry
+    voice_assets = voice_manifest.get("assets") if voice_manifest is not None else None
+    if isinstance(voice_assets, list):
+        for entry in voice_assets:
+            if isinstance(entry, dict) and entry.get("path") == "free-voices.mp3":
+                expected["free-voices"] = entry
 
     errors: list[str] = []
     map_match = _GUIDE_MAP_PATTERN.search(source)
@@ -761,8 +772,22 @@ def validate_browser_narration_pack(
     raw_assets = manifest.get("assets")
     if not isinstance(raw_assets, list):
         return errors
+    side_root = root / "voice_examples"
+    if not staged_render or side_root.exists() or side_root.is_symlink():
+        errors.extend(
+            validate_free_voice_example(
+                assets_root=root,
+                static_root=static_root,
+                radio_config_path=radio_config_path,
+                staged_render=staged_render,
+            )
+        )
     if not staged_render:
-        errors.extend(_validate_admin_guide_metadata(manifest, admin_template_path=admin_template_path))
+        errors.extend(
+            _validate_admin_guide_metadata(
+                manifest, voice_manifest=_read_manifest(side_root), admin_template_path=admin_template_path
+            )
+        )
 
     entries_by_path: dict[str, dict[str, object]] = {}
     for raw_entry in raw_assets:
@@ -781,6 +806,20 @@ def validate_browser_narration_pack(
     if unexpected:
         errors.append(f"browser narration inventory has unexpected clips: {', '.join(unexpected)}")
 
+    return errors + _validate_browser_media(
+        root=root,
+        entries_by_path=entries_by_path,
+        paths=BROWSER_GUIDE_PATHS,
+        static_root=static_root,
+        staged_render=staged_render,
+    )
+
+
+def _validate_browser_media(*, root, entries_by_path, paths, static_root, staged_render) -> list[str]:
+    """Apply identical media limits to both packs without combining their provenance."""
+
+    errors = []
+
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         errors.append("ffprobe is required to validate the browser narration pack")
@@ -789,7 +828,7 @@ def validate_browser_narration_pack(
         errors.append("ffmpeg is required to measure browser narration loudness and true peak")
 
     total_bytes = 0
-    for relative_path in BROWSER_GUIDE_PATHS:
+    for relative_path in paths:
         entry = entries_by_path.get(relative_path)
         if entry is None:
             continue
@@ -882,11 +921,84 @@ def validate_browser_narration_pack(
                         f"{BROWSER_GUIDE_MAX_TRUE_PEAK_DBTP:.1f} dBTP"
                     )
 
+    for relative_path in set((*BROWSER_GUIDE_PATHS, FREE_VOICE_PATH)) - set(paths):
+        try:
+            total_bytes += (root / relative_path).stat().st_size
+        except OSError:
+            pass
     if total_bytes > BROWSER_GUIDE_MAX_BYTES:
         errors.append(
             f"browser narration bundle is {total_bytes} bytes; maximum is {BROWSER_GUIDE_MAX_BYTES} bytes (2.5 MiB)"
         )
     return errors
+
+
+def free_voice_render_receipt(config_path: Path = RADIO_CONFIG_PATH) -> dict[str, object]:
+    with Path(config_path).open("rb") as handle:
+        hosts = {host["name"]: host for host in tomllib.load(handle).get("hosts", [])}
+    voices = []
+    for name in BROWSER_GUIDE_HOSTS:
+        voice = hosts.get(name, {}).get("edge_fallback_voice")
+        if not isinstance(voice, str) or not voice.endswith("Neural"):
+            raise ValueError(f"{name} must configure its free fallback voice")
+        voices.append({"name": name, "voice_id": voice, "rate": "+0%", "pitch": "+0Hz"})
+    return {"schema_version": 1, "source": "radio.toml", "provider": "edge", "hosts": voices}
+
+
+def validate_free_voice_example(
+    *, assets_root=BROWSER_AUDIO_ROOT, static_root=STATIC_ROOT, radio_config_path=RADIO_CONFIG_PATH, staged_render=False
+) -> list[str]:
+    from mammamiradio.core.path_safety import safe_path_within
+
+    root = Path(assets_root)
+    side_root = root / "voice_examples"
+    paths = (side_root, side_root / "spoken_assets.json", root / FREE_VOICE_PATH)
+    if any(safe_path_within(path, root, reject_symlinks=True) is None for path in paths):
+        return ["free voice example path escapes its asset root or is a symlink"]
+    manifest = _read_manifest(side_root)
+    if manifest is None:
+        return ["free voice example manifest is missing or unreadable"]
+    errors = []
+    if manifest.get("schema_version") != 1 or manifest.get("bundle") != "first-listen-free-voices":
+        errors.append("free voice example schema or bundle is invalid")
+    try:
+        receipt = free_voice_render_receipt(radio_config_path)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        errors.append(f"cannot derive free voice receipt: {exc}")
+    else:
+        if manifest.get("render_provider") != "edge" or manifest.get("render_receipt") != receipt:
+            errors.append("free voice example receipt does not match radio.toml")
+    assets = manifest.get("assets")
+    if (
+        not isinstance(assets, list)
+        or len(assets) != 1
+        or not isinstance(assets[0], dict)
+        or assets[0].get("path") != "free-voices.mp3"
+    ):
+        return [*errors, "free voice example inventory must contain only free-voices.mp3"]
+    if {p.relative_to(side_root).as_posix() for p in side_root.rglob("*.mp3")} != {"free-voices.mp3"}:
+        errors.append("free voice example inventory contains missing or unlisted audio")
+    entry = assets[0]
+    if (
+        entry.get("kind") != "speech"
+        or entry.get("language") != "en"
+        or entry.get("speakers") != list(BROWSER_GUIDE_HOSTS)
+        or entry.get("transcript") != FREE_VOICE_TRANSCRIPT
+    ):
+        errors.append("free voice example must retain its approved English Marco/Giulia dialogue")
+    try:
+        digest = hashlib.sha256((root / FREE_VOICE_PATH).read_bytes()).hexdigest()
+        if entry.get("sha256") != digest:
+            errors.append("free voice example sha256 does not match")
+    except OSError:
+        errors.append("free voice example audio is missing or unreadable")
+    return errors + _validate_browser_media(
+        root=root,
+        entries_by_path={FREE_VOICE_PATH: entry},
+        paths=(FREE_VOICE_PATH,),
+        static_root=static_root,
+        staged_render=staged_render,
+    )
 
 
 def _is_demo_assets_root(assets_root: Path) -> bool:

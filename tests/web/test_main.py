@@ -1974,6 +1974,116 @@ async def test_startup_prewarm_is_capped_to_two_on_addon(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "fresh",
+        "failed",
+        "raised",
+        "existing",
+        "stopped",
+        "handoff",
+        "keyed",
+        "italian",
+        "timeout",
+        "source_revision",
+        "chaos_cutover_epoch",
+        "continuity_epoch",
+        "stop_during_start",
+        "stop_resume",
+        "new_key",
+    ],
+)
+async def test_first_install_orders_the_recorded_show_without_blocking_other_starts(tmp_path, scenario):
+    from mammamiradio.core.models import Segment, SegmentType, Track
+    from mammamiradio.main import app, startup
+
+    config = _privacy_startup_config(tmp_path)
+    config.super_italian_mode = scenario == "italian"
+    config.pacing.lookahead_segments = 1
+    config.audio.bitrate = 192
+    config.cache_dir.mkdir(parents=True)
+    if scenario == "existing":
+        (config.cache_dir / "mammamiradio.db").touch()
+    if scenario == "stopped":
+        (config.cache_dir / "session_stopped.flag").touch()
+    gate, entered, producing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    prepared = []
+    observed = []
+    keyed = scenario == "keyed"
+    bypass = scenario in {"existing", "stopped", "handoff", "keyed", "italian"}
+
+    async def music(queue, state, config):
+        prepared.append("music")
+        entered.set()
+        await gate.wait()
+        if scenario == "failed":
+            return False
+        if scenario == "raised":
+            raise RuntimeError("prewarm failed")
+        await queue.put(Segment(type=SegmentType.MUSIC, path=tmp_path / "song.mp3"))
+        return True
+
+    async def speech(queue, state, config, *, stale_check):
+        if stale_check() is not None:
+            return False
+        prepared.append("banter")
+        await queue.put(Segment(type=SegmentType.BANTER, path=tmp_path / "chair.mp3"))
+        return True
+
+    async def produce(queue, *_args, **_kwargs):
+        observed.extend(segment.type.value for segment in queue._queue)
+        producing.set()
+
+    def handoff(queue, *_):
+        if scenario == "handoff":
+            queue.put_nowait(Segment(type=SegmentType.MUSIC, path=tmp_path / "resume.mp3"))
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.has_script_llm", side_effect=lambda _: keyed),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="Song", artist="A", duration_ms=180000)], None, ""),
+        ),
+        patch(f"{MODULE}._admit_restart_handoff", side_effect=handoff),
+        patch(f"{MODULE}.prewarm_first_segment", side_effect=music),
+        patch(f"{MODULE}.queue_first_listen_banter", side_effect=speech),
+        patch(f"{MODULE}.run_producer", side_effect=produce),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}._FIRST_LISTEN_OPENING_WAIT_SECONDS", 0.02 if scenario == "timeout" else 15),
+    ):
+        await startup()
+        await asyncio.wait_for(entered.wait(), 2)
+        if bypass or scenario == "timeout":
+            await asyncio.wait_for(producing.wait(), 2)
+        else:
+            assert not producing.is_set(), "producer overtook the opening song"
+        if scenario in {"source_revision", "chaos_cutover_epoch", "continuity_epoch"}:
+            setattr(app.state.station_state, scenario, 1)
+        if scenario == "stop_resume":
+            app.state.station_state.session_stopped = True
+            app.state.station_state.continuity_epoch += 1
+            app.state.station_state.session_stopped = False
+        if scenario == "stop_during_start":
+            app.state.station_state.session_stopped = True
+        if scenario == "new_key":
+            keyed = True
+        gate.set()
+        await asyncio.wait_for(producing.wait(), 2)
+        await asyncio.gather(app.state.prewarm_task, app.state.producer_task, return_exceptions=True)
+
+    assert "banter" in prepared if scenario == "fresh" else "banter" not in prepared
+    if scenario == "fresh":
+        assert observed == ["music", "banter", "music"]
+        assert app.state.queue.maxsize == 3
+        assert app.state.station_state.listeners_active == 0
+    if scenario in {"failed", "raised"}:
+        assert prepared == ["music"]
+
+
+@pytest.mark.asyncio
 async def test_startup_reads_persisted_source_before_fetching():
     from mammamiradio.core.models import PlaylistSource, Track
 

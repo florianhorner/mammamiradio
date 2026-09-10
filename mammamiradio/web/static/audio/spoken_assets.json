@@ -37,11 +37,11 @@
   "assets": [
     {
       "path": "first_listen/welcome.mp3",
-      "sha256": "dd31f04724119647c9152b9f9e7d7a0e5abf266d2b9d7d4e368fee4e789c126a",
+      "sha256": "de7e0d29bed865e35710d0929dcc1825cc2b32eba4366099ca66554b65ecc97c",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee. Giulia: Touch it again and you’re reading the weather from the corridor. Three small steps. Then we’re on air.",
-      "duration_seconds": 12.528,
+      "transcript": "Marco: Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee. Giulia: I’m Giulia. I run the desk. Touch my coffee again and you’re in the corridor, Marco. Come in. Three small steps. Then we’re on air.",
+      "duration_seconds": 15.768,
       "speakers": [
         "Marco",
         "Giulia"
@@ -85,11 +85,11 @@
     },
     {
       "path": "first_listen/privacy.mp3",
-      "sha256": "3565eea7e6138e58cdfc57dc00af52d441991eebc797f657439d4070d3d04004",
+      "sha256": "17bde6abcd1a431773b55e4a2fd32bdd203a7121d00dedaa28ded05556d5b426",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: Give me the weather and I will make it radio. Giulia: Only after you preview the exact details. Keep Home private and we read nothing.",
-      "duration_seconds": 8.448,
+      "transcript": "Marco: Rain all afternoon. I’ve cancelled the rooftop disco. Giulia: It was a speaker on a bin, Marco. Bring it inside. We’re not cancelling Saturday.",
+      "duration_seconds": 9.504,
       "speakers": [
         "Marco",
         "Giulia"
@@ -97,11 +97,11 @@
     },
     {
       "path": "first_listen/ai.mp3",
-      "sha256": "9a0975774b35e5ca14e3532d4746b75ba24f0a68f487363656caec3953aebb4b",
+      "sha256": "5e30ee5ce2a1f20564e53182b0828caaf895d2a73ea1d6fef1c47d3d9dd50c1a",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: Connect an AI provider and the conversations keep changing. Giulia: Optional. The station already works. Saved keys stay hidden, and an empty field changes nothing.",
-      "duration_seconds": 12.432,
+      "transcript": "Marco: Connect a writing service and I’ll have something new to say between records. Giulia: Something new, Marco. That rules out the story about your famous cousin.",
+      "duration_seconds": 9.312,
       "speakers": [
         "Marco",
         "Giulia"

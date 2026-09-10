@@ -38,7 +38,7 @@ from mammamiradio.core.first_listen import (
     capture_first_listen_install_origin,
     migrate_first_listen_install_origin,
 )
-from mammamiradio.core.models import PlaylistSource, StationState
+from mammamiradio.core.models import GenerationWasteReason, PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.context_director import HomeContextDirector
@@ -55,6 +55,7 @@ from mammamiradio.home.migration import (
 )
 from mammamiradio.home.moment_receipts import MomentStore
 from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.hosts.scriptwriter import has_script_llm
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.blocklist import load_blocklist
@@ -81,7 +82,12 @@ from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME, prune_stale_keepsake_tmp_files
-from mammamiradio.scheduling.producer import _queue_shadow_entry, prewarm_first_segment, run_producer
+from mammamiradio.scheduling.producer import (
+    _queue_shadow_entry,
+    prewarm_first_segment,
+    queue_first_listen_banter,
+    run_producer,
+)
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.media_sources import router as media_sources_router
 from mammamiradio.web.streamer import (
@@ -117,6 +123,7 @@ def _configure_http_logging() -> None:
 
 _configure_http_logging()
 logger = logging.getLogger("mammamiradio")
+_FIRST_LISTEN_OPENING_WAIT_SECONDS = 15.0
 
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
@@ -867,28 +874,70 @@ async def startup():
         # reading a spooled file must never abort startup (INSTANT AUDIO).
         logger.warning("Restart handoff admission failed; continuing without it", exc_info=True)
 
-    # Pre-produce music segments in the background so app startup is instant.
-    # If a listener connects before prewarm finishes, the producer's idle-resume
-    # logic queues a canned clip as an immediate fallback.
-    # Keep prewarm capped at 2 across environments to avoid ffmpeg pileups on
-    # constrained addon hardware while still buffering enough for smooth start.
+    # A fresh recorded station opens music -> third chair -> music. Keep the
+    # producer from overtaking that sequence; playback still starts immediately.
+    # The minimum queue capacity is three, so no listener is needed to fill it.
+    opening = (
+        app.state.first_listen_cold_install
+        and queue.empty()
+        and not state.session_stopped
+        and not config.super_italian_mode
+        and not has_script_llm(config)
+    )
+    opening_pending = opening
+    opening_epochs = (state.source_revision, state.chaos_cutover_epoch, state.continuity_epoch)
+
+    def _opening_stale_reason():
+        if state.session_stopped:
+            return GenerationWasteReason.SESSION_STOPPED
+        if state.source_revision != opening_epochs[0]:
+            return GenerationWasteReason.STALE_SOURCE
+        if state.chaos_cutover_epoch != opening_epochs[1]:
+            return GenerationWasteReason.STALE_CHAOS
+        if (
+            not opening_pending
+            or state.continuity_epoch != opening_epochs[2]
+            or config.super_italian_mode
+            or has_script_llm(config)
+        ):
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
     async def _prewarm_multiple():
-        total = 2
-        for _ in range(total):
+        if opening:
+            if not await prewarm_first_segment(queue, state, config):
+                return  # Release ordinary production; do not retry the opening.
+            await queue_first_listen_banter(queue, state, config, stale_check=_opening_stale_reason)
+            await prewarm_first_segment(queue, state, config)
+            return
+        # Existing/keyed/stopped stations retain two concurrent music prewarms.
+        for _ in range(2):
             await prewarm_first_segment(queue, state, config)
 
     _prewarm_task = asyncio.create_task(_prewarm_multiple())
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
-    _producer_task = asyncio.create_task(
-        run_producer(
+
+    async def _produce_after_opening():
+        nonlocal opening_pending
+        if opening:
+            try:
+                await asyncio.wait_for(asyncio.shield(_prewarm_task), timeout=_FIRST_LISTEN_OPENING_WAIT_SECONDS)
+            except Exception:
+                logger.warning("Opening preparation did not finish; continuing ordinary production", exc_info=True)
+            finally:
+                # Revoke before releasing the producer. A late probe/egress may
+                # finish, but its stale gate can no longer insert an opening.
+                opening_pending = False
+        await run_producer(
             queue,
             state,
             config,
             skip_event=app.state.skip_event,
             jamendo_provider=jamendo_provider,
         )
-    )
+
+    _producer_task = asyncio.create_task(_produce_after_opening())
     local_library_task = asyncio.create_task(
         run_local_library_scanner(app.state),
         name="local-library-scanner",

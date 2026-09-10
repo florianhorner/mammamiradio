@@ -67,7 +67,7 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     path = html[html.index('id="firstListenPath"') : html.index('id="firstListenOptional"')]
     assert path.count('class="first-listen-step"') == 3
     assert 'id="firstListenAiStep"' not in path
-    assert "Optional enhancement" in html
+    assert "Your ongoing show" in html
     assert (
         html.index('id="firstListenPath"')
         < html.index('id="firstListenOptional"')
@@ -82,9 +82,9 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Play my station" in html
     assert "Can you hear us?" in html
     assert "I hear you" in html
-    assert 'id="firstListenPrivacyHeading" tabindex="-1">Home details</h3>' in html
+    assert 'id="firstListenPrivacyHeading" tabindex="-1">Make it yours</h3>' in html
     assert "Return to “Can you hear us?”, then review your Home details." in html
-    assert "Add new conversations between songs" in html
+    assert "Give them something new to say." in html
     assert "Hearing it here is enough to finish setup." in html
     assert 'id="firstListenHomeAssistantGuide"' in html
     assert "Home Assistant Community Store (HACS)" in html
@@ -126,7 +126,7 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
         "firstListenAiStep",
     ):
         assert progress.count(f"firstListenSetStep('{stage}'") == 1
-    assert "firstListenSetStep('firstListenAiStep',configuredKeys.length?'complete':'optional')" in progress
+    assert "firstListenSetStep('firstListenAiStep','optional')" in progress
     assert "firstListenAiStep',configuredKeys.length?'current'" not in progress
 
 
@@ -291,7 +291,7 @@ def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
     privacy = html.index('id="firstListenPrivacyStep"')
     ai = html.index('id="firstListenAiStep"')
     assert privacy < ai
-    assert "Example only. This is not your Home data" in html
+    assert "household-scene" in html
     assert "We won’t request Home details unless you ask for a preview." in html
     assert "Keep Home private and we request nothing." in html
     assert "preview exactly what the hosts would receive, then decide." in html
@@ -326,8 +326,11 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     assert "listenAccepted?'complete':'current'" in progress
     assert "listenComplete?'complete':receiptRepairRequired||listenAccepted?'current':'upcoming'" in progress
     assert "privacyMilestone?'complete':existingPrivacyReview||listenComplete?'current':'upcoming'" in progress
-    assert "configuredKeys.length?'complete':'optional'" in progress
-    assert "aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi" in progress
+    assert "firstListenSetStep('firstListenAiStep','optional')" in progress
+    assert (
+        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
+        in progress
+    )
     assert "You do not need to play the station again." in progress
     assert "Your existing listening check still stands. Review your Home details next." in progress
 
@@ -519,34 +522,35 @@ def test_discovery_and_privacy_preview_require_canonical_detached_envelopes() ->
 
 def test_no_ai_key_is_needed_for_first_audio() -> None:
     html = _html()
-    assert "No AI key needed." in html
-    assert "Welcome and live radio" in html
-    assert "New host conversations" in html
+    assert "Those studio recordings play without a key." in html
+    assert "No keys needed to start listening" in html
     assert "Hear the studio voices" in html
-    assert "A recording with the hosts’ studio voices." in html
+    assert "Hear the free voices" in html
     ai_body = re.search(r'<div class="first-listen-body"[^>]*id="firstListenAiBody"[^>]*>', html)
     assert ai_body is not None
     assert "hidden" in ai_body.group(0)
     assert 'aria-hidden="true"' in ai_body.group(0)
     assert "inert" in ai_body.group(0)
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    assert "aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi" in progress
+    assert (
+        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
+        in progress
+    )
     assert "filter(e=>e.key==='llm_keys')" in progress
-    assert "firstListenSetStep('firstListenAiStep',configuredKeys.length?'complete':'optional')" in progress
-    assert "AI service connected" in progress
+    assert "firstListenSetStep('firstListenAiStep','optional')" in progress
+    assert "renderFirstListenConnection()" in progress
     start_block = _function("startFirstListen", "verifyFirstListen")
     assert "setupAnthropicKey" not in start_block
     assert "setupOpenaiKey" not in start_block
 
-    values = _function("firstListenKeyValues", "updateFirstListenKeySaveState")
+    fields = _function("firstListenKeyFields", "firstListenKeyValues")
     update = _function("updateFirstListenKeySaveState", "openFirstListenKeyEditor")
     save = _function("setupSaveKeys", "copySetupSnippet")
-    assert "setupAnthropicKey" in values
-    assert "setupOpenaiKey" in values
-    assert "save.disabled=!firstListenKeyValues().some(Boolean)" in update
-    assert "if(anthropic) payload.ANTHROPIC_API_KEY=anthropic" in save
-    assert "if(openai) payload.OPENAI_API_KEY=openai" in save
-    assert "if(!Object.keys(payload).length)" in save
+    assert "setupAnthropicKey" in fields
+    assert "setupOpenaiKey" in fields
+    assert "save.disabled=_firstListenUi.keySaving||!hasInput" in update
+    assert "firstListenKeyFields()" in save
+    assert "apiResponse('POST','/api/setup/save-keys',payload,FIRST_LISTEN_TIMEOUTS.privacy)" in save
     assert "Saved keys stay hidden." in html
     assert "Leave a field empty to keep its current value." in html
     assert html.count('placeholder="Leave blank to keep saved key"') == 4
@@ -755,8 +759,15 @@ def test_completed_rows_review_inline_without_stealing_current_step() -> None:
     assert "const trigger=_firstListenUi.reviewTrigger" in close
     assert "_firstListenUi.reviewStep=''" in close
     assert "_firstListenUi.optionalStep=''" in close
+    assert "_keysEditMode=false" in close
     assert "if(!focusCurrentFirstListenStep()&&trigger?.isConnected)trigger.focus()" in close
     assert "event.key==='Escape'" in html
+
+    optional = _function("toggleFirstListenOptional", "showFirstListenConnection")
+    assert "_keysEditMode=false" in optional
+    connection = _function("showFirstListenConnection", "returnToFirstListenSetup")
+    assert "if(stage==='voices'){" in connection
+    assert "_keysEditMode=false" in connection
 
 
 def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> None:
@@ -766,7 +777,7 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     assert 'preload="none"' in audio_tag.group(0)
     assert "autoplay" not in audio_tag.group(0)
     assert html.count('id="firstListenGuideAudio"') == 1
-    assert html.count('class="guide-audio-play"') == 7
+    assert html.count('class="guide-audio-play"') == 8
     for key in (
         "welcome",
         "sound-check",
@@ -774,6 +785,7 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
         "receipt-recovery",
         "privacy",
         "ai",
+        "free-voices",
         "success",
     ):
         assert f'data-guide-key="{key}"' in html
@@ -782,15 +794,17 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     guides_start = html.index("const FIRST_LISTEN_GUIDES={")
     guides_end = html.index("function initFirstListenTechnicalDetails", guides_start)
     guide_code = html[guides_start:guides_end]
-    assert "/static/audio/first_listen/${guide.file}" in guide_code
+    assert "/static/audio/${folder}/${guide.file}" in guide_code
     # Playback is raced against a load deadline, so the clip still starts from a
     # click and nothing else, but a stalled one cannot wait forever.
     assert "await Promise.race([" in guide_code
     assert "audio.play()," in guide_code
     assert "function resetFirstListenGuideSource(audio)" in guide_code
     assert "audio.removeAttribute('src')" in guide_code
-    assert "if(!audio.getAttribute('src'))" in guide_code
-    assert "audio.src=`${_base}/static/audio/first_listen/${guide.file}?v=${guide.version}`" in guide_code
+    assert "if(audio.getAttribute('src')!==next)" in guide_code
+    assert "const folder=key==='free-voices'?'voice_examples':'first_listen'" in guide_code
+    assert "const next=`${_base}/static/audio/${folder}/${guide.file}?v=${guide.version}`" in guide_code
+    assert "audio.src=next" in guide_code
     assert "audio.load()" in guide_code
     toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
     # A failed load/play must not strand a station audio paused for this guide --
@@ -967,7 +981,7 @@ def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actio
     assert 'id="firstListenSuccessRepair"' in html
     assert 'id="setupConversationsHeading"' in html
     assert 'id="setupVoiceQualityHeading"' in html
-    assert "With the default setup, add an ElevenLabs key" in html
+    assert "In the default setup, add an ElevenLabs key" in html
     assert "new conversations use the free voices" in html
     assert "They do not add new conversations" not in html
 

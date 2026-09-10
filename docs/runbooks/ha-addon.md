@@ -81,10 +81,12 @@ A successful thaw enables future PR events; it does not re-arm held PRs itself.
 ## First-listen operator check
 
 Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
-authored Marco/Giulia welcome. Starting the station plays a separate English
-opening before the music. Neither recording needs an AI key or Home context.
+authored Marco/Giulia welcome (both hosts, about 16 seconds). Starting the
+station plays a separate English opening before the music. After the first
+song, a recorded third-chair break can sit between two startup tracks.
+Neither recording needs an AI key or Home context.
 Music readiness is an unnumbered status above the
-three human steps: **1 Play it here → 2 Can you hear us? → 3 Home details**.
+three human steps: **1 Play it here → 2 Can you hear us? → 3 Make it yours**.
 Expand **Music details** to see the playable source first. When music is ready,
 **Add more music** offers Jamendo, local music, and charts only where supported.
 Unavailable legacy demo files and idle backup audio stay in Technical details.
@@ -104,7 +106,7 @@ the opening, or use the [this-device repair
 steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
 
 Music continues beneath the recorded hosts at a lower level, then returns to
-normal. The same player stays available through Home details, completion,
+normal. The same player stays available through Make it yours, completion,
 music-source setup and station controls. **Pause music** pauses this device;
 **Continue music** resumes it without changing saved choices. If the browser
 cannot mix the hosts over music, use the transcript or pause music explicitly
@@ -130,15 +132,18 @@ speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, First Listen offers **Keep Home private** without reading
-Home state, or a fresh filtered preview before **Let Marco and Giulia use these
-details**. If only generic daylight is available, verify that it is disclosed as
-ambient-only and not meaningful personalization, with the private path
-recommended. AI-host setup comes later.
+audible verification, **Make it yours** first shows staged household scenes
+(laundry, arrival, coffee), then **Keep Home private** without reading Home
+state, or a fresh filtered preview before **Let Marco and Giulia use these
+details**. **Cue the rooftop disco** is the Home-details recording. If only
+generic daylight is available, verify that it is disclosed as ambient-only and
+not meaningful personalization, with the private path recommended.
 
-**Hear the studio voices** plays a recording. With the default setup, new
-conversations use those studio voices only after an ElevenLabs key is added
-under **Voice quality**. Without that key, new conversations use free voices.
+**Your ongoing show** is optional. **Hear the studio voices** and **Hear the
+free voices** play recordings. With the default setup, new conversations use
+those studio voices only after an ElevenLabs key is added under **Voice
+quality**. Without that key, new conversations use free voices. **Done with
+setup** and **Back to setup** stay on the same station.
 The English Admin opening is a bundled recording of the studio voices; it needs
 no key to play. The existing Italian opening for ordinary listeners is unchanged. The optional example never counts toward required progress.
 

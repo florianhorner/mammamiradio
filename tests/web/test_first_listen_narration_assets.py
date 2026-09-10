@@ -66,8 +66,9 @@ def stub_browser_media_tools(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def probe(path: Path, *, ffprobe: str):
         del ffprobe
-        manifest = json.loads((path.parents[1] / "spoken_assets.json").read_text(encoding="utf-8"))
-        relative_path = f"first_listen/{path.name}"
+        side = path.parent.name == "voice_examples"
+        manifest = json.loads(((path.parent if side else path.parents[1]) / "spoken_assets.json").read_text())
+        relative_path = path.name if side else f"first_listen/{path.name}"
         entry = next(item for item in manifest["assets"] if item["path"] == relative_path)
         return (
             {
@@ -289,6 +290,10 @@ def test_generator_cli_keeps_staging_inputs_and_rejects_provider_selection(
 
     monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--clip", "welcome"])
     assert GENERATOR._arguments().clip == "welcome"
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--clip", "privacy"])
+    assert GENERATOR._arguments().clip == "privacy"
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--clip", "ai"])
+    assert GENERATOR._arguments().clip == "ai"
 
     monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--station-opening"])
     assert GENERATOR._arguments().output_root == GENERATOR.STATION_OUTPUT_ROOT
@@ -305,6 +310,205 @@ def test_generator_cli_keeps_staging_inputs_and_rejects_provider_selection(
 @pytest.fixture
 def generator_media_tools(stub_browser_media_tools, monkeypatch):
     monkeypatch.setattr(GENERATOR, "_load_pack_validator", lambda: VALIDATOR.validate_browser_narration_pack)
+    monkeypatch.setattr(GENERATOR.runpy, "run_path", lambda _path: vars(VALIDATOR))
+
+
+def _free_manifest():
+    return json.loads((SHIPPED_AUDIO_ROOT / "voice_examples/spoken_assets.json").read_text())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("host_name", ["Marco", "Giulia"])
+async def test_free_voice_render_uses_exact_voice_and_blocks_transport_retry(tmp_path, monkeypatch, retry, host_name):
+    import aiohttp
+    import edge_tts
+
+    from mammamiradio.audio import normalizer
+    from mammamiradio.core.config import load_config
+
+    host = next(host for host in load_config(str(ROOT / "radio.toml")).hosts if host.name == host_name)
+    requests = []
+
+    async def connect(*args, **kwargs):
+        requests.append(1)
+
+    class Voice:
+        def __init__(self, text, voice, *, rate, pitch, connector):
+            assert (text, voice, rate, pitch) == ("approved line", host.edge_fallback_voice, "+0%", "+0Hz")
+            self.connector = connector
+
+        async def save(self, path):
+            await self.connector.connect()
+            if retry:
+                await self.connector.connect()
+            Path(path).write_bytes(b"raw provider take")
+
+    monkeypatch.setattr(aiohttp.TCPConnector, "connect", connect)
+    monkeypatch.setattr(edge_tts, "Communicate", Voice)
+    monkeypatch.setattr(normalizer, "normalize", lambda raw, out, **kwargs: out.write_bytes(raw.read_bytes()))
+    out = tmp_path / "voice.mp3"
+    if retry:
+        with pytest.raises(RuntimeError, match="automatic retry is disabled"):
+            await GENERATOR._render_free_line(host, "approved line", out)
+        assert not out.exists()
+    else:
+        assert await GENERATOR._render_free_line(host, "approved line", out) == out
+        assert out.read_bytes() == out.with_suffix(".edge-raw.mp3").read_bytes()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "audio",
+        "extra",
+        "symlink",
+        "manifest-link",
+        "directory-link",
+        "assets-null",
+        "assets-scalar",
+        "hash",
+        "path",
+        "duplicate",
+        "receipt",
+        "transcript",
+        "media",
+        "budget",
+    ],
+)
+def test_free_example_damage_blocks_release_and_generation_before_provider(
+    copied_pack, monkeypatch, generator_media_tools, damage
+):
+    static, root = copied_pack
+    side = root / "voice_examples"
+    manifest = side / "spoken_assets.json"
+    data = json.loads(manifest.read_text())
+    asset = side / "free-voices.mp3"
+    if damage == "missing":
+        manifest.unlink()
+    elif damage == "audio":
+        asset.unlink()
+    elif damage == "extra":
+        (side / "extra.mp3").write_bytes(b"unlisted")
+    elif damage in {"symlink", "manifest-link"}:
+        target = asset if damage == "symlink" else manifest
+        outside = root.parent / target.name
+        target.rename(outside)
+        target.symlink_to(outside)
+    elif damage == "directory-link":
+        shutil.rmtree(side)
+        side.symlink_to(root.parent / "missing-directory", target_is_directory=True)
+    elif damage in {"assets-null", "assets-scalar"}:
+        data["assets"] = None if damage == "assets-null" else 3
+        manifest.write_text(json.dumps(data))
+    elif damage == "media":
+        monkeypatch.setattr(VALIDATOR, "_probe_audio", lambda *a, **kw: (None, "not playable audio"))
+    elif damage == "budget":
+        monkeypatch.setattr(
+            VALIDATOR, "BROWSER_GUIDE_MAX_BYTES", sum(p.stat().st_size for p in (root / "first_listen").glob("*.mp3"))
+        )
+    else:
+        if damage == "receipt":
+            data["render_receipt"]["hosts"][0]["voice_id"] = "wrong voice"
+        elif damage == "duplicate":
+            data["assets"].append(data["assets"][0])
+        else:
+            data["assets"][0][{"hash": "sha256", "path": "path", "transcript": "transcript"}[damage]] = "changed"
+        manifest.write_text(json.dumps(data))
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert VALIDATOR.validate_browser_narration_pack(assets_root=root, static_root=static)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("provider called before retained pack rejection")
+
+    monkeypatch.setattr(GENERATOR, "_render_clip", forbidden)
+    for free, selected in [(True, None), (False, "welcome"), (False, None)]:
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "unused-test-key")
+        with pytest.raises(RuntimeError):
+            asyncio.run(
+                GENERATOR._run(
+                    argparse.Namespace(
+                        env_file=root / "absent.env", output_root=root, clip=selected, free_voice_example=free
+                    )
+                )
+            )
+    assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("failure", [None, "synthesis", "validation", "publish-audio", "publish-manifest"])
+def test_free_example_stages_without_paid_key_and_rolls_back(
+    copied_pack, monkeypatch, generator_media_tools, existing, failure
+):
+    _static, root = copied_pack
+    original = _free_manifest()
+    if not existing:
+        shutil.rmtree(root / "voice_examples")
+        assert VALIDATOR.validate_browser_narration_pack(
+            assets_root=root
+        )  # Required at release, even on first creation.
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    calls = []
+
+    async def render(clip, _hosts, _work, destination, **kwargs):
+        assert kwargs["free_voices"] is True and clip is GENERATOR.FREE_VOICE_CLIP
+        calls.append(clip.clip_id)
+        destination.write_bytes(b"new approved free sample")
+        if failure == "synthesis":
+            raise RuntimeError("synthesis failed")
+        return {
+            **original["assets"][0],
+            "sha256": GENERATOR._sha256(destination),
+            "transcript": "wrong" if failure == "validation" else clip.transcript,
+        }
+
+    publish = GENERATOR._publish_staged_file
+
+    def guarded_publish(source, destination):
+        if failure == "publish-audio" or (failure == "publish-manifest" and destination.name == "spoken_assets.json"):
+            raise OSError("simulated publication failure")
+        publish(source, destination)
+
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.setattr(GENERATOR, "_load_environment", lambda path: None)
+    monkeypatch.setattr(GENERATOR, "_render_clip", render)
+    monkeypatch.setattr(GENERATOR, "_publish_staged_file", guarded_publish)
+    args = argparse.Namespace(env_file=root / "absent.env", output_root=root, clip=None, free_voice_example=True)
+    if failure:
+        with pytest.raises((RuntimeError, OSError)):
+            asyncio.run(GENERATOR._run(args))
+        assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+        if not existing:
+            assert not (root / "voice_examples").exists(), "failed creation stranded a partial pack"
+    else:
+        asyncio.run(GENERATOR._run(args))
+        assert VALIDATOR.validate_free_voice_example(assets_root=root, staged_render=True) == []
+        assert all(
+            (root / p).read_bytes() == content for p, content in before.items() if p.parts[0] != "voice_examples"
+        )
+    assert calls == ["free-voices"]
+
+
+def test_free_example_bindings_and_cli_are_exact(monkeypatch):
+    entry = _free_manifest()["assets"][0]
+    assert entry["transcript"] == GENERATOR.FREE_VOICE_CLIP.transcript == VALIDATOR.FREE_VOICE_TRANSCRIPT
+    source = (ROOT / "mammamiradio/web/templates/admin.html").read_text()
+    block = source.split('data-guide="free-voices"', 1)[1].split("</details>", 1)[0]
+    assert f"{round(entry['duration_seconds'])} seconds on this device" in block
+    for field in ["sha256", "transcript"]:
+        damaged = _free_manifest()
+        damaged["assets"][0][field] = "wrong"
+        assert VALIDATOR._validate_admin_guide_metadata(
+            json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text()), voice_manifest=damaged
+        )
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--free-voice-example"])
+    assert GENERATOR._arguments().free_voice_example
+    for selection in [["--clip", "welcome"], ["--station-opening"]]:
+        monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--free-voice-example", *selection])
+        with pytest.raises(SystemExit):
+            GENERATOR._arguments()
 
 
 @pytest.mark.parametrize("publish_failure", [False, True])
@@ -587,7 +791,7 @@ def test_generator_publish_handles_cross_filesystem_output(
 def test_admin_guide_metadata_matches_shipped_manifest() -> None:
     manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
 
-    assert VALIDATOR._validate_admin_guide_metadata(manifest) == []
+    assert VALIDATOR._validate_admin_guide_metadata(manifest, voice_manifest=_free_manifest()) == []
 
 
 def test_welcome_transcript_duration_and_cache_binding_are_synchronized() -> None:
@@ -596,6 +800,7 @@ def test_welcome_transcript_duration_and_cache_binding_are_synchronized() -> Non
     welcome = next(entry for entry in manifest["assets"] if entry["path"] == "first_listen/welcome.mp3")
     assert welcome["transcript"] == GENERATOR.GUIDE_CLIPS[0].transcript
     assert "Three small steps" in welcome["transcript"]
+    assert "I run the desk" in welcome["transcript"]
     assert f"version:'{welcome['sha256'][:12]}'" in template
     assert f"{round(welcome['duration_seconds'])} seconds on this device" in template
 
@@ -621,7 +826,9 @@ def test_admin_guide_metadata_rejects_hash_and_transcript_drift(tmp_path: Path) 
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert any("admin guide welcome version" in error and "manifest sha256 prefix" in error for error in errors)
     assert "admin guide welcome transcript does not match spoken_assets.json" in errors
@@ -634,7 +841,9 @@ def test_admin_guide_metadata_rejects_container_inventory_drift(tmp_path: Path) 
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide containers are missing: welcome" in errors
     assert "admin guide containers have unexpected keys: extra" in errors
@@ -652,7 +861,9 @@ def test_admin_guide_metadata_rejects_button_key_and_onclick_mismatch(tmp_path: 
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide welcome play button data-guide-key 'sound-check' does not match its container" in errors
     assert any(
@@ -668,7 +879,9 @@ def test_admin_guide_metadata_rejects_unrecognized_button_key(tmp_path: Path) ->
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide welcome play button has unrecognized data-guide-key 'unknown'" in errors
 
@@ -691,7 +904,9 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide welcome must contain exactly one guide-audio-play button; found 2" in errors
     assert "admin guide sound-check must contain exactly one guide-audio-play button; found 0" in errors
