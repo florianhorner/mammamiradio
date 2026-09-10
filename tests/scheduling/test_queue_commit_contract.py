@@ -451,13 +451,12 @@ async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_p
             await _cancel(task)
 
     readiness = _source_readiness_status(config, state)
-    queued = list(queue._queue)
-    assert not any(seg.type is SegmentType.MUSIC for seg in queued)
-    assert all(
-        (seg.metadata or {}).get("title_only") != track.title
-        and (seg.metadata or {}).get("spotify_id") != track.spotify_id
-        for seg in queued
-    )
+    # Empty-pool recovery may queue prerendered continuity banter so /stream stays
+    # audible; that must not revive local playable readiness after the ban.
+    while not queue.empty():
+        segment = queue.get_nowait()
+        assert segment.type is SegmentType.BANTER
+        assert segment.metadata.get("canned") is True
     assert state.playlist == []
     assert readiness["sources"]["local"]["status"] == "unavailable"
     assert readiness["sources"]["local"]["playable"] == 0
