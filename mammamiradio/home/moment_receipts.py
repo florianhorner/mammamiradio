@@ -24,11 +24,11 @@ spoken lines — matching the exposure `/public-status` already accepts for
 stays behind admin auth.
 
 Persistence mirrors ``EveningLedger``: a small bounded JSON file in
-``cache_dir`` (atomic temp + rename, corrupt-tolerant load, dirty-gated save,
-listed in the downloader's ``_CACHE_PROTECTED``). Writes happen only from the
-producer's save site — the streamer just mutates in memory and marks the store
-dirty, so the playback loop never does disk I/O. Every mutator is best-effort
-and must never raise into the audio path.
+``cache_dir`` (atomic temp + rename, owner-only 0600, corrupt-tolerant load,
+dirty-gated save, listed in the downloader's ``_CACHE_PROTECTED``). Writes
+happen only from the producer's save site — the streamer just mutates in
+memory and marks the store dirty, so the playback loop never does disk I/O.
+Every mutator is best-effort and must never raise into the audio path.
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from mammamiradio.home.atomic_json import atomic_write_json, chmod_owner_only, unlink_legacy_fixed_tmp
 
 logger = logging.getLogger("mammamiradio.moment_receipts")
 
@@ -273,11 +275,17 @@ class MomentStore:
     def load(cls, cache_dir: Path) -> MomentStore:
         """Corrupt-tolerant load: missing/malformed/wrong-shape → fresh store."""
         path = Path(cache_dir) / STORE_FILENAME
+        chmod_owner_only(path)
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload_text = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return cls()
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError):
+            logger.warning("Moment store is unreadable, starting fresh: %s", path)
+            return cls()
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
             logger.warning("Moment store is unreadable, starting fresh: %s", path)
             return cls()
         if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
@@ -312,7 +320,7 @@ class MomentStore:
         return store
 
     def save_if_dirty(self, cache_dir: Path) -> None:
-        """Persist atomically (temp + rename) only when state changed.
+        """Persist atomically (temp + rename, owner-only 0600) only when state changed.
 
         Called from the producer's save site only — never from the playback
         loop, so a slow SD-card write can't put a gap in the stream.
@@ -320,10 +328,9 @@ class MomentStore:
         if not self._dirty:
             return
         path = Path(cache_dir) / STORE_FILENAME
-        tmp = path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
-            tmp.replace(path)
+            unlink_legacy_fixed_tmp(path)
+            atomic_write_json(path, self.to_dict(), ensure_ascii=True)
             self._dirty = False
         except Exception as exc:  # disk full / permissions / anything — the caller
             # is the producer loop, and this module's contract is that a receipt
