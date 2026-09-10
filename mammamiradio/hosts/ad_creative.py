@@ -201,6 +201,12 @@ AD_FORMATS: dict[str, str] = {
     ),
 }
 
+# The one spelling of the fine-print role.  scriptwriter.py addresses the
+# disclaimer line to it and tts.py gates the speed-up on it; a literal in each
+# file would let the two drift silently, which is how the rattle went missing in
+# five of six ad formats.
+DISCLAIMER_ROLE = "disclaimer_goblin"
+
 SPEAKER_ROLES: dict[str, str] = {
     "hammer": "The Hammer: booming national TV voice, dramatic pauses, sells the apocalypse with a smile",
     "seductress": "The Seductress: whisper-ASMR menace, makes everything sound inappropriately intimate",

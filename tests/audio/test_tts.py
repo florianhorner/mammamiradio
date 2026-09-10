@@ -22,8 +22,12 @@ def _touch(path: Path) -> Path:
     return path
 
 
-def _normalize_side_effect(input_path, output_path, config=None, *, loudnorm=True):
-    """Side-effect for normalize(input_path, output_path, config, loudnorm)."""
+def _normalize_side_effect(input_path, output_path, config=None, **kwargs):
+    """Side-effect for normalize(); tolerant of keyword-only options.
+
+    Accepts **kwargs rather than naming each one so a new normalize() option
+    (loudnorm, music_eq, background, tempo, ...) does not break every caller.
+    """
     _touch(output_path)
     return output_path
 
@@ -2306,6 +2310,78 @@ async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
             found_rate = True
             break
     assert found_rate, f"Expected rate='+55%' in Communicate calls, got: {calls}"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_ad_copy_is_never_sped_up(_mock_all, tmp_path):
+    """The rate gate is a disclaimer gate. A normal sales line stays at +0%.
+
+    The suite only ever pinned the positive case, so nothing stopped a future
+    change from speeding up ordinary copy.
+    """
+    from mammamiradio.audio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="PharmaCo",
+        parts=[
+            AdPart(type="voice", text="Buy PharmaCo today!", role="hammer"),
+            AdPart(type="voice", text="Side effects may include...", role="disclaimer_goblin"),
+        ],
+        mood="lounge",
+    )
+    voices = {
+        "hammer": AdVoice(name="Loud", voice="it-IT-DiegoNeural", style="hard sell", role="hammer"),
+        "disclaimer_goblin": AdVoice(name="Speed", voice="it-IT-DiegoNeural", style="fast", role="disclaimer_goblin"),
+    }
+
+    await synthesize_ad(script, voices, tmp_path)
+
+    rates = sorted({(c.kwargs or {}).get("rate", "+0%") for c in _mock_all["Communicate"].call_args_list})
+    assert rates == ["+0%", "+55%"], f"expected exactly one sped-up line, got {rates}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["elevenlabs", "openai"])
+async def test_disclaimer_is_time_compressed_on_engines_that_ignore_rate(_mock_all, tmp_path, engine, monkeypatch):
+    """ElevenLabs and OpenAI have no rate parameter and silently discard it.
+
+    AdVoice.engine defaults to "edge", so a test that omits it passes while
+    production runs the role on a cloud voice that never speeds up. This pins
+    the engine explicitly: the disclaimer must still come out compressed.
+    """
+    from mammamiradio.audio import tts as tts_mod
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+    seen: dict[str, float] = {}
+
+    async def _fake_cloud(*args, **kwargs):
+        seen["tempo"] = kwargs.get("tempo", 1.0)
+        out = args[2]
+        out.write_bytes(b"\xff\xfb" + b"\x00" * 4096)
+        return out
+
+    monkeypatch.setattr(tts_mod, "synthesize_elevenlabs", _fake_cloud)
+    monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_cloud)
+
+    script = AdScript(
+        brand="PharmaCo",
+        parts=[AdPart(type="voice", text="Side effects may include...", role="disclaimer_goblin")],
+        mood="lounge",
+    )
+    voices = {
+        "disclaimer_goblin": AdVoice(
+            name="Cloud", voice="cloud-voice", style="fast", role="disclaimer_goblin", engine=engine
+        ),
+    }
+
+    await tts_mod.synthesize_ad(script, voices, tmp_path)
+
+    assert seen.get("tempo") == pytest.approx(1.55), (
+        f"{engine} disclaimer was not time-compressed (tempo={seen.get('tempo')!r}); "
+        "the SSML rate is discarded by this engine"
+    )
 
 
 @pytest.mark.asyncio

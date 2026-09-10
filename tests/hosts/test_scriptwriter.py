@@ -8616,3 +8616,150 @@ async def test_normal_mode_selects_each_complete_fallback_pool(config, state, po
     assert scriptwriter_module._normal_mode_language_ok([line.text for line in lines], config)
     assert _banter_turn_taking_ok(lines)
     assert (state.language_guard_rejections, state.language_guard_failures) == (0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Ad fine print: role addressing, prompt contract, format label, pharma authority
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_ad_role_recovers_the_prompt_roster_label():
+    """The model returns the roster label, not always the cast key.
+
+    The prompt used to print "BUREAUCRAT (Nonno Aldo)" while the JSON example
+    asked for "bureaucrat"; 31% of voice parts came back with a role no cast
+    entry matched, silently rendering on default_voice with no speed-up.
+    """
+    from mammamiradio.hosts.ad_creative import AdVoice
+    from mammamiradio.hosts.scriptwriter import _resolve_ad_role
+
+    voices = {"bureaucrat": AdVoice(name="Nonno Aldo", voice="v", style="s", role="bureaucrat")}
+
+    assert _resolve_ad_role("BUREAUCRAT (Nonno Aldo)", voices) == "bureaucrat"
+    assert _resolve_ad_role("BUREAUCRAT", voices) == "bureaucrat"
+    assert _resolve_ad_role("  bureaucrat  ", voices) == "bureaucrat"
+    assert _resolve_ad_role("bureaucrat", voices) == "bureaucrat"
+
+
+def test_resolve_ad_role_keeps_the_disclaimer_role_addressable_when_uncast():
+    """No format but classic_pitch casts a goblin, yet every format addresses one.
+
+    tts._render_part resolves an uncast disclaimer role to the format's own
+    voice and still applies the rate, so the token must survive normalization.
+    """
+    from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE, AdVoice
+    from mammamiradio.hosts.scriptwriter import _resolve_ad_role
+
+    voices = {"seductress": AdVoice(name="Palmira", voice="v", style="s", role="seductress")}
+
+    assert _resolve_ad_role("DISCLAIMER_GOBLIN", voices) == DISCLAIMER_ROLE
+    assert _resolve_ad_role(DISCLAIMER_ROLE, voices) == DISCLAIMER_ROLE
+    # An unknown role is preserved, not blanked — it must keep falling through
+    # to default_voice exactly as before.
+    assert _resolve_ad_role("narrator", voices) == "narrator"
+    assert _resolve_ad_role("", voices) == ""
+    assert _resolve_ad_role(None, voices) == ""
+
+
+def test_every_ad_format_addresses_the_fine_print_to_the_disclaimer_role():
+    """The rattle must not depend on which roles a format happens to cast.
+
+    _FORMAT_ROLES names a disclaimer_goblin in 1 of 6 formats, but the prompt
+    asks for a fast disclaimer in all 6. This is the test that would have caught
+    the original bug.
+    """
+    import re
+
+    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES, ALL_FORMATS, DISCLAIMER_ROLE
+
+    src = Path("mammamiradio/hosts/scriptwriter.py").read_text()
+    examples = re.findall(r'\{\{"type": "voice", "text": "Fast disclaimer", "role": "\{(\w+)\}"\}\}', src)
+    assert len(examples) == 2, f"expected both parts_example branches, found {examples}"
+    assert set(examples) == {"DISCLAIMER_ROLE"}, f"fine print addressed to {examples}, not DISCLAIMER_ROLE"
+
+    # The middle character line must not share the disclaimer's slot.
+    middles = re.findall(r'\{\{"type": "voice", "text": "More ad copy", "role": "\{(\w+)\}"\}\}', src)
+    assert len(middles) == 2 and set(middles) == {"second_role"}, middles
+
+    # And every format really does have a character role left to speak.
+    for fmt in ALL_FORMATS:
+        characters = [r for r in _FORMAT_ROLES[fmt] if r != DISCLAIMER_ROLE]
+        assert characters, f"{fmt} has no character role once the disclaimer is excluded"
+
+
+def test_ad_prompt_forbids_faking_speed_in_the_text():
+    """The model glues words together to fake speed; that renders SLOWER.
+
+    A hyphen chain makes Edge insert pauses. Measured 8/18 disclaimer parts
+    mangled before this rule, 0/12 after.
+    """
+    src = Path("mammamiradio/hosts/scriptwriter.py").read_text()
+    assert "never run words together" in src
+    assert "never join them with hyphens" in src
+    assert "copied exactly" in src, "the role-token rule went missing"
+
+
+@pytest.mark.asyncio
+async def test_pharma_canonical_disclaimer_wins_over_the_models_own(config, state):
+    """The canonical medicine tail is authoritative and airs exactly once.
+
+    Now that the fine print is addressed in every format the model nearly always
+    writes one, so "skip the append when a disclaimer exists" would have retired
+    the canonical text permanently. It must replace the model's, end the ad, and
+    be counted in roles_used.
+    """
+    from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE
+
+    config.super_italian_mode = True
+    brand = AdBrand(name="Capellissimo", tagline="Circa.", category="pharma")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [
+                {"type": "voice", "text": "Capellissimo: capelli da sogno, circa.", "role": "default"},
+                {"type": "voice", "text": "Non responsabile per capelli.", "role": DISCLAIMER_ROLE},
+            ],
+            "summary": "Capellissimo ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    disclaimers = [p for p in result.parts if p.role == DISCLAIMER_ROLE]
+    assert len(disclaimers) == 1, f"expected one disclaimer, got {[d.text for d in disclaimers]}"
+    assert result.parts[-1] is disclaimers[0], "the ad must end on the fine print"
+    assert "ibuprofene" in disclaimers[0].text, "the model's disclaimer replaced the canonical one"
+    assert DISCLAIMER_ROLE in result.roles_used, "a disclaimer aired but roles_used omits it"
+
+
+@pytest.mark.asyncio
+async def test_write_ad_normalizes_the_role_the_model_returns(config, state):
+    """The parse site must actually call _resolve_ad_role, not just define it.
+
+    A roster-label role ("DEFAULT (Voce Uno)") reaching AdPart unchanged makes
+    voices.get(part.role, default_voice) miss and skips the disclaimer rate gate.
+    """
+    from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE
+
+    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    voices = {"hammer": AdVoice(name="Voce Uno", voice="it-IT-DiegoNeural", style="hard sell", role="hammer")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [
+                {"type": "voice", "text": "Testo is here today.", "role": "HAMMER (Voce Uno)"},
+                {"type": "voice", "text": "Terms apply. Results may vary.", "role": "DISCLAIMER_GOBLIN"},
+            ],
+            "summary": "Testo ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format="classic_pitch")
+
+    roles = [p.role for p in result.parts if p.type == "voice" and p.text]
+    assert "hammer" in roles, f"roster label was not normalized onto the cast key: {roles}"
+    assert DISCLAIMER_ROLE in roles, f"uppercase disclaimer role was not normalized: {roles}"
+    assert not any("(" in r for r in roles), f"a roster label survived into a part: {roles}"

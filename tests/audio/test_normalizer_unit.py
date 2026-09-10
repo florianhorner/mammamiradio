@@ -1162,3 +1162,56 @@ def test_normalize_fast_path_preserves_speech_with_internal_pauses(tmp_path):
         f"silenceremove stop_periods must stay negative (trailing-only trim), "
         f"else multi-phrase banter is rejected as implausibly short."
     )
+
+
+def test_atempo_chain_stays_in_range_on_older_ffmpeg():
+    """A single atempo instance is capped at [0.5, 2.0] on older builds."""
+    from mammamiradio.audio.normalizer import _atempo_chain
+
+    for factor in (0.4, 1.55, 2.0, 3.1, 5.0):
+        chain = _atempo_chain(factor)
+        values = [float(part.split("=")[1]) for part in chain.split(",")]
+        assert all(0.5 <= v <= 2.0 for v in values), f"{factor} -> {chain} leaves the safe range"
+        product = 1.0
+        for v in values:
+            product *= v
+        assert product == pytest.approx(factor, rel=1e-3), f"{chain} does not multiply to {factor}"
+
+
+def test_atempo_chain_never_spins_on_a_bad_factor():
+    """A non-positive factor diverges in the range-splitting loops.
+
+    remaining=-1.0 goes -2, -4, -8 ... forever, which would hang the executor
+    thread mid-render and surface as dead air.
+    """
+    from mammamiradio.audio.normalizer import _atempo_chain
+
+    for bad in (0.0, -1.0, -0.5, float("nan"), float("inf"), float("-inf")):
+        assert _atempo_chain(bad) == "atempo=1", f"{bad!r} did not degrade to a no-op"
+
+
+def test_normalize_prepends_atempo_when_tempo_is_set(mock_subprocess):
+    """The fine-print speed-up is a FILTER in the existing pass, not a new pass.
+
+    A separate stage would take a second audio.admission slot and add one ffmpeg
+    process per line; as a filter it costs less than the baseline chain.
+    """
+    mock_run, _ = mock_subprocess
+
+    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False, tempo=1.55)
+
+    cmd = mock_run.call_args[0][0]
+    assert mock_run.call_count == 1, "atempo must not add a second ffmpeg invocation"
+    chain = cmd[cmd.index("-filter:a") + 1]
+    assert chain.startswith("atempo=1.55,"), f"atempo must lead the chain, got {chain!r}"
+    assert "silenceremove" in chain, "atempo must not replace the existing filter"
+
+
+def test_normalize_omits_atempo_at_normal_speed(mock_subprocess):
+    """tempo=1.0 must add no filter at all — the default path is untouched."""
+    mock_run, _ = mock_subprocess
+
+    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False, tempo=1.0)
+
+    chain = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-filter:a") + 1]
+    assert "atempo" not in chain, f"unexpected atempo at normal speed: {chain!r}"

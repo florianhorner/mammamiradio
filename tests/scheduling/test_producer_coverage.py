@@ -2602,3 +2602,29 @@ async def test_unavailable_music_render_closes_timing_before_idle(tmp_path):
     assert timing["reason"] == "render_unavailable"
     assert state._render_timing_started == 0.0
     assert not any(item.get("reason") == "abandoned" for item in state.render_timings)
+
+
+# ---------------------------------------------------------------------------
+# The disclaimer role must not count as a character
+# ---------------------------------------------------------------------------
+
+
+def test_disclaimer_role_does_not_rescue_a_thin_duo_from_demotion():
+    """A duo that is really one announcer plus a disclaimer is a classic pitch.
+
+    roles_found counts any distinct role. Once the fine print is addressed in
+    every format, counting it would let a one-voice duo_scene keep its label —
+    and that label flows into ad_history, last_ad_script and the admin card.
+    """
+    from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE, AdFormat
+
+    roles_found = {"hammer", DISCLAIMER_ROLE}
+    character_roles = roles_found - {DISCLAIMER_ROLE}
+
+    assert len(roles_found) == 2, "precondition: the naive count sees two roles"
+    assert len(character_roles) < 2, "but only one of them is a character"
+    assert AdFormat.DUO_SCENE in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL)
+
+    src = Path("mammamiradio/hosts/scriptwriter.py").read_text()
+    assert "character_roles_found = roles_found - {DISCLAIMER_ROLE}" in src
+    assert "len(character_roles_found) < 2" in src, "demotion still counts the disclaimer as a character"

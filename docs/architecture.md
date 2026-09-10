@@ -1021,6 +1021,35 @@ line remains the sole input to transcript metadata, safety/language guards,
 memory, accounting, and any Edge fallback, so a failed V3 request cannot make a
 fallback voice read markup aloud.
 
+### Ad fine print (the fast-talking disclaimer)
+
+An ad's closing legal line is addressed to the `DISCLAIMER_ROLE` token
+(`hosts/ad_creative.py`), which `hosts/scriptwriter.py` writes into the prompt's
+JSON example for **every** ad format and `audio/tts.py::_render_part` gates the
+speed-up on. `_FORMAT_ROLES` remains the format contract and still casts an
+actual disclaimer voice in `classic_pitch` only; in the other five formats the
+role resolves through `voices.get(part.role, default_voice)` to that format's
+own voice, which is deliberate — the line is still sped up.
+
+Two properties this depends on, both of which have bitten before:
+
+- **The role token is normalized on parse.** The model is not a contract: it has
+  been observed returning the prompt's roster label (`"BUREAUCRAT (Nonno Aldo)"`)
+  instead of the cast key. `_resolve_ad_role` folds case and strips a trailing
+  parenthetical before the role reaches `AdPart`; an unmatched role is preserved,
+  not blanked, so it keeps falling through to `default_voice`.
+- **Speed is engine-independent.** Only Edge and Azure honour SSML `rate`;
+  ElevenLabs and OpenAI have no speed control and silently discard it. Those two
+  receive the same speed as an `atempo` factor (`_rate_to_tempo`) applied as a
+  *filter* inside the re-encode `normalize()` already runs — never as a separate
+  stage, which would take a second `audio.admission` slot and add one ffmpeg
+  process per line. `_atempo_chain` splits factors outside `[0.5, 2.0]` so the
+  chain stays valid on whatever ffmpeg the floating Home Assistant base ships.
+
+Pharma brands additionally get the canonical medicine tail appended
+(`_pharma_disclaimer_text`); it replaces any disclaimer the model wrote, so the
+ad always ends on the legally-styled text exactly once.
+
 Fallback chain: cloud TTS failure or missing credentials →
 `edge_fallback_voice` (so the role falls back to its own Edge voice, not a
 stranger) → the house Edge fallback → `TTSUnavailableError`. The final failure

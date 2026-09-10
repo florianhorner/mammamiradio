@@ -678,3 +678,65 @@ def test_broadcast_chain_cpu_budget_logged(tmp_path, capsys):
         print(f"\n[broadcast-chain CPU] 3s segment colour pass: {elapsed:.2f}s")
     assert out.exists() and out.stat().st_size > 0
     assert elapsed < 60.0  # loose sanity bound; a pathological hang fails, real timing is the log
+
+
+@pytest.mark.requires_ffmpeg
+def test_atempo_time_compresses_without_crashing(tmp_path):
+    """Ad fine print is time-compressed for engines that ignore SSML rate.
+
+    Runs on arm64 in the pi-smoke job: the add-on installs whatever ffmpeg the
+    floating Home Assistant base ships, and atempo is the one filter this
+    feature depends on. A mocked test cannot catch a non-zero exit or a SIGABRT.
+    """
+
+    src = tmp_path / "src.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=6",
+            "-c:a",
+            "libmp3lame",
+            str(src),
+        ],
+        check=True,
+    )
+    baseline = probe_duration_sec(src)
+    assert baseline is not None
+
+    out = tmp_path / "fast.mp3"
+    normalize(src, out, loudnorm=False, tempo=1.55)
+
+    fast = probe_duration_sec(out)
+    assert fast is not None, "atempo pass produced an unprobeable file"
+    assert fast < baseline * 0.75, f"expected time compression, got {baseline:.2f}s -> {fast:.2f}s"
+
+
+@pytest.mark.requires_ffmpeg
+def test_normalize_without_tempo_is_unchanged(tmp_path):
+    """tempo=1.0 must add no filter at all — the default path stays byte-identical in shape."""
+    src = tmp_path / "src.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=4",
+            "-c:a",
+            "libmp3lame",
+            str(src),
+        ],
+        check=True,
+    )
+    out = tmp_path / "same.mp3"
+    normalize(src, out, loudnorm=False, tempo=1.0)
+    assert probe_duration_sec(out) == pytest.approx(probe_duration_sec(src), abs=0.3)

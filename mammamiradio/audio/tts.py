@@ -48,7 +48,7 @@ from mammamiradio.audio.voice_catalog import (
     is_openai_voice as _catalog_is_openai_voice,
 )
 from mammamiradio.core.models import DialogueLine, HostPersonality
-from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice
+from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE, AdPart, AdScript, AdVoice
 
 if TYPE_CHECKING:
     from mammamiradio.audio.imaging import ResolvedAdRecipe
@@ -695,6 +695,29 @@ def _coerce_edge_voice(voice: str, *, edge_fallback_voice: str = "") -> str:
     return fallback
 
 
+def _rate_to_tempo(rate: str | None) -> float:
+    """Convert an SSML rate string ("+55%") to an atempo factor (1.55).
+
+    Only Edge and Azure honour SSML ``rate``; ElevenLabs and OpenAI have no
+    speed control and silently discard it.  Those two get the same speed as a
+    time-compression filter inside the re-encode they already run, so delivery
+    stops depending on which engine a voice happens to be cast on.  Returns 1.0
+    for anything unparseable — a mis-typed rate must not distort speech.
+    """
+    if not rate:
+        return 1.0
+    try:
+        percent = float(str(rate).strip().rstrip("%"))
+    except ValueError:
+        logger.warning("Unparseable TTS rate %r; rendering at normal speed", rate)
+        return 1.0
+    tempo = 1.0 + percent / 100.0
+    if tempo <= 0.0:
+        logger.warning("TTS rate %r resolves to a non-positive tempo; ignoring", rate)
+        return 1.0
+    return tempo
+
+
 def _openai_instructions_for_host(host: HostPersonality) -> str:
     """Build OpenAI TTS instructions from host personality axes and style.
 
@@ -839,9 +862,14 @@ async def synthesize_openai(
     loudnorm: bool = True,
     model: str | None = None,
     api_key: str = "",
+    tempo: float = 1.0,
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
-    """Render text with the registry-selected OpenAI speech model."""
+    """Render text with the registry-selected OpenAI speech model.
+
+    ``tempo`` time-compresses the render; OpenAI has no speed parameter, so this
+    is how a fast ad disclaimer reaches an OpenAI voice.
+    """
     api_key = api_key or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set")
@@ -870,7 +898,7 @@ async def synthesize_openai(
         )
         raw_path.write_bytes(audio_bytes)
 
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])  # clean up orphaned raw file on any failure
@@ -1034,6 +1062,7 @@ async def synthesize_elevenlabs(
     delivery_profile: str = "none",
     host_name: str = "",
     api_key: str = "",
+    tempo: float = 1.0,
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with ElevenLabs TTS REST API, then normalize to station settings.
@@ -1094,7 +1123,7 @@ async def synthesize_elevenlabs(
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])
@@ -1188,6 +1217,7 @@ async def synthesize(
                             instructions=openai_instructions,
                             loudnorm=loudnorm,
                             api_key=openai_api_key,
+                            tempo=_rate_to_tempo(rate),
                             on_paid_provider_success=_bill_tts,
                         ),
                         "OpenAI",
@@ -1337,6 +1367,7 @@ async def synthesize(
                                 delivery_profile=delivery_profile,
                                 host_name=host_name,
                                 api_key=elevenlabs_api_key,
+                                tempo=_rate_to_tempo(rate),
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "ElevenLabs",
@@ -1643,7 +1674,7 @@ async def synthesize_ad(
             }
             if voice_for_part.voice_settings:
                 extra["voice_settings"] = voice_for_part.voice_settings
-            if part.role == "disclaimer_goblin":
+            if part.role == DISCLAIMER_ROLE:
                 extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
             return await synthesize(

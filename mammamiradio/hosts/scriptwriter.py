@@ -47,6 +47,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.hosts.ad_creative import (
     AD_FORMATS,
+    DISCLAIMER_ROLE,
     SONIC_ENVIRONMENTS,
     SPEAKER_ROLES,
     AdBrand,
@@ -3679,6 +3680,32 @@ def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
     return f"{brand.name}. Because you deserve it, amici."
 
 
+def _resolve_ad_role(raw_role: object, voices: dict[str, AdVoice]) -> str:
+    """Map the role string a model returned onto an actual cast key.
+
+    The model is not a contract.  It has been observed returning the prompt's
+    roster label verbatim ("BUREAUCRAT (Nonno Aldo)") instead of the cast key
+    ("bureaucrat"), which makes ``voices.get(part.role, default_voice)`` miss and
+    silently renders the line in the wrong voice with no speed-up.  Match
+    case-insensitively and tolerate a trailing " (Voice Name)".
+
+    An unmatched role is returned stripped rather than blanked: DISCLAIMER_ROLE
+    is deliberately addressable even in formats that cast no such voice, and an
+    unknown role must keep falling through to ``default_voice`` exactly as before.
+    """
+    role = str(raw_role or "").strip()
+    if not role or role in voices:
+        return role
+    candidate = role.split("(")[0].strip() if "(" in role else role
+    folded = candidate.casefold()
+    for key in voices:
+        if key.casefold() == folded:
+            return key
+    if folded == DISCLAIMER_ROLE:
+        return DISCLAIMER_ROLE
+    return role
+
+
 def _pharma_disclaimer_text(config: StationConfig) -> str:
     """Return the legally styled fictional-pharma tail for the spoken mode."""
     if _spoken_fallback_language(config) == "it":
@@ -4019,11 +4046,16 @@ CAMPAIGN SPINE:
         else ""
     )
 
-    # Build speaker descriptions for the prompt
+    # Build speaker descriptions for the prompt.  The role token here MUST be the
+    # exact key the JSON example asks for: the roster used to print
+    # "BUREAUCRAT (Nonno Aldo)" while the example asked for "bureaucrat", and the
+    # model copied the roster label into the part's "role" field often enough that
+    # 31% of voice parts arrived with a role no cast entry matched — silently
+    # rendering on default_voice and skipping the disclaimer rate gate.
     speaker_lines = []
     for role_name, voice in voices.items():
         role_desc = SPEAKER_ROLES.get(role_name, f"Commercial voice: {voice.style}")
-        speaker_lines.append(f"- {role_name.upper()} ({voice.name}): {role_desc}")
+        speaker_lines.append(f'- "{role_name}" — {voice.name}: {role_desc}')
     speakers_block = "\n".join(speaker_lines)
 
     # Format description
@@ -4037,16 +4069,23 @@ CAMPAIGN SPINE:
     sfx_types = ", ".join(f'"{t}"' for t in AVAILABLE_SFX_TYPES)
 
     role_names = list(voices.keys())
+    # The middle character line and the fine print used to share role_names[-1].
+    # They are different jobs: the disclaimer is always addressed to
+    # DISCLAIMER_ROLE so tts._render_part's rate gate fires in every format, not
+    # only the one format whose _FORMAT_ROLES happens to cast that role.
+    character_roles = [r for r in role_names if r != DISCLAIMER_ROLE] or list(role_names)
+    opening_role = character_roles[0]
+    second_role = character_roles[1] if len(character_roles) > 1 else character_roles[0]
 
     if sonic.is_recipe_driven:
         sonic_rule = (
             f"- Station recipe: {sonic.recipe_id}. It supplies the bed and any sound details after speech is rendered. "
             "Return only voice and optional pause parts; do not return an sfx or environment part."
         )
-        parts_example = f'''    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
-    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+        parts_example = f'''    {{"type": "voice", "text": "Ad copy line here", "role": "{opening_role}"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{second_role}"}},
     {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{DISCLAIMER_ROLE}"}}'''
     else:
         sonic_rule = (
             "- You may interleave sound effect cues and environment cues between voice lines. "
@@ -4055,11 +4094,11 @@ CAMPAIGN SPINE:
             f"environment name above, never invent new ones: {sfx_types}"
         )
         parts_example = f'''    {{"type": "sfx", "sfx": "{sonic.transition_motif}"}},
-    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
+    {{"type": "voice", "text": "Ad copy line here", "role": "{opening_role}"}},
     {{"type": "sfx", "sfx": "sweep"}},
-    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{second_role}"}},
     {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{DISCLAIMER_ROLE}"}}'''
 
     prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
 Tagline: "{brand.tagline}"
@@ -4089,6 +4128,8 @@ RULES:
 - Think late-night TV shopping meets GTA radio meets a faded political showman's fever dream, with Italian station character.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
+- Every "role" value must be one of the quoted role tokens listed under SPEAKERS, copied exactly. Do not add the voice's name, do not change the capitalisation.
+- The fine print is spoken by "{DISCLAIMER_ROLE}" and is sped up automatically. Write it as ordinary spaced words: never run words together, never join them with hyphens, never use ALL CAPS to suggest speed.
 {direct_spokesperson_rule}
 - Open HARD. The first beat should grab attention immediately.
 {sonic_rule}
@@ -4131,7 +4172,7 @@ Return JSON:
                     text=sanitize_spoken_station_name(p.get("text", ""), config.display_station_name),
                     sfx=p.get("sfx", ""),
                     duration=p.get("duration", 0.0),
-                    role=p.get("role", ""),
+                    role=_resolve_ad_role(p.get("role", ""), voices),
                     environment=p.get("environment", ""),
                 )
             )
@@ -4172,9 +4213,18 @@ Return JSON:
         actual_format = ad_format
         if used_owned_fallback:
             actual_format = AdFormat.CLASSIC_PITCH
-        if ad_format in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) and len(roles_found) < 2:
+        # Count CHARACTERS, not roles: the fine print is addressed to
+        # DISCLAIMER_ROLE in every format now, so counting it would let a duo
+        # that is really one announcer plus a disclaimer escape demotion and
+        # report a format it never aired.
+        character_roles_found = roles_found - {DISCLAIMER_ROLE}
+        if ad_format in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) and len(character_roles_found) < 2:
             actual_format = AdFormat.CLASSIC_PITCH
-            logger.info("Demoted %s to classic_pitch (only %d role(s) in output)", ad_format, len(roles_found))
+            logger.info(
+                "Demoted %s to classic_pitch (only %d character role(s) in output)",
+                ad_format,
+                len(character_roles_found),
+            )
 
         summary = data.get("summary", f"Ad for {brand.name}")
         mood = data.get("mood", sonic.music_bed)
@@ -4191,13 +4241,22 @@ Return JSON:
         # its medicine-style ibuprofen disclaimer is intentional, not a category
         # mismatch or defect. Keep its pharma category and disclaimer together.
         if brand.category == "pharma":
+            # The canonical medicine tail is authoritative — never suppressed by
+            # whatever fine print the model happened to write.  Now that the
+            # disclaimer role is addressed in every format the model nearly
+            # always writes one, so "skip if a disclaimer exists" would retire
+            # this text permanently.  Drop the model's version and end on ours.
+            parts = [p for p in parts if p.role != DISCLAIMER_ROLE]
             parts.append(
                 AdPart(
                     type="voice",
                     text=_pharma_disclaimer_text(config),
-                    role="disclaimer_goblin",
+                    role=DISCLAIMER_ROLE,
                 )
             )
+            # roles_found was computed before this append, so a pharma
+            # disclaimer could air while roles_used omitted it.
+            roles_found = {p.role for p in parts if p.type == "voice" and p.role}
 
         voice_texts = [p.text for p in parts if p.type == "voice" and p.text]
         if not _normal_mode_language_ok(voice_texts, config):
@@ -4205,9 +4264,7 @@ Return JSON:
             logger.warning("Ad failed final Normal Mode language check; using deterministic fallback")
             fallback_parts = [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)]
             if brand.category == "pharma":
-                fallback_parts.append(
-                    AdPart(type="voice", text=_pharma_disclaimer_text(config), role="disclaimer_goblin")
-                )
+                fallback_parts.append(AdPart(type="voice", text=_pharma_disclaimer_text(config), role=DISCLAIMER_ROLE))
             parts = _ensure_attention_grabbing_ad_parts(fallback_parts, sonic)
             actual_format = AdFormat.CLASSIC_PITCH
             roles_found = {p.role for p in parts if p.type == "voice" and p.role}
