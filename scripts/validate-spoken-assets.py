@@ -563,6 +563,53 @@ def _browser_route_error(path: Path, *, relative_path: str, static_root: Path) -
     return None
 
 
+class _HomeMomentSceneParser(HTMLParser):
+    """Collect each Step 3 scene's declared reachability and whether it wears a chip.
+
+    A regex over the ``<h5>`` was the first attempt and it was wrong: the chip is
+    styled by class alone (``.first-listen-panel .day-one-chip`` in
+    first-listen.css), so it renders identically from anywhere inside the scene.
+    Moving it one line down into the caption defeated the check while a reader
+    still saw "day one" on a gated moment. Walking the whole subtree is what
+    makes the guard see what the reader sees.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.scenes: dict = {}
+        self.duplicate_keys: set = set()
+        self.unkeyed_scenes = 0
+        self._depth = 0
+        self._active = None
+        self._root_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if tag == "div":
+            self._depth += 1
+            if self._active is None and "household-scene" in classes:
+                key = attributes.get("data-explainer-scenario")
+                if key is None:
+                    self.unkeyed_scenes += 1
+                    return
+                if key in self.scenes:
+                    self.duplicate_keys.add(key)
+                self.scenes[key] = {"reachability": attributes.get("data-reachability"), "chipped": False}
+                self._active = key
+                self._root_depth = self._depth
+                return
+        if self._active is not None and "day-one-chip" in classes:
+            self.scenes[self._active]["chipped"] = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "div":
+            if self._active is not None and self._depth == self._root_depth:
+                self._active = None
+                self._root_depth = 0
+            self._depth = max(0, self._depth - 1)
+
+
 class _GuideTranscriptParser(HTMLParser):
     """Collect plain-text transcripts from one family of First Listen audio blocks.
 
@@ -652,12 +699,7 @@ class _GuideTranscriptParser(HTMLParser):
 _GUIDE_MAP_PATTERN = re.compile(r"const\s+FIRST_LISTEN_GUIDES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
 _HOME_MOMENT_MAP_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
 _HOME_MOMENT_NOUN_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLE_NOUNS\s*=\s*\{(?P<body>[^}]*)\}")
-_HOME_MOMENT_NOUN_ENTRY_PATTERN = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]*)\s*:\s*'[^']*'")
-_HOME_MOMENT_SCENE_PATTERN = re.compile(
-    r'<div class="[^"]*household-scene[^"]*"(?P<attrs>[^>]*)>\s*<h5>(?P<h5>.*?)</h5>',
-    re.DOTALL,
-)
-_HOME_MOMENT_SCENE_ATTR_PATTERN = re.compile(r'(?P<name>data-[a-z-]+)="(?P<value>[^"]*)"')
+_HOME_MOMENT_NOUN_ENTRY_PATTERN = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]*)\s*:\s*'(?P<noun>[^']*)'")
 _GUIDE_ENTRY_PATTERN = re.compile(
     r"(?:'(?P<quoted_key>[^']+)'|(?P<plain_key>[A-Za-z][A-Za-z0-9_-]*))\s*:\s*"
     r"\{\s*file\s*:\s*'(?P<file>[^']+)'\s*,\s*version\s*:\s*'(?P<version>[^']+)'\s*\}"
@@ -895,7 +937,7 @@ def _validate_admin_home_moment_metadata(source: str, manifest: dict | None) -> 
 
     errors.extend(_validate_home_moment_nouns(source, set(expected)))
     errors.extend(_validate_home_moment_reachability(source, expected))
-    return errors, set(expected)
+    return errors, set(expected) | set(entries)
 
 
 def _validate_home_moment_nouns(source: str, expected_keys: set) -> list[str]:
@@ -909,8 +951,15 @@ def _validate_home_moment_nouns(source: str, expected_keys: set) -> list[str]:
     match = _HOME_MOMENT_NOUN_PATTERN.search(source)
     if match is None:
         return ["admin HOUSEHOLD_EXAMPLE_NOUNS map is missing"]
-    declared = {entry.group("key") for entry in _HOME_MOMENT_NOUN_ENTRY_PATTERN.finditer(match.group("body"))}
-    errors = []
+    entries = {
+        entry.group("key"): entry.group("noun")
+        for entry in _HOME_MOMENT_NOUN_ENTRY_PATTERN.finditer(match.group("body"))
+    }
+    declared = set(entries)
+    errors = [
+        f"admin HOUSEHOLD_EXAMPLE_NOUNS {key} is empty; its button label would fall back to 'recording'"
+        for key in sorted(key for key, noun in entries.items() if not noun.strip())
+    ]
     missing = sorted(expected_keys - declared)
     unexpected = sorted(declared - expected_keys)
     if missing:
@@ -943,19 +992,14 @@ def _validate_home_moment_reachability(source: str, expected: dict) -> list[str]
             f"reachability {HOME_MOMENT_DAY_ONE!r}"
         )
 
-    scenes: dict = {}
-    for match in _HOME_MOMENT_SCENE_PATTERN.finditer(source):
-        attrs = dict(
-            (attr.group("name"), attr.group("value"))
-            for attr in _HOME_MOMENT_SCENE_ATTR_PATTERN.finditer(match.group("attrs"))
-        )
-        key = attrs.get("data-explainer-scenario")
-        if key is None:
-            errors.append("admin home moment scene is missing data-explainer-scenario")
-            continue
-        if key in scenes:
-            errors.append(f"admin home moment scene {key} is declared more than once")
-        scenes[key] = (attrs.get("data-reachability"), match.group("h5"))
+    parser = _HomeMomentSceneParser()
+    parser.feed(source)
+    parser.close()
+    scenes = parser.scenes
+    for _ in range(parser.unkeyed_scenes):
+        errors.append("admin home moment scene is missing data-explainer-scenario")
+    for key in sorted(parser.duplicate_keys):
+        errors.append(f"admin home moment scene {key} is declared more than once")
 
     missing_scenes = sorted(set(manifest_reach) - set(scenes))
     unexpected_scenes = sorted(set(scenes) - set(manifest_reach))
@@ -965,7 +1009,8 @@ def _validate_home_moment_reachability(source: str, expected: dict) -> list[str]
         errors.append(f"admin home moment scenes have unexpected keys: {', '.join(unexpected_scenes)}")
 
     for key in sorted(set(manifest_reach) & set(scenes)):
-        declared, heading = scenes[key]
+        declared = scenes[key]["reachability"]
+        chipped = scenes[key]["chipped"]
         manifest_value = manifest_reach[key]
         if declared != manifest_value:
             errors.append(
@@ -973,7 +1018,6 @@ def _validate_home_moment_reachability(source: str, expected: dict) -> list[str]
                 f"but its manifest entry is {manifest_value!r}"
             )
             continue
-        chipped = "day-one-chip" in heading
         if manifest_value == HOME_MOMENT_DAY_ONE and not chipped:
             errors.append(f"admin home moment {key} is reachable today but its scene carries no day-one-chip")
         elif manifest_value != HOME_MOMENT_DAY_ONE and chipped:

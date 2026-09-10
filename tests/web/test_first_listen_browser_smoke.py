@@ -49,6 +49,8 @@ def test_first_listen_browser_smoke_contract_is_deterministic() -> None:
         "household-scene",
         "household-example-play",
         "home_moments\\/laundry",
+        "home_moments\\/quiet",
+        '[data-explainer-scenario="quiet"] .day-one-chip',
         "toggleHouseholdExample",
         "firstListenSetupDoneBtn",
         "firstListenSetupReturnBtn",

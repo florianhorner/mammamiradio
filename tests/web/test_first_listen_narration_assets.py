@@ -1280,7 +1280,10 @@ def test_home_moments_reject_unlisted_audio_and_missing_files(copied_pack) -> No
     assert any("unlisted audio" in error for error in _home_moment_errors(copied_pack))
     (room / "stray.mp3").unlink()
     (room / "quiet.mp3").unlink()
-    assert any("unlisted audio" in error for error in _home_moment_errors(copied_pack))
+    # Assert the missing-file branch specifically: the generic inventory error
+    # fires here too, so matching that would keep this green if the branch went.
+    errors = _home_moment_errors(copied_pack)
+    assert any("quiet.mp3 is missing or unreadable" in error for error in errors), errors
 
 
 def test_home_moments_reject_bytes_that_are_not_the_explainer_segment(copied_pack) -> None:
@@ -1355,7 +1358,38 @@ def test_admin_home_moment_metadata_rejects_reachability_swapped_against_the_man
         'data-explainer-scenario="laundry" data-reachability="day-one"',
     )
     errors = _admin_home_moment_errors(source)
-    assert any("but its manifest entry is" in error for error in errors), errors
+    assert any("scene quiet declares data-reachability 'home-grant'" in e for e in errors), errors
+    assert any("scene laundry declares data-reachability 'day-one'" in e for e in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_chip_outside_the_heading() -> None:
+    """The chip is styled by class alone, so it renders anywhere in the scene.
+
+    An h5-bounded check passed while a reader still saw "day one" on a gated
+    moment; this pins the subtree walk that replaced it.
+    """
+
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    for mutation in (
+        (
+            "<h5>The laundry finished. Nobody noticed.</h5>",
+            '<h5>The laundry finished. Nobody noticed.</h5><em class="day-one-chip">day one</em>',
+        ),
+        (
+            '<p class="scene-caption">Washing machine · finished</p>',
+            '<p class="scene-caption">Washing machine · finished <em class="day-one-chip">day one</em></p>',
+        ),
+    ):
+        errors = _admin_home_moment_errors(template.replace(*mutation))
+        assert any("laundry is 'home-grant' but its scene carries a day-one-chip" in e for e in errors), mutation
+
+
+def test_admin_home_moment_metadata_rejects_an_empty_spoken_noun() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'evening',", "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'',"
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("quiet is empty" in error for error in errors), errors
 
 
 def test_admin_home_moment_metadata_rejects_a_missing_chip_and_a_missing_scene() -> None:
@@ -1394,10 +1428,9 @@ def test_admin_metadata_rejects_a_home_moment_shadowing_a_narration_clip(tmp_pat
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
+    # The runtime shadow is JS-vs-JS, so the JS rename alone must be enough; the
+    # manifest is deliberately left untouched.
     home_manifest = json.loads((SHIPPED_AUDIO_ROOT / "home_moments" / "spoken_assets.json").read_text(encoding="utf-8"))
-    for entry in home_manifest["assets"]:
-        if entry["path"] == "quiet.mp3":
-            entry["path"] = "privacy.mp3"
     guide_manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
 
     errors = VALIDATOR._validate_admin_guide_metadata(

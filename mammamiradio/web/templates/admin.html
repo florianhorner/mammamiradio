@@ -5356,7 +5356,7 @@ function restartFirstListen(){
   cancelFirstListenHandoff();stopFirstListenGuide();
   Object.assign(_firstListenUi,{restarting:true,selectionDirty:true,retestPending:true,selectedEntityId:'',selectedName:'',attemptId:'',dispatch:'ready',verification:'awaiting',privacyChoice:null,privacyReceiptChoice:null,privacyPreview:'untouched',privacyPreviewValid:false,privacyPreviewUseful:false,repairOpen:false,reviewStep:'',optionalStep:'',reviewTrigger:null,showSuccess:false,successAnnounced:false,activationStartedAt:0,activationMs:null,firstUnresolvedRenderedAt:performance.now()});
   document.querySelectorAll('#journeySurface details,.success-saved').forEach(details=>{details.open=false;});
-  document.querySelectorAll('.guide-audio').forEach(card=>{card.dataset.state='idle';const button=card.querySelector('.guide-audio-play');if(button){button.textContent=firstListenGuideIdleLabel(button);button.setAttribute('aria-pressed','false');}});
+  document.querySelectorAll('.guide-audio,.household-example').forEach(card=>{card.dataset.state='idle';const button=card.querySelector('.guide-audio-play,.household-example-play');if(button){button.textContent=firstListenGuideIdleLabel(button);button.setAttribute('aria-pressed','false');}});
   renderHomeContextPreview({ok:true,status:'review',entities:[]});
   _lastSetupJson='';document.body.dataset.firstListenEntry='required';
   syncFirstListenSetupMount();showAdminTab('setup',{render:true,persist:true});renderFirstListenProgress();

@@ -180,10 +180,15 @@ def test_the_day_one_marking_lands_on_the_scene_that_is_actually_reachable() -> 
     )
     assert scenes == {"quiet": "day-one", "laundry": "home-grant", "arrival": "home-grant", "coffee": "home-grant"}
 
-    chipped = re.findall(
-        r'data-explainer-scenario="([a-z]+)" data-reachability="[a-z-]+">\s*<h5>(.*?)</h5>', html, re.DOTALL
-    )
-    assert [key for key, heading in chipped if "day-one-chip" in heading] == ["quiet"]
+    # Split on scene boundaries rather than bounding at </h5>: the chip is styled
+    # by class alone, so it renders from anywhere inside the scene.
+    block = html[html.index('class="home-moments"') : html.index('<div class="guide-audio" data-guide="privacy"')]
+    chunks = re.split(r'(?=<div class="listening-invitation household-scene")', block)[1:]
+    chipped = [
+        re.search(r'data-explainer-scenario="([a-z]+)"', chunk).group(1) for chunk in chunks if "day-one-chip" in chunk
+    ]
+    assert chipped == ["quiet"]
+    assert len(chunks) == 4
 
 
 def test_step_three_names_both_gates_before_the_decision_not_after_the_demos() -> None:
@@ -197,7 +202,8 @@ def test_step_three_names_both_gates_before_the_decision_not_after_the_demos() -
 
     html = _html()
     invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
-    note = invite[invite.index("On day one your station knows the sky") :][:500]
+    note_start = invite.index("On day one your station knows the sky")
+    note = invite[note_start : invite.index("</p>", note_start)]
     assert "weather and daylight" in note
     assert "does not have yet" in note
     assert "writing service" in note
