@@ -19,7 +19,7 @@ async (page) => {
   const guideAudioRequests = [];
   const rememberGuideAudioRequest = (url) => {
     const requestPath = url.slice(originOf(url).length);
-    if (!/\/static\/audio\/(?:first_listen|voice_examples)\/[^/?]+\.mp3(?:\?|$)/.test(requestPath)) return;
+    if (!/\/static\/audio\/(?:first_listen|voice_examples|home_moments)\/[^/?]+\.mp3(?:\?|$)/.test(requestPath)) return;
     guideAudioRequests.push(requestPath);
   };
   function assertGuideRequests(baseline,key,prefix='') {
@@ -267,7 +267,7 @@ async (page) => {
     blockedOffOriginRequests.push(route.request().url());
     await route.fulfill({ status: 204, contentType: 'text/plain', body: '' });
   });
-  await page.route(/\/static\/audio\/(?:first_listen|voice_examples)\/[^/?]+\.mp3(?:\?|$)/, async (route) => {
+  await page.route(/\/static\/audio\/(?:first_listen|voice_examples|home_moments)\/[^/?]+\.mp3(?:\?|$)/, async (route) => {
     const requestAddress = route.request().url();
     const requestPath = requestAddress.slice(originOf(requestAddress).length);
     const filename = requestPath.split('?', 1)[0].split('/').at(-1) || '';
@@ -1705,6 +1705,20 @@ async (page) => {
     const connectionStation=await startAudibleFirstListen({home:false});
     await assertUnfinished('firstListenPrivacyStep','firstListenMakeYoursBtn');
     assert(await page.locator('#firstListenConnectionInvite .household-scene').count()===3,'household possibilities are missing from the invitation');
+    assert(await page.locator('#firstListenConnectionInvite .household-example-play').count()===4,'home moments are not playable');
+    assert(await page.evaluate(()=>typeof toggleHouseholdExample==='function'),'household examples lost their play helper');
+    await page.locator('[data-household-example="laundry"]').click();
+    await page.waitForFunction(()=>_firstListenUi.guideKey==='laundry'&&!firstListenGuideAudio().paused);
+    const laundryDebug=await page.evaluate(()=>({
+      src:firstListenGuideAudio().getAttribute('src'),
+      currentSrc:firstListenGuideAudio().currentSrc,
+    }));
+    assert(
+      /\/static\/audio\/home_moments\/laundry\.mp3\?v=e7607b0c0566/.test(laundryDebug.src||laundryDebug.currentSrc||''),
+      `laundry example loaded the wrong source: ${JSON.stringify(laundryDebug)}`,
+    );
+    await page.locator('[data-household-example="laundry"]').click();
+    await page.waitForFunction(()=>firstListenGuideAudio().paused);
     assert((await page.locator('#firstListenPrivacyHeading').innerText())==='Make it yours','privacy step lost its polished heading');
     assert(await page.locator('[data-guide="free-voices"]').isHidden(),'free audition appeared before voice choice');
     assert(await page.locator('#firstListenSetupDoneBtn').count()===1,'Done with setup is missing');

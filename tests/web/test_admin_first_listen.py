@@ -130,6 +130,78 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "firstListenAiStep',configuredKeys.length?'current'" not in progress
 
 
+def test_last_required_step_keeps_the_rail_while_its_body_is_open() -> None:
+    css = _css()
+    hide = css.index(".first-listen-panel .first-listen-step:last-child::before")
+    restore = css.index(
+        ".first-listen-panel .first-listen-step:last-child:has(.first-listen-body:not([hidden]))::before"
+    )
+    assert hide < restore
+    assert "display: none;" in css[hide:restore]
+    opened = css[restore : restore + 180]
+    assert "display: block;" in opened
+    assert "bottom: 0;" in opened
+
+
+def test_step_three_leads_with_a_day_one_moment_and_marks_the_gated_ones() -> None:
+    """Step 3 must demonstrate something a fresh install can actually reach.
+
+    Three of the four scenes need household details narrow mode does not grant
+    (mammamiradio/home/authorization.py), so a stack of only those tells a cold
+    install its setup is unfinished. docs/explainer refuses to build a page in
+    that state; this is the same refusal for the admin journey. The binding half
+    lives in validate-spoken-assets.py, which fails if the manifest loses its
+    day-one entry or the scene loses its chip.
+    """
+
+    html = _html()
+    moments = html[html.index('class="home-moments"') : html.index('class="setup-note">Staged station moments')]
+    assert moments.count("household-scene") == 4
+    # The reachable one leads, so it is read before ~97s of gated demos.
+    assert moments.index('data-explainer-scenario="quiet"') < moments.index('data-explainer-scenario="laundry"')
+    assert moments.count('data-reachability="day-one"') == 1
+    assert moments.count('data-reachability="home-grant"') == 3
+    assert '<em class="day-one-chip">day one</em>' in moments
+
+
+def test_step_three_disclaimer_names_both_gates_not_only_the_key() -> None:
+    """A writing key alone does not unlock the household moments.
+
+    A fresh install resolves to narrow ambient context, so laundry/arrival/kitchen
+    are out of reach whatever the operator pays for. Copy that blames only the key
+    would sell an upgrade that changes nothing.
+    """
+
+    html = _html()
+    note = html[html.index('class="setup-note">Staged station moments') :][:600]
+    assert "weather and daylight" in note
+    assert "does not have yet" in note
+    assert "writing service" in note
+    assert "isn’t available in this setup yet" not in html
+
+
+def test_step_three_decision_precedes_the_demos_and_is_named_by_outcome() -> None:
+    """Finishing is the primary action and sits above the demo stack.
+
+    "Keep listening" read as a playback control while it committed the Home
+    privacy choice to the server, and it sat under ~2.5 minutes of audio.
+    """
+
+    html = _html()
+    invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
+    assert invite.index('id="firstListenKeepListeningBtn"') < invite.index('class="home-moments"')
+    assert invite.index('id="firstListenMakeYoursBtn"') < invite.index('class="home-moments"')
+    # Finishing needs nothing else, so it carries the primary tone.
+    keep = invite[
+        invite.index('id="firstListenKeepListeningBtn"') - 200 : invite.index('id="firstListenKeepListeningBtn"')
+    ]
+    assert "btn-trigger" in keep
+    assert ">Finish with Home private<" in invite
+    assert ">Add live host writing<" in invite
+    assert ">Keep listening<" not in invite
+    assert ">Make the show yours<" not in invite
+
+
 def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() -> None:
     html = _html()
     for state in ("pending", "complete"):
@@ -292,6 +364,12 @@ def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
     ai = html.index('id="firstListenAiStep"')
     assert privacy < ai
     assert "household-scene" in html
+    assert html.count('class="household-example-play"') == 4
+    assert "toggleHouseholdExample('quiet',this)" in html
+    assert "toggleHouseholdExample('laundry',this)" in html
+    assert "toggleHouseholdExample('arrival',this)" in html
+    assert "toggleHouseholdExample('coffee',this)" in html
+    assert "home_moments" in html
     assert "We won’t request Home details unless you ask for a preview." in html
     assert "Keep Home private and we request nothing." in html
     assert "preview exactly what the hosts would receive, then decide." in html
@@ -802,8 +880,20 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     assert "function resetFirstListenGuideSource(audio)" in guide_code
     assert "audio.removeAttribute('src')" in guide_code
     assert "if(audio.getAttribute('src')!==next)" in guide_code
-    assert "const folder=key==='free-voices'?'voice_examples':'first_listen'" in guide_code
+    assert "const folder=household?'home_moments':key==='free-voices'?'voice_examples':'first_listen'" in guide_code
     assert "const next=`${_base}/static/audio/${folder}/${guide.file}?v=${guide.version}`" in guide_code
+    assert "const HOUSEHOLD_EXAMPLES={" in guide_code
+    household = _function("toggleHouseholdExample", "initFirstListenTechnicalDetails")
+    assert "return toggleFirstListenGuide(key,button);" in household
+    # The literals below are a smoke check only. validate-spoken-assets.py is what
+    # binds each version to its manifest sha256 prefix; see
+    # test_home_moment_pack_is_bound_to_the_explainer_source.
+    assert "quiet:{file:'quiet.mp3',version:'02fc7d83734a'}" in guide_code
+    assert "laundry:{file:'laundry.mp3',version:'e7607b0c0566'}" in guide_code
+    assert "arrival:{file:'arrival.mp3',version:'f2dabb786f49'}" in guide_code
+    assert "coffee:{file:'coffee.mp3',version:'048792796ad8'}" in guide_code
+    container = _function("firstListenGuideContainer", "firstListenGuideLocksRoomProof")
+    assert "button?.closest('.guide-audio,.household-example')" in container
     assert "audio.src=next" in guide_code
     assert "audio.load()" in guide_code
     toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")

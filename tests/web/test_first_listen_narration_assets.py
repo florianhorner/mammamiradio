@@ -1171,6 +1171,67 @@ async def test_all_browser_narration_clips_are_public_audio_mpeg() -> None:
             assert response.content, relative_path
 
 
+HOME_MOMENTS = ("quiet.mp3", "laundry.mp3", "arrival.mp3", "coffee.mp3")
+HOME_MOMENT_ROOT = SHIPPED_AUDIO_ROOT / "home_moments"
+EXPLAINER_AUDIO_ROOT = ROOT / "docs" / "explainer" / "public" / "audio"
+
+
+def test_home_moments_copy_explainer_bytes_outside_the_guide_pack() -> None:
+    manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    declared = {entry["path"] for entry in manifest["assets"]}
+    for name in HOME_MOMENTS:
+        shipped = HOME_MOMENT_ROOT / name
+        source = EXPLAINER_AUDIO_ROOT / name
+        assert shipped.is_file(), name
+        assert not shipped.is_symlink(), name
+        assert shipped.read_bytes() == source.read_bytes(), name
+        assert f"home_moments/{name}" not in declared
+        assert f"first_listen/{name}" not in declared
+
+
+def test_home_moment_pack_is_bound_to_the_explainer_source() -> None:
+    """The explainer manifest is the single source of truth for these clips.
+
+    Three copies of the same audio exist (explainer page, shipped pack, admin
+    cache-bust tokens). Only a binding makes that safe: regenerate a clip and the
+    validator fails rather than the pack silently drifting behind a stale URL.
+    """
+
+    manifest = json.loads((HOME_MOMENT_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    segments = json.loads((EXPLAINER_AUDIO_ROOT / "segments.manifest.json").read_text(encoding="utf-8"))["segments"]
+    admin = (ROOT / "mammamiradio" / "web" / "templates" / "admin.html").read_text(encoding="utf-8")
+
+    assert manifest["bundle"] == "first-listen-home-moments"
+    reachabilities = {entry["path"]: entry["reachability"] for entry in manifest["assets"]}
+    # Without a day-one entry Step 3 demonstrates only capability a fresh install
+    # cannot reach. validate-spoken-assets.py refuses that; this pins the data.
+    assert "day-one" in reachabilities.values()
+    assert reachabilities["quiet.mp3"] == "day-one"
+
+    for entry in manifest["assets"]:
+        key = entry["path"].removesuffix(".mp3")
+        digest = hashlib.sha256((HOME_MOMENT_ROOT / entry["path"]).read_bytes()).hexdigest()
+        assert entry["sha256"] == digest, key
+        assert segments[key]["sha256"] == digest, key
+        assert f"{key}:{{file:'{entry['path']}',version:'{digest[:12]}'}}" in admin, key
+
+
+@pytest.mark.asyncio
+async def test_home_moment_clips_are_public_audio_mpeg() -> None:
+    from mammamiradio.web.streamer import router
+
+    app = FastAPI()
+    app.include_router(router)
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for name in HOME_MOMENTS:
+            response = await client.get(f"/static/audio/home_moments/{name}")
+            assert response.status_code == 200, name
+            assert response.headers["content-type"].startswith("audio/mpeg"), name
+            assert response.content == (HOME_MOMENT_ROOT / name).read_bytes()
+
+
 @pytest.mark.parametrize("default_root", [False, True])
 @pytest.mark.parametrize("failure", [None, "inventory", "hash", "refresh_voice", "render", "validation", "publication"])
 def test_station_render_preserves_both_packs_and_fails_before_publication(

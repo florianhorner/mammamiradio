@@ -2620,22 +2620,60 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <div class="show-invitation" id="firstListenConnectionInvite">
                     <h4 class="benefit-heading">Your home becomes part of the show.</h4>
                     <p class="use-copy">Home Assistant can give the hosts material from your world: a finished wash, a homecoming, the kitchen temperature. Ordinary details. Very serious radio.</p>
-                    <div class="home-moments" aria-label="Home Assistant household possibilities">
-                      <div class="listening-invitation household-scene" data-explainer-scenario="laundry"><h5>The laundry finished. Nobody noticed.</h5><p class="scene-caption">Washing machine · finished</p><p><strong>Marco</strong><span>“Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.”</span></p></div>
-                      <div class="listening-invitation household-scene" data-explainer-scenario="arrival"><h5>Someone’s home early.</h5><p class="scene-caption">Arrival · front door · evening light</p><p><strong>Marco</strong><span>“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</span></p></div>
-                      <div class="listening-invitation household-scene" data-explainer-scenario="coffee"><h5>The kitchen just woke up.</h5><p class="scene-caption">Coffee machine · room temperature</p><p><strong>Giulia</strong><span>“The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.”</span></p></div>
-                    </div>
-                    <p class="setup-note">Staged household examples, not readings from your home. Fresh installs currently offer weather and daylight sharing; household sharing isn’t available in this setup yet. The preview shows what this station can actually share.</p>
-                    <div class="guide-audio" data-guide="privacy">
-                      <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Cue the rooftop disco</button>
-                      <p class="guide-audio-copy" id="guidePrivacyNote"><strong>Same weather. Their version.</strong><span>Recorded scene · invented weather · 10 seconds on this device</span></p>
-                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Rain all afternoon. I’ve cancelled the rooftop disco. <strong>Giulia:</strong> It was a speaker on a bin, Marco. Bring it inside. We’re not cancelling Saturday.</p></details>
-                    </div>
                     <p class="use-copy">Music and recorded host moments are already yours. Connect a writing service for new conversations, choose their voices, then preview the Home Assistant details you want to share.</p>
                     <p class="setup-note" id="firstListenConnectionPromise">No keys needed to start listening. Home stays private until you choose otherwise. Connected services may charge for use.</p>
-                    <div class="first-listen-actions">
-                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Make the show yours</button>
-                      <button type="button" class="btn btn-util first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Keep listening</button>
+                    <div class="first-listen-actions first-listen-decision">
+                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Finish with Home private</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Add live host writing</button>
+                    </div>
+                    <p class="setup-note">Or hear what the hosts do with a home first.</p>
+                    <div class="home-moments" aria-label="Home moments Marco and Giulia can use">
+                      <div class="listening-invitation household-scene" data-explainer-scenario="quiet" data-reachability="day-one">
+                        <h5>Evening, officially. <em class="day-one-chip">day one</em></h5>
+                        <p class="scene-caption">Sunset · clear night · eleven degrees</p>
+                        <p><strong>Giulia</strong><span>“Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.”</span></p>
+                        <div class="household-example" data-home-moment="quiet">
+                          <button type="button" class="household-example-play" data-household-example="quiet" data-stopped-exempt aria-describedby="householdQuietNote" onclick="toggleHouseholdExample('quiet',this)">Hear the evening</button>
+                          <p class="guide-audio-copy" id="householdQuietNote"><strong>About 36 seconds on this device</strong><span>Staged station moment · your station can do this today</span></p>
+                          <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. <strong>Giulia:</strong> It’s a landline, Marco, and you unplug it so your ego can charge. <strong>Giulia:</strong> The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly. <strong>Marco:</strong> Officially evening means slow songs only from here. I don’t make the rules. Giulia makes the rules.</p></details>
+                        </div>
+                      </div>
+                      <div class="listening-invitation household-scene" data-explainer-scenario="laundry" data-reachability="home-grant">
+                        <h5>The laundry finished. Nobody noticed.</h5>
+                        <p class="scene-caption">Washing machine · finished</p>
+                        <p><strong>Marco</strong><span>“Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.”</span></p>
+                        <div class="household-example" data-home-moment="laundry">
+                          <button type="button" class="household-example-play" data-household-example="laundry" data-stopped-exempt aria-describedby="householdLaundryNote" onclick="toggleHouseholdExample('laundry',this)">Hear the laundry</button>
+                          <p class="guide-audio-copy" id="householdLaundryNote"><strong>About 31 seconds on this device</strong><span>Staged station moment · not your home</span></p>
+                          <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Giulia:</strong> Four minutes on one penalty kick tonight, Marco. Three of them were about your hair. <strong>Marco:</strong> The hair is part of the sport, Giulia. Cinema. Pure cinema. <strong>Marco:</strong> You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us. <strong>Giulia:</strong> You heard it here first. Up next: the sports desk, which is unfortunately still Marco’s.</p></details>
+                        </div>
+                      </div>
+                      <div class="listening-invitation household-scene" data-explainer-scenario="arrival" data-reachability="home-grant">
+                        <h5>Someone’s home early.</h5>
+                        <p class="scene-caption">Arrival · front door · evening light</p>
+                        <p><strong>Marco</strong><span>“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</span></p>
+                        <div class="household-example" data-home-moment="arrival">
+                          <button type="button" class="household-example-play" data-household-example="arrival" data-stopped-exempt aria-describedby="householdArrivalNote" onclick="toggleHouseholdExample('arrival',this)">Hear the arrival</button>
+                          <p class="guide-audio-copy" id="householdArrivalNote"><strong>About 30 seconds on this device</strong><span>Staged station moment · not your home</span></p>
+                          <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Limit 70! Kevin MacLeod. The official soundtrack of the drive home, Giulia. <strong>Giulia:</strong> You have never once driven the speed limit, Marco. <strong>Marco:</strong> And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa. <strong>Giulia:</strong> Benvenuto a casa indeed. Next up, a song for walking in the door.</p></details>
+                        </div>
+                      </div>
+                      <div class="listening-invitation household-scene" data-explainer-scenario="coffee" data-reachability="home-grant">
+                        <h5>The kitchen just woke up.</h5>
+                        <p class="scene-caption">Coffee machine · room temperature</p>
+                        <p><strong>Giulia</strong><span>“The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.”</span></p>
+                        <div class="household-example" data-home-moment="coffee">
+                          <button type="button" class="household-example-play" data-household-example="coffee" data-stopped-exempt aria-describedby="householdCoffeeNote" onclick="toggleHouseholdExample('coffee',this)">Hear the kitchen</button>
+                          <p class="guide-audio-copy" id="householdCoffeeNote"><strong>About 36 seconds on this device</strong><span>Staged station moment · not your home</span></p>
+                          <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Newer Wave! Kevin MacLeod. A visionary — we are very similar, he and I. <strong>Giulia:</strong> He writes music, Marco. You read a schedule. And nobody is listening to it. Not even your mother. <strong>Giulia:</strong> Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday. <strong>Marco:</strong> A Tuesday coffee deserves a Tuesday song. Andiamo.</p></details>
+                        </div>
+                      </div>
+                    </div>
+                    <p class="setup-note">Staged station moments, not readings from your home. On day one your station knows the sky: weather and daylight. That is the evening moment above, and it works on a fresh install. The laundry, the arrival and the kitchen need household details a fresh station does not have yet; those arrive with a later update. New host lines of any kind need a writing service — add one below, or keep listening without.</p>
+                    <div class="guide-audio" data-guide="privacy">
+                      <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Hear weather become a bit</button>
+                      <p class="guide-audio-copy" id="guidePrivacyNote"><strong>Rain cancels Marco’s rooftop disco.</strong><span>Recorded scene · invented weather · 10 seconds on this device</span></p>
+                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Rain all afternoon. I’ve cancelled the rooftop disco. <strong>Giulia:</strong> It was a speaker on a bin, Marco. Bring it inside. We’re not cancelling Saturday.</p></details>
                     </div>
                   </div>
                   <div id="firstListenHomeChoice" hidden>
@@ -2993,8 +3031,19 @@ const FIRST_LISTEN_GUIDES={
   success:{file:'success.mp3',version:'17b854587398'},
 };
 const FIRST_LISTEN_GUIDE_NOUNS={welcome:'welcome','sound-check':'explanation','not-yet':'advice','receipt-recovery':'explanation',privacy:'recording',ai:'studio sample','free-voices':'free sample',success:'celebration'};
+// One pack, two reachabilities. quiet is the day-one moment a fresh install can
+// actually reach; the other three need household details it does not have yet.
+// home_moments/spoken_assets.json carries that boundary as data, and
+// validate-spoken-assets.py binds these versions to its sha256 prefixes.
+const HOUSEHOLD_EXAMPLES={
+  quiet:{file:'quiet.mp3',version:'02fc7d83734a'},
+  laundry:{file:'laundry.mp3',version:'e7607b0c0566'},
+  arrival:{file:'arrival.mp3',version:'f2dabb786f49'},
+  coffee:{file:'coffee.mp3',version:'048792796ad8'},
+};
+const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'evening',laundry:'laundry',arrival:'arrival',coffee:'kitchen'};
 function firstListenGuideLabel(button,state){
-  const noun=FIRST_LISTEN_GUIDE_NOUNS[button?.dataset.guideKey]||'recording';
+  const noun=FIRST_LISTEN_GUIDE_NOUNS[button?.dataset.guideKey]||HOUSEHOLD_EXAMPLE_NOUNS[button?.dataset.householdExample]||'recording';
   return {loading:`Starting ${noun}…`,playing:`Pause ${noun}`,paused:`Continue ${noun}`,ended:button?.dataset.replayLabel||'Hear it again',error:`Try ${noun} again`}[state];
 }
 // One <audio> serves the remaining First Listen clips, so a click that supersedes an in-flight
@@ -3012,7 +3061,7 @@ const FIRST_LISTEN_GUIDE_LOAD_MS=8000;
 const FIRST_LISTEN_GUIDE_STALL_BUFFER_MS=2500;
 let _firstListenGuideWatchdog=null;
 function firstListenGuideAudio(){return document.getElementById('firstListenGuideAudio')}
-function firstListenGuideContainer(button){return button?.closest('.guide-audio')||null}
+function firstListenGuideContainer(button){return button?.closest('.guide-audio,.household-example')||null}
 function firstListenGuideLocksRoomProof(){
   // Narration decorates the journey, it never gates it. Only a clip that is
   // genuinely playing holds the room proof; a slow or missing one leaves
@@ -3046,7 +3095,8 @@ function stopFirstListenGuide({reset=true,resumeStation=true}={}){
   _firstListenUi.guideButton=null;
 }
 async function toggleFirstListenGuide(key,button){
-  const guide=FIRST_LISTEN_GUIDES[key];
+  const household=HOUSEHOLD_EXAMPLES[key];
+  const guide=household||FIRST_LISTEN_GUIDES[key];
   const audio=firstListenGuideAudio();
   if(!guide||!audio||!button)return;
   firstListenGuideIdleLabel(button);
@@ -3071,7 +3121,7 @@ async function toggleFirstListenGuide(key,button){
   button.textContent=firstListenGuideLabel(button,'loading');
   button.setAttribute('aria-pressed','true');
   renderFirstListenProgress();
-  const folder=key==='free-voices'?'voice_examples':'first_listen';
+  const folder=household?'home_moments':key==='free-voices'?'voice_examples':'first_listen';
   const next=`${_base}/static/audio/${folder}/${guide.file}?v=${guide.version}`;
   if(audio.getAttribute('src')!==next){
     audio.src=next;
@@ -3154,6 +3204,9 @@ function initFirstListenGuideAudio(){
     stopFirstListenGuide();
     renderFirstListenProgress();
   });
+}
+async function toggleHouseholdExample(key,button){
+  return toggleFirstListenGuide(key,button);
 }
 initFirstListenGuideAudio();
 initFirstListenStationAudio();
@@ -5627,19 +5680,21 @@ function renderFirstListenConnection(){
   const promise=document.getElementById('firstListenConnectionPromise');
   promise.textContent=p.privacyEnabled?'Your saved Home sharing is on. A connected writing service may use those details. Connected services may charge for use.':'No keys needed to start listening. Home stays private until you choose otherwise. Connected services may charge for use.';
   const keep=document.getElementById('firstListenKeepListeningBtn');
-  keep.textContent=p.privacyEnabled?'Review my Home choice':'Keep listening';
+  keep.textContent=p.privacyEnabled?'Review my Home choice':'Finish with Home private';
   keep.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
   document.getElementById('firstListenMakeYoursBtn').disabled=!p.privacyUnlocked;
   document.getElementById('firstListenHomeUnavailable').hidden=p.haAccess;
   document.getElementById('firstListenExistingHomeNotice').hidden=!p.privacyEnabled;
-  if(!home&&p.privacyUnlocked&&!p.privacyReviewed)document.getElementById('firstListenPrivacySummary').textContent='Bring your world into the show, or keep listening with your current settings.';
+  if(!home&&p.privacyUnlocked&&!p.privacyReviewed)document.getElementById('firstListenPrivacySummary').textContent='Finish with Home private, or add live host writing first.';
   document.querySelectorAll('[data-connection-stage]').forEach(pane=>{pane.hidden=pane.dataset.connectionStage!==(stage==='voices'?'voices':'writing');});
   const provider=document.getElementById('firstListenWritingProvider').value;
   document.querySelectorAll('[data-writing-provider]').forEach(field=>{field.hidden=field.dataset.writingProvider!==provider;});
   document.getElementById('firstListenAiHeading').textContent=stage==='voices'?'Choose how they sound.':'Give them something new to say.';
   document.getElementById('firstListenConnectionCopy').textContent=stage==='voices'?'Choose the voices for new conversations.':'Connect a service that writes fresh host moments between songs. You can keep listening while you set this up.';
   document.getElementById('firstListenVoiceStory').hidden=stage!=='voices';
-  document.getElementById('firstListenConnectionSkip').hidden=stage==='voices';
+  // Both key stages keep the escape hatch: hiding it on `voices` left Back and
+  // Escape as the only ways out of an optional trail.
+  document.getElementById('firstListenConnectionSkip').hidden=false;
   document.getElementById('firstListenConnectionNext').textContent=stage==='voices'?'Choose what the hosts know':'Choose the voices';
   document.getElementById('setupSaveBtn').textContent=_firstListenUi.keySaving?'Saving…':stage==='voices'?'Save voice service':'Connect writing';
   const evidence=stage==='voices'?firstListenVoiceEvidence():firstListenConnectionEvidence();

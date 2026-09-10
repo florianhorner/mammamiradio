@@ -467,6 +467,11 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   display: none;
 }
 
+.first-listen-panel .first-listen-step:last-child:has(.first-listen-body:not([hidden]))::before {
+  display: block;
+  bottom: 0;
+}
+
 .first-listen-panel .first-listen-optional { margin-top:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--line); }
 .first-listen-panel .first-listen-optional-heading { margin:0 var(--space-5) var(--space-2);color:var(--sun);font-family:var(--font-body);font-size:.75rem;font-weight:700;line-height:1.3;letter-spacing:.12em;text-transform:uppercase; }
 .first-listen-panel .first-listen-optional .first-listen-step { border-bottom:0; }
@@ -792,7 +797,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
 
 /* ── Spoken guide component ─────────────────────────────────────────────── */
 
-.first-listen-panel .guide-audio {
+.first-listen-panel :is(.guide-audio, .household-example) {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 0.625rem;
@@ -806,7 +811,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   background: color-mix(in srgb, var(--bg) 26%, transparent);
 }
 
-.first-listen-panel .guide-audio-play {
+.first-listen-panel :is(.guide-audio-play, .household-example-play) {
   position: relative;
   display: grid;
   place-items: center;
@@ -821,7 +826,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   background: color-mix(in srgb, var(--sun) 6%, transparent);
 }
 
-.first-listen-panel .guide-audio-play:hover {
+.first-listen-panel :is(.guide-audio-play, .household-example-play):hover {
   border-color: var(--sun);
   background: color-mix(in srgb, var(--sun) 11%, transparent);
 }
@@ -847,12 +852,12 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   line-height: 1.35;
 }
 
-.first-listen-panel .guide-audio[data-state="playing"] .guide-audio-play {
+.first-listen-panel :is(.guide-audio, .household-example)[data-state="playing"] :is(.guide-audio-play, .household-example-play) {
   color: var(--bg);
   background: var(--sun2);
 }
 
-.first-listen-panel .guide-audio[data-state="loading"] .guide-audio-play::after {
+.first-listen-panel :is(.guide-audio, .household-example)[data-state="loading"] :is(.guide-audio-play, .household-example-play)::after {
   content: "";
   position: absolute;
   inset: 0.375rem;
@@ -862,12 +867,12 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   animation: first-listen-guide-spin 0.8s linear infinite;
 }
 
-.first-listen-panel .guide-audio[data-state="error"] {
+.first-listen-panel :is(.guide-audio, .household-example)[data-state="error"] {
   border-color: color-mix(in srgb, var(--error) 55%, var(--cream));
   background: color-mix(in srgb, var(--error) 7%, transparent);
 }
 
-.first-listen-panel .guide-audio[data-state="error"] .guide-audio-copy span {
+.first-listen-panel :is(.guide-audio, .household-example)[data-state="error"] .guide-audio-copy span {
   color: color-mix(in srgb, var(--error) 58%, var(--cream));
 }
 
@@ -2068,7 +2073,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .first-listen-panel .guide-audio {
+  .first-listen-panel :is(.guide-audio, .household-example) {
     grid-template-columns: 44px minmax(0, 1fr);
   }
 
@@ -2136,7 +2141,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   }
 
   .first-listen-panel .semantic-visual,
-  .first-listen-panel .guide-audio {
+  .first-listen-panel :is(.guide-audio, .household-example) {
     padding-inline: 0.625rem;
   }
 
@@ -2208,7 +2213,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
     transition-duration: 0.01ms !important;
   }
 
-  .first-listen-panel .guide-audio[data-state="loading"] .guide-audio-play::after,
+  .first-listen-panel :is(.guide-audio, .household-example)[data-state="loading"] :is(.guide-audio-play, .household-example-play)::after,
   .first-listen-panel :is(.first-listen-success, .success-surface).is-celebrating::before,
   .first-listen-panel :is(.first-listen-success, .success-surface).is-celebrating :is(
     .tuning-line,
@@ -2283,11 +2288,11 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   width: min(42.5rem, 100%);
 }
 
-.first-listen-panel .guide-audio {
+.first-listen-panel :is(.guide-audio, .household-example) {
   grid-template-columns: minmax(9rem, auto) minmax(0, 1fr);
 }
 
-.first-listen-panel .guide-audio-play {
+.first-listen-panel :is(.guide-audio-play, .household-example-play) {
   display: inline-flex;
   width: auto;
   max-width: 100%;
@@ -2389,17 +2394,17 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
     font-size: 14px;
   }
 
-  .first-listen-panel .guide-audio {
+  .first-listen-panel :is(.guide-audio, .household-example) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .first-listen-panel .guide-audio-play,
+  .first-listen-panel :is(.guide-audio-play, .household-example-play),
   .first-listen-panel .guide-audio-copy,
   .first-listen-panel .guide-transcript {
     grid-column: 1;
   }
 
-  .first-listen-panel .guide-audio-play {
+  .first-listen-panel :is(.guide-audio-play, .household-example-play) {
     width: 100%;
   }
 }
@@ -2585,6 +2590,31 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
 .first-listen-panel .home-moments .listening-invitation span { font-size: 1rem; line-height: 1.45; }
 .first-listen-panel .household-scene h5 { margin: 0 0 .25rem; font: 600 1rem/1.4 var(--font-body); color: var(--cream); }
 .first-listen-panel .home-moments .household-scene + .household-scene { border-top: 1px solid var(--line-strong); padding-top: .75rem; }
+.first-listen-panel .household-scene .household-example { margin: .625rem 0 0; }
+/* The reachable moment is marked, not merely listed first. Blue, never green
+   (colorblind safety), and the word itself carries the meaning so the colour is
+   never the only signal. Mirrors .day-one-chip in docs/explainer/styles.css. */
+.first-listen-panel .day-one-chip {
+  display: inline-block;
+  margin-left: .3125rem;
+  padding: .0625rem .375rem;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border-radius: 999px;
+  color: var(--ok);
+  font-family: var(--font-body);
+  font-size: .5625rem;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+/* The choice sits above the demo stack, so it needs its own edge to read as a
+   decision rather than as more of the invitation copy. */
+.first-listen-panel .first-listen-decision {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
 .first-listen-panel .voice-story { margin: 1rem 0; padding: 1rem; border-left: 2px solid var(--sun); }
 .first-listen-panel .voice-story h4 { margin: 0 0 .5rem; }
 .first-listen-panel .voice-story p { margin: .5rem 0 0; color: var(--cream-dk); }

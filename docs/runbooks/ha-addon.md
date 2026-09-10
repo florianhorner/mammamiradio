@@ -132,12 +132,23 @@ speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, **Make it yours** first shows staged household scenes
-(laundry, arrival, coffee), then **Keep Home private** without reading Home
-state, or a fresh filtered preview before **Let Marco and Giulia use these
-details**. **Cue the rooftop disco** is the Home-details recording. If only
-generic daylight is available, verify that it is disclosed as ambient-only and
-not meaningful personalization, with the private path recommended.
+audible verification, **Make it yours** opens with the choice — **Finish with
+Home private** (primary) or **Add live host writing** — above four playable
+staged scenes from the explainer pack. The lead scene, **Hear the evening**,
+carries a `day one` chip: it is the only one a fresh install can actually
+reach, because narrow ambient context grants weather and daylight and nothing
+else. Laundry, arrival and kitchen need household details a fresh station does
+not have, which no key unlocks; verify the note below the scenes says so.
+**Hear weather become a bit** is the Home-details recording. Choosing to share
+still runs through a fresh filtered preview before **Let Marco and Giulia use
+these details**. If only generic daylight is available, verify that it is
+disclosed as ambient-only and not meaningful personalization, with the private
+path recommended.
+
+The staged scenes are byte copies of `docs/explainer/public/audio`, bound to
+that pack by `scripts/validate-spoken-assets.py`. The same gate refuses a pack
+with no `reachability: day-one` entry, so Step 3 can never demonstrate only
+gated capability.
 
 **Your ongoing show** is optional. **Hear the studio voices** and **Hear the
 free voices** play recordings. With the default setup, new conversations use
