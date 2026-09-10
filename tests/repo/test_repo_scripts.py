@@ -1480,6 +1480,20 @@ def test_validate_addon_rejects_unknown_effort_level(tmp_path: Path) -> None:
     assert "level 'turbo' is not one of" in result.stdout
 
 
+def test_validate_addon_rejects_unknown_effort_catalog_key(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    _write(registry, registry.read_text() + '\n[models.effort.anthropic]\nnonexistent = "medium"\n')
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "models.effort.anthropic.nonexistent is not in models.catalog.anthropic" in result.stdout
+
+
 def test_validate_addon_effort_levels_match_runtime() -> None:
     """Release validation and runtime parsing must accept the same effort schema."""
     import ast
