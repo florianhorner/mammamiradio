@@ -7,19 +7,26 @@
 [models]
 default_profile = "balanced"
 # The day a maintainer last decided these pins, bump or hold; the comment says which.
-# 2026-09-08: pins deliberately held pending the separate Claude 5 generation update;
-# that decision will restamp. scripts/check_model_registry.py --age checks age at the cut.
-last_reviewed = "2026-09-08"
+# last_reviewed 2026-09-10: bump to the Claude 5 generation and the OpenAI 5.6
+# sol/terra/luna ladder; effort medium on Anthropic creative.
+last_reviewed = "2026-09-10"
 
 [models.catalog.anthropic]
-fable = "claude-fable-5"  # ported from main #806; unmapped by any profile — usable via CLAUDE_CREATIVE_MODEL, gated keys fall back to OpenAI
-opus = "claude-opus-4-8"
-sonnet = "claude-sonnet-4-6"
+fable = "claude-fable-5-1"  # unmapped by any profile — usable via CLAUDE_CREATIVE_MODEL, gated keys fall back to OpenAI
+opus = "claude-opus-5"
+sonnet = "claude-sonnet-5"
 haiku = "claude-haiku-4-5-20251001"
 
 [models.catalog.openai]
-large = "gpt-5.5"
-small = "gpt-5.4-mini"
+large = "gpt-5.6-sol"
+mid = "gpt-5.6-terra"
+small = "gpt-5.6-luna"
+
+# Effort applies to Anthropic creative models that support adaptive thinking.
+# Haiku must never appear here: Claude Haiku 4.5 rejects effort and would 400.
+[models.effort.anthropic]
+opus = "medium"
+sonnet = "medium"
 
 [models.routing]
 banter = "creative"
@@ -36,7 +43,7 @@ openai = { creative = "large", fast = "small" }
 
 [models.profiles.balanced]
 anthropic = { creative = "sonnet", fast = "haiku" }
-openai = { creative = "small", fast = "small" }
+openai = { creative = "mid", fast = "small" }
 
 [models.profiles.economy]
 anthropic = { creative = "haiku", fast = "haiku" }
@@ -52,10 +59,12 @@ fallback_input_per_million = 15.0
 fallback_output_per_million = 75.0
 
 [pricing.catalog.anthropic]
-opus = { input_per_million = 15.0, output_per_million = 75.0 }
-sonnet = { input_per_million = 3.0, output_per_million = 15.0 }
-haiku = { input_per_million = 0.8, output_per_million = 4.0 }
+opus = { input_per_million = 5.0, output_per_million = 25.0 }
+sonnet = { input_per_million = 2.0, output_per_million = 10.0 }
+haiku = { input_per_million = 1.0, output_per_million = 5.0 }
+fable = { input_per_million = 10.0, output_per_million = 50.0 }
 
 [pricing.catalog.openai]
-large = { input_per_million = 5.0, output_per_million = 30.0 }
-small = { input_per_million = 0.75, output_per_million = 4.5 }
+large = { input_per_million = 4.0, output_per_million = 20.0 }
+mid = { input_per_million = 2.0, output_per_million = 12.0 }
+small = { input_per_million = 0.20, output_per_million = 1.20 }

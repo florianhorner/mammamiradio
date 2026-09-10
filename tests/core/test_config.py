@@ -619,7 +619,7 @@ def test_shipped_profiles_never_resolve_to_unmapped_fable(monkeypatch):
     tasks = ("banter", "news_flash", "ad", "transition", "home_mood", "memory_extract")
     for profile in ("premium", "balanced", "economy"):
         for task in tasks:
-            assert resolve_model(config.models, task, "anthropic", profile=profile) != "claude-fable-5", (
+            assert resolve_model(config.models, task, "anthropic", profile=profile) != "claude-fable-5-1", (
                 f"{profile}/{task} resolved to the unmapped gated model"
             )
 

@@ -291,6 +291,10 @@ _DEFAULT_ROUTING: dict[str, str] = {
     "direction": "creative",
 }
 
+# Adaptive-thinking effort levels accepted on Anthropic models that support them.
+# Haiku 4.5 does not; never send effort for a claude-haiku* ID.
+ALLOWED_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
 
 @dataclass
 class ModelsSection:
@@ -299,6 +303,8 @@ class ModelsSection:
     catalog: dict[str, dict[str, str]] = field(default_factory=dict)
     routing: dict[str, str] = field(default_factory=dict)
     profiles: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    # provider → catalog key → effort level (optional; absent means no effort body)
+    effort: dict[str, dict[str, str]] = field(default_factory=dict)
     default_profile: str = "balanced"
     active_profile: str = "balanced"
     tts_models: dict[str, str] = field(default_factory=dict)
@@ -330,6 +336,49 @@ def _empty_models(*, source: str = "unavailable") -> ModelsSection:
     return ModelsSection(routing=dict(_DEFAULT_ROUTING), source=source)
 
 
+def _resolve_catalog_key(
+    models: ModelsSection,
+    caller: str | None,
+    provider: str,
+    profile: str | None = None,
+) -> str | None:
+    """Return the catalog key selected by the same route as ``resolve_model``."""
+    role = models.routing.get(caller or "", DEFAULT_ROLE)
+    prof = profile or models.active_profile or models.default_profile
+
+    def _key_for(profile_name: str) -> str | None:
+        prov_map = models.profiles.get(profile_name, {}).get(provider, {})
+        return prov_map.get(role)
+
+    return _key_for(prof) or _key_for(models.default_profile)
+
+
+def effort_for(
+    models: ModelsSection,
+    provider: str,
+    model_id: str | None,
+    *,
+    caller: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Return effort for the selected route and model, or ``None``.
+
+    Effort is keyed by the selected catalog key, not reverse-matched by model ID.
+    That keeps dedicated fast/creative environment overrides isolated even when
+    an override happens to equal another catalog entry's model ID.
+    """
+    if not model_id:
+        return None
+    catalog_key = _resolve_catalog_key(models, caller, provider, profile)
+    if catalog_key is None:
+        return None
+    provider_catalog = models.catalog.get(provider) or {}
+    if provider_catalog.get(catalog_key) != model_id:
+        return None
+    level = (models.effort.get(provider) or {}).get(catalog_key)
+    return level if isinstance(level, str) and level in ALLOWED_EFFORT_LEVELS else None
+
+
 def resolve_model(models: ModelsSection, caller: str | None, provider: str, profile: str | None = None) -> str | None:
     """Resolve which model voices `caller` on `provider`, right now.
 
@@ -344,20 +393,72 @@ def resolve_model(models: ModelsSection, caller: str | None, provider: str, prof
     Any missing mapping is unavailable rather than an arbitrary catalog entry:
     a malformed registry must not turn into an accidental provider request.
     """
-    role = models.routing.get(caller or "", DEFAULT_ROLE)
-    prof = profile or models.active_profile or models.default_profile
-
-    def _key_for(profile_name: str) -> str | None:
-        prov_map = models.profiles.get(profile_name, {}).get(provider, {})
-        return prov_map.get(role)
-
-    key = _key_for(prof) or _key_for(models.default_profile)
+    key = _resolve_catalog_key(models, caller, provider, profile)
     provider_catalog = models.catalog.get(provider, {})
     if key:
         model_id = provider_catalog.get(key)
         if isinstance(model_id, str) and model_id.strip():
             return model_id
     return None
+
+
+def _parse_effort_table(
+    raw_effort: object,
+    catalog: dict[str, dict[str, str]],
+    *,
+    log,
+) -> dict[str, dict[str, str]]:
+    """Parse optional ``[models.effort.<provider>]`` tables; never raise into boot.
+
+    Invalid levels and unknown catalog keys are dropped with a warning so a
+    typo cannot disable the whole registry.
+    """
+    if raw_effort is None:
+        return {}
+    if not isinstance(raw_effort, dict):
+        log.warning("models.effort must be a table; ignoring")
+        return {}
+    parsed: dict[str, dict[str, str]] = {}
+    for provider, levels in raw_effort.items():
+        provider_key = str(provider)
+        if not isinstance(levels, dict):
+            log.warning("models.effort.%s must be a table; ignoring", provider_key)
+            continue
+        provider_catalog = catalog.get(provider_key) or {}
+        cleaned: dict[str, str] = {}
+        for catalog_key, level in levels.items():
+            key = str(catalog_key)
+            if key not in provider_catalog:
+                log.warning(
+                    "models.effort.%s.%s is not in models.catalog.%s; dropping",
+                    provider_key,
+                    key,
+                    provider_key,
+                )
+                continue
+            model_id = provider_catalog[key]
+            if isinstance(model_id, str) and model_id.startswith("claude-haiku"):
+                log.warning(
+                    "models.effort.%s.%s points at Haiku (%s), which rejects effort; dropping",
+                    provider_key,
+                    key,
+                    model_id,
+                )
+                continue
+            level_text = str(level).strip().lower()
+            if level_text not in ALLOWED_EFFORT_LEVELS:
+                log.warning(
+                    "models.effort.%s.%s has invalid level %r (allowed: %s); dropping",
+                    provider_key,
+                    key,
+                    level,
+                    ", ".join(sorted(ALLOWED_EFFORT_LEVELS)),
+                )
+                continue
+            cleaned[key] = level_text
+        if cleaned:
+            parsed[provider_key] = cleaned
+    return parsed
 
 
 def _parse_models_section(raw: dict, *, source: str = "inline registry") -> ModelsSection:
@@ -378,13 +479,15 @@ def _parse_models_section(raw: dict, *, source: str = "inline registry") -> Mode
             raise ValueError("models.catalog and models.profiles must be non-empty")
         default_profile = section.get("default_profile", "balanced")
         merged_routing = {**_DEFAULT_ROUTING, **{str(t): str(r) for t, r in routing.items()}}
+        parsed_catalog = {str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()}
         return ModelsSection(
-            catalog={str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()},
+            catalog=parsed_catalog,
             routing=merged_routing,
             profiles={
                 str(pf): {str(pr): {str(role): str(key) for role, key in rm.items()} for pr, rm in provs.items()}
                 for pf, provs in profiles.items()
             },
+            effort=_parse_effort_table(section.get("effort"), parsed_catalog, log=log),
             default_profile=str(default_profile),
             active_profile=str(default_profile),
             source=source,
