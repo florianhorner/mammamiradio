@@ -1216,6 +1216,199 @@ def test_home_moment_pack_is_bound_to_the_explainer_source() -> None:
         assert f"{key}:{{file:'{entry['path']}',version:'{digest[:12]}'}}" in admin, key
 
 
+def _rewrite_home_moments(audio_root: Path, mutate) -> None:
+    manifest_path = audio_root / "home_moments" / "spoken_assets.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mutate(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _home_moment_errors(copied_pack) -> list[str]:
+    static_root, audio_root = copied_pack
+    return VALIDATOR.validate_home_moments(assets_root=audio_root, static_root=static_root)
+
+
+def test_home_moments_accept_the_shipped_pack(copied_pack) -> None:
+    assert _home_moment_errors(copied_pack) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "needle"),
+    [
+        (lambda m: m.__setitem__("bundle", "wrong-bundle"), "schema or bundle is invalid"),
+        (lambda m: m.__setitem__("assets", []), "declares no assets"),
+        (lambda m: m["assets"].__setitem__(0, "not-a-dict"), "malformed entry"),
+        (lambda m: m["assets"][0].__setitem__("path", "nested/quiet.mp3"), "must be a bare .mp3 name"),
+        (lambda m: m["assets"][0].__setitem__("sha256", "0" * 64), "sha256 does not match"),
+        (lambda m: m["assets"][0].__setitem__("reachability", "someday"), "reachability"),
+        (lambda m: m["assets"][0].__setitem__("duration_seconds", 3.0), "is outside"),
+        (lambda m: m["assets"][0].__setitem__("transcript", "   "), "transcript is missing"),
+        (lambda m: m["assets"][0].pop("duration_seconds"), "duration_seconds is missing"),
+    ],
+)
+def test_home_moment_manifest_drift_is_rejected(copied_pack, mutation, needle) -> None:
+    """Every failure branch must actually fire.
+
+    `scripts/` is outside the coverage ratchet (`[tool.coverage.run] source =
+    ["mammamiradio"]`), so nothing else would notice a guard that cannot fail.
+    """
+
+    _, audio_root = copied_pack
+    _rewrite_home_moments(audio_root, mutation)
+    errors = _home_moment_errors(copied_pack)
+    assert any(needle in error for error in errors), errors
+
+
+def test_home_moments_reject_a_pack_with_nothing_reachable_today(copied_pack) -> None:
+    """The refusal docs/explainer/scripts/build.mjs already makes, for Step 3."""
+
+    _, audio_root = copied_pack
+
+    def demote_all(manifest):
+        for entry in manifest["assets"]:
+            entry["reachability"] = "home-grant"
+
+    _rewrite_home_moments(audio_root, demote_all)
+    errors = _home_moment_errors(copied_pack)
+    assert any("day-one" in error and "gated capability" in error for error in errors), errors
+
+
+def test_home_moments_reject_unlisted_audio_and_missing_files(copied_pack) -> None:
+    _, audio_root = copied_pack
+    room = audio_root / "home_moments"
+    shutil.copy(room / "quiet.mp3", room / "stray.mp3")
+    assert any("unlisted audio" in error for error in _home_moment_errors(copied_pack))
+    (room / "stray.mp3").unlink()
+    (room / "quiet.mp3").unlink()
+    assert any("unlisted audio" in error for error in _home_moment_errors(copied_pack))
+
+
+def test_home_moments_reject_bytes_that_are_not_the_explainer_segment(copied_pack) -> None:
+    """The explainer pack is the single source of truth; drift either way fails."""
+
+    _, audio_root = copied_pack
+    room = audio_root / "home_moments"
+    shutil.copy(room / "laundry.mp3", room / "quiet.mp3")
+    errors = _home_moment_errors(copied_pack)
+    assert any("is not the explainer segment it claims to copy" in error for error in errors), errors
+
+
+def test_home_moments_reject_a_symlinked_clip(copied_pack) -> None:
+    _, audio_root = copied_pack
+    room = audio_root / "home_moments"
+    (room / "quiet.mp3").unlink()
+    (room / "quiet.mp3").symlink_to(room / "laundry.mp3")
+    errors = _home_moment_errors(copied_pack)
+    assert any("symlink" in error for error in errors), errors
+
+
+def test_home_moments_reject_a_bundle_over_budget(copied_pack, monkeypatch) -> None:
+    """Live headroom is thin: the pack is ~1.6 MiB against a 2 MiB cap."""
+
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_MAX_BYTES", 1024)
+    errors = _home_moment_errors(copied_pack)
+    assert any("home moment bundle is" in error for error in errors), errors
+
+
+def _admin_home_moment_errors(source: str) -> list[str]:
+    manifest = json.loads((SHIPPED_AUDIO_ROOT / "home_moments" / "spoken_assets.json").read_text(encoding="utf-8"))
+    errors, _ = VALIDATOR._validate_admin_home_moment_metadata(source, manifest)
+    return errors
+
+
+def test_admin_home_moment_metadata_accepts_the_shipped_template() -> None:
+    assert _admin_home_moment_errors(VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_admin_home_moment_metadata_rejects_a_stale_cache_bust_token() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "quiet:{file:'quiet.mp3',version:'02fc7d83734a'}",
+        "quiet:{file:'quiet.mp3',version:'deadbeef0000'}",
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("does not match manifest sha256 prefix" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_chip_on_a_gated_scene() -> None:
+    """Presence alone is not proof.
+
+    An earlier version of this guard asked only whether *a* day-one scene wore
+    the chip. A gated scene wearing one tells a fresh install the laundry works
+    today, which narrow ambient context can never deliver.
+    """
+
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "<h5>The laundry finished. Nobody noticed.</h5>",
+        '<h5>The laundry finished. Nobody noticed. <em class="day-one-chip">day one</em></h5>',
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("carries a day-one-chip" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_reachability_swapped_against_the_manifest() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    source = source.replace(
+        'data-explainer-scenario="quiet" data-reachability="day-one"',
+        'data-explainer-scenario="quiet" data-reachability="home-grant"',
+    ).replace(
+        'data-explainer-scenario="laundry" data-reachability="home-grant"',
+        'data-explainer-scenario="laundry" data-reachability="day-one"',
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("but its manifest entry is" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_missing_chip_and_a_missing_scene() -> None:
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    stripped = template.replace(' <em class="day-one-chip">day one</em>', "")
+    assert any("carries no day-one-chip" in error for error in _admin_home_moment_errors(stripped))
+
+    start = template.index('<div class="listening-invitation household-scene" data-explainer-scenario="quiet"')
+    end = template.rindex(
+        '<div class="listening-invitation household-scene"', 0, template.index('data-explainer-scenario="laundry"')
+    )
+    errors = _admin_home_moment_errors(template[:start] + template[end:])
+    assert any("scenes are missing: quiet" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_key_without_a_spoken_noun() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'evening',", "const HOUSEHOLD_EXAMPLE_NOUNS={"
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("HOUSEHOLD_EXAMPLE_NOUNS is missing: quiet" in error for error in errors), errors
+
+
+def test_admin_metadata_rejects_a_home_moment_shadowing_a_narration_clip(tmp_path: Path) -> None:
+    """toggleFirstListenGuide reads HOUSEHOLD_EXAMPLES before FIRST_LISTEN_GUIDES.
+
+    A shared key silently re-points a narration button at a home moment. The two
+    maps are validated against disjoint manifests, so neither can see the other's
+    keys and only the cross-check catches it.
+    """
+
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "quiet:{file:'quiet.mp3',version:'02fc7d83734a'}",
+        "privacy:{file:'quiet.mp3',version:'02fc7d83734a'}",
+    )
+    template_path = tmp_path / "admin.html"
+    template_path.write_text(source, encoding="utf-8")
+
+    home_manifest = json.loads((SHIPPED_AUDIO_ROOT / "home_moments" / "spoken_assets.json").read_text(encoding="utf-8"))
+    for entry in home_manifest["assets"]:
+        if entry["path"] == "quiet.mp3":
+            entry["path"] = "privacy.mp3"
+    guide_manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        guide_manifest,
+        voice_manifest=_free_manifest(),
+        home_moment_manifest=home_manifest,
+        admin_template_path=template_path,
+    )
+    assert any("share keys: privacy" in error for error in errors), errors
+
+
 @pytest.mark.asyncio
 async def test_home_moment_clips_are_public_audio_mpeg() -> None:
     from mammamiradio.web.streamer import router

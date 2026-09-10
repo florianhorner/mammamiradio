@@ -1703,10 +1703,26 @@ async (page) => {
 
     smokeStage='guided-connection';
     const connectionStation=await startAudibleFirstListen({home:false});
-    await assertUnfinished('firstListenPrivacyStep','firstListenMakeYoursBtn');
-    assert(await page.locator('#firstListenConnectionInvite .household-scene').count()===3,'household possibilities are missing from the invitation');
+    await assertUnfinished('firstListenPrivacyStep','firstListenKeepListeningBtn');
+    assert(await page.locator('#firstListenConnectionInvite .household-scene').count()===4,'home moments are missing from the invitation');
     assert(await page.locator('#firstListenConnectionInvite .household-example-play').count()===4,'home moments are not playable');
     assert(await page.evaluate(()=>typeof toggleHouseholdExample==='function'),'household examples lost their play helper');
+    assert(
+      await page.locator('[data-explainer-scenario="quiet"] .day-one-chip').count()===1,
+      'day-one moment lost its visible chip',
+    );
+    await page.locator('[data-household-example="quiet"]').click();
+    await page.waitForFunction(()=>_firstListenUi.guideKey==='quiet'&&!firstListenGuideAudio().paused);
+    const quietDebug=await page.evaluate(()=>({
+      src:firstListenGuideAudio().getAttribute('src'),
+      currentSrc:firstListenGuideAudio().currentSrc,
+    }));
+    assert(
+      /\/static\/audio\/home_moments\/quiet\.mp3\?v=02fc7d83734a/.test(quietDebug.src||quietDebug.currentSrc||''),
+      `day-one moment loaded the wrong source: ${JSON.stringify(quietDebug)}`,
+    );
+    await page.locator('[data-household-example="quiet"]').click();
+    await page.waitForFunction(()=>firstListenGuideAudio().paused);
     await page.locator('[data-household-example="laundry"]').click();
     await page.waitForFunction(()=>_firstListenUi.guideKey==='laundry'&&!firstListenGuideAudio().paused);
     const laundryDebug=await page.evaluate(()=>({

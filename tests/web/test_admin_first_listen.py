@@ -149,35 +149,60 @@ def test_step_three_leads_with_a_day_one_moment_and_marks_the_gated_ones() -> No
     Three of the four scenes need household details narrow mode does not grant
     (mammamiradio/home/authorization.py), so a stack of only those tells a cold
     install its setup is unfinished. docs/explainer refuses to build a page in
-    that state; this is the same refusal for the admin journey. The binding half
-    lives in validate-spoken-assets.py, which fails if the manifest loses its
-    day-one entry or the scene loses its chip.
+    that state; this is the same refusal for the admin journey.
     """
 
     html = _html()
-    moments = html[html.index('class="home-moments"') : html.index('class="setup-note">Staged station moments')]
+    moments = html[html.index('class="home-moments"') : html.index('<div class="guide-audio" data-guide="privacy"')]
     assert moments.count("household-scene") == 4
     # The reachable one leads, so it is read before ~97s of gated demos.
     assert moments.index('data-explainer-scenario="quiet"') < moments.index('data-explainer-scenario="laundry"')
     assert moments.count('data-reachability="day-one"') == 1
     assert moments.count('data-reachability="home-grant"') == 3
-    assert '<em class="day-one-chip">day one</em>' in moments
 
 
-def test_step_three_disclaimer_names_both_gates_not_only_the_key() -> None:
-    """A writing key alone does not unlock the household moments.
+def test_the_day_one_marking_lands_on_the_scene_that_is_actually_reachable() -> None:
+    """Counting the markings is not the same as checking which scene wears them.
 
-    A fresh install resolves to narrow ambient context, so laundry/arrival/kitchen
-    are out of reach whatever the operator pays for. Copy that blames only the key
-    would sell an upgrade that changes nothing.
+    A swap that moves `day-one` onto the laundry while quiet still leads would
+    satisfy the counts above and promise a fresh install something narrow ambient
+    context cannot deliver. validate-spoken-assets.py binds these to the manifest;
+    this pins the pairing in the template itself.
     """
 
     html = _html()
-    note = html[html.index('class="setup-note">Staged station moments') :][:600]
+    scenes = dict(
+        re.findall(
+            r'data-explainer-scenario="([a-z]+)" data-reachability="([a-z-]+)">\s*<h5>(?:.*?)</h5>',
+            html,
+            re.DOTALL,
+        )
+    )
+    assert scenes == {"quiet": "day-one", "laundry": "home-grant", "arrival": "home-grant", "coffee": "home-grant"}
+
+    chipped = re.findall(
+        r'data-explainer-scenario="([a-z]+)" data-reachability="[a-z-]+">\s*<h5>(.*?)</h5>', html, re.DOTALL
+    )
+    assert [key for key, heading in chipped if "day-one-chip" in heading] == ["quiet"]
+
+
+def test_step_three_names_both_gates_before_the_decision_not_after_the_demos() -> None:
+    """A writing key alone does not unlock the household moments.
+
+    A fresh install resolves to narrow ambient context, so laundry/arrival/kitchen
+    are out of reach whatever the operator pays for. The copy that qualifies the
+    choice has to precede the choice, or an assistive-tech user commits first and
+    reads the caveat afterwards.
+    """
+
+    html = _html()
+    invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
+    note = invite[invite.index("On day one your station knows the sky") :][:500]
     assert "weather and daylight" in note
     assert "does not have yet" in note
     assert "writing service" in note
-    assert "isn’t available in this setup yet" not in html
+    assert invite.index("On day one your station knows the sky") < invite.index("first-listen-decision")
+    assert "isn\u2019t available in this setup yet" not in html
 
 
 def test_step_three_decision_precedes_the_demos_and_is_named_by_outcome() -> None:
@@ -192,14 +217,24 @@ def test_step_three_decision_precedes_the_demos_and_is_named_by_outcome() -> Non
     assert invite.index('id="firstListenKeepListeningBtn"') < invite.index('class="home-moments"')
     assert invite.index('id="firstListenMakeYoursBtn"') < invite.index('class="home-moments"')
     # Finishing needs nothing else, so it carries the primary tone.
-    keep = invite[
-        invite.index('id="firstListenKeepListeningBtn"') - 200 : invite.index('id="firstListenKeepListeningBtn"')
-    ]
-    assert "btn-trigger" in keep
+    keep_at = invite.index('id="firstListenKeepListeningBtn"')
+    assert "btn-trigger" in invite[keep_at - 200 : keep_at]
     assert ">Finish with Home private<" in invite
     assert ">Add live host writing<" in invite
     assert ">Keep listening<" not in invite
     assert ">Make the show yours<" not in invite
+
+
+def test_staged_scene_group_does_not_reuse_the_moment_receipts_label() -> None:
+    """ "Home moments" already names real HA ritual history elsewhere in this file.
+
+    Reusing it for staged fakes gives a screen reader one label for two opposite
+    things.
+    """
+
+    html = _html()
+    assert 'aria-label="Staged example scenes, not your home"' in html
+    assert html.count('aria-label="Home moments') == 0
 
 
 def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() -> None:

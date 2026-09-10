@@ -2,7 +2,6 @@
   "schema_version": 1,
   "bundle": "first-listen-home-moments",
   "source": "docs/explainer/public/audio",
-  "pr": 1003,
   "note": "Staged explainer station segments. Not part of the First Listen spoken-asset inventory. quiet.mp3 is the day-one moment a fresh install can actually reach.",
   "assets": [
     {

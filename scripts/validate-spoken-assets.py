@@ -651,6 +651,13 @@ class _GuideTranscriptParser(HTMLParser):
 
 _GUIDE_MAP_PATTERN = re.compile(r"const\s+FIRST_LISTEN_GUIDES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
 _HOME_MOMENT_MAP_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
+_HOME_MOMENT_NOUN_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLE_NOUNS\s*=\s*\{(?P<body>[^}]*)\}")
+_HOME_MOMENT_NOUN_ENTRY_PATTERN = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]*)\s*:\s*'[^']*'")
+_HOME_MOMENT_SCENE_PATTERN = re.compile(
+    r'<div class="[^"]*household-scene[^"]*"(?P<attrs>[^>]*)>\s*<h5>(?P<h5>.*?)</h5>',
+    re.DOTALL,
+)
+_HOME_MOMENT_SCENE_ATTR_PATTERN = re.compile(r'(?P<name>data-[a-z-]+)="(?P<value>[^"]*)"')
 _GUIDE_ENTRY_PATTERN = re.compile(
     r"(?:'(?P<quoted_key>[^']+)'|(?P<plain_key>[A-Za-z][A-Za-z0-9_-]*))\s*:\s*"
     r"\{\s*file\s*:\s*'(?P<file>[^']+)'\s*,\s*version\s*:\s*'(?P<version>[^']+)'\s*\}"
@@ -836,18 +843,32 @@ def _validate_admin_guide_metadata(
             container_hint="guide-audio data-guide",
         )
     )
-    errors.extend(_validate_admin_home_moment_metadata(source, home_moment_manifest))
+    home_errors, home_keys = _validate_admin_home_moment_metadata(source, home_moment_manifest)
+    errors.extend(home_errors)
+    # toggleFirstListenGuide reads HOUSEHOLD_EXAMPLES before FIRST_LISTEN_GUIDES, so a
+    # shared key silently re-points a narration button at a home moment. The two maps
+    # are validated against disjoint manifests, so only this check can see it.
+    shared = sorted(set(guide_entries) & home_keys)
+    if shared:
+        errors.append(
+            f"admin FIRST_LISTEN_GUIDES and HOUSEHOLD_EXAMPLES share keys: {', '.join(shared)}; "
+            "the home moment would shadow the narration clip"
+        )
     return errors
 
 
-def _validate_admin_home_moment_metadata(source: str, manifest: dict | None) -> list[str]:
-    """Hold the Step 3 demo pack to the same binding as the narration guides."""
+def _validate_admin_home_moment_metadata(source: str, manifest: dict | None) -> tuple[list[str], set]:
+    """Hold the Step 3 demo pack to the same binding as the narration guides.
+
+    Returns its errors plus the declared key set, so the caller can check the two
+    audio maps do not shadow each other.
+    """
 
     if manifest is None:
-        return []
+        return [], set()
     raw_assets = manifest.get("assets")
     if not isinstance(raw_assets, list):
-        return []  # validate_home_moments reports the malformed inventory.
+        return [], set()  # validate_home_moments reports the malformed inventory.
     expected = {
         Path(entry["path"]).stem: entry
         for entry in raw_assets
@@ -872,30 +893,94 @@ def _validate_admin_home_moment_metadata(source: str, manifest: dict | None) -> 
         )
     )
 
-    # The honesty guard. docs/explainer/scripts/build.mjs refuses to build a page
-    # that demonstrates only gated capability; Step 3 makes the same promise to a
-    # cold install and needs the same refusal. Without this, dropping the day-one
-    # scene is a silent copy edit.
-    day_one = sorted(
-        key
-        for key, entry in expected.items()
-        if isinstance(entry, dict) and entry.get("reachability") == HOME_MOMENT_DAY_ONE
-    )
-    if not day_one:
+    errors.extend(_validate_home_moment_nouns(source, set(expected)))
+    errors.extend(_validate_home_moment_reachability(source, expected))
+    return errors, set(expected)
+
+
+def _validate_home_moment_nouns(source: str, expected_keys: set) -> list[str]:
+    """Every playable key needs a spoken noun, or its button label degrades silently.
+
+    A key without one falls through to the generic "recording" in
+    ``firstListenGuideLabel``, which reads as a narration clip rather than a
+    scene. Nothing else notices.
+    """
+
+    match = _HOME_MOMENT_NOUN_PATTERN.search(source)
+    if match is None:
+        return ["admin HOUSEHOLD_EXAMPLE_NOUNS map is missing"]
+    declared = {entry.group("key") for entry in _HOME_MOMENT_NOUN_ENTRY_PATTERN.finditer(match.group("body"))}
+    errors = []
+    missing = sorted(expected_keys - declared)
+    unexpected = sorted(declared - expected_keys)
+    if missing:
+        errors.append(f"admin HOUSEHOLD_EXAMPLE_NOUNS is missing: {', '.join(missing)}")
+    if unexpected:
+        errors.append(f"admin HOUSEHOLD_EXAMPLE_NOUNS has unexpected keys: {', '.join(unexpected)}")
+    return errors
+
+
+def _validate_home_moment_reachability(source: str, expected: dict) -> list[str]:
+    """Bind every scene's visible day-one boundary to the manifest.
+
+    docs/explainer/scripts/build.mjs refuses to build a page that demonstrates
+    only gated capability; Step 3 makes the same promise to a cold install and
+    needs the same refusal.
+
+    Presence alone is not enough, and an earlier version of this check made that
+    mistake: it asked whether *a* day-one scene carried the chip and never asked
+    whether a gated one carried it too. A ``home-grant`` scene wearing the chip
+    tells a fresh install that the laundry works today, which narrow ambient
+    context can never deliver -- the exact drift this guard exists to stop. So
+    the binding runs both ways, per scene.
+    """
+
+    errors: list[str] = []
+    manifest_reach = {key: entry.get("reachability") for key, entry in expected.items() if isinstance(entry, dict)}
+    if HOME_MOMENT_DAY_ONE not in manifest_reach.values():
         errors.append(
             "admin home moments demonstrate only gated capability: no manifest entry is "
             f"reachability {HOME_MOMENT_DAY_ONE!r}"
         )
-    for key in day_one:
-        scene = re.search(
-            r'<div class="[^"]*household-scene[^"]*" data-explainer-scenario="' + re.escape(key) + r'"[^>]*>(.*?)</h5>',
-            source,
-            re.DOTALL,
+
+    scenes: dict = {}
+    for match in _HOME_MOMENT_SCENE_PATTERN.finditer(source):
+        attrs = dict(
+            (attr.group("name"), attr.group("value"))
+            for attr in _HOME_MOMENT_SCENE_ATTR_PATTERN.finditer(match.group("attrs"))
         )
-        if scene is None:
-            errors.append(f"admin home moment {key} is reachability {HOME_MOMENT_DAY_ONE!r} but has no scene in Step 3")
-        elif "day-one-chip" not in scene.group(1):
-            errors.append(f"admin home moment {key} scene must carry a day-one-chip so the boundary is visible")
+        key = attrs.get("data-explainer-scenario")
+        if key is None:
+            errors.append("admin home moment scene is missing data-explainer-scenario")
+            continue
+        if key in scenes:
+            errors.append(f"admin home moment scene {key} is declared more than once")
+        scenes[key] = (attrs.get("data-reachability"), match.group("h5"))
+
+    missing_scenes = sorted(set(manifest_reach) - set(scenes))
+    unexpected_scenes = sorted(set(scenes) - set(manifest_reach))
+    if missing_scenes:
+        errors.append(f"admin home moment scenes are missing: {', '.join(missing_scenes)}")
+    if unexpected_scenes:
+        errors.append(f"admin home moment scenes have unexpected keys: {', '.join(unexpected_scenes)}")
+
+    for key in sorted(set(manifest_reach) & set(scenes)):
+        declared, heading = scenes[key]
+        manifest_value = manifest_reach[key]
+        if declared != manifest_value:
+            errors.append(
+                f"admin home moment scene {key} declares data-reachability {declared!r} "
+                f"but its manifest entry is {manifest_value!r}"
+            )
+            continue
+        chipped = "day-one-chip" in heading
+        if manifest_value == HOME_MOMENT_DAY_ONE and not chipped:
+            errors.append(f"admin home moment {key} is reachable today but its scene carries no day-one-chip")
+        elif manifest_value != HOME_MOMENT_DAY_ONE and chipped:
+            errors.append(
+                f"admin home moment {key} is {manifest_value!r} but its scene carries a day-one-chip, "
+                "promising a fresh install something it cannot reach"
+            )
     return errors
 
 

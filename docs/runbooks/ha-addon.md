@@ -132,13 +132,15 @@ speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, **Make it yours** opens with the choice — **Finish with
-Home private** (primary) or **Add live host writing** — above four playable
-staged scenes from the explainer pack. The lead scene, **Hear the evening**,
+audible verification, **Make it yours** states the day-one boundary, then offers
+the choice — **Finish with Home private** (primary) or **Add live host
+writing** — and only then the four playable staged scenes from the explainer
+pack. Verify that order: the note qualifying the choice must precede the choice,
+not sit under two minutes of demos. The lead scene, **Hear the evening**,
 carries a `day one` chip: it is the only one a fresh install can actually
 reach, because narrow ambient context grants weather and daylight and nothing
 else. Laundry, arrival and kitchen need household details a fresh station does
-not have, which no key unlocks; verify the note below the scenes says so.
+not have, which no key unlocks.
 **Hear weather become a bit** is the Home-details recording. Choosing to share
 still runs through a fresh filtered preview before **Let Marco and Giulia use
 these details**. If only generic daylight is available, verify that it is
@@ -147,8 +149,9 @@ path recommended.
 
 The staged scenes are byte copies of `docs/explainer/public/audio`, bound to
 that pack by `scripts/validate-spoken-assets.py`. The same gate refuses a pack
-with no `reachability: day-one` entry, so Step 3 can never demonstrate only
-gated capability.
+with no `reachability: day-one` entry, and refuses a gated scene that wears the
+`day one` chip, so Step 3 can neither demonstrate only gated capability nor
+mislabel a gated moment as reachable.
 
 **Your ongoing show** is optional. **Hear the studio voices** and **Hear the
 free voices** play recordings. With the default setup, new conversations use

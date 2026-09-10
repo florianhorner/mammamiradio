@@ -42,7 +42,7 @@ body[data-local-player="on"] .undo-toast-btn { min-width: 44px; min-height: 44px
 .first-listen-player a { display: inline-block; align-content: center; color: var(--sun); }
 .first-listen-player :is(button, summary, a):focus-visible { outline: 3px solid var(--sun); outline-offset: 3px; }
 .guide-audio-error { color: var(--cream); }
-.guide-audio:not([data-state="error"]) .guide-audio-error { display: none; }
+:is(.guide-audio, .household-example):not([data-state="error"]) .guide-audio-error { display: none; }
 
 .first-listen-panel,
 .first-listen-success,

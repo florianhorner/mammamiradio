@@ -2621,13 +2621,14 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <h4 class="benefit-heading">Your home becomes part of the show.</h4>
                     <p class="use-copy">Home Assistant can give the hosts material from your world: a finished wash, a homecoming, the kitchen temperature. Ordinary details. Very serious radio.</p>
                     <p class="use-copy">Music and recorded host moments are already yours. Connect a writing service for new conversations, choose their voices, then preview the Home Assistant details you want to share.</p>
+                    <p class="setup-note">On day one your station knows the sky: weather and daylight, which is the evening moment below and works on a fresh install. The laundry, the arrival and the kitchen need household details a fresh station does not have yet; those arrive with a later update. New host lines of any kind need a writing service — add one below, or keep listening without.</p>
                     <p class="setup-note" id="firstListenConnectionPromise">No keys needed to start listening. Home stays private until you choose otherwise. Connected services may charge for use.</p>
                     <div class="first-listen-actions first-listen-decision">
                       <button type="button" class="btn btn-trigger first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Finish with Home private</button>
                       <button type="button" class="btn btn-util first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Add live host writing</button>
                     </div>
-                    <p class="setup-note">Or hear what the hosts do with a home first.</p>
-                    <div class="home-moments" aria-label="Home moments Marco and Giulia can use">
+                    <p class="setup-note">Or hear what the hosts do with a home first. These are staged station moments, not readings from your home.</p>
+                    <div class="home-moments" aria-label="Staged example scenes, not your home">
                       <div class="listening-invitation household-scene" data-explainer-scenario="quiet" data-reachability="day-one">
                         <h5>Evening, officially. <em class="day-one-chip">day one</em></h5>
                         <p class="scene-caption">Sunset · clear night · eleven degrees</p>
@@ -2669,7 +2670,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                         </div>
                       </div>
                     </div>
-                    <p class="setup-note">Staged station moments, not readings from your home. On day one your station knows the sky: weather and daylight. That is the evening moment above, and it works on a fresh install. The laundry, the arrival and the kitchen need household details a fresh station does not have yet; those arrive with a later update. New host lines of any kind need a writing service — add one below, or keep listening without.</p>
                     <div class="guide-audio" data-guide="privacy">
                       <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Hear weather become a bit</button>
                       <p class="guide-audio-copy" id="guidePrivacyNote"><strong>Rain cancels Marco’s rooftop disco.</strong><span>Recorded scene · invented weather · 10 seconds on this device</span></p>
@@ -5692,9 +5692,7 @@ function renderFirstListenConnection(){
   document.getElementById('firstListenAiHeading').textContent=stage==='voices'?'Choose how they sound.':'Give them something new to say.';
   document.getElementById('firstListenConnectionCopy').textContent=stage==='voices'?'Choose the voices for new conversations.':'Connect a service that writes fresh host moments between songs. You can keep listening while you set this up.';
   document.getElementById('firstListenVoiceStory').hidden=stage!=='voices';
-  // Both key stages keep the escape hatch: hiding it on `voices` left Back and
-  // Escape as the only ways out of an optional trail.
-  document.getElementById('firstListenConnectionSkip').hidden=false;
+  document.getElementById('firstListenConnectionSkip').hidden=stage==='voices';
   document.getElementById('firstListenConnectionNext').textContent=stage==='voices'?'Choose what the hosts know':'Choose the voices';
   document.getElementById('setupSaveBtn').textContent=_firstListenUi.keySaving?'Saving…':stage==='voices'?'Save voice service':'Connect writing';
   const evidence=stage==='voices'?firstListenVoiceEvidence():firstListenConnectionEvidence();
