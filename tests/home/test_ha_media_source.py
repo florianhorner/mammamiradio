@@ -306,7 +306,7 @@ def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
     assert "no provider account or network music source is required" in rendered
     assert "**Host home context** choice is omitted and remains off" in rendered
     assert "Previewing does not publish the snapshot into host scripts or send it to an AI provider" in rendered
-    assert "### Check the app (operators)" in readme
+    assert "## Operator checks" in readme
 
 
 def test_optional_ha_playback_docs_keep_the_frozen_media_source_way_out() -> None:
