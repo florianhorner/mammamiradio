@@ -197,9 +197,33 @@ target="$(git rev-parse HEAD 2>/dev/null)" || exit 0
 [ -z "$target" ] && exit 0
 
 # Prefer an explicit --base on the command; fall back to the usual default branch.
-base_ref="$(printf '%s' "$cmd" | sed -n 's/.*--base[ =]\{1,\}\([A-Za-z0-9._/-]\{1,\}\).*/\1/p' | head -1)"
-[ -z "$base_ref" ] && base_ref="origin/main"
-base="$(git rev-parse "$base_ref" 2>/dev/null || git rev-parse origin/main 2>/dev/null)" || exit 0
+# First match wins: flags precede long --body/--title prose, and a base mis-read
+# out of that prose resolves to nothing and falls open below rather than denying.
+base_ref=""
+prev=""
+for token in $cmd; do
+  token="$(strip_hook_quotes "$token")"
+  case "$token" in
+    --base=*) base_ref="${token#--base=}"; break ;;
+  esac
+  [ "$prev" = "--base" ] && { base_ref="$token"; break; }
+  prev="$token"
+done
+[ -z "$base_ref" ] && base_ref="main"
+
+# A bare `main` is the stale LOCAL branch; the PR is cut against the remote, and
+# the two disagree often enough to render a different verdict on the same HEAD.
+base_sha="$(git rev-parse "origin/$base_ref" 2>/dev/null \
+  || git rev-parse "$base_ref" 2>/dev/null)" || exit 0
+[ -z "$base_sha" ] && exit 0
+
+# Verify against the FORK POINT, never the base tip. Being behind origin/main is
+# the normal state at PR-open, and the checker rejects a base that is not an
+# ancestor of the target with a `landing-evidence:` verdict — which would read as
+# "no receipt" and deny a PR whose only fault is needing an integrate, with a
+# remedy (emit a receipt) that cannot fix it. land-pr.sh treats behind-ness as
+# "integrate and come back"; this hook must not turn it into a block.
+base="$(git merge-base "$base_sha" HEAD 2>/dev/null)" || exit 0
 [ -z "$base" ] && exit 0
 
 evidence_out="$(bash "$evidence_checker" --v2 --target "$target" --base "$base" --mode pr 2>&1)"
@@ -209,7 +233,9 @@ evidence_rc=$?
 # Non-zero without a verdict means the checker could not run. Stay out of the way.
 printf '%s' "$evidence_out" | grep -q 'landing-evidence:' || exit 0
 
-reason="$(printf '%s' "$evidence_out" | tr '\n' ' ' | sed 's/"/\\"/g')"
+# Escape backslashes before quotes, and drop control characters: an unparseable
+# deny payload is silently discarded, which would retire this rule without a trace.
+reason="$(printf '%s' "$evidence_out" | tr '\n' ' ' | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g')"
 cat <<JSON
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pre-ship squad is logged but its v2 receipt does not cover HEAD, so this PR would be refused at landing. Run scripts/emit-review-evidence.sh, commit the receipt it writes under proof/preship-reviews/v2/, then open the PR. Checker said: ${reason}"}}
 JSON

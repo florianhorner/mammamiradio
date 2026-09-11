@@ -353,5 +353,40 @@ printf '%s' "$DENY_OUT" | jq -e . >/dev/null 2>&1 \
   || fail "deny payload must stay valid JSON once the checker output is embedded"
 pass "deny message names the remedy and stays valid JSON"
 
+# Case 22: a branch BEHIND the base must not be denied.
+# The checker rejects a base that is not an ancestor of the target, and that
+# message carries the landing-evidence: prefix. Verifying against the base tip
+# would read it as "no receipt" and block a PR whose only fault is needing an
+# integrate — a remedy the deny message cannot offer. The hook verifies against
+# the fork point instead, so this case exercises the real checker end to end.
+BEHIND_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create --base main"}}' \
+  | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" bash "$HOOK" 2>/dev/null || true)"
+printf '%s' "$BEHIND_OUT" | grep -q 'is not an ancestor of target' \
+  && fail "hook must verify against the fork point, not the base tip (behind-base false deny)"
+pass "behind-base branch not denied for ancestry"
+
+# Case 23: --base=VALUE form is parsed
+[ "$(verdict '{"tool_input":{"command":"gh pr create --base=main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "--base=VALUE form should still reach the receipt rule"
+pass "--base=VALUE parsed"
+
+# Case 24: a --base mentioned only inside --body prose must not swap the base.
+# First-match-wins plus fail-open on an unresolvable ref keeps this harmless.
+[ "$(verdict '{"tool_input":{"command":"gh pr create --base main --body see --base nonexistent-ref"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "a --base inside body prose must not derail the real base"
+pass "body-prose --base does not derail the base"
+
+# Case 25: checker output containing a backslash must still yield valid JSON.
+# An unparseable deny is silently dropped, which retires the rule without a trace.
+EVIDENCE_BACKSLASH="$(make_evidence 1 'landing-evidence: FAIL — receipt proof\v2\r.json is "wrong"')"
+BS_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create"}}' \
+  | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_BACKSLASH" \
+    bash "$HOOK" 2>/dev/null || true)"
+printf '%s' "$BS_OUT" | jq -e . >/dev/null 2>&1 \
+  || fail "deny payload must stay valid JSON when checker output contains backslashes or quotes"
+printf '%s' "$BS_OUT" | grep -q '"permissionDecision":"deny"' \
+  || fail "backslash-bearing checker output must still deny"
+pass "backslash/quote checker output stays valid JSON"
+
 echo
-echo "All 40 pre-ship squad gate cases passed."
+echo "All 47 pre-ship squad gate cases passed."
