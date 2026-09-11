@@ -27,6 +27,7 @@ from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.imaging_schema import MAX_RECIPE_GAIN_DB, MIN_RECIPE_GAIN_DB
 from mammamiradio.audio.normalizer import (
     DEFAULT_CONCAT_SILENCE_MS,
+    _compressing,
     concat_files,
     generate_brand_motif,
     generate_foley_loop,
@@ -838,6 +839,57 @@ def _schedule_paid_provider_success(
         logger.debug("Paid TTS accounting callback skipped because the event loop is closed")
 
 
+def _has_audible_audio(path: Path) -> bool:
+    """Cheap degenerate-output check: did the pass leave anything to play?
+
+    A silence filter can legitimately return an empty stream. That is fine for a
+    trim and fatal for a spoken line, so the caller falls back rather than
+    queueing a hole in the ad.
+    """
+    try:
+        if path.stat().st_size < _MIN_DIALOGUE_LINE_BYTES:
+            return False
+    except OSError:
+        return False
+    duration = probe_duration_sec(path)
+    return duration is not None and duration >= _MIN_DIALOGUE_LINE_DURATION_SEC
+
+
+def _normalize_tolerating_tempo(raw_path: Path, output_path: Path, loudnorm: bool, tempo: float) -> Path:
+    """Normalize, and never let the cosmetic speed-up be what kills a segment.
+
+    Two hazards this closes, both inside the caller's ``except`` that memoizes a
+    failed Edge voice for the whole session:
+
+    * an ffmpeg failure in the time-compression pass is not evidence the VOICE is
+      bad, but it lands in the same handler and would blacklist the station's
+      house voice for every later banter, station ID and time check;
+    * the fine print is decorative. Airing it at normal speed is a worse joke;
+      airing nothing is dead air, which the illusion never survives.
+
+    So a tempo render that fails is retried once at normal speed. Only a failure
+    that persists without the filter is a real synthesis failure and propagates.
+    """
+    try:
+        result = normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo)
+        if not _compressing(tempo) or _has_audible_audio(result):
+            return result
+        logger.warning(
+            "Time-compression produced no usable audio for %s; airing the line at normal speed",
+            output_path.name,
+        )
+    except Exception as exc:
+        if not _compressing(tempo):
+            raise
+        logger.warning(
+            "Time-compression failed for %s (%s); airing the line at normal speed",
+            output_path.name,
+            exc,
+        )
+        return normalize(raw_path, output_path, loudnorm=loudnorm)
+    return normalize(raw_path, output_path, loudnorm=loudnorm)
+
+
 async def synthesize_openai(
     text: str,
     voice: str,
@@ -883,7 +935,7 @@ async def synthesize_openai(
         )
         raw_path.write_bytes(audio_bytes)
 
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
+        await loop.run_in_executor(None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])  # clean up orphaned raw file on any failure
@@ -939,7 +991,7 @@ async def synthesize_azure(
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
+        await loop.run_in_executor(None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])
@@ -1109,7 +1161,7 @@ async def synthesize_elevenlabs(
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
+        await loop.run_in_executor(None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])
@@ -1447,7 +1499,9 @@ async def synthesize(
             await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
 
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
+            await loop.run_in_executor(
+                None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo)
+            )
             _unlink_many([raw_path])
 
             if fallback_reason:
@@ -1491,7 +1545,7 @@ async def synthesize(
                     await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
-                        None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo)
+                        None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo)
                     )
                     _unlink_many([raw_path])
                     character = f" character={host_name}" if host_name else ""
@@ -1661,7 +1715,9 @@ async def synthesize_ad(
     async def _render_part(part, part_path):
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
-            # Legal disclaimers are format-scoped, not accidental role spikes.
+            # Fine print is one tempo in every format and on every engine, see
+            # DISCLAIMER_TEMPO. Format-scoped rates are what left five of six
+            # formats with no rattle at all.
             extra: dict[str, object] = {
                 "engine": voice_for_part.engine,
                 "edge_fallback_voice": voice_for_part.edge_fallback_voice,

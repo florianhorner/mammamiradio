@@ -5282,3 +5282,67 @@ async def test_synthesize_ad_recipe_restore_skips_motif_without_signature(_mock_
     assert result.exists()
     _mock_all["generate_sfx"].assert_called_once()
     _mock_all["generate_brand_motif"].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renderer", ["elevenlabs", "openai", "azure"])
+async def test_cloud_renderer_bodies_forward_tempo_to_normalize(_mock_all, tmp_path, monkeypatch, renderer):
+    """Execute the renderer bodies, not a stub of them.
+
+    The engine-matrix test above monkeypatches the three renderers wholesale, so
+    it proves synthesize() passes the kwarg to the boundary and nothing about
+    what happens inside. Deleting the tempo forward from any renderer body would
+    break every cloud voice with no test failing. That is the same shape as the
+    bug this branch exists to fix: a parameter accepted at the signature and
+    dropped inside.
+    """
+    from mammamiradio.audio import tts as tts_mod
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kwargs):
+            return httpx.Response(200, content=b"\x00" * 2048, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _Client)
+    out = tmp_path / "line.mp3"
+
+    if renderer == "elevenlabs":
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+        await tts_mod.synthesize_elevenlabs("fine print", "voice-id", out, api_key="k", tempo=1.95)
+    elif renderer == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+        class _Resp:
+            content = b"\x00" * 2048
+
+        class _Speech:
+            @staticmethod
+            def create(**kwargs):
+                return _Resp()
+
+        class _Audio:
+            speech = _Speech()
+
+        class _OpenAI:
+            audio = _Audio()
+
+        monkeypatch.setattr("mammamiradio.audio.tts._get_openai_client", lambda api_key: _OpenAI())
+        await tts_mod.synthesize_openai("fine print", "coral", out, api_key="k", tempo=1.95)
+    else:
+        monkeypatch.setenv("AZURE_SPEECH_KEY", "k")
+        await tts_mod.synthesize_azure(
+            "fine print", "it-IT-DiegoNeural", out, api_key="k", region="westeurope", tempo=1.95
+        )
+
+    tempos = [(c.kwargs or {}).get("tempo", 1.0) for c in _mock_all["normalize"].call_args_list]
+    assert pytest.approx(DISCLAIMER_TEMPO) in tempos, (
+        f"{renderer} renderer body dropped tempo before normalize(): {tempos}"
+    )

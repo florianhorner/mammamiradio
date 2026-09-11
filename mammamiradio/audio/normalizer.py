@@ -678,10 +678,27 @@ def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
 # Fine print only: remove leading, trailing AND internal silence.  The 0.08s
 # stop_duration is short enough to catch inter-phrase breaths, which the normal
 # 0.3s trailing-only trim leaves in place.
+# -60dB, not -40dB. Measured: at -40dB this filter deletes the ENTIRE signal for
+# any render at or below roughly -26dBFS, emitting a 44-byte file. Ad parts are
+# rendered with loudnorm=False, i.e. raw provider level, which varies by engine —
+# so a quiet voice would have made the fine print vanish instead of rattle. At
+# -60dB the gaps still go (a 5.0s tone/silence/tone/silence/tone source lands at
+# 3.13s) and a -38dBFS render survives intact.
 _SILENCE_ALL_GAPS = (
-    "silenceremove=start_periods=1:start_duration=0:start_threshold=-40dB:"
-    "stop_periods=-1:stop_duration=0.08:stop_threshold=-40dB"
+    "silenceremove=start_periods=1:start_duration=0:start_threshold=-60dB:"
+    "stop_periods=-1:stop_duration=0.08:stop_threshold=-60dB"
 )
+
+
+# Widest band a station segment can sanely use; beyond it the chain length,
+# not the factor, becomes the problem.
+_TEMPO_MIN = 0.25
+_TEMPO_MAX = 4.0
+
+
+def _compressing(tempo: float) -> bool:
+    """True when a tempo is meaningfully different from normal speed."""
+    return bool(tempo) and abs(tempo - 1.0) > 1e-3
 
 
 def _atempo_chain(tempo: float) -> str:
@@ -699,6 +716,13 @@ def _atempo_chain(tempo: float) -> str:
         # the one outcome the audio path must never produce.
         logger.warning("Ignoring non-positive/non-finite tempo %r; rendering at normal speed", tempo)
         return "atempo=1"
+    # Clamp before chaining. Unclamped, 1e300 produced 997 chained WSOLA stages
+    # and an 8979-character filter string — the same "never finishes on a fanless
+    # ARM box" outcome the non-finite guard above exists to prevent.
+    if not _TEMPO_MIN <= remaining <= _TEMPO_MAX:
+        clamped = min(max(remaining, _TEMPO_MIN), _TEMPO_MAX)
+        logger.warning("Tempo %r out of range; clamping to %s", tempo, clamped)
+        remaining = clamped
     factors: list[float] = []
     while remaining > 2.0:
         factors.append(2.0)
@@ -731,15 +755,13 @@ def normalize(
     before the loudness pass: removes subsonic rumble, de-muds compressed audio,
     adds presence, and rolls off HF harshness from lossy re-encoding.
 
-    Set tempo>1.0 to time-compress the audio (ad fine print).  This is a FILTER
-    in the pass this function already runs, deliberately not a separate stage:
-    a stage would take a second mammamiradio.audio.admission slot and add one
-    ffmpeg process per line.  As a filter it measures CHEAPER than the baseline
-    chain (0.82x CPU at tempo=1.55 with -threads 1), because atempo is O(n)
-    time-domain while the shorter stream leaves libmp3lame ~35% fewer samples to
-    Time-compression also strips every silence gap (breaths included) before
-    compressing, which is the fine-print treatment rather than a generic
-    speed-up.
+    Set tempo != 1.0 to time-compress the audio (ad fine print). This is a
+    FILTER appended to the pass this function already runs, deliberately not a
+    separate stage: a stage would take a second mammamiradio.audio.admission
+    slot and add one ffmpeg process per line. Compressing also substitutes the
+    all-gaps silence filter for the trailing-only trim, so breaths go before the
+    compression rather than being compressed along with the speech — that is the
+    fine-print treatment, not a generic speed-up.
     """
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
@@ -768,7 +790,7 @@ def normalize(
     # the source was (e.g. 44.1 kHz from yt-dlp), which can cause audio glitches at stream
     # boundaries. measure_lufs takes ~2-5s on Pi vs 10-75s for a full loudnorm pass.
     # When music_eq is requested, we always re-encode (EQ requires a pass regardless).
-    if loudnorm and not music_eq:
+    if loudnorm and not music_eq and not _compressing(tempo):
         lufs = measure_lufs(input_path, background=background)
         if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
             loudnorm = False  # fall through to the fast format-conversion path below
@@ -782,7 +804,11 @@ def normalize(
         # stop_periods MUST stay negative. A positive stop_periods makes silenceremove
         # halt output at the FIRST silence period, truncating speech at its first
         # inter-phrase pause (host lines collapsed to ~1.6s). -1 trims trailing silence only.
-        silence_trim = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        silence_trim = (
+            _SILENCE_ALL_GAPS
+            if _compressing(tempo)
+            else "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        )
         # Soft fade-in on every final-output segment: music → banter hand-offs
         # used to be a hard cut at full volume. A short ramp-in on the incoming
         # segment turns the perceived "drop" into a gentle entry without
@@ -798,14 +824,21 @@ def normalize(
     else:
         # stop_periods=-1 (negative) trims trailing silence only; a positive value
         # truncates speech at the first pause. See the note in the loudnorm branch above.
-        audio_filter = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        audio_filter = (
+            _SILENCE_ALL_GAPS
+            if _compressing(tempo)
+            else "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        )
 
-    if tempo and abs(tempo - 1.0) > 1e-3:
-        # Fine-print treatment, in this order on purpose: strip EVERY silence gap
-        # first, then time-compress.  The other way round spends compression on
-        # silence, and the surviving breaths are what make a sped-up line read as
-        # "someone talking fast" instead of the legal blur the gag needs.
-        audio_filter = f"{_SILENCE_ALL_GAPS},{_atempo_chain(tempo)}"
+    if _compressing(tempo):
+        # APPEND, never replace: an earlier revision reassigned audio_filter here
+        # and silently dropped loudnorm, music_eq and the fade-in for any caller
+        # that passed both loudnorm=True and a tempo.  The gap-strip is already
+        # substituted for the trailing-only trim above, so compression lands
+        # after every breath is gone — the other order spends compression on
+        # silence and leaves the pauses that make a fast read sound like fast
+        # talking instead of the legal blur the gag needs.
+        audio_filter = f"{audio_filter},{_atempo_chain(tempo)}"
 
     cmd = [
         "ffmpeg",

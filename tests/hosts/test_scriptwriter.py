@@ -33,6 +33,7 @@ from mammamiradio.core.models import (
 from mammamiradio.hosts.ad_creative import (
     AD_FORMATS,
     ALL_FORMATS,
+    DISCLAIMER_ROLE,
     SPEAKER_ROLES,
     AdBrand,
     AdFormat,
@@ -8662,42 +8663,65 @@ def test_resolve_ad_role_keeps_the_disclaimer_role_addressable_when_uncast():
     assert _resolve_ad_role(None, voices) == ""
 
 
-def test_every_ad_format_addresses_the_fine_print_to_the_disclaimer_role():
-    """The rattle must not depend on which roles a format happens to cast.
+def test_format_roles_always_leave_a_character_besides_the_fine_print():
+    """Every format must have someone left to speak once the goblin is excluded.
 
-    _FORMAT_ROLES names a disclaimer_goblin in 1 of 6 formats, but the prompt
-    asks for a fast disclaimer in all 6. This is the test that would have caught
-    the original bug.
+    Asserts the data, not the source text: an earlier version of this test
+    grepped scriptwriter.py for literal lines, so it passed on dead code and
+    would have broken on a reformat.
     """
-    import re
-
     from mammamiradio.hosts.ad_creative import _FORMAT_ROLES, ALL_FORMATS, DISCLAIMER_ROLE
 
-    src = Path("mammamiradio/hosts/scriptwriter.py").read_text()
-    examples = re.findall(r'\{\{"type": "voice", "text": "Fast disclaimer", "role": "\{(\w+)\}"\}\}', src)
-    assert len(examples) == 2, f"expected both parts_example branches, found {examples}"
-    assert set(examples) == {"DISCLAIMER_ROLE"}, f"fine print addressed to {examples}, not DISCLAIMER_ROLE"
-
-    # The middle character line must not share the disclaimer's slot.
-    middles = re.findall(r'\{\{"type": "voice", "text": "More ad copy", "role": "\{(\w+)\}"\}\}', src)
-    assert len(middles) == 2 and set(middles) == {"second_role"}, middles
-
-    # And every format really does have a character role left to speak.
     for fmt in ALL_FORMATS:
         characters = [r for r in _FORMAT_ROLES[fmt] if r != DISCLAIMER_ROLE]
         assert characters, f"{fmt} has no character role once the disclaimer is excluded"
 
 
-def test_ad_prompt_forbids_faking_speed_in_the_text():
+@pytest.mark.asyncio
+async def test_ad_prompt_forbids_faking_speed_in_the_text(config, state):
     """The model glues words together to fake speed; that renders SLOWER.
 
-    A hyphen chain makes Edge insert pauses. Measured 8/18 disclaimer parts
-    mangled before this rule, 0/12 after.
+    Asserts against the rendered prompt rather than the source file.
     """
-    src = Path("mammamiradio/hosts/scriptwriter.py").read_text()
-    assert "never run words together" in src
-    assert "never join them with hyphens" in src
-    assert "copied exactly" in src, "the role-token rule went missing"
+    captured = {}
+
+    async def _capture(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"parts": [{"type": "voice", "text": "Copy.", "role": "hammer"}]}
+
+    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
+        await write_ad(brand, voices, state, config, ad_format="classic_pitch")
+
+    prompt = captured["prompt"]
+    assert "never run words together" in prompt
+    assert "never join them with hyphens" in prompt
+    assert "copied exactly" in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ad_format", list(ALL_FORMATS))
+async def test_the_fine_print_rule_reaches_every_format(config, state, ad_format):
+    """classic_pitch is the one format that casts the goblin, and was the only
+    one whose roster omitted the never-for-sales-copy rule."""
+    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES
+
+    captured = {}
+
+    async def _capture(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"parts": [{"type": "voice", "text": "Copy.", "role": _FORMAT_ROLES[ad_format][0]}]}
+
+    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    voices = {
+        r: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=r)
+        for i, r in enumerate(_FORMAT_ROLES[ad_format])
+    }
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
+        await write_ad(brand, voices, state, config, ad_format=ad_format)
+
+    assert "never for sales copy" in captured["prompt"], f"{ad_format} roster omits the fine-print restriction"
 
 
 @pytest.mark.asyncio
@@ -8806,3 +8830,85 @@ async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad
     )
     assert DISCLAIMER_ROLE in listed, f"{ad_format}: fine-print role missing from SPEAKERS"
     assert DISCLAIMER_ROLE in requested, f"{ad_format}: fine print not addressed to the rate-gated role"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("roles", "expected_format"),
+    [
+        (["hammer", DISCLAIMER_ROLE], AdFormat.CLASSIC_PITCH),
+        (["hammer", "maniac", DISCLAIMER_ROLE], AdFormat.DUO_SCENE),
+    ],
+)
+async def test_duo_demotion_counts_characters_not_the_fine_print(config, state, roles, expected_format):
+    """A duo that is really one announcer plus a disclaimer is a classic pitch.
+
+    The fine print is addressed in every format now, so counting it as a role
+    would let a single-voice duo keep its label — and that label reaches
+    ad_history, last_ad_script and the admin card.
+    """
+    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    voices = {r: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=r) for i, r in enumerate(roles)}
+    parts = [{"type": "voice", "text": f"Line for {r}.", "role": r} for r in roles]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"parts": parts, "summary": "s"},
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format="duo_scene")
+
+    assert result.format == expected_format
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["tech", "pharma"])
+async def test_a_script_labelled_all_fine_print_still_speaks_the_brand(config, state, category):
+    """Guard against an ad that is nothing but blur.
+
+    DISCLAIMER_ROLE is named in every format's SPEAKERS block and
+    _resolve_ad_role coerces spelling variants onto it, so a model that labels
+    several lines "disclaimer" would have all of them time-compressed. Observed
+    before the cap: brand name and tagline both aired as blur, and the pharma
+    filter removed the sales copy entirely.
+    """
+    # Super Italian keeps the Italian copy below from being rejected by the
+    # Normal Mode language guard, which would return a one-part fallback and
+    # make this assertion pass without ever exercising the cap.
+    config.super_italian_mode = True
+    brand = AdBrand(name="Capellissimo", tagline="Circa.", category=category)
+    voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [
+                {"type": "voice", "text": "Capellissimo, i capelli dei sogni!", "role": "DISCLAIMER_GOBLIN"},
+                {"type": "voice", "text": "Solo oggi, prezzo speciale.", "role": "Disclaimer Goblin (V)"},
+                {"type": "voice", "text": "Capellissimo. Circa.", "role": "disclaimer_goblin"},
+            ],
+            "summary": "s",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format="classic_pitch")
+
+    assert not result.summary.startswith("Fallback"), (
+        "the language guard replaced the script; this test would pass vacuously"
+    )
+    spoken = [p for p in result.parts if p.type == "voice" and p.text]
+    compressed = [p for p in spoken if p.role == DISCLAIMER_ROLE]
+    assert len(compressed) <= 1, f"{len(compressed)} parts would be time-compressed, expected at most 1"
+    assert any(p.role != DISCLAIMER_ROLE for p in spoken), "nothing would air at normal speed"
+    assert any("Capellissimo" in p.text for p in spoken if p.role != DISCLAIMER_ROLE), (
+        "the brand name is only ever spoken as blur"
+    )
+
+
+def test_resolve_ad_role_accepts_a_space_separated_label():
+    """The model spaces the token as often as it underscores it."""
+    from mammamiradio.hosts.scriptwriter import _resolve_ad_role
+
+    voices = {"hammer": AdVoice(name="V", voice="v", style="s", role="hammer")}
+    assert _resolve_ad_role("Disclaimer Goblin", voices) == DISCLAIMER_ROLE
+    assert _resolve_ad_role("DISCLAIMER GOBLIN (V)", voices) == DISCLAIMER_ROLE

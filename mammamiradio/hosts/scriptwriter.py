@@ -46,6 +46,7 @@ from mammamiradio.core.models import (
     listener_request_pin_revision,
 )
 from mammamiradio.hosts.ad_creative import (
+    _FORMAT_ROLES,
     AD_FORMATS,
     DISCLAIMER_ROLE,
     SONIC_ENVIRONMENTS,
@@ -3696,14 +3697,57 @@ def _resolve_ad_role(raw_role: object, voices: dict[str, AdVoice]) -> str:
     role = str(raw_role or "").strip()
     if not role or role in voices:
         return role
-    candidate = role.split("(")[0].strip() if "(" in role else role
-    folded = candidate.casefold()
+    # Cut at the first separator the roster can put after the token, then strip
+    # every non-alphanumeric so quoting, spacing and casing all collapse. The
+    # roster format has already changed once under this parser: it used to read
+    # `BUREAUCRAT (Nonno Aldo)` and now reads `"bureaucrat" - Nonno Aldo`, so
+    # matching a specific decoration is what breaks next time.
+    candidate = re.split(r"[(\u2014:,]|\s-\s", role, maxsplit=1)[0]
+    folded = re.sub(r"[^a-z0-9]", "", candidate.casefold())
+    if not folded:
+        return role
     for key in voices:
-        if key.casefold() == folded:
+        if re.sub(r"[^a-z0-9]", "", key.casefold()) == folded:
             return key
-    if folded == DISCLAIMER_ROLE:
+    if folded == re.sub(r"[^a-z0-9]", "", DISCLAIMER_ROLE):
         return DISCLAIMER_ROLE
     return role
+
+
+def _cap_disclaimer_parts(parts: list[AdPart], fallback_role: str) -> list[AdPart]:
+    """Keep at most ONE fine-print part, and never let it be the whole ad.
+
+    DISCLAIMER_ROLE is now named in every format's SPEAKERS block and
+    ``_resolve_ad_role`` deliberately coerces spelling variants onto it, so a
+    model that labels several lines "disclaimer" would have every one of them
+    time-compressed.  Observed live: a spot whose brand name and tagline both
+    aired as a 1.95x blur, and a pharma spot whose brand name was never spoken
+    at all once the canonical-tail filter removed the mislabelled copy.
+
+    The fine print is the closing line, so the LAST disclaimer-labelled voice
+    part keeps the role and any earlier one is demoted to a speaking role.
+    """
+    voice_parts = [p for p in parts if p.type == "voice" and p.text]
+    disclaimers = [p for p in voice_parts if p.role == DISCLAIMER_ROLE]
+    if len(disclaimers) < 2:
+        return parts
+    keep = disclaimers[-1]
+    # A fallback that IS the disclaimer role would be a no-op logging a false
+    # success. Reachable: a campaign may legitimately pin the goblin as its
+    # spokesperson, so the caller's primary role can be this very token.
+    safe_role = fallback_role if fallback_role and fallback_role != DISCLAIMER_ROLE else "hammer"
+    demoted = 0
+    for part in disclaimers:
+        if part is not keep:
+            part.role = safe_role
+            demoted += 1
+    logger.warning(
+        "Ad script labelled %d parts as fine print; demoted %d to %r so the spot is not all blur",
+        len(disclaimers),
+        demoted,
+        safe_role,
+    )
+    return parts
 
 
 def _pharma_disclaimer_text(config: StationConfig) -> str:
@@ -4064,9 +4108,7 @@ CAMPAIGN SPINE:
         # is missing from it.  A self-inconsistent prompt is what put the roster
         # and the example out of step in the first place.
         speaker_lines.append(
-            f'- "{DISCLAIMER_ROLE}" — {SPEAKER_ROLES[DISCLAIMER_ROLE]} '
-            "Use this role for the closing fine print ONLY, never for sales copy; "
-            "it is spoken by the same voice as the rest of the spot."
+            f'- "{DISCLAIMER_ROLE}" — {SPEAKER_ROLES[DISCLAIMER_ROLE]} It is read by the spot\'s opening voice.'
         )
     speakers_block = "\n".join(speaker_lines)
 
@@ -4189,6 +4231,10 @@ Return JSON:
                 )
             )
 
+        # A fine-print label on several lines would time-compress most of the
+        # spot; keep one and give the rest a speaking role.
+        parts = _cap_disclaimer_parts(parts, direct_primary_role or _FORMAT_ROLES.get(ad_format, ["hammer"])[0])
+
         # Ensure we have at least one voice part
         used_owned_fallback = False
         if not any(p.type == "voice" for p in parts):
@@ -4258,7 +4304,19 @@ Return JSON:
             # disclaimer role is addressed in every format the model nearly
             # always writes one, so "skip if a disclaimer exists" would retire
             # this text permanently.  Drop the model's version and end on ours.
+            # _cap_disclaimer_parts guarantees at most one of these, so this
+            # removes the model's fine print and never its sales copy.
+            for dropped in [p for p in parts if p.role == DISCLAIMER_ROLE and p.text]:
+                logger.warning(
+                    "Pharma ad %s: replacing the model's fine print with the canonical tail (dropped: %r)",
+                    brand.name,
+                    dropped.text[:80],
+                )
             parts = [p for p in parts if p.role != DISCLAIMER_ROLE]
+            if not any(p.type == "voice" and p.text for p in parts):
+                # Defensive: a script that was nothing but fine print would leave
+                # the brand unspoken. Say the name rather than air a bare blur.
+                parts.append(AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role))
             parts.append(
                 AdPart(
                     type="voice",

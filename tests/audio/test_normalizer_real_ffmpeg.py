@@ -740,3 +740,81 @@ def test_normalize_without_tempo_is_unchanged(tmp_path):
     out = tmp_path / "same.mp3"
     normalize(src, out, loudnorm=False, tempo=1.0)
     assert probe_duration_sec(out) == pytest.approx(probe_duration_sec(src), abs=0.3)
+
+
+@pytest.mark.requires_ffmpeg
+@pytest.mark.parametrize("tempo", [1.95, 3.1])
+def test_tempo_pass_survives_speech_with_real_gaps(tmp_path, tempo):
+    """The existing tempo test feeds a constant sine, so silenceremove is a no-op.
+
+    Build tone/silence/tone/silence/tone so the gap-strip half of the filter is
+    actually exercised, and cover a multi-factor atempo chain (3.1 splits into
+    two instances) against real ffmpeg rather than only arithmetic.
+    """
+    src = tmp_path / "gapped.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=44100:cl=mono:d=1",
+            "-filter_complex",
+            "[0:a][1:a][0:a][1:a][0:a]concat=n=5:v=0:a=1[out]",
+            "-map",
+            "[out]",
+            "-c:a",
+            "libmp3lame",
+            str(src),
+        ],
+        check=True,
+    )
+    baseline = probe_duration_sec(src)
+    assert baseline is not None and baseline > 4
+
+    out = tmp_path / "fast.mp3"
+    normalize(src, out, loudnorm=False, tempo=tempo)
+    fast = probe_duration_sec(out)
+
+    assert fast is not None and fast > 0.2, "gap-strip plus compression emptied the file"
+    assert fast < baseline / tempo, "silence was not removed before compressing"
+
+
+@pytest.mark.requires_ffmpeg
+def test_tempo_pass_does_not_empty_a_quiet_render(tmp_path):
+    """stop_threshold=-40dB is 10dB hotter than the normal trim.
+
+    Ad parts render with loudnorm=False, i.e. raw provider level, which varies by
+    engine. A quiet render must not be gated away into nothing.
+    """
+    src = tmp_path / "quiet.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=5",
+            "-filter:a",
+            "volume=-32dB",
+            "-c:a",
+            "libmp3lame",
+            str(src),
+        ],
+        check=True,
+    )
+    out = tmp_path / "quiet_fast.mp3"
+    normalize(src, out, loudnorm=False, tempo=1.95)
+
+    duration = probe_duration_sec(out)
+    assert duration is not None and duration > 0.5, f"quiet render collapsed to {duration}s"

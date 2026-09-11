@@ -213,7 +213,10 @@ SPEAKER_ROLES: dict[str, str] = {
     "bureaucrat": "The Bureaucrat: dry official notice voice, reads absurd things with total sincerity",
     "maniac": "The Maniac: oversold shopping-channel energy, everything is THE GREATEST THING EVER",
     "witness": "The Witness: fake customer testimonial, suspiciously specific, clearly reading a script",
-    "disclaimer_goblin": "The Disclaimer Goblin: ultra-fast legal cleanup, buries the bad news in speed",
+    "disclaimer_goblin": (
+        "The Disclaimer Goblin: ultra-fast legal cleanup, buries the bad news in speed. "
+        "Use this role for the closing fine print ONLY, never for sales copy."
+    ),
 }
 
 SONIC_ENVIRONMENTS: dict[str, str] = {

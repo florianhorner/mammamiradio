@@ -1021,6 +1021,18 @@ line remains the sole input to transcript metadata, safety/language guards,
 memory, accounting, and any Edge fallback, so a failed V3 request cannot make a
 fallback voice read markup aloud.
 
+Fallback chain: cloud TTS failure or missing credentials →
+`edge_fallback_voice` (so the role falls back to its own Edge voice, not a
+stranger) → the house Edge fallback → `TTSUnavailableError`. The final failure
+deletes partial speech files and lets required voice reach the producer's
+music/continuity rescue ladder; it never substitutes generated silence for
+speech.
+
+A session's blended TTS estimate records a confirmed paid-provider response before local raw-file I/O or normalization. If that local processing later fails and the role falls back to Edge, the session still includes the paid request; missing credentials, provider errors, and Edge-only synthesis remain uncounted. This is a conservative session estimate, not invoice-level provider reconciliation.
+
+A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
+
+
 ### Ad fine print (the fast-talking disclaimer)
 
 An ad's closing legal line is addressed to the `DISCLAIMER_ROLE` token
@@ -1031,7 +1043,7 @@ actual disclaimer voice in `classic_pitch` only; in the other five formats the
 role resolves through `voices.get(part.role, default_voice)` to that format's
 own voice, which is deliberate — the line is still sped up.
 
-Two properties this depends on, both of which have bitten before:
+Three properties this depends on, all of which have bitten before:
 
 - **The role token is normalized on parse.** The model is not a contract: it has
   been observed returning the prompt's roster label (`"BUREAUCRAT (Nonno Aldo)"`)
@@ -1050,24 +1062,13 @@ Two properties this depends on, both of which have bitten before:
 - **Breath gaps are stripped before compressing**, in that order. The other way
   round spends compression on silence, and the surviving pauses make the line
   read as someone talking fast rather than as the legal blur the gag needs.
-  Measured across the four approved engines the delivered rate lands at
-  2.10-2.31x; the spread is per-voice breathiness, which is what gap-stripping
-  normalizes away. `rate` remains in use for host prosody and is unrelated.
+  How much the gap-strip adds on top of `DISCLAIMER_TEMPO` depends entirely on
+  how breathy the render is, so the delivered rate is not a fixed number and is
+  not quoted here. `rate` remains in use for host prosody and is unrelated.
 
 Pharma brands additionally get the canonical medicine tail appended
 (`_pharma_disclaimer_text`); it replaces any disclaimer the model wrote, so the
 ad always ends on the legally-styled text exactly once.
-
-Fallback chain: cloud TTS failure or missing credentials →
-`edge_fallback_voice` (so the role falls back to its own Edge voice, not a
-stranger) → the house Edge fallback → `TTSUnavailableError`. The final failure
-deletes partial speech files and lets required voice reach the producer's
-music/continuity rescue ladder; it never substitutes generated silence for
-speech.
-
-A session's blended TTS estimate records a confirmed paid-provider response before local raw-file I/O or normalization. If that local processing later fails and the role falls back to Edge, the session still includes the paid request; missing credentials, provider errors, and Edge-only synthesis remain uncounted. This is a conservative session estimate, not invoice-level provider reconciliation.
-
-A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
 
 ## Compounding station memory and truthful listener sessions
 
