@@ -680,101 +680,41 @@ def test_broadcast_chain_cpu_budget_logged(tmp_path, capsys):
     assert elapsed < 60.0  # loose sanity bound; a pathological hang fails, real timing is the log
 
 
+def _render_lavfi_mp3(path, *sources, filter_complex=None):
+    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+    for source in sources:
+        cmd.extend(["-f", "lavfi", "-i", source])
+    if filter_complex:
+        cmd.extend(["-filter_complex", filter_complex, "-map", "[out]"])
+    subprocess.run([*cmd, "-c:a", "libmp3lame", str(path)], check=True)
+
+
 @pytest.mark.requires_ffmpeg
-def test_atempo_time_compresses_without_crashing(tmp_path):
-    """Ad fine print is time-compressed for engines that ignore SSML rate.
-
-    Runs on arm64 in the pi-smoke job: the add-on installs whatever ffmpeg the
-    floating Home Assistant base ships, and atempo is the one filter this
-    feature depends on. A mocked test cannot catch a non-zero exit or a SIGABRT.
-    """
-
+def test_atempo_compresses_while_normal_speed_preserves_duration(tmp_path):
+    """Exercise the real FFmpeg filter used by all TTS engines on arm64 CI."""
     src = tmp_path / "src.mp3"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=6",
-            "-c:a",
-            "libmp3lame",
-            str(src),
-        ],
-        check=True,
-    )
+    _render_lavfi_mp3(src, "sine=frequency=440:duration=6")
     baseline = probe_duration_sec(src)
     assert baseline is not None
 
-    out = tmp_path / "fast.mp3"
-    normalize(src, out, loudnorm=False, tempo=1.55)
-
-    fast = probe_duration_sec(out)
-    assert fast is not None, "atempo pass produced an unprobeable file"
-    assert fast < baseline * 0.75, f"expected time compression, got {baseline:.2f}s -> {fast:.2f}s"
-
-
-@pytest.mark.requires_ffmpeg
-def test_normalize_without_tempo_is_unchanged(tmp_path):
-    """tempo=1.0 must add no filter at all — the default path stays byte-identical in shape."""
-    src = tmp_path / "src.mp3"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=4",
-            "-c:a",
-            "libmp3lame",
-            str(src),
-        ],
-        check=True,
-    )
-    out = tmp_path / "same.mp3"
-    normalize(src, out, loudnorm=False, tempo=1.0)
-    assert probe_duration_sec(out) == pytest.approx(probe_duration_sec(src), abs=0.3)
+    plain, fast = tmp_path / "plain.mp3", tmp_path / "fast.mp3"
+    normalize(src, plain, loudnorm=False, tempo=1.0)
+    normalize(src, fast, loudnorm=False, tempo=1.55)
+    plain_duration, fast_duration = probe_duration_sec(plain), probe_duration_sec(fast)
+    assert plain_duration == pytest.approx(baseline, abs=0.3)
+    assert fast_duration is not None and fast_duration < baseline * 0.75
 
 
 @pytest.mark.requires_ffmpeg
 @pytest.mark.parametrize("tempo", [1.95, 3.1])
 def test_tempo_pass_survives_speech_with_real_gaps(tmp_path, tempo):
-    """The existing tempo test feeds a constant sine, so silenceremove is a no-op.
-
-    Build tone/silence/tone/silence/tone so the gap-strip half of the filter is
-    actually exercised, and cover a multi-factor atempo chain (3.1 splits into
-    two instances) against real ffmpeg rather than only arithmetic.
-    """
+    """Exercise gap removal and a multi-factor chain against real FFmpeg."""
     src = tmp_path / "gapped.mp3"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=1",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=r=44100:cl=mono:d=1",
-            "-filter_complex",
-            "[0:a][1:a][0:a][1:a][0:a]concat=n=5:v=0:a=1[out]",
-            "-map",
-            "[out]",
-            "-c:a",
-            "libmp3lame",
-            str(src),
-        ],
-        check=True,
+    _render_lavfi_mp3(
+        src,
+        "sine=frequency=440:duration=1",
+        "anullsrc=r=44100:cl=mono:d=1",
+        filter_complex="[0:a][1:a][0:a][1:a][0:a]concat=n=5:v=0:a=1[out]",
     )
     baseline = probe_duration_sec(src)
     assert baseline is not None and baseline > 4
@@ -789,30 +729,9 @@ def test_tempo_pass_survives_speech_with_real_gaps(tmp_path, tempo):
 
 @pytest.mark.requires_ffmpeg
 def test_tempo_pass_does_not_empty_a_quiet_render(tmp_path):
-    """stop_threshold=-40dB is 10dB hotter than the normal trim.
-
-    Ad parts render with loudnorm=False, i.e. raw provider level, which varies by
-    engine. A quiet render must not be gated away into nothing.
-    """
+    """The internal-gap threshold must preserve quiet provider output."""
     src = tmp_path / "quiet.mp3"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=5",
-            "-filter:a",
-            "volume=-32dB",
-            "-c:a",
-            "libmp3lame",
-            str(src),
-        ],
-        check=True,
-    )
+    _render_lavfi_mp3(src, "sine=frequency=440:duration=5,volume=-32dB")
     out = tmp_path / "quiet_fast.mp3"
     normalize(src, out, loudnorm=False, tempo=1.95)
 

@@ -5346,3 +5346,36 @@ async def test_cloud_renderer_bodies_forward_tempo_to_normalize(_mock_all, tmp_p
     assert pytest.approx(DISCLAIMER_TEMPO) in tempos, (
         f"{renderer} renderer body dropped tempo before normalize(): {tempos}"
     )
+
+
+@pytest.mark.parametrize("failure", ["exception", "too_small"])
+def test_tempo_normalization_retries_once_at_normal_speed(_mock_all, tmp_path, failure):
+    from mammamiradio.audio.tts import _normalize_tolerating_tempo
+
+    raw, out = tmp_path / "raw.mp3", tmp_path / "out.mp3"
+    raw.write_bytes(b"raw")
+
+    def first_failure(input_path, output_path, config=None, **kwargs):
+        if _mock_all["normalize"].call_count == 1:
+            if failure == "exception":
+                raise RuntimeError("tempo filter failed")
+            output_path.write_bytes(b"tiny")
+            return output_path
+        return _normalize_side_effect(input_path, output_path, config, **kwargs)
+
+    _mock_all["normalize"].side_effect = first_failure
+    assert _normalize_tolerating_tempo(raw, out, False, DISCLAIMER_TEMPO) == out
+    assert out.stat().st_size >= 1024
+    assert _mock_all["normalize"].call_count == 2
+    assert "tempo" not in _mock_all["normalize"].call_args_list[-1].kwargs
+
+
+def test_unprobeable_sized_tempo_output_is_accepted(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import _normalize_tolerating_tempo
+
+    raw, out = tmp_path / "raw.mp3", tmp_path / "out.mp3"
+    raw.write_bytes(b"raw")
+    _mock_all["ffprobe_duration"].return_value = None
+
+    assert _normalize_tolerating_tempo(raw, out, False, DISCLAIMER_TEMPO) == out
+    _mock_all["normalize"].assert_called_once()

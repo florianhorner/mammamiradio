@@ -1032,43 +1032,22 @@ A session's blended TTS estimate records a confirmed paid-provider response befo
 
 A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
 
-
 ### Ad fine print (the fast-talking disclaimer)
 
-An ad's closing legal line is addressed to the `DISCLAIMER_ROLE` token
-(`hosts/ad_creative.py`), which `hosts/scriptwriter.py` writes into the prompt's
-JSON example for **every** ad format and `audio/tts.py::_render_part` gates the
-speed-up on. `_FORMAT_ROLES` remains the format contract and still casts an
-actual disclaimer voice in `classic_pitch` only; in the other five formats the
-role resolves through `voices.get(part.role, default_voice)` to that format's
-own voice, which is deliberate — the line is still sped up.
+Every ad format addresses its closing legal line to `DISCLAIMER_ROLE`. The
+parser normalizes decorated model output onto that token, while unrecognized
+roles retain the existing default-voice fallback. `_FORMAT_ROLES` remains the
+casting contract; formats without a dedicated disclaimer voice use their
+opening voice.
 
-Three properties this depends on, all of which have bitten before:
+`audio/tts.py` applies `DISCLAIMER_TEMPO` through the existing `normalize()`
+FFmpeg pass on every engine. Internal breath gaps are removed before `atempo`,
+whose factors stay within the range supported by older FFmpeg builds. Invalid
+tempo values use the complete normal-speed path, and failed or unusable
+compressed renders retry once without compression. SSML `rate` remains reserved
+for host prosody.
 
-- **The role token is normalized on parse.** The model is not a contract: it has
-  been observed returning the prompt's roster label (`"BUREAUCRAT (Nonno Aldo)"`)
-  instead of the cast key. `_resolve_ad_role` folds case and strips a trailing
-  parenthetical before the role reaches `AdPart`; an unmatched role is preserved,
-  not blanked, so it keeps falling through to `default_voice`.
-- **Speed is engine-independent.** The fine print is time-compressed by
-  `DISCLAIMER_TEMPO` (1.95) on *every* engine, never by SSML `rate`. Only Edge
-  and Azure honour `rate` at all, and at this speed the two mechanisms do not
-  sound alike, so splitting formats between them would put the delivery back at
-  the mercy of casting. The compression is a *filter* inside the re-encode
-  `normalize()` already runs — never a separate stage, which would take a second
-  `audio.admission` slot and add one ffmpeg process per line. `_atempo_chain`
-  splits factors outside `[0.5, 2.0]` so the chain stays valid on whatever
-  ffmpeg the floating Home Assistant base ships.
-- **Breath gaps are stripped before compressing**, in that order. The other way
-  round spends compression on silence, and the surviving pauses make the line
-  read as someone talking fast rather than as the legal blur the gag needs.
-  How much the gap-strip adds on top of `DISCLAIMER_TEMPO` depends entirely on
-  how breathy the render is, so the delivered rate is not a fixed number and is
-  not quoted here. `rate` remains in use for host prosody and is unrelated.
-
-Pharma brands additionally get the canonical medicine tail appended
-(`_pharma_disclaimer_text`); it replaces any disclaimer the model wrote, so the
-ad always ends on the legally-styled text exactly once.
+Pharma ads replace model-written fine print with one canonical medicine tail.
 
 ## Compounding station memory and truthful listener sessions
 

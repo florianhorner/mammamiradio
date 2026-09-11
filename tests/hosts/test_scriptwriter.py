@@ -8905,6 +8905,20 @@ async def test_a_script_labelled_all_fine_print_still_speaks_the_brand(config, s
     )
 
 
+def test_single_voice_disclaimer_is_demoted_but_a_real_tail_is_kept():
+    from mammamiradio.hosts.ad_creative import AdPart
+    from mammamiradio.hosts.scriptwriter import _cap_disclaimer_parts
+
+    sole = [AdPart(type="voice", text="The whole ad.", role=DISCLAIMER_ROLE)]
+    mixed = [
+        AdPart(type="voice", text="Brand copy.", role="hammer"),
+        AdPart(type="voice", text="Terms.", role=DISCLAIMER_ROLE),
+    ]
+
+    assert _cap_disclaimer_parts(sole, "hammer")[0].role == "hammer"
+    assert _cap_disclaimer_parts(mixed, "hammer")[-1].role == DISCLAIMER_ROLE
+
+
 def test_resolve_ad_role_accepts_a_space_separated_label():
     """The model spaces the token as often as it underscores it."""
     from mammamiradio.hosts.scriptwriter import _resolve_ad_role

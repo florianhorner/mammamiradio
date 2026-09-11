@@ -3682,26 +3682,11 @@ def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
 
 
 def _resolve_ad_role(raw_role: object, voices: dict[str, AdVoice]) -> str:
-    """Map the role string a model returned onto an actual cast key.
-
-    The model is not a contract.  It has been observed returning the prompt's
-    roster label verbatim ("BUREAUCRAT (Nonno Aldo)") instead of the cast key
-    ("bureaucrat"), which makes ``voices.get(part.role, default_voice)`` miss and
-    silently renders the line in the wrong voice with no speed-up.  Match
-    case-insensitively and tolerate a trailing " (Voice Name)".
-
-    An unmatched role is returned stripped rather than blanked: DISCLAIMER_ROLE
-    is deliberately addressable even in formats that cast no such voice, and an
-    unknown role must keep falling through to ``default_voice`` exactly as before.
-    """
+    """Map decorated model output onto a cast key; preserve unknown roles."""
     role = str(raw_role or "").strip()
     if not role or role in voices:
         return role
-    # Cut at the first separator the roster can put after the token, then strip
-    # every non-alphanumeric so quoting, spacing and casing all collapse. The
-    # roster format has already changed once under this parser: it used to read
-    # `BUREAUCRAT (Nonno Aldo)` and now reads `"bureaucrat" - Nonno Aldo`, so
-    # matching a specific decoration is what breaks next time.
+    # Accept both old `BUREAUCRAT (Name)` and current `"bureaucrat" — Name` labels.
     candidate = re.split(r"[(\u2014:,]|\s-\s", role, maxsplit=1)[0]
     folded = re.sub(r"[^a-z0-9]", "", candidate.casefold())
     if not folded:
@@ -3715,27 +3700,20 @@ def _resolve_ad_role(raw_role: object, voices: dict[str, AdVoice]) -> str:
 
 
 def _cap_disclaimer_parts(parts: list[AdPart], fallback_role: str) -> list[AdPart]:
-    """Keep at most ONE fine-print part, and never let it be the whole ad.
-
-    DISCLAIMER_ROLE is now named in every format's SPEAKERS block and
-    ``_resolve_ad_role`` deliberately coerces spelling variants onto it, so a
-    model that labels several lines "disclaimer" would have every one of them
-    time-compressed.  Observed live: a spot whose brand name and tagline both
-    aired as a 1.95x blur, and a pharma spot whose brand name was never spoken
-    at all once the canonical-tail filter removed the mislabelled copy.
-
-    The fine print is the closing line, so the LAST disclaimer-labelled voice
-    part keeps the role and any earlier one is demoted to a speaking role.
-    """
+    """Keep only the closing fine-print part and never compress the whole ad."""
     voice_parts = [p for p in parts if p.type == "voice" and p.text]
     disclaimers = [p for p in voice_parts if p.role == DISCLAIMER_ROLE]
-    if len(disclaimers) < 2:
+    if not disclaimers:
+        return parts
+    # A campaign may legitimately use the disclaimer voice as its spokesperson.
+    safe_role = fallback_role if fallback_role and fallback_role != DISCLAIMER_ROLE else "hammer"
+    if len(voice_parts) == 1:
+        disclaimers[0].role = safe_role
+        logger.warning("Ad script was only fine print; demoted it to %r", safe_role)
+        return parts
+    if len(disclaimers) == 1:
         return parts
     keep = disclaimers[-1]
-    # A fallback that IS the disclaimer role would be a no-op logging a false
-    # success. Reachable: a campaign may legitimately pin the goblin as its
-    # spokesperson, so the caller's primary role can be this very token.
-    safe_role = fallback_role if fallback_role and fallback_role != DISCLAIMER_ROLE else "hammer"
     demoted = 0
     for part in disclaimers:
         if part is not keep:
@@ -4090,23 +4068,13 @@ CAMPAIGN SPINE:
         else ""
     )
 
-    # Build speaker descriptions for the prompt.  The role token here MUST be the
-    # exact key the JSON example asks for: the roster used to print
-    # "BUREAUCRAT (Nonno Aldo)" while the example asked for "bureaucrat", and the
-    # model copied the roster label into the part's "role" field often enough that
-    # 31% of voice parts arrived with a role no cast entry matched — silently
-    # rendering on default_voice and skipping the disclaimer rate gate.
+    # Speaker tokens must exactly match the JSON example and parser contract.
     speaker_lines = []
     for role_name, voice in voices.items():
         role_desc = SPEAKER_ROLES.get(role_name, f"Commercial voice: {voice.style}")
         speaker_lines.append(f'- "{role_name}" — {voice.name}: {role_desc}')
     if DISCLAIMER_ROLE not in voices:
-        # Only classic_pitch casts an actual disclaimer voice, but the fine print
-        # is addressed to DISCLAIMER_ROLE in every format so the rate gate fires.
-        # List it here too, or the prompt contradicts itself: the rules say every
-        # role must come from this block while the JSON example uses a role that
-        # is missing from it.  A self-inconsistent prompt is what put the roster
-        # and the example out of step in the first place.
+        # Other formats address this token but render it with their opening voice.
         speaker_lines.append(
             f'- "{DISCLAIMER_ROLE}" — {SPEAKER_ROLES[DISCLAIMER_ROLE]} It is read by the spot\'s opening voice.'
         )
@@ -4123,10 +4091,7 @@ CAMPAIGN SPINE:
     sfx_types = ", ".join(f'"{t}"' for t in AVAILABLE_SFX_TYPES)
 
     role_names = list(voices.keys())
-    # The middle character line and the fine print used to share role_names[-1].
-    # They are different jobs: the disclaimer is always addressed to
-    # DISCLAIMER_ROLE so tts._render_part's rate gate fires in every format, not
-    # only the one format whose _FORMAT_ROLES happens to cast that role.
+    # Keep character copy separate from the canonical fine-print token.
     character_roles = [r for r in role_names if r != DISCLAIMER_ROLE] or list(role_names)
     opening_role = character_roles[0]
     second_role = character_roles[1] if len(character_roles) > 1 else character_roles[0]
@@ -4231,8 +4196,6 @@ Return JSON:
                 )
             )
 
-        # A fine-print label on several lines would time-compress most of the
-        # spot; keep one and give the rest a speaking role.
         parts = _cap_disclaimer_parts(parts, direct_primary_role or _FORMAT_ROLES.get(ad_format, ["hammer"])[0])
 
         # Ensure we have at least one voice part
@@ -4271,10 +4234,7 @@ Return JSON:
         actual_format = ad_format
         if used_owned_fallback:
             actual_format = AdFormat.CLASSIC_PITCH
-        # Count CHARACTERS, not roles: the fine print is addressed to
-        # DISCLAIMER_ROLE in every format now, so counting it would let a duo
-        # that is really one announcer plus a disclaimer escape demotion and
-        # report a format it never aired.
+        # A disclaimer does not turn a one-character spot into a duo.
         character_roles_found = roles_found - {DISCLAIMER_ROLE}
         if ad_format in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) and len(character_roles_found) < 2:
             actual_format = AdFormat.CLASSIC_PITCH
@@ -4299,13 +4259,7 @@ Return JSON:
         # its medicine-style ibuprofen disclaimer is intentional, not a category
         # mismatch or defect. Keep its pharma category and disclaimer together.
         if brand.category == "pharma":
-            # The canonical medicine tail is authoritative — never suppressed by
-            # whatever fine print the model happened to write.  Now that the
-            # disclaimer role is addressed in every format the model nearly
-            # always writes one, so "skip if a disclaimer exists" would retire
-            # this text permanently.  Drop the model's version and end on ours.
-            # _cap_disclaimer_parts guarantees at most one of these, so this
-            # removes the model's fine print and never its sales copy.
+            # Replace model-written fine print with the canonical medicine tail.
             for dropped in [p for p in parts if p.role == DISCLAIMER_ROLE and p.text]:
                 logger.warning(
                     "Pharma ad %s: replacing the model's fine print with the canonical tail (dropped: %r)",
@@ -4314,8 +4268,7 @@ Return JSON:
                 )
             parts = [p for p in parts if p.role != DISCLAIMER_ROLE]
             if not any(p.type == "voice" and p.text for p in parts):
-                # Defensive: a script that was nothing but fine print would leave
-                # the brand unspoken. Say the name rather than air a bare blur.
+                # Keep the brand audible if the model returned only fine print.
                 parts.append(AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role))
             parts.append(
                 AdPart(
@@ -4324,8 +4277,6 @@ Return JSON:
                     role=DISCLAIMER_ROLE,
                 )
             )
-            # roles_found was computed before this append, so a pharma
-            # disclaimer could air while roles_used omitted it.
             roles_found = {p.role for p in parts if p.type == "voice" and p.role}
 
         voice_texts = [p.text for p in parts if p.type == "voice" and p.text]

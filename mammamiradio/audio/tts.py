@@ -112,18 +112,7 @@ _cloud_voice_state_lock = threading.Lock()
 _HEAVY_SEM = asyncio.Semaphore(2)
 _MIN_DIALOGUE_LINE_BYTES = 1024
 _MIN_DIALOGUE_LINE_DURATION_SEC = 0.5
-# How fast the ad fine print is delivered.  One number for every format and
-# every engine: the joke is a legal blur you can hear but not parse, and it has
-# to land identically whichever voice the caster picked.
-#
-# Applied as an atempo filter, never as SSML rate.  Only Edge and Azure honour
-# SSML rate at all, and at this speed the two mechanisms do not sound alike, so
-# routing some formats through one and some through the other would put the
-# delivery back at the mercy of casting.
-#
-# 1.95 chosen by ear from a rendered ladder (1.55 / 2.0 / 2.5 / 3.0 / 3.5, with
-# and without breath gaps).  1.55 was "far too slow, rips out the comedic
-# effect"; 3.0+ turns to mush.  Gap-stripping puts the effective rate near 2.1x.
+# Engine-independent legal blur; selected by ear from a rendered tempo ladder.
 DISCLAIMER_TEMPO = 1.95
 
 
@@ -852,24 +841,11 @@ def _has_audible_audio(path: Path) -> bool:
     except OSError:
         return False
     duration = probe_duration_sec(path)
-    return duration is not None and duration >= _MIN_DIALOGUE_LINE_DURATION_SEC
+    return duration is None or duration >= _MIN_DIALOGUE_LINE_DURATION_SEC
 
 
 def _normalize_tolerating_tempo(raw_path: Path, output_path: Path, loudnorm: bool, tempo: float) -> Path:
-    """Normalize, and never let the cosmetic speed-up be what kills a segment.
-
-    Two hazards this closes, both inside the caller's ``except`` that memoizes a
-    failed Edge voice for the whole session:
-
-    * an ffmpeg failure in the time-compression pass is not evidence the VOICE is
-      bad, but it lands in the same handler and would blacklist the station's
-      house voice for every later banter, station ID and time check;
-    * the fine print is decorative. Airing it at normal speed is a worse joke;
-      airing nothing is dead air, which the illusion never survives.
-
-    So a tempo render that fails is retried once at normal speed. Only a failure
-    that persists without the filter is a real synthesis failure and propagates.
-    """
+    """Retry failed or unusable cosmetic compression once at normal speed."""
     try:
         result = normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo)
         if not _compressing(tempo) or _has_audible_audio(result):
@@ -902,11 +878,7 @@ async def synthesize_openai(
     tempo: float = 1.0,
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
-    """Render text with the registry-selected OpenAI speech model.
-
-    ``tempo`` time-compresses the render; OpenAI has no speed parameter, so this
-    is how a fast ad disclaimer reaches an OpenAI voice.
-    """
+    """Render OpenAI speech, optionally time-compressed during normalization."""
     api_key = api_key or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set")
@@ -1198,10 +1170,7 @@ async def synthesize(
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
 
-    ``tempo`` time-compresses the finished render and is independent of ``rate``:
-    ``rate`` is SSML prosody that only two of the four engines honour, while
-    ``tempo`` is an FFmpeg filter in the re-encode every engine already runs. Ad
-    fine print uses ``tempo`` so it sounds the same on every voice.
+    ``tempo`` is engine-independent FFmpeg compression; ``rate`` is SSML prosody.
 
     engine="openai" uses the registry-selected OpenAI speech model. Falls back
     to edge-tts if the key or registry route is unavailable. When falling back,
@@ -1715,9 +1684,7 @@ async def synthesize_ad(
     async def _render_part(part, part_path):
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
-            # Fine print is one tempo in every format and on every engine, see
-            # DISCLAIMER_TEMPO. Format-scoped rates are what left five of six
-            # formats with no rattle at all.
+            # Fine print uses one engine-independent tempo in every format.
             extra: dict[str, object] = {
                 "engine": voice_for_part.engine,
                 "edge_fallback_voice": voice_for_part.edge_fallback_voice,
@@ -2309,12 +2276,7 @@ async def synthesize_ad(
 
 
 class _HostProsody(TypedDict, total=False):
-    """Exactly the SSML knobs a host personality may set.
-
-    Typed narrowly because this is splatted into ``synthesize(**...)``: a plain
-    ``dict[str, str]`` would let mypy believe it could supply ``tempo``, which
-    is a float, and the splat would hide the mismatch until runtime.
-    """
+    """SSML-only host controls, typed separately from float ``tempo``."""
 
     rate: str
     pitch: str

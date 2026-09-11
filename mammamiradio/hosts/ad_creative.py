@@ -201,10 +201,7 @@ AD_FORMATS: dict[str, str] = {
     ),
 }
 
-# The one spelling of the fine-print role.  scriptwriter.py addresses the
-# disclaimer line to it and tts.py gates the speed-up on it; a literal in each
-# file would let the two drift silently, which is how the rattle went missing in
-# five of six ad formats.
+# Shared prompt and TTS token for the fast fine-print line.
 DISCLAIMER_ROLE = "disclaimer_goblin"
 
 SPEAKER_ROLES: dict[str, str] = {

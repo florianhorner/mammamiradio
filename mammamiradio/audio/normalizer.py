@@ -675,54 +675,41 @@ def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
     return True
 
 
-# Fine print only: remove leading, trailing AND internal silence.  The 0.08s
-# stop_duration is short enough to catch inter-phrase breaths, which the normal
-# 0.3s trailing-only trim leaves in place.
-# -60dB, not -40dB. Measured: at -40dB this filter deletes the ENTIRE signal for
-# any render at or below roughly -26dBFS, emitting a 44-byte file. Ad parts are
-# rendered with loudnorm=False, i.e. raw provider level, which varies by engine —
-# so a quiet voice would have made the fine print vanish instead of rattle. At
-# -60dB the gaps still go (a 5.0s tone/silence/tone/silence/tone source lands at
-# 3.13s) and a -38dBFS render survives intact.
+# Fine print removes internal breaths; -60dB preserves quiet raw-provider audio
+# that the earlier -40dB threshold could erase entirely.
 _SILENCE_ALL_GAPS = (
     "silenceremove=start_periods=1:start_duration=0:start_threshold=-60dB:"
     "stop_periods=-1:stop_duration=0.08:stop_threshold=-60dB"
 )
 
 
-# Widest band a station segment can sanely use; beyond it the chain length,
-# not the factor, becomes the problem.
 _TEMPO_MIN = 0.25
 _TEMPO_MAX = 4.0
 
 
+def _validated_tempo(tempo: float, *, warn: bool = True) -> float:
+    """Return the one safe tempo value used by every filter decision."""
+    value = float(tempo)
+    if not math.isfinite(value) or value <= 0.0:
+        if warn:
+            logger.warning("Ignoring non-positive/non-finite tempo %r; rendering at normal speed", tempo)
+        return 1.0
+    if not _TEMPO_MIN <= value <= _TEMPO_MAX:
+        clamped = min(max(value, _TEMPO_MIN), _TEMPO_MAX)
+        if warn:
+            logger.warning("Tempo %r out of range; clamping to %s", tempo, clamped)
+        return clamped
+    return value
+
+
 def _compressing(tempo: float) -> bool:
     """True when a tempo is meaningfully different from normal speed."""
-    return bool(tempo) and abs(tempo - 1.0) > 1e-3
+    return abs(_validated_tempo(tempo, warn=False) - 1.0) > 1e-3
 
 
 def _atempo_chain(tempo: float) -> str:
-    """Build an atempo filter chain valid on every ffmpeg build we may run on.
-
-    A single atempo instance is limited to [0.5, 2.0] on older builds.  The
-    add-on installs whatever ffmpeg the floating Home Assistant base image
-    ships, so a factor outside that window is expressed as a product of in-range
-    factors rather than assuming the modern [0.5, 100] range.
-    """
-    remaining = float(tempo)
-    if remaining <= 0.0 or remaining != remaining or remaining in (float("inf"), float("-inf")):
-        # A non-positive or non-finite factor never converges in the loops below
-        # and would spin the executor thread forever — which reads as dead air,
-        # the one outcome the audio path must never produce.
-        logger.warning("Ignoring non-positive/non-finite tempo %r; rendering at normal speed", tempo)
-        return "atempo=1"
-    # Clamp before chaining. Unclamped, 1e300 produced 997 chained WSOLA stages
-    # and an 8979-character filter string — the same "never finishes on a fanless
-    # ARM box" outcome the non-finite guard above exists to prevent.
-    if not _TEMPO_MIN <= remaining <= _TEMPO_MAX:
-        clamped = min(max(remaining, _TEMPO_MIN), _TEMPO_MAX)
-        logger.warning("Tempo %r out of range; clamping to %s", tempo, clamped)
-        remaining = clamped
+    """Build a chain whose factors fit old FFmpeg's [0.5, 2.0] range."""
+    remaining = _validated_tempo(tempo)
     factors: list[float] = []
     while remaining > 2.0:
         factors.append(2.0)
@@ -755,14 +742,10 @@ def normalize(
     before the loudness pass: removes subsonic rumble, de-muds compressed audio,
     adds presence, and rolls off HF harshness from lossy re-encoding.
 
-    Set tempo != 1.0 to time-compress the audio (ad fine print). This is a
-    FILTER appended to the pass this function already runs, deliberately not a
-    separate stage: a stage would take a second mammamiradio.audio.admission
-    slot and add one ffmpeg process per line. Compressing also substitutes the
-    all-gaps silence filter for the trailing-only trim, so breaths go before the
-    compression rather than being compressed along with the speech — that is the
-    fine-print treatment, not a generic speed-up.
+    ``tempo`` time-compresses fine print inside this existing pass and removes
+    internal breath gaps before compression.
     """
+    tempo = _validated_tempo(tempo)
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
@@ -831,13 +814,7 @@ def normalize(
         )
 
     if _compressing(tempo):
-        # APPEND, never replace: an earlier revision reassigned audio_filter here
-        # and silently dropped loudnorm, music_eq and the fade-in for any caller
-        # that passed both loudnorm=True and a tempo.  The gap-strip is already
-        # substituted for the trailing-only trim above, so compression lands
-        # after every breath is gone — the other order spends compression on
-        # silence and leaves the pauses that make a fast read sound like fast
-        # talking instead of the legal blur the gag needs.
+        # Append so loudness, EQ and fade filters survive; remove gaps first.
         audio_filter = f"{audio_filter},{_atempo_chain(tempo)}"
 
     cmd = [

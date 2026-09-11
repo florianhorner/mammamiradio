@@ -1202,37 +1202,21 @@ def test_atempo_chain_never_spins_on_a_bad_factor():
         assert _atempo_chain(bad) == "atempo=1", f"{bad!r} did not degrade to a no-op"
 
 
-def test_normalize_prepends_atempo_when_tempo_is_set(mock_subprocess):
-    """The fine-print speed-up is a FILTER in the existing pass, not a new pass.
-
-    A separate stage would take a second audio.admission slot and add one ffmpeg
-    process per line; as a filter it costs less than the baseline chain.
-    """
+@pytest.mark.parametrize(
+    ("tempo", "expected_atempo", "gap_duration"),
+    [(1.55, "atempo=1.55", "0.08"), (1.0, None, "0.3"), (-1.0, None, "0.3"), (float("nan"), None, "0.3")],
+)
+def test_normalize_uses_one_validated_tempo_for_the_filter_path(mock_subprocess, tempo, expected_atempo, gap_duration):
     mock_run, _ = mock_subprocess
+    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False, tempo=tempo)
+    chain = _extract_af_value(mock_run)
 
-    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False, tempo=1.55)
-
-    cmd = mock_run.call_args[0][0]
-    assert mock_run.call_count == 1, "atempo must not add a second ffmpeg invocation"
-    chain = cmd[cmd.index("-filter:a") + 1]
-    # Order is load-bearing: strip every breath FIRST, then compress. The other
-    # way round spends compression on silence and leaves the pauses that make a
-    # sped-up line read as fast talking instead of a legal blur.
-    assert chain.index("silenceremove") < chain.index("atempo"), (
-        f"gaps must be stripped before compression, got {chain!r}"
-    )
-    assert "stop_duration=0.08" in chain, "internal breaths are not being removed"
-    assert "atempo=1.55" in chain, f"tempo not applied: {chain!r}"
-
-
-def test_normalize_omits_atempo_at_normal_speed(mock_subprocess):
-    """tempo=1.0 must add no filter at all — the default path is untouched."""
-    mock_run, _ = mock_subprocess
-
-    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False, tempo=1.0)
-
-    chain = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-filter:a") + 1]
-    assert "atempo" not in chain, f"unexpected atempo at normal speed: {chain!r}"
+    assert mock_run.call_count == 1
+    assert f"stop_duration={gap_duration}" in chain
+    assert ("atempo" in chain) is (expected_atempo is not None)
+    if expected_atempo:
+        assert expected_atempo in chain
+        assert chain.index("silenceremove") < chain.index("atempo")
 
 
 def test_tempo_does_not_silently_drop_the_loudnorm_chain(mock_subprocess):
@@ -1252,17 +1236,3 @@ def test_tempo_does_not_silently_drop_the_loudnorm_chain(mock_subprocess):
     assert "atempo" in chain, f"tempo dropped: {chain!r}"
     assert "afade" in chain, f"fade-in dropped: {chain!r}"
     assert chain.index("silenceremove") < chain.index("atempo"), "gaps must go before compression"
-
-
-def test_tempo_substitutes_the_gap_strip_for_the_trailing_trim(mock_subprocess):
-    """Compressing uses the all-gaps filter; normal speed keeps the 0.3s tail trim."""
-    mock_run, _ = mock_subprocess
-
-    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False, tempo=1.95)
-    fast = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-filter:a") + 1]
-    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False)
-    plain = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-filter:a") + 1]
-
-    assert "stop_duration=0.08" in fast, "breaths are not stripped when compressing"
-    assert "stop_duration=0.3" in plain, "the normal path lost its trailing trim"
-    assert "atempo" not in plain
