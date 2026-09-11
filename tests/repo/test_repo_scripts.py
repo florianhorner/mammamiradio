@@ -1446,6 +1446,85 @@ def test_validate_addon_rejects_registry_without_last_reviewed(tmp_path: Path) -
     assert "last_reviewed must be a YYYY-MM-DD date" in result.stdout
 
 
+def test_validate_addon_rejects_effort_on_haiku(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    body = registry.read_text()
+    body = body.replace(
+        'haiku = "anthropic-fast"',
+        'haiku = "claude-haiku-4-5-20251001"',
+    )
+    body += '\n[models.effort.anthropic]\nhaiku = "medium"\n'
+    _write(registry, body)
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "must not set effort on Haiku" in result.stdout
+
+
+def test_validate_addon_rejects_unknown_effort_level(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    _write(registry, registry.read_text() + '\n[models.effort.anthropic]\nopus = "turbo"\n')
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "level 'turbo' is not one of" in result.stdout
+
+
+def test_validate_addon_rejects_unknown_effort_catalog_key(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    _write(registry, registry.read_text() + '\n[models.effort.anthropic]\nnonexistent = "medium"\n')
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "models.effort.anthropic.nonexistent is not in models.catalog.anthropic" in result.stdout
+
+
+def test_validate_addon_effort_levels_match_runtime() -> None:
+    """Release validation and runtime parsing must accept the same effort schema."""
+    import ast
+    import re
+
+    from mammamiradio.core.config import ALLOWED_EFFORT_LEVELS
+
+    match = re.search(
+        r"^allowed_effort\s*=\s*(\{[^\n]+\})$",
+        VALIDATE_ADDON.read_text(),
+        re.MULTILINE,
+    )
+    assert match is not None, "validate-addon.sh must declare its mirrored effort levels"
+    assert frozenset(ast.literal_eval(match.group(1))) == ALLOWED_EFFORT_LEVELS
+
+
+def test_validate_addon_effort_haiku_prefix_matches_runtime() -> None:
+    """The level set is pinned; the model prefix that rejects effort must be too."""
+    import ast
+    import re
+
+    from mammamiradio.core.config import EFFORT_UNSUPPORTED_MODEL_PREFIX
+
+    match = re.search(
+        r"model_id\.startswith\(('[^']+'|\"[^\"]+\")\)",
+        VALIDATE_ADDON.read_text(),
+    )
+    assert match is not None, "validate-addon.sh must guard effort on the unsupported model prefix"
+    assert ast.literal_eval(match.group(1)) == EFFORT_UNSUPPORTED_MODEL_PREFIX
+
+
 def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
     import re
 

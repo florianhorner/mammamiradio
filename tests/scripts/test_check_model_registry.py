@@ -55,6 +55,7 @@ haiku = "claude-haiku-4-5-20251001"
 
 [models.catalog.openai]
 large = "gpt-5.6-sol"
+mid = "gpt-5.6-terra"
 small = "gpt-5.6-luna"
 
 [tts.openai]
@@ -581,7 +582,28 @@ def test_all_current_registry_is_clean_under_drift(tmp_path: Path, capsys: pytes
         capsys, "--providers", "--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", "2026-09-08"
     )
     assert code == watch.EXIT_OK
-    assert "OK (drift): all 6 pinned models are current" in out
+    assert "OK (drift): all 7 pinned models are current" in out
+
+
+def test_real_registry_is_current_under_fixture_drift(capsys: pytest.CaptureFixture[str]) -> None:
+    """After the Claude 5 bump, the shipped registry must read as current against the captures."""
+    code, out = _run(
+        capsys,
+        "--providers",
+        "--gate",
+        "drift",
+        "--registry",
+        str(REPO_REGISTRY),
+        "--fixture-dir",
+        str(FIXTURES),
+        "--today",
+        "2026-09-10",
+    )
+    assert code == watch.EXIT_OK, out
+    assert "OK (drift):" in out
+    for label in ("anthropic.opus", "anthropic.sonnet", "anthropic.fable", "anthropic.haiku"):
+        line = next(line for line in out.splitlines() if line.startswith(label))
+        assert "current" in line, line
 
 
 def test_deprecated_anthropic_pin_fails_liveness(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

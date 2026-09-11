@@ -850,6 +850,67 @@ def _banter_user_prompt(mock_cls) -> str:
     return create.call_args.kwargs["messages"][0]["content"]
 
 
+@pytest.mark.asyncio
+async def test_anthropic_creative_call_sends_configured_effort(config, state):
+    """Balanced creative (Sonnet 5) must pass medium effort via extra_body."""
+    config.super_italian_mode = True
+    host_name = config.hosts[0].name
+    response_json = json.dumps({"lines": [{"host": host_name, "text": "ciao"}], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    create = mock_cls.return_value.messages.create
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == "claude-sonnet-5"
+    assert kwargs["extra_body"] == {"output_config": {"effort": "medium"}}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_fast_path_omits_effort(config, state):
+    """Transitions resolve to Haiku, which must never receive output_config."""
+    config.super_italian_mode = True
+    response_json = json.dumps({"text": "next up"})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_transition(state, config, next_segment="banter", song_cues=[])
+
+    create = mock_cls.return_value.messages.create
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == "claude-haiku-4-5-20251001"
+    assert "extra_body" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_fast_override_matching_creative_model_omits_effort(config, state):
+    """A fast override must not inherit effort from an equal creative model ID."""
+    config.super_italian_mode = True
+    config.models.catalog["anthropic"]["__env_fast"] = "claude-sonnet-5"
+    for profile in config.models.profiles.values():
+        profile.setdefault("anthropic", {})["fast"] = "__env_fast"
+    response_json = json.dumps({"text": "next up"})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_transition(state, config, next_segment="banter", song_cues=[])
+
+    create = mock_cls.return_value.messages.create
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == "claude-sonnet-5"
+    assert "extra_body" not in kwargs
+
+
 def _no_deferred_mutations(commit) -> bool:
     """True when commit is None or only carries exchange-shape observability."""
     if commit is None:
@@ -2756,8 +2817,8 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
-    """Lock the production default: balanced creative fallback uses GPT-5.4 mini."""
+async def test_openai_fallback_default_model_is_gpt_5_6_terra(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.6 Terra."""
     config.super_italian_mode = True
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
@@ -2776,7 +2837,7 @@ async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.4-mini"
+    assert call_kwargs["model"] == "gpt-5.6-terra"
 
 
 @pytest.mark.asyncio
@@ -2805,7 +2866,7 @@ async def test_openai_fallback_uses_max_completion_tokens(config, state):
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
     assert "max_completion_tokens" in call_kwargs
     assert "max_tokens" not in call_kwargs
-    # gpt-5.x counts hidden reasoning tokens against this cap. We request minimal
+    # gpt-5.x counts hidden reasoning tokens against this cap. We disable
     # reasoning and add a small fixed residual buffer on top of the caller's
     # visible-output budget — lock the exact additive contract so a regression
     # that stops adding the caller budget (or inflates it) is caught.
@@ -2819,7 +2880,8 @@ async def test_openai_fallback_uses_max_completion_tokens(config, state):
     # Anthropic failed on a generic (non-truncation) exception here, so the OpenAI
     # floor must stay at the BASE budget — no escalation leaked in.
     assert call_kwargs["max_completion_tokens"] == _BANTER_MAX_TOKENS + _OPENAI_REASONING_HEADROOM
-    assert call_kwargs.get("reasoning_effort") == "minimal"
+    assert call_kwargs.get("reasoning_effort") == "none"
+    assert openai_client.chat.completions.create.call_count == 1
     # The SDK-level timeout must ride along AND be budget-scaled: asyncio.wait_for
     # abandons (does not cancel) the sync SDK thread, so the HTTP-layer timeout is
     # the real stop — and a regression back to a fixed 45s would make the bigger
@@ -2865,7 +2927,7 @@ async def test_openai_fallback_retries_without_reasoning_effort_on_400(config, s
 
     # First attempt carried reasoning_effort and 400'd; the retry dropped it.
     assert len(calls) == 2
-    assert calls[0].get("reasoning_effort") == "minimal"
+    assert calls[0].get("reasoning_effort") == "none"
     assert "reasoning_effort" not in calls[1]
     assert calls[1]["max_completion_tokens"] == calls[0]["max_completion_tokens"]
 
@@ -2875,8 +2937,8 @@ async def test_openai_fallback_uses_configured_model(config, state):
     config.super_italian_mode = True
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced OpenAI creative = "small"
-    config.models.catalog["openai"]["small"] = "gpt-5.4-mini-test"
+    # banter → creative role → balanced OpenAI creative = "mid"
+    config.models.catalog["openai"]["mid"] = "gpt-5.6-terra-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -2893,21 +2955,21 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.4-mini-test"
+    assert call_kwargs["model"] == "gpt-5.6-terra-test"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_model"),
     [
-        ("news_flash", "gpt-5.4-mini"),
-        ("ad", "gpt-5.4-mini"),
-        ("transition", "gpt-5.4-mini"),
+        ("news_flash", "gpt-5.6-terra"),
+        ("ad", "gpt-5.6-terra"),
+        ("transition", "gpt-5.6-luna"),
     ],
 )
 async def test_openai_fallback_routes_by_caller_role(config, state, caller, expected_model):
     config.super_italian_mode = True
-    """Creative fallbacks use GPT-5.5; latency-sensitive transitions use GPT-5.4-mini."""
+    """Balanced: creative OpenAI fallback is Terra; fast stays on Luna."""
     config.openai_api_key = "openai-key"
     openai_client = _mock_openai_response(json.dumps({"ok": True}))
     mock_client = MagicMock()
@@ -2960,7 +3022,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-5.4-mini"
+    assert record.model == "gpt-5.6-terra"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True
