@@ -732,15 +732,16 @@ Script generation never names a model in code. Each call site asks for a model b
 | Profile | Anthropic creative | OpenAI creative | Fast routes |
 | --- | --- | --- | --- |
 | Premium | `opus` | `large` | `haiku` / `small` |
-| Balanced (default) | `sonnet` | `small` | `haiku` / `small` |
+| Balanced (default) | `sonnet` | `mid` | `haiku` / `small` |
 | Economy | `haiku` | `small` | `haiku` / `small` |
 
 - `model_registry.toml` is the canonical place provider model IDs and token prices
   live: a per-provider `catalog`, a `routing` map (task→role), named `profiles`
   (the admin "quality dial": `premium` | `balanced` | `economy`), the OpenAI
-  TTS model, and catalog-keyed pricing. `radio.toml` no longer owns model
-  selection; a legacy `[models]` block is compatibility input only and emits a
-  deprecation warning.
+  TTS model, catalog-keyed pricing, and optional catalog-keyed Anthropic effort.
+  The shipped Opus and Sonnet creative routes use `medium`; fast routes and
+  Haiku omit effort. `radio.toml` no longer owns model selection; a legacy
+  `[models]` block is compatibility input only and emits a deprecation warning.
 - `resolve_model()` is **total** — it tries the active profile, then
   `default_profile`, and returns `None` instead of raising when a registry route
   is unavailable. Callers degrade to stock copy or Edge TTS rather than making an

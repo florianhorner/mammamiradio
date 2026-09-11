@@ -454,9 +454,11 @@ not special for unquoted values, so `OPENAI_API_KEY=sk#abc` means the value cont
 **AI quality / model selection.** `quality_profile` (premium | balanced | economy)
 replaced the old `claude_model` dropdown. The operator picks *intent*, not a model
 snapshot, and `run.sh` maps it to `MAMMAMIRADIO_QUALITY` (a missing/blank value
-defaults to `balanced`). Creative work uses Opus/large in `premium`, Sonnet/small
-in `balanced`, and Haiku/small in `economy`; latency-sensitive `fast` work stays
-on Haiku/small in every profile. If the Supervisor-generated, read-only
+defaults to `balanced`). Creative work uses Opus/Sol in `premium`, Sonnet/Terra
+in `balanced`, and Haiku/Luna in `economy`; latency-sensitive `fast` work stays
+on Haiku/Luna in every profile. Opus and Sonnet creative calls use the registry's
+`medium` Anthropic effort; fast routes and Haiku omit effort. If the
+Supervisor-generated, read-only
 `/data/options.json` startup projection still contains the removed
 `claude_model` key, `run.sh` also
 exports it as the legacy `CLAUDE_MODEL` fast-role override while no
