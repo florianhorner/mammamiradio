@@ -385,6 +385,15 @@ verdict '{"tool_input":{"command":"gh pr create # --base HEAD"}}' "$FRESH_READER
   || fail "comment text must not change the default fork-point base (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
 pass "comment text is excluded from --base extraction"
 
+# Case 22c: the other half of the same rule. Only the FIRST gh pr create owns the
+# argument vector; a --base belonging to a later command segment must not be read
+# as this one's. Both halves are covered because either can regress alone.
+: > "$BASE_CAPTURE"
+verdict '{"tool_input":{"command":"gh pr create --base main && gh pr create --base HEAD"}}' "$FRESH_READER" "$EVIDENCE_CAPTURE" >/dev/null
+[ "$(cat "$BASE_CAPTURE" 2>/dev/null)" = "$EXPECTED_BASE" ] \
+  || fail "a later command segment's --base must not be used (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
+pass "later command segment's --base is ignored"
+
 # Case 23: --base=VALUE form is parsed
 [ "$(verdict '{"tool_input":{"command":"gh pr create --base=main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
   || fail "--base=VALUE form should still reach the receipt rule"
