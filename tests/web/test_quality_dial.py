@@ -102,8 +102,8 @@ async def test_post_quality_switch_changes_the_next_creative_model(monkeypatch):
     app = _make_test_app(is_addon=False)
     monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
     models = app.state.config.models
-    assert resolve_model(models, "banter", "anthropic") == "claude-sonnet-4-6"
-    assert resolve_model(models, "banter", "openai") == "gpt-5.4-mini"
+    assert resolve_model(models, "banter", "anthropic") == "claude-sonnet-5"
+    assert resolve_model(models, "banter", "openai") == "gpt-5.6-terra"
 
     with patch("mammamiradio.web.streamer._save_dotenv"):
         async with httpx.AsyncClient(
@@ -112,8 +112,8 @@ async def test_post_quality_switch_changes_the_next_creative_model(monkeypatch):
             response = await client.post("/api/quality", json={"quality_profile": "premium"})
 
     assert response.status_code == 200
-    assert resolve_model(models, "banter", "anthropic") == "claude-opus-4-8"
-    assert resolve_model(models, "banter", "openai") == "gpt-5.5"
+    assert resolve_model(models, "banter", "anthropic") == "claude-opus-5"
+    assert resolve_model(models, "banter", "openai") == "gpt-5.6-sol"
 
 
 @pytest.mark.asyncio
@@ -205,13 +205,13 @@ async def test_quality_requires_admin_for_public_ip():
 def test_cost_counter_prices_each_model():
     state = StationState(playlist=[])
     state.api_tokens_by_model = {
-        "claude-opus-4-8": {"input": 1_000_000, "output": 1_000_000},  # 15 + 75 = 90
-        "gpt-5.5": {"input": 1_000_000, "output": 1_000_000},  # 5 + 30 = 35 (premium creative fallback)
-        "gpt-5.4-mini": {"input": 1_000_000, "output": 1_000_000},  # 0.75 + 4.50 = 5.25
+        "claude-opus-5": {"input": 1_000_000, "output": 1_000_000},  # 5 + 25 = 30
+        "gpt-5.6-sol": {"input": 1_000_000, "output": 1_000_000},  # 4 + 20 = 24 (premium creative fallback)
+        "gpt-5.6-luna": {"input": 1_000_000, "output": 1_000_000},  # 0.20 + 1.20 = 1.40
     }
     cost, unpriced = _estimate_api_cost(state)
     assert unpriced is False
-    assert cost == pytest.approx(130.25, abs=0.01)
+    assert cost == pytest.approx(55.40, abs=0.01)
 
 
 def test_cost_counter_unpriced_model_flags_and_uses_conservative_default():
@@ -228,18 +228,18 @@ def test_cost_counter_never_zero_without_per_model_data():
     state.api_input_tokens = 1_000_000
     state.api_output_tokens = 1_000_000
     cost, unpriced = _estimate_api_cost(state)
-    # Cheapest configured tier (haiku: 0.8 + 4.0), never inflated.
-    assert cost == pytest.approx(4.8, abs=0.01)
+    # Cheapest configured tier (gpt-5.6-luna: 0.20 + 1.20), never inflated.
+    assert cost == pytest.approx(1.40, abs=0.01)
     assert unpriced is False  # no per-model data is not an unpriced *model*
 
 
 def test_cost_counter_includes_tts_characters():
     """Paid TTS characters add a blended estimate on top of the LLM token cost."""
     state = StationState(playlist=[])
-    state.api_tokens_by_model = {"gpt-5.4-mini": {"input": 1_000_000, "output": 1_000_000}}  # 5.25
+    state.api_tokens_by_model = {"gpt-5.6-luna": {"input": 1_000_000, "output": 1_000_000}}  # 1.40
     state.tts_characters = 1_000_000  # * 0.00002 blended = 20.00
     cost, _ = _estimate_api_cost(state)
-    assert cost == pytest.approx(5.25 + 20.0, abs=0.01)
+    assert cost == pytest.approx(1.40 + 20.0, abs=0.01)
 
 
 def test_cost_breakdown_registries_cover_all_llm_categories():
@@ -249,11 +249,11 @@ def test_cost_breakdown_registries_cover_all_llm_categories():
 
 def test_cost_breakdown_prices_model_aware_categories_and_reconciles_units():
     state = StationState(playlist=[])
-    state.record_llm_usage("script_banter", "claude-opus-4-8", 1_000_000, 1_000_000)
-    state.record_llm_usage("script_banter", "gpt-5.4-mini", 1_000_000, 1_000_000)
-    state.record_llm_usage("script_transition", "gpt-5.4-mini", 10_000, 10_000)
-    state.record_llm_usage("script_ads", "gpt-5.5", 100_000, 100_000)
-    state.record_llm_usage("script_memory", "gpt-5.4-mini", 1_000, 500)
+    state.record_llm_usage("script_banter", "claude-opus-5", 1_000_000, 1_000_000)
+    state.record_llm_usage("script_banter", "gpt-5.6-luna", 1_000_000, 1_000_000)
+    state.record_llm_usage("script_transition", "gpt-5.6-luna", 10_000, 10_000)
+    state.record_llm_usage("script_ads", "gpt-5.6-sol", 100_000, 100_000)
+    state.record_llm_usage("script_memory", "gpt-5.6-luna", 1_000, 500)
     state.record_tts_usage(50_000)
 
     payload = _consumption_cost(state)
@@ -262,7 +262,7 @@ def test_cost_breakdown_prices_model_aware_categories_and_reconciles_units():
 
     assert breakdown["available"] is True
     assert breakdown["total_usd"] == payload["api_cost_estimate_usd"]
-    assert cats["script_banter"]["raw_cost_usd"] == pytest.approx(95.25, abs=0.0001)
+    assert cats["script_banter"]["raw_cost_usd"] == pytest.approx(31.40, abs=0.0001)
     assert cats["tts"]["raw_cost_usd"] == pytest.approx(1.0, abs=0.0001)
     assert sum(cat["calls"] for cat in cats.values()) == state.api_calls
     assert sum(cat["input_tokens"] for cat in cats.values()) == state.api_input_tokens
@@ -338,10 +338,10 @@ async def test_status_surfaces_unpriced_flag():
 async def test_status_surfaces_fixed_key_cost_breakdown():
     app = _make_test_app()
     state = app.state.station_state
-    state.record_llm_usage("script_banter", "gpt-5.4-mini", 1000, 500)
-    state.record_llm_usage("script_transition", "gpt-5.4-mini", 100, 50)
-    state.record_llm_usage("script_ads", "gpt-5.5", 200, 100)
-    state.record_llm_usage("script_memory", "gpt-5.4-mini", 20, 10)
+    state.record_llm_usage("script_banter", "gpt-5.6-luna", 1000, 500)
+    state.record_llm_usage("script_transition", "gpt-5.6-luna", 100, 50)
+    state.record_llm_usage("script_ads", "gpt-5.6-sol", 200, 100)
+    state.record_llm_usage("script_memory", "gpt-5.6-luna", 20, 10)
     state.record_tts_usage(300)
 
     async with httpx.AsyncClient(

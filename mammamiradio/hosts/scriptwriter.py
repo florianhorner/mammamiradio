@@ -22,12 +22,12 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import cycle, pairwise
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anthropic
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
-from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_model
+from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, effort_for, resolve_model
 from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims, home_return_authority_for_directive
 from mammamiradio.core.models import (
@@ -127,11 +127,11 @@ _ANTHROPIC_TRANSIENT_BACKOFF_SECONDS = 20
 _ANTHROPIC_TRANSIENT_BACKOFF_FLOOR = 5
 _ANTHROPIC_TRANSIENT_BACKOFF_MAX = 60
 # gpt-5.x reasoning models bill hidden reasoning tokens against
-# `max_completion_tokens`. We request `reasoning_effort="minimal"` for these
-# short radio snippets (see _call_openai) so reasoning is near-zero — that keeps
+# `max_completion_tokens`. We request `reasoning_effort="none"` for these short
+# radio snippets (see _call_openai) so hidden reasoning is disabled — that keeps
 # the visible JSON from being starved AND keeps the per-request cap small, since
 # OpenAI estimates rate-limit (TPM) usage from the requested cap, not the actual
-# output. This small residual buffer covers minimal-reasoning + JSON framing
+# output. This small residual buffer covers JSON framing
 # without inflating every short fallback into a multi-thousand-token request.
 _OPENAI_REASONING_HEADROOM = 512
 # A max_tokens-truncated response is a budget problem, not a provider-health
@@ -1140,13 +1140,19 @@ async def _generate_json_response(
                     _anthropic_in = _anthropic_out = 0
                     try:
                         client = _get_client(config.anthropic_api_key)
+                        create_kwargs: dict[str, Any] = {
+                            "model": model,
+                            "max_tokens": current_max_tokens,
+                            "system": system_prompt,
+                            "messages": [{"role": "user", "content": prompt}],
+                        }
+                        # Adaptive thinking on Claude 5 creative models. Haiku has
+                        # no effort entry and must never receive output_config.
+                        effort_level = effort_for(config.models, "anthropic", model, caller=caller)
+                        if effort_level:
+                            create_kwargs["extra_body"] = {"output_config": {"effort": effort_level}}
                         resp = await asyncio.wait_for(
-                            client.with_options(max_retries=0).messages.create(
-                                model=model,
-                                max_tokens=current_max_tokens,
-                                system=system_prompt,
-                                messages=[{"role": "user", "content": prompt}],
-                            ),
+                            client.with_options(max_retries=0).messages.create(**create_kwargs),
                             timeout=_attempt_timeout(current_max_tokens),
                         )
                         # Read stop_reason before indexing content: a max_tokens cut can
@@ -1396,11 +1402,10 @@ async def _generate_json_response(
 
         def _call_openai(kwargs=openai_kwargs):
             try:
-                # "minimal" reasoning keeps these short snippets from spending the
-                # completion cap on hidden reasoning tokens (which would starve the
-                # visible JSON) while keeping the request — and its TPM footprint —
-                # small and low-latency.
-                return client.chat.completions.create(reasoning_effort="minimal", **kwargs)
+                # "none" is the lowest effort accepted by the GPT-5.6 ladder. It
+                # keeps these short snippets from spending the completion cap on
+                # hidden reasoning tokens (which would starve the visible JSON).
+                return client.chat.completions.create(reasoning_effort="none", **kwargs)
             except Exception as exc:
                 # An operator can point OPENAI_SCRIPT_MODEL at a non-reasoning model
                 # that rejects `reasoning_effort` with a 400. Retry once without it
