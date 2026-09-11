@@ -294,6 +294,7 @@ _DEFAULT_ROUTING: dict[str, str] = {
 # Adaptive-thinking effort levels accepted on Anthropic models that support them.
 # Haiku 4.5 does not; never send effort for a claude-haiku* ID.
 ALLOWED_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+EFFORT_UNSUPPORTED_MODEL_PREFIX = "claude-haiku"
 
 
 @dataclass
@@ -437,7 +438,7 @@ def _parse_effort_table(
                 )
                 continue
             model_id = provider_catalog[key]
-            if isinstance(model_id, str) and model_id.startswith("claude-haiku"):
+            if isinstance(model_id, str) and model_id.startswith(EFFORT_UNSUPPORTED_MODEL_PREFIX):
                 log.warning(
                     "models.effort.%s.%s points at Haiku (%s), which rejects effort; dropping",
                     provider_key,

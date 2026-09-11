@@ -312,6 +312,36 @@ def test_shipped_registry_parses_effort_for_creative_only(models: ModelsSection)
     assert effort_for(models, "openai", "gpt-5.6-sol", caller="banter", profile="premium") is None
 
 
+def test_memory_extraction_never_carries_effort(models: ModelsSection) -> None:
+    """Post-air memory extraction shares the fast role and must stay effort-free."""
+    from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER
+
+    model = resolve_model(models, MEMORY_EXTRACT_CALLER, "anthropic")
+
+    assert model == "claude-haiku-4-5-20251001"
+    assert effort_for(models, "anthropic", model, caller=MEMORY_EXTRACT_CALLER) is None
+
+
+def test_effort_follows_default_profile_when_active_profile_omits_provider() -> None:
+    """effort_for resolves through the same profile fallback as resolve_model."""
+    models = _parse_models_section(
+        {
+            "models": {
+                "default_profile": "balanced",
+                "catalog": {"anthropic": {"sonnet": "claude-sonnet-5"}},
+                "profiles": {
+                    "balanced": {"anthropic": {"creative": "sonnet"}},
+                    "economy": {"openai": {"creative": "small"}},
+                },
+                "effort": {"anthropic": {"sonnet": "medium"}},
+            }
+        }
+    )
+
+    assert resolve_model(models, "banter", "anthropic", profile="economy") == "claude-sonnet-5"
+    assert effort_for(models, "anthropic", "claude-sonnet-5", caller="banter", profile="economy") == "medium"
+
+
 def test_fast_env_override_matching_creative_model_does_not_inherit_effort(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-5")
     models = load_config().models

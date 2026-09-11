@@ -1510,6 +1510,21 @@ def test_validate_addon_effort_levels_match_runtime() -> None:
     assert frozenset(ast.literal_eval(match.group(1))) == ALLOWED_EFFORT_LEVELS
 
 
+def test_validate_addon_effort_haiku_prefix_matches_runtime() -> None:
+    """The level set is pinned; the model prefix that rejects effort must be too."""
+    import ast
+    import re
+
+    from mammamiradio.core.config import EFFORT_UNSUPPORTED_MODEL_PREFIX
+
+    match = re.search(
+        r"model_id\.startswith\(('[^']+'|\"[^\"]+\")\)",
+        VALIDATE_ADDON.read_text(),
+    )
+    assert match is not None, "validate-addon.sh must guard effort on the unsupported model prefix"
+    assert ast.literal_eval(match.group(1)) == EFFORT_UNSUPPORTED_MODEL_PREFIX
+
+
 def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
     import re
 
