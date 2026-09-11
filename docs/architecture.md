@@ -1038,13 +1038,21 @@ Two properties this depends on, both of which have bitten before:
   instead of the cast key. `_resolve_ad_role` folds case and strips a trailing
   parenthetical before the role reaches `AdPart`; an unmatched role is preserved,
   not blanked, so it keeps falling through to `default_voice`.
-- **Speed is engine-independent.** Only Edge and Azure honour SSML `rate`;
-  ElevenLabs and OpenAI have no speed control and silently discard it. Those two
-  receive the same speed as an `atempo` factor (`_rate_to_tempo`) applied as a
-  *filter* inside the re-encode `normalize()` already runs — never as a separate
-  stage, which would take a second `audio.admission` slot and add one ffmpeg
-  process per line. `_atempo_chain` splits factors outside `[0.5, 2.0]` so the
-  chain stays valid on whatever ffmpeg the floating Home Assistant base ships.
+- **Speed is engine-independent.** The fine print is time-compressed by
+  `DISCLAIMER_TEMPO` (1.95) on *every* engine, never by SSML `rate`. Only Edge
+  and Azure honour `rate` at all, and at this speed the two mechanisms do not
+  sound alike, so splitting formats between them would put the delivery back at
+  the mercy of casting. The compression is a *filter* inside the re-encode
+  `normalize()` already runs — never a separate stage, which would take a second
+  `audio.admission` slot and add one ffmpeg process per line. `_atempo_chain`
+  splits factors outside `[0.5, 2.0]` so the chain stays valid on whatever
+  ffmpeg the floating Home Assistant base ships.
+- **Breath gaps are stripped before compressing**, in that order. The other way
+  round spends compression on silence, and the surviving pauses make the line
+  read as someone talking fast rather than as the legal blur the gag needs.
+  Measured across the four approved engines the delivered rate lands at
+  2.10-2.31x; the spread is per-voice breathiness, which is what gap-stripping
+  normalizes away. `rate` remains in use for host prosody and is unrelated.
 
 Pharma brands additionally get the canonical medicine tail appended
 (`_pharma_disclaimer_text`); it replaces any disclaimer the model wrote, so the

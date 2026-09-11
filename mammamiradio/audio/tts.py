@@ -15,7 +15,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -111,11 +111,19 @@ _cloud_voice_state_lock = threading.Lock()
 _HEAVY_SEM = asyncio.Semaphore(2)
 _MIN_DIALOGUE_LINE_BYTES = 1024
 _MIN_DIALOGUE_LINE_DURATION_SEC = 0.5
-# Disclaimer voice rate by ad format. Formats not listed use the +35%
-# disclaimer_goblin default shared by the other ad treatments.
-_DISCLAIMER_RATE_BY_FORMAT = {
-    "classic_pitch": "+55%",
-}
+# How fast the ad fine print is delivered.  One number for every format and
+# every engine: the joke is a legal blur you can hear but not parse, and it has
+# to land identically whichever voice the caster picked.
+#
+# Applied as an atempo filter, never as SSML rate.  Only Edge and Azure honour
+# SSML rate at all, and at this speed the two mechanisms do not sound alike, so
+# routing some formats through one and some through the other would put the
+# delivery back at the mercy of casting.
+#
+# 1.95 chosen by ear from a rendered ladder (1.55 / 2.0 / 2.5 / 3.0 / 3.5, with
+# and without breath gaps).  1.55 was "far too slow, rips out the comedic
+# effect"; 3.0+ turns to mush.  Gap-stripping puts the effective rate near 2.1x.
+DISCLAIMER_TEMPO = 1.95
 
 
 class TTSUnavailableError(RuntimeError):
@@ -695,29 +703,6 @@ def _coerce_edge_voice(voice: str, *, edge_fallback_voice: str = "") -> str:
     return fallback
 
 
-def _rate_to_tempo(rate: str | None) -> float:
-    """Convert an SSML rate string ("+55%") to an atempo factor (1.55).
-
-    Only Edge and Azure honour SSML ``rate``; ElevenLabs and OpenAI have no
-    speed control and silently discard it.  Those two get the same speed as a
-    time-compression filter inside the re-encode they already run, so delivery
-    stops depending on which engine a voice happens to be cast on.  Returns 1.0
-    for anything unparseable — a mis-typed rate must not distort speech.
-    """
-    if not rate:
-        return 1.0
-    try:
-        percent = float(str(rate).strip().rstrip("%"))
-    except ValueError:
-        logger.warning("Unparseable TTS rate %r; rendering at normal speed", rate)
-        return 1.0
-    tempo = 1.0 + percent / 100.0
-    if tempo <= 0.0:
-        logger.warning("TTS rate %r resolves to a non-positive tempo; ignoring", rate)
-        return 1.0
-    return tempo
-
-
 def _openai_instructions_for_host(host: HostPersonality) -> str:
     """Build OpenAI TTS instructions from host personality axes and style.
 
@@ -918,6 +903,7 @@ async def synthesize_azure(
     loudnorm: bool = True,
     api_key: str = "",
     region: str = "",
+    tempo: float = 1.0,
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with Azure Speech TTS REST API, then normalize to station settings."""
@@ -953,7 +939,7 @@ async def synthesize_azure(
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])
@@ -1155,9 +1141,15 @@ async def synthesize(
     delivery_cue: str = "neutral",
     delivery_profile: str = "none",
     host_name: str = "",
+    tempo: float = 1.0,
     state: StationState | None = None,
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
+
+    ``tempo`` time-compresses the finished render and is independent of ``rate``:
+    ``rate`` is SSML prosody that only two of the four engines honour, while
+    ``tempo`` is an FFmpeg filter in the re-encode every engine already runs. Ad
+    fine print uses ``tempo`` so it sounds the same on every voice.
 
     engine="openai" uses the registry-selected OpenAI speech model. Falls back
     to edge-tts if the key or registry route is unavailable. When falling back,
@@ -1217,7 +1209,7 @@ async def synthesize(
                             instructions=openai_instructions,
                             loudnorm=loudnorm,
                             api_key=openai_api_key,
-                            tempo=_rate_to_tempo(rate),
+                            tempo=tempo,
                             on_paid_provider_success=_bill_tts,
                         ),
                         "OpenAI",
@@ -1291,6 +1283,7 @@ async def synthesize(
                                 loudnorm=loudnorm,
                                 api_key=azure_api_key,
                                 region=azure_region,
+                                tempo=tempo,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "Azure",
@@ -1367,7 +1360,7 @@ async def synthesize(
                                 delivery_profile=delivery_profile,
                                 host_name=host_name,
                                 api_key=elevenlabs_api_key,
-                                tempo=_rate_to_tempo(rate),
+                                tempo=tempo,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "ElevenLabs",
@@ -1454,7 +1447,7 @@ async def synthesize(
             await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
 
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+            await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo))
             _unlink_many([raw_path])
 
             if fallback_reason:
@@ -1497,7 +1490,9 @@ async def synthesize(
                     comm = edge_tts.Communicate(text, fallback, rate=rate or "+0%", pitch=pitch or "+0Hz")
                     await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
                     loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+                    await loop.run_in_executor(
+                        None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo)
+                    )
                     _unlink_many([raw_path])
                     character = f" character={host_name}" if host_name else ""
                     logger.info(
@@ -1675,7 +1670,7 @@ async def synthesize_ad(
             if voice_for_part.voice_settings:
                 extra["voice_settings"] = voice_for_part.voice_settings
             if part.role == DISCLAIMER_ROLE:
-                extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
+                extra["tempo"] = DISCLAIMER_TEMPO
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
             return await synthesize(
                 part.text,
@@ -2257,9 +2252,21 @@ async def synthesize_ad(
         return output_path
 
 
-def _prosody_for_host(host: HostPersonality) -> dict[str, str]:
+class _HostProsody(TypedDict, total=False):
+    """Exactly the SSML knobs a host personality may set.
+
+    Typed narrowly because this is splatted into ``synthesize(**...)``: a plain
+    ``dict[str, str]`` would let mypy believe it could supply ``tempo``, which
+    is a float, and the splat would hide the mismatch until runtime.
+    """
+
+    rate: str
+    pitch: str
+
+
+def _prosody_for_host(host: HostPersonality) -> _HostProsody:
     """Derive TTS rate/pitch adjustments from personality axes."""
-    kwargs: dict[str, str] = {}
+    kwargs: _HostProsody = {}
     p = host.personality
     if p.energy > 60:
         kwargs["rate"] = "+10%"

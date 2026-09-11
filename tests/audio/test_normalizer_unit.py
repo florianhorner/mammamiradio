@@ -1203,8 +1203,14 @@ def test_normalize_prepends_atempo_when_tempo_is_set(mock_subprocess):
     cmd = mock_run.call_args[0][0]
     assert mock_run.call_count == 1, "atempo must not add a second ffmpeg invocation"
     chain = cmd[cmd.index("-filter:a") + 1]
-    assert chain.startswith("atempo=1.55,"), f"atempo must lead the chain, got {chain!r}"
-    assert "silenceremove" in chain, "atempo must not replace the existing filter"
+    # Order is load-bearing: strip every breath FIRST, then compress. The other
+    # way round spends compression on silence and leaves the pauses that make a
+    # sped-up line read as fast talking instead of a legal blur.
+    assert chain.index("silenceremove") < chain.index("atempo"), (
+        f"gaps must be stripped before compression, got {chain!r}"
+    )
+    assert "stop_duration=0.08" in chain, "internal breaths are not being removed"
+    assert "atempo=1.55" in chain, f"tempo not applied: {chain!r}"
 
 
 def test_normalize_omits_atempo_at_normal_speed(mock_subprocess):

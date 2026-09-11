@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from mammamiradio.audio.tts import DISCLAIMER_TEMPO
 from mammamiradio.core.models import HostPersonality, StationState
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 
@@ -2283,7 +2284,7 @@ async def test_synthesize_elevenlabs_full_failure_fails_closed(_mock_all, tmp_pa
 
 @pytest.mark.asyncio
 async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
-    """Disclaimer speed is format-scoped and no longer the old near-2x spike."""
+    """The fine print is time-compressed, uniformly, on whatever voice is cast."""
     from mammamiradio.audio.tts import synthesize_ad
 
     script = AdScript(
@@ -2300,16 +2301,12 @@ async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
 
-    # Check that Communicate was called with the classic-pitch disclaimer rate.
-    calls = _mock_all["Communicate"].call_args_list
-    assert len(calls) >= 1
-    found_rate = False
-    for call in calls:
-        kwargs = call.kwargs if call.kwargs else {}
-        if kwargs.get("rate") == "+55%":
-            found_rate = True
-            break
-    assert found_rate, f"Expected rate='+55%' in Communicate calls, got: {calls}"
+    # Speed is an atempo filter, not SSML rate: only two of the four engines
+    # honour rate, so routing the gag through it made delivery depend on casting.
+    tempos = [(c.kwargs or {}).get("tempo", 1.0) for c in _mock_all["normalize"].call_args_list]
+    assert DISCLAIMER_TEMPO in tempos, f"disclaimer was not time-compressed: {tempos}"
+    rates = {(c.kwargs or {}).get("rate", "+0%") for c in _mock_all["Communicate"].call_args_list}
+    assert rates == {"+0%"}, f"fine print must not also carry an SSML rate: {rates}"
 
 
 @pytest.mark.asyncio
@@ -2336,23 +2333,26 @@ async def test_ordinary_ad_copy_is_never_sped_up(_mock_all, tmp_path):
 
     await synthesize_ad(script, voices, tmp_path)
 
-    rates = sorted({(c.kwargs or {}).get("rate", "+0%") for c in _mock_all["Communicate"].call_args_list})
-    assert rates == ["+0%", "+55%"], f"expected exactly one sped-up line, got {rates}"
+    tempos = [(c.kwargs or {}).get("tempo", 1.0) for c in _mock_all["normalize"].call_args_list]
+    assert sorted(tempos) == [1.0, DISCLAIMER_TEMPO], f"expected exactly one sped-up line, got {tempos}"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("engine", ["elevenlabs", "openai"])
-async def test_disclaimer_is_time_compressed_on_engines_that_ignore_rate(_mock_all, tmp_path, engine, monkeypatch):
-    """ElevenLabs and OpenAI have no rate parameter and silently discard it.
+@pytest.mark.parametrize("engine", ["elevenlabs", "openai", "azure"])
+async def test_disclaimer_is_time_compressed_on_every_engine(_mock_all, tmp_path, engine, monkeypatch):
+    """The gag must land identically whichever engine the voice is cast on.
 
     AdVoice.engine defaults to "edge", so a test that omits it passes while
-    production runs the role on a cloud voice that never speeds up. This pins
-    the engine explicitly: the disclaimer must still come out compressed.
+    production runs the role on a cloud voice. Each cloud renderer is pinned
+    explicitly here; the Edge path is covered by
+    test_synthesize_ad_disclaimer_goblin_rate above.
     """
     from mammamiradio.audio import tts as tts_mod
 
     monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
     monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "k")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
 
     seen: dict[str, float] = {}
 
@@ -2364,6 +2364,7 @@ async def test_disclaimer_is_time_compressed_on_engines_that_ignore_rate(_mock_a
 
     monkeypatch.setattr(tts_mod, "synthesize_elevenlabs", _fake_cloud)
     monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_cloud)
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_cloud)
 
     script = AdScript(
         brand="PharmaCo",
@@ -2378,9 +2379,9 @@ async def test_disclaimer_is_time_compressed_on_engines_that_ignore_rate(_mock_a
 
     await tts_mod.synthesize_ad(script, voices, tmp_path)
 
-    assert seen.get("tempo") == pytest.approx(1.55), (
+    assert seen.get("tempo") == pytest.approx(DISCLAIMER_TEMPO), (
         f"{engine} disclaimer was not time-compressed (tempo={seen.get('tempo')!r}); "
-        "the SSML rate is discarded by this engine"
+        "delivery must not depend on which engine the voice is cast on"
     )
 
 
@@ -3340,11 +3341,11 @@ async def test_synthesize_dialogue_normalize_cancellation_waits_then_cleans_scra
     normalize_started = threading.Event()
     release_normalize = threading.Event()
 
-    def _slow_final_normalize(input_path, output_path, config=None, *, loudnorm=True):
+    def _slow_final_normalize(input_path, output_path, config=None, **kwargs):
         if input_path.name.startswith("dialogue_raw_"):
             normalize_started.set()
             assert release_normalize.wait(timeout=2.0)
-        return _normalize_side_effect(input_path, output_path, config, loudnorm=loudnorm)
+        return _normalize_side_effect(input_path, output_path, config, **kwargs)
 
     _mock_all["normalize"].side_effect = _slow_final_normalize
     task = asyncio.create_task(

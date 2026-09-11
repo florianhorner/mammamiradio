@@ -675,6 +675,15 @@ def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
     return True
 
 
+# Fine print only: remove leading, trailing AND internal silence.  The 0.08s
+# stop_duration is short enough to catch inter-phrase breaths, which the normal
+# 0.3s trailing-only trim leaves in place.
+_SILENCE_ALL_GAPS = (
+    "silenceremove=start_periods=1:start_duration=0:start_threshold=-40dB:"
+    "stop_periods=-1:stop_duration=0.08:stop_threshold=-40dB"
+)
+
+
 def _atempo_chain(tempo: float) -> str:
     """Build an atempo filter chain valid on every ffmpeg build we may run on.
 
@@ -728,7 +737,9 @@ def normalize(
     ffmpeg process per line.  As a filter it measures CHEAPER than the baseline
     chain (0.82x CPU at tempo=1.55 with -threads 1), because atempo is O(n)
     time-domain while the shorter stream leaves libmp3lame ~35% fewer samples to
-    encode.  Applied first so silenceremove trims the real tail.
+    Time-compression also strips every silence gap (breaths included) before
+    compressing, which is the fine-print treatment rather than a generic
+    speed-up.
     """
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
@@ -790,7 +801,11 @@ def normalize(
         audio_filter = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
 
     if tempo and abs(tempo - 1.0) > 1e-3:
-        audio_filter = f"{_atempo_chain(tempo)},{audio_filter}"
+        # Fine-print treatment, in this order on purpose: strip EVERY silence gap
+        # first, then time-compress.  The other way round spends compression on
+        # silence, and the surviving breaths are what make a sped-up line read as
+        # "someone talking fast" instead of the legal blur the gag needs.
+        audio_filter = f"{_SILENCE_ALL_GAPS},{_atempo_chain(tempo)}"
 
     cmd = [
         "ffmpeg",
