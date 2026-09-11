@@ -110,7 +110,7 @@ the shared audio queue:
   (`record_accepted_playback` returns early on `is_complete_listener_proof`).
   Browser-local confirmation presents no attempt id at all.
 - If the audible moment happened but the receipt write failed, the app keeps
-  only a process-local recovery handle so **Restore sound check** can retry the
+  only a process-local recovery handle so **Save my sound check** can retry the
   same fact without replaying audio.
 - Feature-era install origin uses two agreeing witnesses: the owner-only
   `cache/state/first_listen_install_origin_v1.json` sidecar and the private
@@ -1314,7 +1314,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
-| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped |
+| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped. `?first_listen=live` keeps that resume wait but suppresses the packaged prelude, so the browser that already heard the opening rejoins the live hub on an explicit transport click instead of replaying it while human confirmation is still pending |
 | `/healthz` | GET | Public | Runtime-health probe with process uptime; prolonged silence with active listeners returns `503`, while an intentional Stop remains healthy |
 | `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped` |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), process-local `ad_experiment` completion counts, `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |

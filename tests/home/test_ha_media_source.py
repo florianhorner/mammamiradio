@@ -269,7 +269,7 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     lowered_first_listen = rendered_first_listen.lower()
 
     stream_proof = first_listen.index("`/stream`")
-    human_confirmation = first_listen.index("**Yes, I hear it**")
+    human_confirmation = first_listen.index("**I hear you**")
     privacy_choice = first_listen.index("**Keep Home private**")
     assert stream_proof < human_confirmation < privacy_choice
     assert "current device" in lowered_first_listen or "device in front of you" in lowered_first_listen

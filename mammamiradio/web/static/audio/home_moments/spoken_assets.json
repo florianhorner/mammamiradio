@@ -11,7 +11,8 @@
       "kind": "station-segment",
       "language": "en",
       "reachability": "day-one",
-      "transcript": "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly. Marco: Officially evening means slow songs only from here. I don’t make the rules. Giulia makes the rules."
+      "transcript": "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly. Marco: Officially evening means slow songs only from here. I don’t make the rules. Giulia makes the rules.",
+      "quote": "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly."
     },
     {
       "path": "laundry.mp3",
@@ -20,7 +21,8 @@
       "kind": "station-segment",
       "language": "en",
       "transcript": "Giulia: Four minutes on one penalty kick tonight, Marco. Three of them were about your hair. Marco: The hair is part of the sport, Giulia. Cinema. Pure cinema. Marco: You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us. Giulia: You heard it here first. Up next: the sports desk, which is unfortunately still Marco’s.",
-      "reachability": "home-grant"
+      "reachability": "home-grant",
+      "quote": "Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us."
     },
     {
       "path": "arrival.mp3",
@@ -29,7 +31,8 @@
       "kind": "station-segment",
       "language": "en",
       "transcript": "Marco: Limit 70! Kevin MacLeod. The official soundtrack of the drive home, Giulia. Giulia: You have never once driven the speed limit, Marco. Marco: And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa. Giulia: Benvenuto a casa indeed. Next up, a song for walking in the door.",
-      "reachability": "home-grant"
+      "reachability": "home-grant",
+      "quote": "Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa."
     },
     {
       "path": "coffee.mp3",
@@ -38,7 +41,8 @@
       "kind": "station-segment",
       "language": "en",
       "transcript": "Marco: Newer Wave! Kevin MacLeod. A visionary — we are very similar, he and I. Giulia: He writes music, Marco. You read a schedule. And nobody is listening to it. Not even your mother. Giulia: Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday. Marco: A Tuesday coffee deserves a Tuesday song. Andiamo.",
-      "reachability": "home-grant"
+      "reachability": "home-grant",
+      "quote": "The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday."
     }
   ]
 }

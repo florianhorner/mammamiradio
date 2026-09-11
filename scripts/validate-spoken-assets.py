@@ -582,6 +582,8 @@ class _HomeMomentSceneParser(HTMLParser):
         self._depth = 0
         self._active = None
         self._root_depth = 0
+        self._in_quote = False
+        self._quote_parts: list = []
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
         attributes = dict(attrs)
@@ -595,19 +597,38 @@ class _HomeMomentSceneParser(HTMLParser):
                     return
                 if key in self.scenes:
                     self.duplicate_keys.add(key)
-                self.scenes[key] = {"reachability": attributes.get("data-reachability"), "chipped": False}
+                self.scenes[key] = {
+                    "reachability": attributes.get("data-reachability"),
+                    "chipped": False,
+                    "quote": None,
+                }
                 self._active = key
                 self._root_depth = self._depth
                 return
         if self._active is not None and "day-one-chip" in classes:
             self.scenes[self._active]["chipped"] = True
+        # The pull quote is the first <span> in the scene; later spans belong to
+        # the play-button copy inside .household-example.
+        if tag == "span" and self._active is not None and self.scenes[self._active]["quote"] is None:
+            self._in_quote = True
+            self._quote_parts = []
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "span" and self._in_quote and self._active is not None:
+            self.scenes[self._active]["quote"] = " ".join("".join(self._quote_parts).split())
+            self._in_quote = False
+            self._quote_parts = []
         if tag == "div":
             if self._active is not None and self._depth == self._root_depth:
                 self._active = None
                 self._root_depth = 0
+                self._in_quote = False
+                self._quote_parts = []
             self._depth = max(0, self._depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._in_quote:
+            self._quote_parts.append(data)
 
 
 class _GuideTranscriptParser(HTMLParser):
@@ -1018,6 +1039,14 @@ def _validate_home_moment_reachability(source: str, expected: dict) -> list[str]
                 f"but its manifest entry is {manifest_value!r}"
             )
             continue
+        expected_quote = expected[key].get("quote") if isinstance(expected[key], dict) else None
+        shown = scenes[key]["quote"]
+        if isinstance(expected_quote, str):
+            normalized = " ".join(expected_quote.split())
+            if shown is None:
+                errors.append(f"admin home moment {key} scene shows no pull quote")
+            elif shown.strip('\u201c\u201d"') != normalized:
+                errors.append(f"admin home moment {key} scene quote does not match its manifest quote")
         if manifest_value == HOME_MOMENT_DAY_ONE and not chipped:
             errors.append(f"admin home moment {key} is reachable today but its scene carries no day-one-chip")
         elif manifest_value != HOME_MOMENT_DAY_ONE and chipped:

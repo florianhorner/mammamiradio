@@ -26,11 +26,12 @@ control room, with review and repair under **Motore → Setup**:
    sits underneath as supporting detail. It says whether primary music,
    recovery cover, or a music repair is what follows; bundled demo music is not
    presented as a song library.
-2. Select **Start sound check**. Confirm with **Yes, I hear it** only after you
-   hear Mamma Mi Radio, or **Not yet** for
+2. Select **Play my station**. Confirm with **I hear you** only after you
+   hear Mamma Mi Radio, or **No sound yet** for
    [warm repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
-3. Select **Keep Home private** without reading Home state, or
-   **See what the hosts would receive** before
+3. Select **Finish with Home private** to finish without reading Home state, or
+   **Add live host writing** first. To share Home details instead, use
+   **See what the hosts would receive**, then **Keep Home private** or
    **Let Marco and Giulia use these details**.
    If the preview contains only generic daylight, the UI discloses it as
    ambient-only and not meaningful personalization, and recommends keeping it

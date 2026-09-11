@@ -1384,6 +1384,33 @@ def test_admin_home_moment_metadata_rejects_a_chip_outside_the_heading() -> None
         assert any("laundry is 'home-grant' but its scene carries a day-one-chip" in e for e in errors), mutation
 
 
+def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
+    """The visible quote is the line a reader actually reads.
+
+    Two of the four quotes are paraphrases of their own transcripts (the
+    explainer stores quote and transcript separately), so the transcript check
+    cannot stand in for this one.
+    """
+
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    errors = _admin_home_moment_errors(
+        template.replace(
+            "Sunset was twenty minutes ago, eleven degrees and clear.",
+            "Sunset was ten minutes ago, nine degrees and cloudy.",
+        )
+    )
+    assert any("quote does not match its manifest quote" in error for error in errors), errors
+
+
+def test_home_moment_quotes_are_the_explainer_quotes() -> None:
+    """One source of truth for the quote, as for the bytes and the transcript."""
+
+    manifest = json.loads((HOME_MOMENT_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    scenarios = (ROOT / "docs" / "explainer" / "scenarios.mjs").read_text(encoding="utf-8")
+    for entry in manifest["assets"]:
+        assert f'quote: "{entry["quote"]}"' in scenarios, entry["path"]
+
+
 def test_admin_home_moment_metadata_rejects_an_empty_spoken_noun() -> None:
     source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
         "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'evening',", "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'',"

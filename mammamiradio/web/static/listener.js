@@ -477,12 +477,12 @@
     // wantsPlay is the single intent source: startStream() sets it,
     // setPlayingUi(true) restores it, and external pauses clear it.
     const hasIntent = !stopped && state.wantsPlay;
-    const label = hostPlayback?.reloadRequired ? 'Reload player' : stopped
+    const label = hostPlayback?.reloadRequired ? _t('listen_reload', 'Reload player') : stopped
       ? _t('listen_stopped', 'Station paused')
       : hasIntent
         ? _t('listen_pause', 'Pause')
         : _t('listen_now', 'Listen Now');
-    const ariaLabel = hostPlayback?.reloadRequired ? 'Reload player' : stopped
+    const ariaLabel = hostPlayback?.reloadRequired ? _t('listen_reload', 'Reload player') : stopped
       ? _t('listen_paused_aria', 'Station paused')
       : hasIntent
         ? _t('listen_pause_aria', 'Pause station')
