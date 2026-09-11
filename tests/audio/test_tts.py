@@ -5348,18 +5348,20 @@ async def test_cloud_renderer_bodies_forward_tempo_to_normalize(_mock_all, tmp_p
     )
 
 
-@pytest.mark.parametrize("failure", ["exception", "too_small"])
+@pytest.mark.parametrize("failure", ["exception", "too_small", "too_short"])
 def test_tempo_normalization_retries_once_at_normal_speed(_mock_all, tmp_path, failure):
     from mammamiradio.audio.tts import _normalize_tolerating_tempo
 
     raw, out = tmp_path / "raw.mp3", tmp_path / "out.mp3"
     raw.write_bytes(b"raw")
+    if failure == "too_short":
+        _mock_all["ffprobe_duration"].return_value = 0.1
 
     def first_failure(input_path, output_path, config=None, **kwargs):
         if _mock_all["normalize"].call_count == 1:
             if failure == "exception":
                 raise RuntimeError("tempo filter failed")
-            output_path.write_bytes(b"tiny")
+            output_path.write_bytes(b"tiny" if failure == "too_small" else b"sized" * 1024)
             return output_path
         return _normalize_side_effect(input_path, output_path, config, **kwargs)
 

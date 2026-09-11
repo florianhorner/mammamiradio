@@ -8725,28 +8725,25 @@ async def test_the_fine_print_rule_reaches_every_format(config, state, ad_format
 
 
 @pytest.mark.asyncio
-async def test_pharma_canonical_disclaimer_wins_over_the_models_own(config, state):
-    """The canonical medicine tail is authoritative and airs exactly once.
-
-    Now that the fine print is addressed in every format the model nearly always
-    writes one, so "skip the append when a disclaimer exists" would have retired
-    the canonical text permanently. It must replace the model's, end the ad, and
-    be counted in roles_used.
-    """
+@pytest.mark.parametrize("only_disclaimer", [False, True])
+async def test_pharma_canonical_disclaimer_wins_over_the_models_own(config, state, only_disclaimer):
+    """The canonical medicine tail replaces every model disclaimer and ends the ad."""
     from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE
 
     config.super_italian_mode = True
     brand = AdBrand(name="Capellissimo", tagline="Circa.", category="pharma")
     voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
 
+    model_disclaimer = {"type": "voice", "text": "Non responsabile per capelli.", "role": DISCLAIMER_ROLE}
+    model_parts = [model_disclaimer]
+    if not only_disclaimer:
+        model_parts.insert(0, {"type": "voice", "text": "Capellissimo: capelli da sogno, circa.", "role": "default"})
+
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
         return_value={
-            "parts": [
-                {"type": "voice", "text": "Capellissimo: capelli da sogno, circa.", "role": "default"},
-                {"type": "voice", "text": "Non responsabile per capelli.", "role": DISCLAIMER_ROLE},
-            ],
+            "parts": model_parts,
             "summary": "Capellissimo ad",
         },
     ):
@@ -8756,6 +8753,8 @@ async def test_pharma_canonical_disclaimer_wins_over_the_models_own(config, stat
     assert len(disclaimers) == 1, f"expected one disclaimer, got {[d.text for d in disclaimers]}"
     assert result.parts[-1] is disclaimers[0], "the ad must end on the fine print"
     assert "ibuprofene" in disclaimers[0].text, "the model's disclaimer replaced the canonical one"
+    assert not any("Non responsabile" in p.text for p in result.parts), "model fine print survived replacement"
+    assert any("Capellissimo" in p.text for p in result.parts if p.role != DISCLAIMER_ROLE)
     assert DISCLAIMER_ROLE in result.roles_used, "a disclaimer aired but roles_used omits it"
 
 
@@ -8841,12 +8840,7 @@ async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad
     ],
 )
 async def test_duo_demotion_counts_characters_not_the_fine_print(config, state, roles, expected_format):
-    """A duo that is really one announcer plus a disclaimer is a classic pitch.
-
-    The fine print is addressed in every format now, so counting it as a role
-    would let a single-voice duo keep its label — and that label reaches
-    ad_history, last_ad_script and the admin card.
-    """
+    """A duo that is one announcer plus fine print is still a classic pitch."""
     brand = AdBrand(name="Testo", tagline="T", category="tech")
     voices = {r: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=r) for i, r in enumerate(roles)}
     parts = [{"type": "voice", "text": f"Line for {r}.", "role": r} for r in roles]
@@ -8864,14 +8858,7 @@ async def test_duo_demotion_counts_characters_not_the_fine_print(config, state, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("category", ["tech", "pharma"])
 async def test_a_script_labelled_all_fine_print_still_speaks_the_brand(config, state, category):
-    """Guard against an ad that is nothing but blur.
-
-    DISCLAIMER_ROLE is named in every format's SPEAKERS block and
-    _resolve_ad_role coerces spelling variants onto it, so a model that labels
-    several lines "disclaimer" would have all of them time-compressed. Observed
-    before the cap: brand name and tagline both aired as blur, and the pharma
-    filter removed the sales copy entirely.
-    """
+    """Guard against an ad whose brand copy is nothing but blur."""
     # Super Italian keeps the Italian copy below from being rejected by the
     # Normal Mode language guard, which would return a one-part fallback and
     # make this assertion pass without ever exercising the cap.
@@ -8914,9 +8901,18 @@ def test_single_voice_disclaimer_is_demoted_but_a_real_tail_is_kept():
         AdPart(type="voice", text="Brand copy.", role="hammer"),
         AdPart(type="voice", text="Terms.", role=DISCLAIMER_ROLE),
     ]
+    misplaced = [
+        AdPart(type="voice", text="Terms.", role=DISCLAIMER_ROLE),
+        AdPart(type="pause", duration=0.2),
+        AdPart(type="voice", text="Brand copy.", role="hammer"),
+        AdPart(type="sfx", sfx="sting"),
+    ]
 
     assert _cap_disclaimer_parts(sole, "hammer")[0].role == "hammer"
     assert _cap_disclaimer_parts(mixed, "hammer")[-1].role == DISCLAIMER_ROLE
+    reordered = _cap_disclaimer_parts(misplaced, "hammer")
+    assert [part.text for part in reordered if part.type == "voice"] == ["Brand copy.", "Terms."]
+    assert reordered[-1].type == "sfx", "a trailing non-voice outro should keep its position"
 
 
 def test_resolve_ad_role_accepts_a_space_separated_label():

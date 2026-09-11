@@ -3712,20 +3712,23 @@ def _cap_disclaimer_parts(parts: list[AdPart], fallback_role: str) -> list[AdPar
         logger.warning("Ad script was only fine print; demoted it to %r", safe_role)
         return parts
     if len(disclaimers) == 1:
-        return parts
-    keep = disclaimers[-1]
-    demoted = 0
-    for part in disclaimers:
-        if part is not keep:
+        keep = disclaimers[0]
+    else:
+        keep = disclaimers[-1]
+        for part in disclaimers[:-1]:
             part.role = safe_role
-            demoted += 1
-    logger.warning(
-        "Ad script labelled %d parts as fine print; demoted %d to %r so the spot is not all blur",
-        len(disclaimers),
-        demoted,
-        safe_role,
-    )
-    return parts
+        logger.warning(
+            "Ad script labelled %d parts as fine print; demoted %d to %r so the spot is not all blur",
+            len(disclaimers),
+            len(disclaimers) - 1,
+            safe_role,
+        )
+    if voice_parts[-1] is keep:
+        return parts
+    reordered = [part for part in parts if part is not keep]
+    after_last_voice = max(i for i, part in enumerate(reordered) if part.type == "voice" and part.text) + 1
+    reordered.insert(after_last_voice, keep)
+    return reordered
 
 
 def _pharma_disclaimer_text(config: StationConfig) -> str:
@@ -4196,7 +4199,9 @@ Return JSON:
                 )
             )
 
-        parts = _cap_disclaimer_parts(parts, direct_primary_role or _FORMAT_ROLES.get(ad_format, ["hammer"])[0])
+        # Pharma replacement below must see the model's original role labels.
+        if brand.category != "pharma":
+            parts = _cap_disclaimer_parts(parts, direct_primary_role or _FORMAT_ROLES.get(ad_format, ["hammer"])[0])
 
         # Ensure we have at least one voice part
         used_owned_fallback = False
