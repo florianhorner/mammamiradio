@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import random
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from mammamiradio.home.evening_memory import (
     EVENING_GAP_SECONDS,
@@ -353,10 +357,13 @@ def test_load_purges_entity_denylist_buckets(tmp_path):
 
 
 def test_load_corrupt_starts_fresh_without_crashing(tmp_path):
-    (tmp_path / LEDGER_FILENAME).write_text("{ this is not valid json ")
+    path = tmp_path / LEDGER_FILENAME
+    path.write_text("{ this is not valid json ")
+    os.chmod(path, 0o644)
     led = EveningLedger.load(tmp_path)
     assert led.session_id == 0
     assert led.buckets == {}
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_load_wrong_shape_starts_fresh(tmp_path):
@@ -598,3 +605,98 @@ def test_observe_reports_change_on_quiet_session_roll():
     rolled = led.observe([], now=BASE + 1 + EVENING_GAP_SECONDS + 60)
     assert rolled is True
     assert led.session_id == 2
+
+
+def test_ledger_save_failure_never_raises_on_missing_dir(tmp_path):
+    led = EveningLedger()
+    led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
+    led.save_if_dirty(tmp_path / "gone")
+    assert led._dirty is True
+
+
+def test_ledger_save_failure_preserves_previous_bytes_and_stays_dirty(tmp_path):
+    led = EveningLedger()
+    led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
+    led.save_if_dirty(tmp_path)
+    path = tmp_path / LEDGER_FILENAME
+    previous = path.read_bytes()
+    led._dirty = True
+    with patch("mammamiradio.home.atomic_json.os.replace", side_effect=OSError("disk full")):
+        led.save_if_dirty(tmp_path)
+    assert led._dirty is True
+    assert path.read_bytes() == previous
+    assert list(tmp_path.glob(".evening_ledger.json.*.tmp")) == []
+
+
+def test_ledger_dirty_save_replaces_world_readable_file_with_owner_only(tmp_path):
+    led = EveningLedger()
+    led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
+    path = tmp_path / LEDGER_FILENAME
+    path.write_text("{}", encoding="utf-8")
+    os.chmod(path, 0o644)
+    led.save_if_dirty(tmp_path)
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_ledger_load_tightens_world_readable_file_without_dirty_save(tmp_path):
+    led = EveningLedger()
+    led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
+    led.save_if_dirty(tmp_path)
+    path = tmp_path / LEDGER_FILENAME
+    os.chmod(path, 0o644)
+    restored = EveningLedger.load(tmp_path)
+    assert restored.session_id == 1
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_ledger_save_unlinks_legacy_fixed_scratch(tmp_path):
+    led = EveningLedger()
+    led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
+    leftover = tmp_path / "evening_ledger.json.tmp"
+    leftover.write_text("stale household", encoding="utf-8")
+    os.chmod(leftover, 0o644)
+    led.save_if_dirty(tmp_path)
+    assert not leftover.exists()
+
+
+def test_ledger_temp_file_is_created_owner_only(tmp_path):
+    led = EveningLedger()
+    led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
+    modes: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        modes.append(os.stat(name).st_mode & 0o777)
+        return fd, name
+
+    previous_umask = os.umask(0o000)
+    try:
+        with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+            led.save_if_dirty(tmp_path)
+    finally:
+        os.umask(previous_umask)
+
+    assert modes == [0o600]
+    assert (tmp_path / LEDGER_FILENAME).stat().st_mode & 0o777 == 0o600
+
+
+def test_ledger_temp_names_are_unique(tmp_path):
+    led = EveningLedger()
+    led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
+    names: list[str] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        names.append(Path(name).name)
+        return fd, name
+
+    with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+        led.save_if_dirty(tmp_path)
+        led._dirty = True
+        led.save_if_dirty(tmp_path)
+
+    assert len(names) == 2
+    assert names[0] != names[1]
+    assert all(n.startswith(".evening_ledger.json.") and n.endswith(".tmp") for n in names)

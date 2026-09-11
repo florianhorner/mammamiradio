@@ -1230,16 +1230,78 @@ def test_scored_entities_drops_labeled_entity_with_unavailable_state():
     assert [entity.entity_id for entity in scored] == ["weather.forecast_home"]
 
 
-def test_write_registry_snapshot_swallows_write_error(tmp_path):
-    # A failed disk write must not raise into the polling path; the temp file is
-    # cleaned up and the cache is simply left unwritten.
+def test_write_registry_snapshot_swallows_write_error(tmp_path, caplog):
+    # A failed disk write must not raise into the polling path; previous bytes
+    # stay and dotted temps are cleaned up.
     snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
-
-    with patch("mammamiradio.home.ha_context.os.replace", side_effect=OSError("disk full")):
+    path = tmp_path / "ha_registry.json"
+    previous = json.dumps(
+        {
+            "schema_version": 1,
+            "fetched_at": 1.0,
+            "entity_areas": {},
+            "entity_device_names": {},
+            "entity_names": {},
+        },
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    path.write_text(previous, encoding="utf-8")
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("mammamiradio.home.atomic_json.os.replace", side_effect=OSError("disk full")),
+    ):
         _write_registry_snapshot(tmp_path, snapshot)
 
-    # No catalog/registry file was left behind, and no leftover temp files.
-    assert not list(tmp_path.glob("*.tmp"))
+    assert path.read_text(encoding="utf-8") == previous
+    assert list(tmp_path.glob(".ha_registry.json.*.tmp")) == []
+    assert "Failed to write HA registry cache" in caplog.text
+
+
+def test_write_registry_snapshot_temp_file_is_created_owner_only(tmp_path):
+    import tempfile
+
+    snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    modes: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        modes.append(os.stat(name).st_mode & 0o777)
+        return fd, name
+
+    previous_umask = os.umask(0o000)
+    try:
+        with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+            _write_registry_snapshot(tmp_path, snapshot)
+    finally:
+        os.umask(previous_umask)
+
+    assert modes == [0o600]
+    assert (tmp_path / "ha_registry.json").stat().st_mode & 0o777 == 0o600
+
+
+def test_write_registry_snapshot_temp_names_are_unique(tmp_path):
+    import tempfile
+    from pathlib import Path
+
+    snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    names: list[str] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        names.append(Path(name).name)
+        return fd, name
+
+    with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+        _write_registry_snapshot(tmp_path, snapshot)
+        _write_registry_snapshot(tmp_path, snapshot)
+
+    assert len(names) == 2
+    assert names[0] != names[1]
+    assert all(n.startswith(".ha_registry.json.") and n.endswith(".tmp") for n in names)
 
 
 def test_format_state_light_brightness_non_numeric_falls_back_to_accese():

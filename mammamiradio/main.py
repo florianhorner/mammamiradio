@@ -40,10 +40,12 @@ from mammamiradio.core.first_listen import (
 )
 from mammamiradio.core.models import PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.atomic_json import prune_stale_atomic_json_tmp_files
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.context_director import HomeContextDirector
-from mammamiradio.home.entity_policy import muted_entity_ids
-from mammamiradio.home.evening_memory import EveningLedger
+from mammamiradio.home.entity_policy import muted_entity_ids, policy_path
+from mammamiradio.home.evening_memory import LEDGER_FILENAME, EveningLedger
+from mammamiradio.home.ha_context import _ha_registry_cache_path
 from mammamiradio.home.migration import (
     LegacyHomePreflightV1,
     capture_legacy_home_preflight_v1,
@@ -53,7 +55,7 @@ from mammamiradio.home.migration import (
     rewrite_legacy_home_preflight_cold_v1,
     seal_legacy_home_provenance_v1,
 )
-from mammamiradio.home.moment_receipts import MomentStore
+from mammamiradio.home.moment_receipts import STORE_FILENAME, MomentStore
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
@@ -391,6 +393,16 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    household_json_paths = (
+        _ha_registry_cache_path(config.cache_dir),
+        policy_path(config.cache_dir),
+        config.cache_dir / STORE_FILENAME,
+        config.cache_dir / LEDGER_FILENAME,
+    )
+    pruned_household_json_tmp = prune_stale_atomic_json_tmp_files(config.cache_dir, household_json_paths)
+    if pruned_household_json_tmp:
+        logger.info("Household JSON cleanup: pruned %d stale scratch file(s)", pruned_household_json_tmp)
 
     # Prune stale temp render scratch left by a prior run (crash/restart debris)
     # so the HA add-on's /data/tmp doesn't grow unbounded across restarts.

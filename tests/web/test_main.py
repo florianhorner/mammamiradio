@@ -2079,6 +2079,15 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
     ps = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
     tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+    startup_home_order: list[str] = []
+
+    def record_household_prune(*_args: object) -> int:
+        startup_home_order.append("prune")
+        return 2
+
+    def record_first_home_load(*_args: object) -> set[str]:
+        startup_home_order.append("first_home_load")
+        return set()
 
     with (
         patch(f"{MODULE}.load_config", return_value=mock_config),
@@ -2087,6 +2096,14 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
         patch(f"{MODULE}.purge_suspect_cache_files", return_value=3) as mock_purge,
+        patch(
+            f"{MODULE}.prune_stale_atomic_json_tmp_files",
+            side_effect=record_household_prune,
+        ) as mock_prune_household_json,
+        patch(
+            f"{MODULE}.muted_entity_ids",
+            side_effect=record_first_home_load,
+        ),
         patch(f"{MODULE}.prune_stale_tmp_files", return_value=2) as mock_prune_tmp,
         patch(f"{MODULE}.prune_stale_handoff_tmp_files", return_value=4) as mock_prune_handoff_tmp,
         patch(f"{MODULE}.prune_stale_keepsake_tmp_files", return_value=1) as mock_prune_keepsake_tmp,
@@ -2096,6 +2113,16 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
         await startup()
         mock_purge.assert_called_once()
+        mock_prune_household_json.assert_called_once_with(
+            mock_config.cache_dir,
+            (
+                mock_config.cache_dir / "ha_registry.json",
+                mock_config.cache_dir / "state" / "ha_entity_policy.json",
+                mock_config.cache_dir / "moments.json",
+                mock_config.cache_dir / "evening_ledger.json",
+            ),
+        )
+        assert startup_home_order == ["prune", "first_home_load"]
         # Stale temp render scratch is pruned once at startup (#407).
         mock_prune_tmp.assert_called_once_with(mock_config.tmp_dir)
         mock_prune_handoff_tmp.assert_called_once_with(mock_config.cache_dir)
