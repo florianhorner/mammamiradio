@@ -1992,6 +1992,8 @@ async def test_startup_prewarm_is_capped_to_two_on_addon(tmp_path: Path):
         "stop_during_start",
         "stop_resume",
         "new_key",
+        "banter_rejected",
+        "revoked_during_banter",
     ],
 )
 async def test_first_install_orders_the_recorded_show_without_blocking_other_starts(tmp_path, scenario):
@@ -2034,7 +2036,16 @@ async def test_first_install_orders_the_recorded_show_without_blocking_other_sta
     async def speech(queue, state, config, *, stale_check):
         if stale_check() is not None:
             return False
+        if scenario == "banter_rejected":
+            # The break could not be rendered at all. The fence is clean, so
+            # this is the leg's own verdict rather than a revocation, and it
+            # still has to end the opening.
+            return False
         prepared.append("banter")
+        if scenario == "revoked_during_banter":
+            # Ownership moved while the break rendered. The break itself is
+            # real and belongs on air; only what would follow it is revoked.
+            state.source_revision += 1
         await queue.put(Segment(type=SegmentType.BANTER, path=tmp_path / "chair.mp3"))
         return True
 
@@ -2081,7 +2092,10 @@ async def test_first_install_orders_the_recorded_show_without_blocking_other_sta
         await asyncio.wait_for(producing.wait(), 2)
         await asyncio.gather(app.state.prewarm_task, app.state.producer_task, return_exceptions=True)
 
-    assert "banter" in prepared if scenario == "fresh" else "banter" not in prepared
+    if scenario in {"fresh", "revoked_during_banter"}:
+        assert "banter" in prepared, prepared
+    else:
+        assert "banter" not in prepared, prepared
     if scenario == "fresh":
         assert observed == ["music", "banter", "music"]
         assert app.state.queue.maxsize == 3
@@ -2094,6 +2108,16 @@ async def test_first_install_orders_the_recorded_show_without_blocking_other_sta
         # contradict "do not retry the opening" and take a Pi FFmpeg admission
         # slot the producer is already competing for.
         assert prepared == ["music"], prepared
+    if scenario == "banter_rejected":
+        # No host break means no third chair to introduce. Producing a second
+        # opening track here would air two songs back to back and call it the
+        # recorded show.
+        assert prepared == ["music"], prepared
+    if scenario == "revoked_during_banter":
+        # The break aired; the track behind it did not. The fence is re-read
+        # after the break returns, which is the only place this revocation is
+        # visible — the break's own check ran before the source moved.
+        assert prepared == ["music", "banter"], prepared
 
 
 @pytest.mark.asyncio
