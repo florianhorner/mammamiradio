@@ -90,10 +90,30 @@ empty_reader() {
   echo "$f"
 }
 
-# verdict <json-stdin> <reader-path> -> prints "deny" or "allow"
+# make_evidence <exit-code> <stdout-line> -> path to an executable mock checker.
+# Stands in for scripts/check-preship-evidence.sh so the ledger cases below stay
+# about the ledger, and the receipt cases can drive each outcome deliberately.
+make_evidence() {
+  local f; f="$(mktemp "$TMPDIR_T/evidence.XXXXXX")"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf 'echo %q\n' "$2"
+    printf 'exit %s\n' "$1"
+  } > "$f"
+  chmod +x "$f"
+  echo "$f"
+}
+
+EVIDENCE_OK="$(make_evidence 0 'landing-evidence: OK — pr content has 1 matching v2 receipt(s)')"
+
+# verdict <json-stdin> <reader-path> [evidence-checker-path] -> "deny" or "allow".
+# The evidence checker defaults to a passing stub so existing ledger cases assert
+# the ledger rule alone; receipt cases pass their own stub.
 verdict() {
-  local out
-  out="$(printf '%s' "$1" | MMR_PRESHIP_REVIEW_READER="$2" bash "$HOOK" 2>/dev/null || true)"
+  local out evidence="${3:-$EVIDENCE_OK}"
+  out="$(printf '%s' "$1" \
+    | MMR_PRESHIP_REVIEW_READER="$2" MMR_PRESHIP_EVIDENCE_CHECKER="$evidence" \
+      bash "$HOOK" 2>/dev/null || true)"
   if printf '%s' "$out" | grep -q '"permissionDecision":"deny"'; then echo deny; else echo allow; fi
 }
 
@@ -280,5 +300,58 @@ pass "unparseable timestamp denies"
   || fail "far-future timestamp should deny (not be treated as fresh)"
 pass "far-future timestamp denies"
 
+# --- Rule 1b: the committed v2 receipt, not just the local ledger entry --------
+# The ledger lives only on this machine, so every case below holds the ledger
+# satisfied (fresh review@HEAD) and varies only what the evidence checker says.
+
+FRESH_READER="$(make_reader review "$HEAD_SHA" "$NOW_ISO")"
+
+# Case 15: squad logged AND receipt covers HEAD => allow
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_OK")" = allow ] \
+  || fail "logged squad with a covering receipt should allow"
+pass "logged squad + covering receipt allowed"
+
+# Case 16: squad logged but NO receipt covers HEAD => DENY.
+# This is the #1126 shape: the ledger entry existed, the receipt never did, and
+# nothing objected until the landing attempt.
+EVIDENCE_MISSING="$(make_evidence 1 'landing-evidence: FAIL — PR adds no new v2 review receipt')"
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "logged squad without a covering receipt should deny"
+pass "missing receipt denies"
+
+# Case 17: receipt exists but pins content outside base..target => DENY
+EVIDENCE_STALE="$(make_evidence 1 'landing-evidence: FAIL — new v2 receipt pins a reviewed commit outside base-to-target history')"
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_STALE")" = deny ] \
+  || fail "receipt not covering the head content should deny"
+pass "non-covering receipt denies"
+
+# Case 18: checker cannot run (no verdict rendered) => fail-open allow.
+# Non-zero alone must not block: an unusable Python or a missing dependency is a
+# tooling failure, and this guard never converts one into a blocked PR.
+EVIDENCE_BROKEN="$(make_evidence 1 'check-preship-evidence: v2 requires Python 3.11+ (set MAMMAMIRADIO_PYTHON)')"
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_BROKEN")" = allow ] \
+  || fail "a checker that cannot run should fail open (allow)"
+pass "unrunnable checker fails open"
+
+# Case 19: checker missing entirely => fail-open allow
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$TMPDIR_T/no-such-checker")" = allow ] \
+  || fail "missing evidence checker should fail open (allow)"
+pass "missing evidence checker fails open"
+
+# Case 20: a denied receipt check still leaves non-create commands alone
+[ "$(verdict '{"tool_input":{"command":"gh pr view 1126"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
+  || fail "gh pr view must stay unguarded regardless of receipt state"
+pass "gh pr view unaffected by receipt rule"
+
+# Case 21: the deny message names the remedy, not just the problem
+DENY_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create"}}' \
+  | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_MISSING" \
+    bash "$HOOK" 2>/dev/null || true)"
+printf '%s' "$DENY_OUT" | grep -q 'emit-review-evidence.sh' \
+  || fail "deny message must name scripts/emit-review-evidence.sh as the fix"
+printf '%s' "$DENY_OUT" | jq -e . >/dev/null 2>&1 \
+  || fail "deny payload must stay valid JSON once the checker output is embedded"
+pass "deny message names the remedy and stays valid JSON"
+
 echo
-echo "All 33 pre-ship squad gate cases passed."
+echo "All 40 pre-ship squad gate cases passed."

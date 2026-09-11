@@ -167,9 +167,50 @@ while IFS= read -r line; do
   fi
 done < <("$reader" 2>/dev/null)
 
-[ "$ok" = "1" ] && exit 0
-
-cat <<'JSON'
+if [ "$ok" != "1" ]; then
+  cat <<'JSON'
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"No pre-ship review squad logged for HEAD. Open the PR via /ship (it runs the mandatory squad, incl. the docs/config-consistency check) instead of a bare gh pr create. CLAUDE.md: 'Pre-ship review squad (mandatory in every worktree).'"}}
+JSON
+  exit 0
+fi
+
+# Rule 1b: a logged squad is not the gate — the committed v2 receipt is.
+#
+# The ledger entry above lives only on this machine, so it proves nothing about
+# what the PR carries. check-preship-evidence.sh is the runtime-independent half,
+# and it was already wired at land time (scripts/land-gates.sh) and into the queue
+# view (scripts/pr-queue-status.sh) — but not here. That let a PR open, go fully
+# green, and only fail at the landing attempt, which is the most expensive place
+# to learn the receipt was never emitted. Same checker, same verdict, moved to the
+# cheapest moment. Observed 2026-09-11 on #1126: a malformed ledger entry (findings
+# nested under specialists instead of top-level) made emit-review-evidence.sh refuse
+# to write a receipt, the emit step was skipped entirely, and the "pre-ship evidence"
+# CI check is report-only, so nothing objected until the lander did.
+#
+# FAILS OPEN, like the rest of this guard: deny ONLY when the verifier actually
+# rendered a verdict (its output carries the `landing-evidence:` prefix). A missing
+# checker, an unusable Python, or an unresolvable base leaves the PR alone.
+evidence_checker="${MMR_PRESHIP_EVIDENCE_CHECKER:-$(git rev-parse --show-toplevel 2>/dev/null)/scripts/check-preship-evidence.sh}"
+[ -r "$evidence_checker" ] || exit 0
+
+target="$(git rev-parse HEAD 2>/dev/null)" || exit 0
+[ -z "$target" ] && exit 0
+
+# Prefer an explicit --base on the command; fall back to the usual default branch.
+base_ref="$(printf '%s' "$cmd" | sed -n 's/.*--base[ =]\{1,\}\([A-Za-z0-9._/-]\{1,\}\).*/\1/p' | head -1)"
+[ -z "$base_ref" ] && base_ref="origin/main"
+base="$(git rev-parse "$base_ref" 2>/dev/null || git rev-parse origin/main 2>/dev/null)" || exit 0
+[ -z "$base" ] && exit 0
+
+evidence_out="$(bash "$evidence_checker" --v2 --target "$target" --base "$base" --mode pr 2>&1)"
+evidence_rc=$?
+[ "$evidence_rc" -eq 0 ] && exit 0
+
+# Non-zero without a verdict means the checker could not run. Stay out of the way.
+printf '%s' "$evidence_out" | grep -q 'landing-evidence:' || exit 0
+
+reason="$(printf '%s' "$evidence_out" | tr '\n' ' ' | sed 's/"/\\"/g')"
+cat <<JSON
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pre-ship squad is logged but its v2 receipt does not cover HEAD, so this PR would be refused at landing. Run scripts/emit-review-evidence.sh, commit the receipt it writes under proof/preship-reviews/v2/, then open the PR. Checker said: ${reason}"}}
 JSON
 exit 0
