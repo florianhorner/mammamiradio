@@ -202,17 +202,31 @@ target="$(git rev-parse HEAD 2>/dev/null)" || exit 0
 # as the base. That ref does not resolve, the block below exits 0, and the gate
 # is silently off — fail-open in the one direction that matters. This very PR's
 # body contains the token `--base`, which is how the hole was found. Tokenize the
-# way the shell would instead, and read --base only as an option, never as prose.
+# way the shell would instead, isolate the matched command's argument vector,
+# and read --base only as an option, never as prose or a later command's option.
 base_ref="$(printf '%s' "$cmd" | python3 -c '
 import shlex, sys
 try:
-    tokens = shlex.split(sys.stdin.read())
+    lexer = shlex.shlex(sys.stdin.read(), posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    tokens = list(lexer)
 except ValueError:
     sys.exit(0)          # unbalanced quotes: let the default stand
+command_start = next(
+    (i for i in range(len(tokens) - 2)
+     if tokens[i:i + 3] == ["gh", "pr", "create"]),
+    None,
+)
+if command_start is None:
+    sys.exit(0)
+tokens = tokens[command_start + 3:]
 skip = {"--body", "--title", "-b", "-t", "--body-file", "-F"}
 i = 0
 while i < len(tokens):
     tok = tokens[i]
+    if tok and all(char in ";&|" for char in tok):
+        break
     if tok in skip:      # step over the value so prose is never scanned
         i += 2
         continue

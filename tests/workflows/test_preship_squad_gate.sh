@@ -377,6 +377,14 @@ EXPECTED_BASE="$(git merge-base origin/main HEAD 2>/dev/null || git rev-parse or
   || fail "hook must pass the fork point as --base (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
 pass "fork point passed as --base, not the base tip"
 
+# Case 22b: a comment is not part of the gh pr create argument vector. The
+# apparent --base HEAD must be ignored, leaving the default fork point in use.
+: > "$BASE_CAPTURE"
+verdict '{"tool_input":{"command":"gh pr create # --base HEAD"}}' "$FRESH_READER" "$EVIDENCE_CAPTURE" >/dev/null
+[ "$(cat "$BASE_CAPTURE" 2>/dev/null)" = "$EXPECTED_BASE" ] \
+  || fail "comment text must not change the default fork-point base (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
+pass "comment text is excluded from --base extraction"
+
 # Case 23: --base=VALUE form is parsed
 [ "$(verdict '{"tool_input":{"command":"gh pr create --base=main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
   || fail "--base=VALUE form should still reach the receipt rule"
