@@ -32,6 +32,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.hosts.ad_creative import (
     AD_FORMATS,
+    ALL_FORMATS,
     SPEAKER_ROLES,
     AdBrand,
     AdFormat,
@@ -8763,3 +8764,45 @@ async def test_write_ad_normalizes_the_role_the_model_returns(config, state):
     assert "hammer" in roles, f"roster label was not normalized onto the cast key: {roles}"
     assert DISCLAIMER_ROLE in roles, f"uppercase disclaimer role was not normalized: {roles}"
     assert not any("(" in r for r in roles), f"a roster label survived into a part: {roles}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ad_format", list(ALL_FORMATS))
+async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad_format):
+    """The SPEAKERS block, the role rule and the JSON example must agree.
+
+    The prompt tells the model every role must come from SPEAKERS. Only
+    classic_pitch casts a disclaimer voice, yet the fine print is addressed to
+    DISCLAIMER_ROLE in every format — so that token has to appear in SPEAKERS
+    too, or the prompt contradicts itself. A self-inconsistent prompt is exactly
+    what put the roster and the example out of step before.
+    """
+    import re
+
+    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES, DISCLAIMER_ROLE
+
+    captured = {}
+
+    async def _capture(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"parts": [{"type": "voice", "text": "Copy.", "role": _FORMAT_ROLES[ad_format][0]}]}
+
+    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    voices = {
+        role: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=role)
+        for i, role in enumerate(_FORMAT_ROLES[ad_format])
+    }
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
+        await write_ad(brand, voices, state, config, ad_format=ad_format)
+
+    prompt = captured["prompt"]
+    listed = set(re.findall(r'^- "([a-z_]+)"', prompt, re.M))
+    requested = set(re.findall(r'"role": "([a-z_]+)"', prompt))
+
+    assert requested, f"{ad_format}: no roles in the JSON example"
+    assert requested <= listed, (
+        f"{ad_format}: example asks for {sorted(requested - listed)} but SPEAKERS only lists {sorted(listed)}"
+    )
+    assert DISCLAIMER_ROLE in listed, f"{ad_format}: fine-print role missing from SPEAKERS"
+    assert DISCLAIMER_ROLE in requested, f"{ad_format}: fine print not addressed to the rate-gated role"

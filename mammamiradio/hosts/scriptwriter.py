@@ -4056,6 +4056,18 @@ CAMPAIGN SPINE:
     for role_name, voice in voices.items():
         role_desc = SPEAKER_ROLES.get(role_name, f"Commercial voice: {voice.style}")
         speaker_lines.append(f'- "{role_name}" — {voice.name}: {role_desc}')
+    if DISCLAIMER_ROLE not in voices:
+        # Only classic_pitch casts an actual disclaimer voice, but the fine print
+        # is addressed to DISCLAIMER_ROLE in every format so the rate gate fires.
+        # List it here too, or the prompt contradicts itself: the rules say every
+        # role must come from this block while the JSON example uses a role that
+        # is missing from it.  A self-inconsistent prompt is what put the roster
+        # and the example out of step in the first place.
+        speaker_lines.append(
+            f'- "{DISCLAIMER_ROLE}" — {SPEAKER_ROLES[DISCLAIMER_ROLE]} '
+            "Use this role for the closing fine print ONLY, never for sales copy; "
+            "it is spoken by the same voice as the rest of the spot."
+        )
     speakers_block = "\n".join(speaker_lines)
 
     # Format description
