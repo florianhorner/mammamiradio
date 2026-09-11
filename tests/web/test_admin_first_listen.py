@@ -184,9 +184,12 @@ def test_the_day_one_marking_lands_on_the_scene_that_is_actually_reachable() -> 
     # by class alone, so it renders from anywhere inside the scene.
     block = html[html.index('class="home-moments"') : html.index('<div class="guide-audio" data-guide="privacy"')]
     chunks = re.split(r'(?=<div class="listening-invitation household-scene")', block)[1:]
-    chipped = [
-        re.search(r'data-explainer-scenario="([a-z]+)"', chunk).group(1) for chunk in chunks if "day-one-chip" in chunk
-    ]
+    chipped = []
+    for chunk in chunks:
+        key = re.search(r'data-explainer-scenario="([a-z]+)"', chunk)
+        assert key is not None, chunk[:120]
+        if "day-one-chip" in chunk:
+            chipped.append(key.group(1))
     assert chipped == ["quiet"]
     assert len(chunks) == 4
 
