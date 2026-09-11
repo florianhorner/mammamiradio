@@ -442,13 +442,15 @@ def test_free_example_damage_blocks_release_and_generation_before_provider(
 def test_free_example_stages_without_paid_key_and_rolls_back(
     copied_pack, monkeypatch, generator_media_tools, existing, failure
 ):
-    _static, root = copied_pack
+    static, root = copied_pack
     original = _free_manifest()
     if not existing:
         shutil.rmtree(root / "voice_examples")
-        assert VALIDATOR.validate_browser_narration_pack(
-            assets_root=root
-        )  # Required at release, even on first creation.
+        # static_root is required: without it the pack resolves against the repo
+        # STATIC_ROOT and an intact pack already yields 12 route errors, so a
+        # bare truthiness assertion here passes no matter what was removed.
+        errors = VALIDATOR.validate_browser_narration_pack(assets_root=root, static_root=static)
+        assert any("free voice example manifest is missing" in error for error in errors), errors
     before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     calls = []
 
@@ -1243,6 +1245,8 @@ def test_home_moments_accept_the_shipped_pack(copied_pack) -> None:
         (lambda m: m["assets"][0].__setitem__("reachability", "someday"), "reachability"),
         (lambda m: m["assets"][0].__setitem__("duration_seconds", 3.0), "is outside"),
         (lambda m: m["assets"][0].__setitem__("transcript", "   "), "transcript is missing"),
+        (lambda m: m["assets"][0].__setitem__("quote", "   "), "quote is missing"),
+        (lambda m: m["assets"][0].pop("quote"), "quote is missing"),
         (lambda m: m["assets"][0].pop("duration_seconds"), "duration_seconds is missing"),
     ],
 )
@@ -1294,6 +1298,36 @@ def test_home_moments_reject_bytes_that_are_not_the_explainer_segment(copied_pac
     shutil.copy(room / "laundry.mp3", room / "quiet.mp3")
     errors = _home_moment_errors(copied_pack)
     assert any("is not the explainer segment it claims to copy" in error for error in errors), errors
+
+
+def test_home_moments_reject_source_drift_with_both_manifests_unchanged(copied_pack, monkeypatch, tmp_path) -> None:
+    """The source file itself must be hashed, not only its manifest.
+
+    Without this the chain is copy bytes -> copy manifest -> source manifest, so
+    a source that drifts while both manifests stay put passes clean and the pack
+    silently stops being a copy of anything.
+    """
+
+    source = tmp_path / "explainer_audio"
+    shutil.copytree(EXPLAINER_AUDIO_ROOT, source)
+    (source / "quiet.mp3").write_bytes((source / "laundry.mp3").read_bytes())
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_ROOT", source)
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_MANIFEST", source / "segments.manifest.json")
+
+    errors = _home_moment_errors(copied_pack)
+    assert any("does not match its own segment manifest" in error for error in errors), errors
+    assert any("is not a byte copy of its source" in error for error in errors), errors
+
+
+def test_home_moments_reject_a_missing_source_file(copied_pack, monkeypatch, tmp_path) -> None:
+    source = tmp_path / "explainer_audio"
+    shutil.copytree(EXPLAINER_AUDIO_ROOT, source)
+    (source / "quiet.mp3").unlink()
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_ROOT", source)
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_MANIFEST", source / "segments.manifest.json")
+
+    errors = _home_moment_errors(copied_pack)
+    assert any("source quiet.mp3 is missing or unreadable" in error for error in errors), errors
 
 
 def test_home_moments_reject_a_symlinked_clip(copied_pack) -> None:

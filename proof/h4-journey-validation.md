@@ -34,6 +34,18 @@ mammamiradio/web/static/audio/first_listen/ai.mp3
 mammamiradio/web/static/audio/spoken_assets.json
 mammamiradio/web/static/audio/voice_examples/free-voices.mp3
 mammamiradio/web/static/audio/voice_examples/spoken_assets.json
+mammamiradio/web/static/audio/home_moments/quiet.mp3
+mammamiradio/web/static/audio/home_moments/laundry.mp3
+mammamiradio/web/static/audio/home_moments/arrival.mp3
+mammamiradio/web/static/audio/home_moments/coffee.mp3
+mammamiradio/web/static/audio/home_moments/spoken_assets.json
+mammamiradio/web/ui_copy.py
+README.md
+docs/architecture.md
+docs/music-sources.md
+docs/troubleshooting.md
+tests/home/test_ha_media_source.py
+tests/web/admin_browser_smoke.js
 scripts/generate-first-listen-guide.py
 scripts/validate-spoken-assets.py
 tests/web/first_listen_browser_smoke.js
@@ -54,7 +66,9 @@ proof/h4-journey-validation.md
 proof/preship-reviews/v2/**
 ```
 
-README and `tests/home/test_ha_media_source.py` stay with #1079.
+README and `tests/home/test_ha_media_source.py` are now in this branch: the quick start named
+three First Listen controls the branch had renamed, and the funnel test pinned one of the
+same dead labels, so it stayed green against stale copy.
 `#1123` model-registry tests stay. No integrator files (pyproject,
 changelogs, addon version, workflows). Tip opening `20951268` was not taken.
 
@@ -66,6 +80,10 @@ changelogs, addon version, workflows). Tip opening `20951268` was not taken.
 | `web/static/audio/first_listen/privacy.mp3` | git blob `cab7a2b29ad0723392d8bc5122974f8a8a1436bc`; sha256 `17bde6abcd1a431773b55e4a2fd32bdd203a7121d00dedaa28ded05556d5b426`; 9.504s | Rooftop-disco Home recording. |
 | `web/static/audio/first_listen/ai.mp3` | git blob `345a7f1ace5001186e4c09fa9021d36bfc624d17`; sha256 `5e30ee5ce2a1f20564e53182b0828caaf895d2a73ea1d6fef1c47d3d9dd50c1a`; 9.312s | Writing-service / cousin recording. |
 | `web/static/audio/voice_examples/free-voices.mp3` | git blob `1bf009e40c07477da4066f7602a3f2c662764bc3`; sha256 `eff2f05076122dd021d0f6cba9d73f21f17983885bf35c8dcaf33d38b12f494e`; 12.192s | Free-voice audition. |
+| `web/static/audio/home_moments/quiet.mp3` | git blob `67af1974aecb8612ac7d57d51f42847536703455`; sha256 `02fc7d83734a734180608e9cf56f150ddeec3f9dc45639770b50b782a778e693`; 36.18s | Byte copy of `docs/explainer/public/audio/quiet.mp3`, bound to its `segments.manifest.json` digest by the validator. Reachability `day-one`. |
+| `web/static/audio/home_moments/laundry.mp3` | git blob `5b2269965ddafb1f164a6e3f4a85d78cf22a3fa1`; sha256 `e7607b0c05668d48829b1c0465277d3bcb043ec3c9c55536c7b25edcaf95be7e`; 30.82s | Byte copy of `docs/explainer/public/audio/laundry.mp3`, bound to its `segments.manifest.json` digest by the validator. Reachability `home-grant`. |
+| `web/static/audio/home_moments/arrival.mp3` | git blob `e62de8ee85e2ddbf4ad86dc194550a82914f454b`; sha256 `f2dabb786f49b0a0dcf76b04856a8a9c6e37b75ac59b9ac1c6a39bfbaf58e294`; 29.53s | Byte copy of `docs/explainer/public/audio/arrival.mp3`, bound to its `segments.manifest.json` digest by the validator. Reachability `home-grant`. |
+| `web/static/audio/home_moments/coffee.mp3` | git blob `3db21038ba857120c6283003e8740b4fdba7df7b`; sha256 `048792796ad87f2c70580b75d697296d558fd27a87f7c95aebae7102756a6e81`; 35.55s | Byte copy of `docs/explainer/public/audio/coffee.mp3`, bound to its `segments.manifest.json` digest by the validator. Reachability `home-grant`. |
 | `mammamiradio/assets/demo/first_listen/first_listen_admin_show.mp3` | `4756c0f698e8ec03e4865dc1dfa929ad674b2c25` | Unchanged English Admin opening from main. Tip opening `20951268` was not taken. |
 
 Generator welcome/privacy/AI/free-voice lines match those transcripts. Opening
@@ -74,11 +92,22 @@ regeneration.
 
 ## Size
 
-`git diff --stat origin/main` on this assembled candidate: **29 files,
-3,484 insertions / 802 deletions**, plus the four audio binaries (welcome,
-privacy, ai, free-voices). Florian asked for the complete polished stack on
-one branch; the old PR1-only ~3,200 envelope does not apply. Stop before
-~30% growth of this declared combined write-set.
+`git diff --stat origin/main` on this assembled candidate: **42 files,
+4,840 insertions / 922 deletions**, including eight audio binaries (welcome,
+privacy, ai, free-voices, and the four home moments). Florian asked for the
+complete polished stack on one branch; the old PR1-only ~3,200 envelope does
+not apply. Florian waived the 1,000-line rule in `docs/agents.md` for this PR
+explicitly on 2026-09-11 ("i wave 1k rule here"). Recorded as his statement
+rather than inferred from this file's own narrative.
+
+**This is past the stop-line this file set for itself.** The declared envelope
+was 29 files / 3,484 insertions with a ~30% growth limit; insertions grew 39%
+and the file count grew 45%. The growth is bot-review and CI-driven rather than
+new feature scope: doc-sync corrections the branch owed, a delivery-pacing
+contract fix, the readiness stamp the arm64 smoke caught, and the guards those
+changes needed. Recorded here rather than quietly absorbed, because a stop-line
+that is only enforced when convenient is not a stop-line. Re-declaring the
+envelope is Florian's call.
 
 ## Checks that were actually run
 

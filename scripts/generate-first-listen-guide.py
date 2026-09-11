@@ -171,7 +171,9 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument(
-        "--clip", choices=("welcome", "privacy", "ai"), help="replace one clip in an intact canonical pack"
+        "--clip",
+        choices=tuple(clip.clip_id for clip in GUIDE_CLIPS),
+        help="replace one clip in an intact canonical pack",
     )
     selection.add_argument(
         "--station-opening", action="store_true", help="render only the English Admin station opening"

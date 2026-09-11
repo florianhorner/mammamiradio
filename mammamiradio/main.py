@@ -917,10 +917,19 @@ async def startup():
 
     async def _prewarm_multiple():
         if opening:
-            if not await prewarm_first_segment(queue, state, config):
+            # Every leg of the opening carries the same revocation rule, enforced
+            # at its admission boundary rather than only before generation. The
+            # wait below can time out while a render is still in flight, and on a
+            # Pi cold install that is the ordinary path, not a freak event: an
+            # unfenced late track would land after ordinary production started
+            # and skip the third chair.
+            if not await prewarm_first_segment(queue, state, config, stale_check=_opening_stale_reason):
                 return  # Release ordinary production; do not retry the opening.
-            await queue_first_listen_banter(queue, state, config, stale_check=_opening_stale_reason)
-            await prewarm_first_segment(queue, state, config)
+            if not await queue_first_listen_banter(queue, state, config, stale_check=_opening_stale_reason):
+                return  # A rejected host break ends the opening; no second track.
+            if _opening_stale_reason() is not None:
+                return  # Revoked while the host break rendered.
+            await prewarm_first_segment(queue, state, config, stale_check=_opening_stale_reason)
             return
         # Existing/keyed/stopped stations retain two concurrent music prewarms.
         for _ in range(2):
@@ -934,12 +943,15 @@ async def startup():
         nonlocal opening_pending
         if opening:
             try:
-                await asyncio.wait_for(asyncio.shield(_prewarm_task), timeout=_FIRST_LISTEN_OPENING_WAIT_SECONDS)
+                await asyncio.wait_for(_prewarm_task, timeout=_FIRST_LISTEN_OPENING_WAIT_SECONDS)
             except Exception:
+                # No shield: the timeout cancels the opening instead of leaving
+                # it racing ordinary production. A render already awaiting a
+                # thread can still finish, which is why every opening admission
+                # is fenced by _opening_stale_reason rather than by this
+                # cancellation alone.
                 logger.warning("Opening preparation did not finish; continuing ordinary production", exc_info=True)
             finally:
-                # Revoke before releasing the producer. A late probe/egress may
-                # finish, but its stale gate can no longer insert an opening.
                 opening_pending = False
         await run_producer(
             queue,

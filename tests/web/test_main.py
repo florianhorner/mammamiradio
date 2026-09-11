@@ -2010,10 +2010,11 @@ async def test_first_install_orders_the_recorded_show_without_blocking_other_sta
     gate, entered, producing = asyncio.Event(), asyncio.Event(), asyncio.Event()
     prepared = []
     observed = []
+    admitted_late = []
     keyed = scenario == "keyed"
     bypass = scenario in {"existing", "stopped", "handoff", "keyed", "italian"}
 
-    async def music(queue, state, config):
+    async def music(queue, state, config, *, stale_check=None):
         prepared.append("music")
         entered.set()
         await gate.wait()
@@ -2021,6 +2022,12 @@ async def test_first_install_orders_the_recorded_show_without_blocking_other_sta
             return False
         if scenario == "raised":
             raise RuntimeError("prewarm failed")
+        # Model the real admission boundary: the fence is re-read AFTER the
+        # awaited render, not only before it. A late opening track must not
+        # land once ownership is revoked.
+        if stale_check is not None and stale_check() is not None:
+            admitted_late.append("music")
+            return False
         await queue.put(Segment(type=SegmentType.MUSIC, path=tmp_path / "song.mp3"))
         return True
 
@@ -2081,6 +2088,12 @@ async def test_first_install_orders_the_recorded_show_without_blocking_other_sta
         assert app.state.station_state.listeners_active == 0
     if scenario in {"failed", "raised"}:
         assert prepared == ["music"]
+    if scenario == "timeout":
+        # The wait revokes opening_pending before releasing the producer, so the
+        # sequence must stop there. Running the trailing prewarm anyway would
+        # contradict "do not retry the opening" and take a Pi FFmpeg admission
+        # slot the producer is already competing for.
+        assert prepared == ["music"], prepared
 
 
 @pytest.mark.asyncio

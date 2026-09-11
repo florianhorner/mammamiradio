@@ -1413,6 +1413,23 @@ def validate_home_moments(
         else:
             if segment.get("sha256") != digest:
                 errors.append(f"home moment {relative_path} is not the explainer segment it claims to copy")
+            # Hash the source file itself, not only its manifest. Without this the
+            # chain is copy bytes -> copy manifest -> source manifest, so a source
+            # that drifts while both manifests stay put passes clean and the pack
+            # silently stops being a copy of anything.
+            source_path = HOME_MOMENT_SOURCE_ROOT / relative_path
+            if safe_path_within(source_path, HOME_MOMENT_SOURCE_ROOT, reject_symlinks=True) is None:
+                errors.append(f"home moment source {relative_path} escapes its source root or is a symlink")
+            else:
+                try:
+                    source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+                except OSError:
+                    errors.append(f"home moment source {relative_path} is missing or unreadable")
+                else:
+                    if source_digest != segment.get("sha256"):
+                        errors.append(f"home moment source {relative_path} does not match its own segment manifest")
+                    if source_digest != digest:
+                        errors.append(f"home moment {relative_path} is not a byte copy of its source")
             source_duration = segment.get("durationSec")
             duration = entry.get("duration_seconds")
             if (
@@ -1434,6 +1451,13 @@ def validate_home_moments(
         transcript = entry.get("transcript")
         if not isinstance(transcript, str) or not transcript.strip():
             errors.append(f"home moment {key} transcript is missing")
+
+        quote = entry.get("quote")
+        if not isinstance(quote, str) or not quote.strip():
+            # The scene comparison in _validate_home_moment_reachability only
+            # runs when the manifest carries a quote, so an absent one would
+            # silently unbind the line a reader actually reads.
+            errors.append(f"home moment {key} quote is missing")
 
         if not staged_render:
             route_error = _browser_route_error(

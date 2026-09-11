@@ -4311,10 +4311,19 @@ async def prewarm_first_segment(
     queue: asyncio.Queue[Segment],
     state: StationState,
     config: StationConfig,
+    *,
+    stale_check: StaleCheck | None = None,
 ) -> bool:
     """Pre-produce one music segment at startup so audio is ready before any listener connects.
 
     Returns True if a segment was queued, False on failure (non-fatal).
+
+    ``stale_check`` lets a caller that owns a bounded startup sequence fence this
+    admission with its own revocation rule. The First Listen opening needs it:
+    its wait is shielded, so an in-flight render outlives the timeout and would
+    otherwise land after ordinary production has already started. Cancellation
+    alone cannot guarantee that, because work can outlive its awaiter — the
+    fence at the admission boundary is the guarantee.
     """
     if not state.playlist:
         return False
@@ -4331,6 +4340,10 @@ async def prewarm_first_segment(
     generation_continuity_epoch = state.continuity_epoch
 
     def _prewarm_stale_reason() -> str | None:
+        if stale_check is not None:
+            owner_reason = stale_check()
+            if owner_reason:
+                return owner_reason if isinstance(owner_reason, str) else GenerationWasteReason.STALE_CONTINUITY
         if state.session_stopped:
             return GenerationWasteReason.SESSION_STOPPED
         if state.source_revision != generation_source_revision:
