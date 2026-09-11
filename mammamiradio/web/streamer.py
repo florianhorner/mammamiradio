@@ -6618,6 +6618,14 @@ async def _audio_generator(request: Request, *, first_listen: bool = False, prel
                 if chunk is None:
                     break
                 yield chunk
+                # The prelude is audio a listener accepted, so it counts as air.
+                # Pacing it in real time means nobody reaches the hub for ~23s on
+                # a cold install; without this stamp the station would report
+                # `503 starting` and could trip the silence watchdog while the
+                # opening is audibly covering the speaker. Only the timestamp is
+                # set: `current_stream_audible` belongs to a queued segment, and
+                # no segment is on air yet.
+                state.last_air_monotonic = _runtime_monotonic()
                 pacing = opening_pacer.after_send(len(chunk))
                 chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
                 # Join live immediately at EOF, with the last packet still buffered.

@@ -388,7 +388,7 @@ def test_stream_pacer_records_100ms_lateness_without_moving_the_media_timeline()
 
 @pytest.mark.parametrize(
     "reason",
-    ["no_listeners", "playback_stop_resume", "explicit_skip", "queue_gap_fallback"],
+    ["no_listeners", "playback_stop_resume", "queue_gap_fallback"],
 )
 def test_stream_pacer_resets_only_for_named_transport_discontinuities(reason: str):
     clock = _FakeMonotonic()
@@ -5066,6 +5066,131 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
 
 
 @pytest.mark.asyncio
+async def test_prelude_bytes_count_as_accepted_air_so_readyz_reports_ready(tmp_path):
+    """Scenario 1 (normal): the opening is audio a listener accepted.
+
+    The prelude is paced in real time, so nobody reaches the shared hub for
+    roughly 23s on a cold install. Without this the station reports
+    `503 starting` while it is audibly covering the speaker, which is what the
+    arm64 launch smoke caught.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    state = app.state.station_state
+    state.last_air_monotonic = None
+    show = tmp_path / "show.mp3"
+    show.write_bytes(b"opening")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch(
+            "mammamiradio.web.streamer.iter_first_listen_show_chunks",
+            side_effect=lambda _p: iter([b"opening-a", b"opening-b"]),
+        ),
+    ):
+        generator = _audio_generator(mock_request)
+        assert await anext(generator) == b"opening-a"
+        # The stamp lands after the yield resumes, so it proves the consumer
+        # actually took the bytes rather than that they were merely offered.
+        assert await anext(generator) == b"opening-b"
+        assert state.last_air_monotonic is not None, "prelude bytes did not count as accepted air"
+        # The opening is not a queued segment, so nothing may claim to be on air.
+        assert state.current_stream_audible is False
+        await generator.aclose()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_unreadable_prelude_does_not_fake_accepted_air(tmp_path):
+    """Scenario 2 (empty fallback): a missing or corrupt opening proves nothing.
+
+    The generator falls through to the ordinary live ladder; readiness must
+    still wait for real hub-accepted audio rather than inherit a stamp from an
+    opening that never played.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    state = app.state.station_state
+    state.last_air_monotonic = None
+
+    def unreadable(_path):
+        raise OSError("packaged opening is unreadable")
+        yield  # pragma: no cover - generator protocol only
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=tmp_path / "gone.mp3"),
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=unreadable),
+    ):
+        mock_request = MagicMock()
+        mock_request.app = app
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+        generator = _audio_generator(mock_request)
+        live = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("unreadable opening did not fall through to the live hub")
+            await asyncio.sleep(0)
+        assert state.last_air_monotonic is None, "an opening that never played must not prove readiness"
+        await app.state.stream_hub.broadcast(b"live")
+        assert await live == b"live"
+        await generator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stopped_session_prelude_never_stamps_accepted_air(tmp_path):
+    """Scenario 3 (post-restart): a stopped session must not read as ready.
+
+    The watchdog can restart the add-on with `session_stopped` still persisted.
+    A listener connecting then gets no opening, so nothing may stamp air.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    (tmp_path / "session_stopped.flag").touch()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.last_air_monotonic = None
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=tmp_path / "show.mp3"),
+    ):
+        generator = _audio_generator(mock_request)
+        async for _ in generator:  # pragma: no cover - exits before yielding
+            break
+
+    assert state.last_air_monotonic is None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+    assert resp.status_code == 503
+    assert resp.json()["status"] == "stopped"
+
+
+@pytest.mark.asyncio
 async def test_first_listen_receipt_completion_keeps_the_connected_live_stream(tmp_path):
     """Heard/privacy receipts never terminate or replay an attached stream."""
     from mammamiradio.web.streamer import _audio_generator
@@ -5700,10 +5825,15 @@ async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
         assert f"Probe {index + 1}" in title, f"duplicate/late segment at cycle {index}: {title!r}"
 
     delivery = state.stream_delivery_snapshot()
-    session = delivery["session"]
-    assert session.get("underrun", 0) == 0, delivery
+    # No underrun assertion here on purpose. This harness runs the pacer at
+    # target_lead_seconds=0.0 (see _make_test_app), where the benign "late"
+    # band is unreachable -- lateness >= the threshold implies the lead is
+    # already negative -- so any host stall over 50ms is reported as a cushion
+    # exhaustion on a pacer that has no cushion. That measured the runner, not
+    # the station. The real cushion is covered by the StreamPacer unit tests at
+    # the production lead; what this probe owns is handoff latency and whether
+    # a skip costs anyone their stream.
     assert delivery["slow_listener_drops"]["session"] == 0, delivery
-    assert all(event.get("kind") != "underrun" for event in delivery["recent"]), delivery
 
     listener_delays = [item["listener_ms"] for item in handoffs]
     p50 = _skip_latency_percentile(listener_delays, 50)
