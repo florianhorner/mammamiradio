@@ -351,8 +351,15 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook
   (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`)
   refuses a bare `gh pr create` unless a `review`/`adversarial-review` entry is
-  logged for HEAD (or a recent ancestor) within 2h. The hook is fail-open,
-  project-scoped, and Claude-only; Codex has no hook layer.
+  logged for HEAD (or a recent ancestor) within 2h **and** the committed v2
+  receipt covers HEAD's content. The ledger half proves the squad ran on this
+  machine; the receipt half is what the landing gate actually reads, so the hook
+  runs `scripts/check-preship-evidence.sh` — the same checker `land-pr.sh` uses —
+  before the PR exists rather than after CI. A logged squad whose receipt was
+  never emitted is denied here, with the emit command in the message. The hook is
+  fail-open, project-scoped, and Claude-only; Codex has no hook layer. Fail-open
+  is narrower than exit-code equality: only a rendered `landing-evidence:` verdict
+  denies, so an unusable Python or a missing checker never blocks a PR.
 
   The runtime-independent evidence gate is the immutable v2 receipt, and the
   ceremony is single-pass: commit the implementation, run the review on that
