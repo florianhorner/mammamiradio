@@ -197,25 +197,49 @@ target="$(git rev-parse HEAD 2>/dev/null)" || exit 0
 [ -z "$target" ] && exit 0
 
 # Prefer an explicit --base on the command; fall back to the usual default branch.
-# First match wins: flags precede long --body/--title prose, and a base mis-read
-# out of that prose resolves to nothing and falls open below rather than denying.
-base_ref=""
-prev=""
-for token in $cmd; do
-  token="$(strip_hook_quotes "$token")"
-  case "$token" in
-    --base=*) base_ref="${token#--base=}"; break ;;
-  esac
-  [ "$prev" = "--base" ] && { base_ref="$token"; break; }
-  prev="$token"
-done
+#
+# Word-splitting $cmd loses quoting, so `--body 'see --base foo'` hands us `foo`
+# as the base. That ref does not resolve, the block below exits 0, and the gate
+# is silently off — fail-open in the one direction that matters. This very PR's
+# body contains the token `--base`, which is how the hole was found. Tokenize the
+# way the shell would instead, and read --base only as an option, never as prose.
+base_ref="$(printf '%s' "$cmd" | python3 -c '
+import shlex, sys
+try:
+    tokens = shlex.split(sys.stdin.read())
+except ValueError:
+    sys.exit(0)          # unbalanced quotes: let the default stand
+skip = {"--body", "--title", "-b", "-t", "--body-file", "-F"}
+i = 0
+while i < len(tokens):
+    tok = tokens[i]
+    if tok in skip:      # step over the value so prose is never scanned
+        i += 2
+        continue
+    if tok.startswith("--base="):
+        print(tok.split("=", 1)[1])
+        break
+    if tok == "--base" and i + 1 < len(tokens):
+        print(tokens[i + 1])
+        break
+    i += 1
+' 2>/dev/null)"
 [ -z "$base_ref" ] && base_ref="main"
 
 # A bare `main` is the stale LOCAL branch; the PR is cut against the remote, and
 # the two disagree often enough to render a different verdict on the same HEAD.
-base_sha="$(git rev-parse "origin/$base_ref" 2>/dev/null \
-  || git rev-parse "$base_ref" 2>/dev/null)" || exit 0
-[ -z "$base_sha" ] && exit 0
+#
+# An unresolvable ref falls back to the default branch rather than exiting: base
+# extraction must never be load-bearing for whether the gate runs at all. Letting
+# a ref that does not resolve skip the check turns any odd command line into a
+# silent bypass, which is the one fail-open direction that costs something. A
+# slightly-wrong base only widens the receipt window, so it cannot false-deny.
+base_sha=""
+for candidate in "origin/$base_ref" "$base_ref" "origin/main" "main"; do
+  base_sha="$(git rev-parse --verify --quiet "$candidate^{commit}" 2>/dev/null)" || base_sha=""
+  [ -n "$base_sha" ] && break
+done
+[ -z "$base_sha" ] && exit 0   # no base resolves at all: genuinely cannot judge
 
 # Verify against the FORK POINT, never the base tip. Being behind origin/main is
 # the normal state at PR-open, and the checker rejects a base that is not an
@@ -236,7 +260,19 @@ printf '%s' "$evidence_out" | grep -q 'landing-evidence:' || exit 0
 # Escape backslashes before quotes, and drop control characters: an unparseable
 # deny payload is silently discarded, which would retire this rule without a trace.
 reason="$(printf '%s' "$evidence_out" | tr '\n' ' ' | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+
+# Only a missing receipt is fixed by emitting one. The checker uses the same
+# prefix for evidence it considers present but wrong (a modified base receipt, a
+# receipt-count violation), and telling someone to re-emit for those sends them
+# round a loop that cannot terminate. Name the remedy only when it is the remedy.
+case "$evidence_out" in
+  *"no new v2 review receipt"* | *"no review ledger record"* | *"does not cover"*)
+    remedy="Run scripts/emit-review-evidence.sh, commit the receipt it writes under proof/preship-reviews/v2/, then open the PR." ;;
+  *)
+    remedy="Resolve what the checker reports below before opening the PR; re-emitting a receipt does not fix this class of failure." ;;
+esac
+
 cat <<JSON
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pre-ship squad is logged but its v2 receipt does not cover HEAD, so this PR would be refused at landing. Run scripts/emit-review-evidence.sh, commit the receipt it writes under proof/preship-reviews/v2/, then open the PR. Checker said: ${reason}"}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pre-ship evidence does not cover HEAD, so this PR would be refused at landing. ${remedy} Checker said: ${reason}"}}
 JSON
 exit 0

@@ -353,28 +353,65 @@ printf '%s' "$DENY_OUT" | jq -e . >/dev/null 2>&1 \
   || fail "deny payload must stay valid JSON once the checker output is embedded"
 pass "deny message names the remedy and stays valid JSON"
 
-# Case 22: a branch BEHIND the base must not be denied.
-# The checker rejects a base that is not an ancestor of the target, and that
-# message carries the landing-evidence: prefix. Verifying against the base tip
-# would read it as "no receipt" and block a PR whose only fault is needing an
-# integrate — a remedy the deny message cannot offer. The hook verifies against
-# the fork point instead, so this case exercises the real checker end to end.
-BEHIND_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create --base main"}}' \
-  | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" bash "$HOOK" 2>/dev/null || true)"
-printf '%s' "$BEHIND_OUT" | grep -q 'is not an ancestor of target' \
-  && fail "hook must verify against the fork point, not the base tip (behind-base false deny)"
-pass "behind-base branch not denied for ancestry"
+# Case 22: the hook must hand the checker the FORK POINT, not the base tip.
+# Asserting "no ancestry complaint against the ambient checkout" proves nothing:
+# in a PR merge checkout origin/main is already an ancestor of HEAD, so that
+# assertion passes even if the hook regresses to the base tip. Capture the --base
+# the hook actually passes and compare it to git merge-base directly.
+BASE_CAPTURE="$TMPDIR_T/captured-base"
+EVIDENCE_CAPTURE="$(mktemp "$TMPDIR_T/evidence.XXXXXX")"
+cat > "$EVIDENCE_CAPTURE" <<CAPTURE
+#!/usr/bin/env bash
+while [ \$# -gt 0 ]; do
+  [ "\$1" = "--base" ] && { printf '%s' "\$2" > "$BASE_CAPTURE"; break; }
+  shift
+done
+echo 'landing-evidence: OK — captured'
+exit 0
+CAPTURE
+chmod +x "$EVIDENCE_CAPTURE"
+
+verdict '{"tool_input":{"command":"gh pr create --base main"}}' "$FRESH_READER" "$EVIDENCE_CAPTURE" >/dev/null
+EXPECTED_BASE="$(git merge-base origin/main HEAD 2>/dev/null || git rev-parse origin/main)"
+[ "$(cat "$BASE_CAPTURE" 2>/dev/null)" = "$EXPECTED_BASE" ] \
+  || fail "hook must pass the fork point as --base (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
+pass "fork point passed as --base, not the base tip"
 
 # Case 23: --base=VALUE form is parsed
 [ "$(verdict '{"tool_input":{"command":"gh pr create --base=main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
   || fail "--base=VALUE form should still reach the receipt rule"
 pass "--base=VALUE parsed"
 
-# Case 24: a --base mentioned only inside --body prose must not swap the base.
-# First-match-wins plus fail-open on an unresolvable ref keeps this harmless.
-[ "$(verdict '{"tool_input":{"command":"gh pr create --base main --body see --base nonexistent-ref"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
-  || fail "a --base inside body prose must not derail the real base"
-pass "body-prose --base does not derail the base"
+# Case 24: --base inside --body prose must not be read as the option, in EITHER
+# order. Prose first is the dangerous one: word-splitting picked up the prose ref,
+# it failed to resolve, and the hook fell open — the gate silently off on a PR with
+# no evidence. This PR's own body contains the token `--base`, which is how it
+# surfaced. Both orderings must still reach the receipt rule and deny.
+[ "$(verdict '{"tool_input":{"command":"gh pr create --base main --body \"see --base nonexistent-ref\""}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "a --base inside body prose (after the real option) must not derail the base"
+pass "body-prose --base after the option does not derail the base"
+
+[ "$(verdict '{"tool_input":{"command":"gh pr create --body \"see --base nonexistent-ref\" --base main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "a --base inside body prose BEFORE the real option must not disable the gate"
+pass "body-prose --base before the option does not disable the gate"
+
+# Case 24c: an unbalanced quote must not become an accidental bypass either.
+[ "$(verdict '{"tool_input":{"command":"gh pr create --body \"unterminated --base nope"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "unparseable quoting must fall back to the default base, not skip the gate"
+pass "unbalanced quoting still reaches the receipt rule"
+
+# Case 24d: an unresolvable base must never skip the gate. Base extraction is a
+# convenience, not a security boundary: any command line that yields a ref git
+# cannot resolve falls back to the default branch instead of exiting allow. The
+# unquoted form below passes two --base options, so the "real" one is ambiguous
+# even to gh; ambiguity must not read as permission.
+[ "$(verdict '{"tool_input":{"command":"gh pr create --base totally-nonexistent-ref"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "an unresolvable --base must fall back to the default, not skip the receipt rule"
+pass "unresolvable base falls back instead of bypassing"
+
+[ "$(verdict '{"tool_input":{"command":"gh pr create --body see --base nonexistent-ref --base main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+  || fail "an ambiguous multi---base command line must not bypass the receipt rule"
+pass "ambiguous multi---base command line still denies"
 
 # Case 25: checker output containing a backslash must still yield valid JSON.
 # An unparseable deny is silently dropped, which retires the rule without a trace.
@@ -388,5 +425,21 @@ printf '%s' "$BS_OUT" | grep -q '"permissionDecision":"deny"' \
   || fail "backslash-bearing checker output must still deny"
 pass "backslash/quote checker output stays valid JSON"
 
+# Case 26: the remedy is conditional. Re-emitting fixes a missing receipt; it does
+# nothing for evidence the checker considers present but wrong, and saying so anyway
+# sends a contributor round a loop that cannot terminate.
+EVIDENCE_WRONG="$(make_evidence 1 'landing-evidence: FAIL — v2 receipt modifies a base receipt')"
+WRONG_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create"}}' \
+  | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_WRONG" \
+    bash "$HOOK" 2>/dev/null || true)"
+printf '%s' "$WRONG_OUT" | grep -q '"permissionDecision":"deny"' \
+  || fail "a non-emitter-fixable evidence failure must still deny"
+printf '%s' "$WRONG_OUT" | grep -q 'emit-review-evidence.sh' \
+  && fail "must not prescribe re-emitting for a failure re-emitting cannot fix"
+pass "remedy is conditional on the failure class"
+
+# The total is computed, not typed: a hand-maintained count drifted to 47 against
+# 44 real cases on the first pass, and a summary nobody can verify is decoration.
+CASE_COUNT="$(grep -c '^pass ' "$0")"
 echo
-echo "All 47 pre-ship squad gate cases passed."
+echo "All $CASE_COUNT pre-ship squad gate cases passed."
