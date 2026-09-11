@@ -1033,6 +1033,23 @@ A session's blended TTS estimate records a confirmed paid-provider response befo
 
 A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
 
+### Ad fine print (the fast-talking disclaimer)
+
+Every ad format addresses its closing legal line to `DISCLAIMER_ROLE`. The
+parser normalizes decorated model output onto that token, while unrecognized
+roles retain the existing default-voice fallback. `_FORMAT_ROLES` remains the
+casting contract; formats without a dedicated disclaimer voice use their
+opening voice.
+
+`audio/tts.py` applies `DISCLAIMER_TEMPO` through the existing `normalize()`
+FFmpeg pass on every engine. Internal breath gaps are removed before `atempo`,
+whose factors stay within the range supported by older FFmpeg builds. Invalid
+tempo values use the complete normal-speed path, and failed or unusable
+compressed renders retry once without compression. SSML `rate` remains reserved
+for host prosody.
+
+Pharma ads replace model-written fine print with one canonical medicine tail.
+
 ## Compounding station memory and truthful listener sessions
 
 `core/listener_session.py` maintains an in-memory, identity-free station epoch. The stream hub remains authoritative for raw HTTP connection membership, while the session state machine records only station-level presence:
