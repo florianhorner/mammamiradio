@@ -675,6 +675,52 @@ def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
     return True
 
 
+# Fine print removes internal breaths; -60dB preserves quiet raw-provider audio
+# that the earlier -40dB threshold could erase entirely.
+_SILENCE_ALL_GAPS = (
+    "silenceremove=start_periods=1:start_duration=0:start_threshold=-60dB:"
+    "stop_periods=-1:stop_duration=0.08:stop_threshold=-60dB"
+)
+
+
+_TEMPO_MIN = 0.25
+_TEMPO_MAX = 4.0
+
+
+def _validated_tempo(tempo: float, *, warn: bool = True) -> float:
+    """Return the one safe tempo value used by every filter decision."""
+    value = float(tempo)
+    if not math.isfinite(value) or value <= 0.0:
+        if warn:
+            logger.warning("Ignoring non-positive/non-finite tempo %r; rendering at normal speed", tempo)
+        return 1.0
+    if not _TEMPO_MIN <= value <= _TEMPO_MAX:
+        clamped = min(max(value, _TEMPO_MIN), _TEMPO_MAX)
+        if warn:
+            logger.warning("Tempo %r out of range; clamping to %s", tempo, clamped)
+        return clamped
+    return value
+
+
+def _compressing(tempo: float) -> bool:
+    """True when a tempo is meaningfully different from normal speed."""
+    return abs(_validated_tempo(tempo, warn=False) - 1.0) > 1e-3
+
+
+def _atempo_chain(tempo: float) -> str:
+    """Build a chain whose factors fit old FFmpeg's [0.5, 2.0] range."""
+    remaining = _validated_tempo(tempo)
+    factors: list[float] = []
+    while remaining > 2.0:
+        factors.append(2.0)
+        remaining /= 2.0
+    while remaining < 0.5:
+        factors.append(0.5)
+        remaining /= 0.5
+    factors.append(remaining)
+    return ",".join(f"atempo={_fmt_num(f)}" for f in factors)
+
+
 def normalize(
     input_path: Path,
     output_path: Path,
@@ -683,6 +729,7 @@ def normalize(
     loudnorm: bool = True,
     music_eq: bool = False,
     background: bool = False,
+    tempo: float = 1.0,
 ) -> Path:
     """Re-encode an input file to the station's target loudness and format.
 
@@ -694,7 +741,11 @@ def normalize(
     Set music_eq=True for yt-dlp music tracks to apply a gentle broadcast EQ
     before the loudness pass: removes subsonic rumble, de-muds compressed audio,
     adds presence, and rolls off HF harshness from lossy re-encoding.
+
+    ``tempo`` time-compresses fine print inside this existing pass and removes
+    internal breath gaps before compression.
     """
+    tempo = _validated_tempo(tempo)
     sample_rate = str(config.audio.sample_rate) if config else "48000"
     channels = str(config.audio.channels) if config else "2"
     bitrate = f"{config.audio.bitrate}k" if config else "192k"
@@ -722,7 +773,7 @@ def normalize(
     # the source was (e.g. 44.1 kHz from yt-dlp), which can cause audio glitches at stream
     # boundaries. measure_lufs takes ~2-5s on Pi vs 10-75s for a full loudnorm pass.
     # When music_eq is requested, we always re-encode (EQ requires a pass regardless).
-    if loudnorm and not music_eq:
+    if loudnorm and not music_eq and not _compressing(tempo):
         lufs = measure_lufs(input_path, background=background)
         if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
             loudnorm = False  # fall through to the fast format-conversion path below
@@ -736,7 +787,11 @@ def normalize(
         # stop_periods MUST stay negative. A positive stop_periods makes silenceremove
         # halt output at the FIRST silence period, truncating speech at its first
         # inter-phrase pause (host lines collapsed to ~1.6s). -1 trims trailing silence only.
-        silence_trim = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        silence_trim = (
+            _SILENCE_ALL_GAPS
+            if _compressing(tempo)
+            else "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        )
         # Soft fade-in on every final-output segment: music → banter hand-offs
         # used to be a hard cut at full volume. A short ramp-in on the incoming
         # segment turns the perceived "drop" into a gentle entry without
@@ -752,7 +807,15 @@ def normalize(
     else:
         # stop_periods=-1 (negative) trims trailing silence only; a positive value
         # truncates speech at the first pause. See the note in the loudnorm branch above.
-        audio_filter = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        audio_filter = (
+            _SILENCE_ALL_GAPS
+            if _compressing(tempo)
+            else "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        )
+
+    if _compressing(tempo):
+        # Append so loudness, EQ and fade filters survive; remove gaps first.
+        audio_filter = f"{audio_filter},{_atempo_chain(tempo)}"
 
     cmd = [
         "ffmpeg",

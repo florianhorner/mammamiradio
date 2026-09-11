@@ -15,7 +15,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -27,6 +27,7 @@ from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.imaging_schema import MAX_RECIPE_GAIN_DB, MIN_RECIPE_GAIN_DB
 from mammamiradio.audio.normalizer import (
     DEFAULT_CONCAT_SILENCE_MS,
+    _compressing,
     concat_files,
     generate_brand_motif,
     generate_foley_loop,
@@ -48,7 +49,7 @@ from mammamiradio.audio.voice_catalog import (
     is_openai_voice as _catalog_is_openai_voice,
 )
 from mammamiradio.core.models import DialogueLine, HostPersonality
-from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice
+from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE, AdPart, AdScript, AdVoice
 
 if TYPE_CHECKING:
     from mammamiradio.audio.imaging import ResolvedAdRecipe
@@ -111,11 +112,8 @@ _cloud_voice_state_lock = threading.Lock()
 _HEAVY_SEM = asyncio.Semaphore(2)
 _MIN_DIALOGUE_LINE_BYTES = 1024
 _MIN_DIALOGUE_LINE_DURATION_SEC = 0.5
-# Disclaimer voice rate by ad format. Formats not listed use the +35%
-# disclaimer_goblin default shared by the other ad treatments.
-_DISCLAIMER_RATE_BY_FORMAT = {
-    "classic_pitch": "+55%",
-}
+# Engine-independent legal blur; selected by ear from a rendered tempo ladder.
+DISCLAIMER_TEMPO = 1.95
 
 
 class TTSUnavailableError(RuntimeError):
@@ -830,6 +828,44 @@ def _schedule_paid_provider_success(
         logger.debug("Paid TTS accounting callback skipped because the event loop is closed")
 
 
+def _has_audible_audio(path: Path) -> bool:
+    """Cheap degenerate-output check: did the pass leave anything to play?
+
+    A silence filter can legitimately return an empty stream. That is fine for a
+    trim and fatal for a spoken line, so the caller falls back rather than
+    queueing a hole in the ad.
+    """
+    try:
+        if path.stat().st_size < _MIN_DIALOGUE_LINE_BYTES:
+            return False
+    except OSError:
+        return False
+    duration = probe_duration_sec(path)
+    return duration is None or duration >= _MIN_DIALOGUE_LINE_DURATION_SEC
+
+
+def _normalize_tolerating_tempo(raw_path: Path, output_path: Path, loudnorm: bool, tempo: float) -> Path:
+    """Retry failed or unusable cosmetic compression once at normal speed."""
+    try:
+        result = normalize(raw_path, output_path, loudnorm=loudnorm, tempo=tempo)
+        if not _compressing(tempo) or _has_audible_audio(result):
+            return result
+        logger.warning(
+            "Time-compression produced no usable audio for %s; airing the line at normal speed",
+            output_path.name,
+        )
+    except Exception as exc:
+        if not _compressing(tempo):
+            raise
+        logger.warning(
+            "Time-compression failed for %s (%s); airing the line at normal speed",
+            output_path.name,
+            exc,
+        )
+        return normalize(raw_path, output_path, loudnorm=loudnorm)
+    return normalize(raw_path, output_path, loudnorm=loudnorm)
+
+
 async def synthesize_openai(
     text: str,
     voice: str,
@@ -839,9 +875,10 @@ async def synthesize_openai(
     loudnorm: bool = True,
     model: str | None = None,
     api_key: str = "",
+    tempo: float = 1.0,
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
-    """Render text with the registry-selected OpenAI speech model."""
+    """Render OpenAI speech, optionally time-compressed during normalization."""
     api_key = api_key or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not set")
@@ -870,7 +907,7 @@ async def synthesize_openai(
         )
         raw_path.write_bytes(audio_bytes)
 
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        await loop.run_in_executor(None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])  # clean up orphaned raw file on any failure
@@ -890,6 +927,7 @@ async def synthesize_azure(
     loudnorm: bool = True,
     api_key: str = "",
     region: str = "",
+    tempo: float = 1.0,
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with Azure Speech TTS REST API, then normalize to station settings."""
@@ -925,7 +963,7 @@ async def synthesize_azure(
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        await loop.run_in_executor(None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])
@@ -1034,6 +1072,7 @@ async def synthesize_elevenlabs(
     delivery_profile: str = "none",
     host_name: str = "",
     api_key: str = "",
+    tempo: float = 1.0,
     on_paid_provider_success: Callable[[], None] | None = None,
 ) -> Path:
     """Render text with ElevenLabs TTS REST API, then normalize to station settings.
@@ -1094,7 +1133,7 @@ async def synthesize_elevenlabs(
         raw_path.write_bytes(response.content)
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+        await loop.run_in_executor(None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo))
         _unlink_many([raw_path])
     except Exception:
         _unlink_many([raw_path])
@@ -1126,9 +1165,12 @@ async def synthesize(
     delivery_cue: str = "neutral",
     delivery_profile: str = "none",
     host_name: str = "",
+    tempo: float = 1.0,
     state: StationState | None = None,
 ) -> Path:
     """Render text via the chosen TTS engine, then normalize to station output settings.
+
+    ``tempo`` is engine-independent FFmpeg compression; ``rate`` is SSML prosody.
 
     engine="openai" uses the registry-selected OpenAI speech model. Falls back
     to edge-tts if the key or registry route is unavailable. When falling back,
@@ -1188,6 +1230,7 @@ async def synthesize(
                             instructions=openai_instructions,
                             loudnorm=loudnorm,
                             api_key=openai_api_key,
+                            tempo=tempo,
                             on_paid_provider_success=_bill_tts,
                         ),
                         "OpenAI",
@@ -1261,6 +1304,7 @@ async def synthesize(
                                 loudnorm=loudnorm,
                                 api_key=azure_api_key,
                                 region=azure_region,
+                                tempo=tempo,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "Azure",
@@ -1337,6 +1381,7 @@ async def synthesize(
                                 delivery_profile=delivery_profile,
                                 host_name=host_name,
                                 api_key=elevenlabs_api_key,
+                                tempo=tempo,
                                 on_paid_provider_success=_bill_tts,
                             ),
                             "ElevenLabs",
@@ -1423,7 +1468,9 @@ async def synthesize(
             await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
 
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+            await loop.run_in_executor(
+                None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo)
+            )
             _unlink_many([raw_path])
 
             if fallback_reason:
@@ -1466,7 +1513,9 @@ async def synthesize(
                     comm = edge_tts.Communicate(text, fallback, rate=rate or "+0%", pitch=pitch or "+0Hz")
                     await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
                     loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
+                    await loop.run_in_executor(
+                        None, lambda: _normalize_tolerating_tempo(raw_path, output_path, loudnorm, tempo)
+                    )
                     _unlink_many([raw_path])
                     character = f" character={host_name}" if host_name else ""
                     logger.info(
@@ -1635,7 +1684,7 @@ async def synthesize_ad(
     async def _render_part(part, part_path):
         if part.type == "voice" and part.text:
             voice_for_part = voices.get(part.role, default_voice) if part.role else default_voice
-            # Legal disclaimers are format-scoped, not accidental role spikes.
+            # Fine print uses one engine-independent tempo in every format.
             extra: dict[str, object] = {
                 "engine": voice_for_part.engine,
                 "edge_fallback_voice": voice_for_part.edge_fallback_voice,
@@ -1643,8 +1692,8 @@ async def synthesize_ad(
             }
             if voice_for_part.voice_settings:
                 extra["voice_settings"] = voice_for_part.voice_settings
-            if part.role == "disclaimer_goblin":
-                extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
+            if part.role == DISCLAIMER_ROLE:
+                extra["tempo"] = DISCLAIMER_TEMPO
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
             return await synthesize(
                 part.text,
@@ -2226,9 +2275,16 @@ async def synthesize_ad(
         return output_path
 
 
-def _prosody_for_host(host: HostPersonality) -> dict[str, str]:
+class _HostProsody(TypedDict, total=False):
+    """SSML-only host controls, typed separately from float ``tempo``."""
+
+    rate: str
+    pitch: str
+
+
+def _prosody_for_host(host: HostPersonality) -> _HostProsody:
     """Derive TTS rate/pitch adjustments from personality axes."""
-    kwargs: dict[str, str] = {}
+    kwargs: _HostProsody = {}
     p = host.personality
     if p.energy > 60:
         kwargs["rate"] = "+10%"
