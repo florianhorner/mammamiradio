@@ -47,6 +47,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.hosts.ad_creative import (
     _FORMAT_ROLES,
+    AD_FORMAT_DISCLAIMER_SUFFIX,
     AD_FORMATS,
     DISCLAIMER_ROLE,
     SONIC_ENVIRONMENTS,
@@ -57,6 +58,7 @@ from mammamiradio.hosts.ad_creative import (
     AdScript,
     AdVoice,
     SonicWorld,
+    brand_has_fine_print,
 )
 from mammamiradio.hosts.context_cues import compute_context_block
 from mammamiradio.hosts.fallbacks import (  # noqa: F401  facade re-export — AD_BREAK_* are read only as scriptwriter.* (CHAOS_STOCK_LINES is also used in-module)
@@ -3704,14 +3706,56 @@ def _resolve_ad_role(raw_role: object, voices: dict[str, AdVoice]) -> str:
     return role
 
 
-def _cap_disclaimer_parts(parts: list[AdPart], fallback_role: str) -> list[AdPart]:
-    """Keep only the closing fine-print part and never compress the whole ad."""
-    voice_parts = [p for p in parts if p.type == "voice" and p.text]
+def _cap_disclaimer_parts(parts: list[AdPart], fallback_role: str, allowed: bool = True) -> list[AdPart]:
+    """Reduce the model's fine print to what this brand is allowed to air.
+
+    With ``allowed=True`` that means keeping only the closing fine-print part and
+    never compressing the whole ad.
+
+    ``allowed=False`` means this brand carries no fine print at all: the model was
+    asked not to write any, and anything it wrote regardless is removed rather than
+    demoted. Demoting would keep legal boilerplate in the spot at normal speed, and
+    the reorder below is skipped in that path so it could land mid-ad.
+
+    Whitespace does not count as surviving text. ``"   "`` is truthy, and a lone
+    whitespace part would both satisfy this function's own guard and block
+    ``write_ad``'s recovery, airing a sting followed by silence.
+    """
+
+    def _speaks(part: AdPart) -> bool:
+        return part.type == "voice" and isinstance(part.text, str) and bool(part.text.strip())
+
+    voice_parts = [p for p in parts if _speaks(p)]
     disclaimers = [p for p in voice_parts if p.role == DISCLAIMER_ROLE]
-    if not disclaimers:
+    if not disclaimers and not (not allowed and any(p.role == DISCLAIMER_ROLE for p in parts)):
         return parts
     # A campaign may legitimately use the disclaimer voice as its spokesperson.
     safe_role = fallback_role if fallback_role and fallback_role != DISCLAIMER_ROLE else "hammer"
+    if not allowed:
+        # Nothing here is fine print for this brand. If real copy survives, drop the
+        # disclaimers outright; if the script was *only* fine print, it is simply the
+        # ad copy wearing the wrong label, so demote every part rather than gutting
+        # the spot down to one line. Return early either way -- falling through would
+        # reach the max() below with no surviving voice part.
+        if len(disclaimers) == len(voice_parts):
+            for part in disclaimers:
+                part.role = safe_role
+            logger.warning(
+                "Ad script for a no-fine-print brand was all fine print; demoted %d parts to %r",
+                len(disclaimers),
+                safe_role,
+            )
+            return parts
+        # Every part wearing the role, not just the ones with speakable text: a
+        # blank-text goblin part is invisible to voice_parts but still reaches
+        # tts.py's role gate, so it would air at DISCLAIMER_TEMPO and put the role
+        # into roles_used for a brand that carries no fine print.
+        dropped = {id(part) for part in parts if part.role == DISCLAIMER_ROLE}
+        logger.info(
+            "Dropped %d fine-print part(s) from a no-fine-print brand's ad",
+            len(dropped),
+        )
+        return [part for part in parts if id(part) not in dropped]
     if len(voice_parts) == 1:
         disclaimers[0].role = safe_role
         logger.warning("Ad script was only fine print; demoted it to %r", safe_role)
@@ -3731,7 +3775,7 @@ def _cap_disclaimer_parts(parts: list[AdPart], fallback_role: str) -> list[AdPar
     if voice_parts[-1] is keep:
         return parts
     reordered = [part for part in parts if part is not keep]
-    after_last_voice = max(i for i, part in enumerate(reordered) if part.type == "voice" and part.text) + 1
+    after_last_voice = max(i for i, part in enumerate(reordered) if part.type == "voice" and part.text.strip()) + 1
     reordered.insert(after_last_voice, keep)
     return reordered
 
@@ -4076,20 +4120,35 @@ CAMPAIGN SPINE:
         else ""
     )
 
+    # Only brands with lawyers read fine print. Everything downstream of this flag
+    # has to agree: list the role, ask for the line, describe it in the format
+    # blurb -- or none of the three. Listing a role the example never uses (or the
+    # reverse) is the self-contradiction that made the model return roles the cast
+    # did not contain.
+    fine_print = brand_has_fine_print(brand)
+
     # Speaker tokens must exactly match the JSON example and parser contract.
     speaker_lines = []
     for role_name, voice in voices.items():
+        if role_name == DISCLAIMER_ROLE and not fine_print:
+            # classic_pitch casts a goblin for every brand; without fine print it
+            # simply has no line, so the prompt must not offer it as a speaker.
+            continue
         role_desc = SPEAKER_ROLES.get(role_name, f"Commercial voice: {voice.style}")
         speaker_lines.append(f'- "{role_name}" — {voice.name}: {role_desc}')
-    if DISCLAIMER_ROLE not in voices:
+    if fine_print and DISCLAIMER_ROLE not in voices:
         # Other formats address this token but render it with their opening voice.
         speaker_lines.append(
             f'- "{DISCLAIMER_ROLE}" — {SPEAKER_ROLES[DISCLAIMER_ROLE]} It is read by the spot\'s opening voice.'
         )
     speakers_block = "\n".join(speaker_lines)
 
-    # Format description
+    # Format description. The disclaimer suffix rides on the flag, not on the
+    # format, so an unrecognised ad_format falling back to the classic blurb still
+    # agrees with the SPEAKERS block above.
     format_desc = AD_FORMATS.get(ad_format, AD_FORMATS[AdFormat.CLASSIC_PITCH])
+    if fine_print:
+        format_desc += AD_FORMAT_DISCLAIMER_SUFFIX
 
     # Sonic world description
     env_desc = SONIC_ENVIRONMENTS.get(sonic.environment, "")
@@ -4104,6 +4163,28 @@ CAMPAIGN SPINE:
     opening_role = character_roles[0]
     second_role = character_roles[1] if len(character_roles) > 1 else character_roles[0]
 
+    # The closing beat: fine print for a brand that carries it, otherwise the
+    # tagline. The pause stays either way so the spot keeps its shape and does not
+    # simply get shorter by the length of the disclaimer.
+    if fine_print:
+        fine_print_rule = (
+            f'- The fine print is spoken by "{DISCLAIMER_ROLE}" and is sped up automatically. '
+            "Write it as ordinary spaced words: never run words together, never join them "
+            "with hyphens, never use ALL CAPS to suggest speed."
+        )
+    else:
+        fine_print_rule = (
+            "- This brand has no legal fine print. Do not write a disclaimer, small print, "
+            "terms, or a legal tail of any kind. Close on the tagline with one last beat of "
+            "swagger, and spend the time you would have given the fine print on that button."
+        )
+    if fine_print:
+        closing_example = f'''    {{"type": "pause", "duration": 0.5}},
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{DISCLAIMER_ROLE}"}}'''
+    else:
+        closing_example = f'''    {{"type": "pause", "duration": 0.5}},
+    {{"type": "voice", "text": "Tagline button, one last beat", "role": "{opening_role}"}}'''
+
     if sonic.is_recipe_driven:
         sonic_rule = (
             f"- Station recipe: {sonic.recipe_id}. It supplies the bed and any sound details after speech is rendered. "
@@ -4111,8 +4192,7 @@ CAMPAIGN SPINE:
         )
         parts_example = f'''    {{"type": "voice", "text": "Ad copy line here", "role": "{opening_role}"}},
     {{"type": "voice", "text": "More ad copy", "role": "{second_role}"}},
-    {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{DISCLAIMER_ROLE}"}}'''
+{closing_example}'''
     else:
         sonic_rule = (
             "- You may interleave sound effect cues and environment cues between voice lines. "
@@ -4124,8 +4204,7 @@ CAMPAIGN SPINE:
     {{"type": "voice", "text": "Ad copy line here", "role": "{opening_role}"}},
     {{"type": "sfx", "sfx": "sweep"}},
     {{"type": "voice", "text": "More ad copy", "role": "{second_role}"}},
-    {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{DISCLAIMER_ROLE}"}}'''
+{closing_example}'''
 
     prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
 Tagline: "{brand.tagline}"
@@ -4156,7 +4235,7 @@ RULES:
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
 - Every "role" value must be one of the quoted role tokens listed under SPEAKERS, copied exactly. Do not add the voice's name, do not change the capitalisation.
-- The fine print is spoken by "{DISCLAIMER_ROLE}" and is sped up automatically. Write it as ordinary spaced words: never run words together, never join them with hyphens, never use ALL CAPS to suggest speed.
+{fine_print_rule}
 {direct_spokesperson_rule}
 - Open HARD. The first beat should grab attention immediately.
 {sonic_rule}
@@ -4205,13 +4284,32 @@ Return JSON:
             )
 
         # Pharma replacement below must see the model's original role labels.
+        # Pharma skips the capper entirely, so nothing is dropped on that path.
+        dropped_fine_print = False
         if brand.category != "pharma":
-            parts = _cap_disclaimer_parts(parts, direct_primary_role or _FORMAT_ROLES.get(ad_format, ["hammer"])[0])
+            before = len(parts)
+            parts = _cap_disclaimer_parts(
+                parts,
+                direct_primary_role or _FORMAT_ROLES.get(ad_format, ["hammer"])[0],
+                allowed=fine_print,
+            )
+            # A gag the model buried inside the fine print never reaches air when
+            # that fine print is dropped, so it must not be retired from the
+            # verbal-gag ledger as though it had.
+            dropped_fine_print = len(parts) < before
 
-        # Ensure we have at least one voice part
+        # Ensure we have at least one voice part that actually says something. A
+        # whitespace-only line is truthy but silent, and letting it satisfy this
+        # guard blocks the recovery below -- the spot then airs a sting and nothing
+        # else.
         used_owned_fallback = False
-        if not any(p.type == "voice" for p in parts):
-            parts = [AdPart(type="voice", text=data.get("text", brand.tagline))]
+        if not any(p.type == "voice" and isinstance(p.text, str) and p.text.strip() for p in parts):
+            # The recovery value needs the same guarantee it is recovering: a blank
+            # `text` key, or a brand whose tagline is blank in radio.toml, would
+            # rebuild the identical silent part. Brand name is the last resort
+            # because an ad that says nothing is worse than one that says a name.
+            recovery = (data.get("text") or "").strip() or brand.tagline.strip() or brand.name
+            parts = [AdPart(type="voice", text=recovery)]
             used_owned_fallback = True
         if direct_primary_role and not any(
             part.type == "voice"
@@ -4277,9 +4375,10 @@ Return JSON:
                     dropped.text[:80],
                 )
             parts = [p for p in parts if p.role != DISCLAIMER_ROLE]
-            if not any(p.type == "voice" and p.text for p in parts):
+            if not any(p.type == "voice" and isinstance(p.text, str) and p.text.strip() for p in parts):
                 # Keep the brand audible if the model returned only fine print.
                 parts.append(AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role))
+                used_owned_fallback = True
             parts.append(
                 AdPart(
                     type="voice",
@@ -4303,8 +4402,9 @@ Return JSON:
 
         if callback_gag:
             # A structural or language fallback did not speak the model's
-            # callback, so do not retire the pending offer as if it aired.
-            state.pending_callback_landed = callback_landed and not used_owned_fallback
+            # callback, so do not retire the pending offer as if it aired. Nor did
+            # a dropped fine-print line, which may have been where the model put it.
+            state.pending_callback_landed = callback_landed and not used_owned_fallback and not dropped_fine_print
 
         return AdScript(
             brand=brand.name,
