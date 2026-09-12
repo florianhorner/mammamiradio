@@ -754,6 +754,86 @@ async def test_prewarm_publishes_matching_shadow_row(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault",
+    [None, "false", "mode", "predecessor", "missing", "tampered", "duration", "probe", "egress"],
+)
+async def test_first_listen_host_break_is_admitted_once_through_the_real_funnel(tmp_path, fault):
+    import json
+    import shutil
+
+    state = _make_state()
+    state.songs_since_banter = 1
+    state.last_state_change_at = 1.0
+    config = _make_config(tmp_path)
+    queue = asyncio.Queue(maxsize=3)
+    root = tmp_path / "pack"
+    (root / "banter").mkdir(parents=True)
+    path = root / "banter/20-special-third-chair.mp3"
+    original = producer._DEMO_ASSETS_DIR / path.relative_to(root)
+    shutil.copyfile(original, path)
+    manifest = json.loads((producer._DEMO_ASSETS_DIR / "spoken_assets.json").read_text())
+    entry = next(item for item in manifest["assets"] if item["path"] == path.relative_to(root).as_posix())
+    if fault == "mode":
+        entry["mode"] = "super_italian"
+    if fault == "predecessor":
+        entry["required_previous_starter_id"] = "another-record"
+    (root / "spoken_assets.json").write_text(json.dumps({"schema_version": 1, "assets": [entry]}))
+    if fault == "missing":
+        path.unlink()
+    if fault == "tampered":
+        path.write_bytes(b"not the approved clip")
+    before = path.read_bytes() if path.exists() else None
+
+    def probe(_):
+        if fault == "probe":
+            state.continuity_epoch += 1
+        return float("nan") if fault == "duration" else 69.0
+
+    async def egress(segment, _):
+        if fault == "egress":
+            state.continuity_epoch += 1
+        return segment
+
+    with (
+        patch.object(producer, "_DEMO_ASSETS_DIR", root),
+        patch.object(producer, "_probe_segment_duration", side_effect=probe),
+        patch.object(producer, "_apply_egress", side_effect=egress) as rendered,
+        patch.object(producer, "synthesize", new_callable=AsyncMock) as synth,
+    ):
+        accepted = await producer.queue_first_listen_banter(
+            queue,
+            state,
+            config,
+            stale_check=lambda: (
+                GenerationWasteReason.STALE_CONTINUITY
+                if state.continuity_epoch
+                else False
+                if fault == "false"
+                else None
+            ),
+        )
+    assert accepted is (fault in {None, "false"})
+    synth.assert_not_called()
+    assert (path.read_bytes() if path.exists() else None) == before
+    assert state.canned_clips_streamed == 0  # Only actual playback commits this.
+    if accepted:
+        rendered.assert_awaited_once()
+        segment = queue.get_nowait()
+        assert segment.metadata["canned"] and not segment.metadata.get("rescue")
+        assert not segment.ephemeral
+        assert state.queued_segments[0]["id"] == segment.metadata["queue_id"]
+        assert state.songs_since_banter == 0 and state.segments_produced == 1
+        assert state.last_state_change_at > 1.0
+        assert path.name in producer._recently_played_clips
+    else:
+        assert queue.empty() and not state.queued_segments
+        assert state.songs_since_banter == 1 and state.segments_produced == 0
+        assert state.last_state_change_at == 1.0
+        assert path.name not in producer._recently_played_clips
+
+
+@pytest.mark.asyncio
 async def test_error_recovery_uses_norm_cache_rescue_and_appends_shadow_row(tmp_path):
     """Outer error-recovery rescue (``rescue=True``) is built inside the main loop
     body and so flows through the epilogue — unlike a bridge it DOES append an

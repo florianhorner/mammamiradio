@@ -62,27 +62,29 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
 
     positions = [html.index(stage) for stage in stages]
     assert positions == sorted(positions)
-    assert html.count('class="first-listen-step"') == 5
+    assert html.count('class="first-listen-step"') == 4
     assert 'id="firstListenPath"' in html
     path = html[html.index('id="firstListenPath"') : html.index('id="firstListenOptional"')]
-    assert path.count('class="first-listen-step"') == 4
+    assert path.count('class="first-listen-step"') == 3
     assert 'id="firstListenAiStep"' not in path
-    assert "Optional enhancement" in html
+    assert "Your ongoing show" in html
     assert (
         html.index('id="firstListenPath"')
         < html.index('id="firstListenOptional"')
         < html.index('id="firstListenAiStep"')
     )
-    assert "Hear Mamma Mi Radio right here." in html
+    assert "Your seat’s ready." in html
     assert '<header class="mmr-panel-head sr-only">' in html
-    assert "Check music can continue" in html
-    assert "What plays after the welcome" in html
+    assert 'aria-label="Music readiness"' in html
+    assert "Music details" in html
     assert 'id="firstListenSourcePreview"' in html
-    assert "Play it on this device" in html
-    assert "Start sound check" in html
-    assert "Check the sound" in html
-    assert "Choose whether the hosts can use Home details" in html
-    assert "Add new conversations between songs" in html
+    assert "Play it here" in html
+    assert "Play my station" in html
+    assert "Can you hear us?" in html
+    assert "I hear you" in html
+    assert 'id="firstListenPrivacyHeading" tabindex="-1">Make it yours</h3>' in html
+    assert "Return to “Can you hear us?”, then review your Home details." in html
+    assert "Give them something new to say." in html
     assert "Hearing it here is enough to finish setup." in html
     assert 'id="firstListenHomeAssistantGuide"' in html
     assert "Home Assistant Community Store (HACS)" in html
@@ -93,7 +95,7 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Restart Home Assistant" in html
     assert "Settings → Devices &amp; Services → Add Integration → Mamma Mi Radio" in html
     assert "Media → Mamma Mi Radio → Mamma Mi Radio Live" in html
-    assert '<p class="progress-line" id="firstListenProgressLine">Checking your next step…</p>' in html
+    assert '<p class="progress-line" id="firstListenProgressLine">Step 1 of 3. Next: play it here.</p>' in html
     assert "first-listen-current-meta" not in html
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
@@ -113,20 +115,135 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "FIRST_LISTEN_REVIEW_LABELS[key]" in step
     assert "review.setAttribute('aria-expanded',reviewing?'true':'false')" in step
     collapsed_bodies = re.findall(r'<div class="first-listen-body"[^>]*\bhidden\b[^>]*\binert\b', html)
-    assert len(collapsed_bodies) == 4
+    assert len(collapsed_bodies) == 3
     assert 'id="firstListenAiBody"' in collapsed_bodies[-1]
 
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     for stage in (
-        "firstListenSourceStep",
         "firstListenSpeakerStep",
         "firstListenVerifyStep",
         "firstListenPrivacyStep",
         "firstListenAiStep",
     ):
         assert progress.count(f"firstListenSetStep('{stage}'") == 1
-    assert "firstListenSetStep('firstListenAiStep',configuredKeys.length?'complete':'optional')" in progress
+    assert "firstListenSetStep('firstListenAiStep','optional')" in progress
     assert "firstListenAiStep',configuredKeys.length?'current'" not in progress
+
+
+def test_last_required_step_keeps_the_rail_while_its_body_is_open() -> None:
+    css = _css()
+    hide = css.index(".first-listen-panel .first-listen-step:last-child::before")
+    restore = css.index(
+        ".first-listen-panel .first-listen-step:last-child:has(.first-listen-body:not([hidden]))::before"
+    )
+    assert hide < restore
+    assert "display: none;" in css[hide:restore]
+    opened = css[restore : restore + 180]
+    assert "display: block;" in opened
+    assert "bottom: 0;" in opened
+
+
+def test_step_three_leads_with_a_day_one_moment_and_marks_the_gated_ones() -> None:
+    """Step 3 must demonstrate something a fresh install can actually reach.
+
+    Three of the four scenes need household details narrow mode does not grant
+    (mammamiradio/home/authorization.py), so a stack of only those tells a cold
+    install its setup is unfinished. docs/explainer refuses to build a page in
+    that state; this is the same refusal for the admin journey.
+    """
+
+    html = _html()
+    moments = html[html.index('class="home-moments"') : html.index('<div class="guide-audio" data-guide="privacy"')]
+    assert moments.count("household-scene") == 4
+    # The reachable one leads, so it is read before ~97s of gated demos.
+    assert moments.index('data-explainer-scenario="quiet"') < moments.index('data-explainer-scenario="laundry"')
+    assert moments.count('data-reachability="day-one"') == 1
+    assert moments.count('data-reachability="home-grant"') == 3
+
+
+def test_the_day_one_marking_lands_on_the_scene_that_is_actually_reachable() -> None:
+    """Counting the markings is not the same as checking which scene wears them.
+
+    A swap that moves `day-one` onto the laundry while quiet still leads would
+    satisfy the counts above and promise a fresh install something narrow ambient
+    context cannot deliver. validate-spoken-assets.py binds these to the manifest;
+    this pins the pairing in the template itself.
+    """
+
+    html = _html()
+    scenes = dict(
+        re.findall(
+            r'data-explainer-scenario="([a-z]+)" data-reachability="([a-z-]+)">\s*<h5>(?:.*?)</h5>',
+            html,
+            re.DOTALL,
+        )
+    )
+    assert scenes == {"quiet": "day-one", "laundry": "home-grant", "arrival": "home-grant", "coffee": "home-grant"}
+
+    # Split on scene boundaries rather than bounding at </h5>: the chip is styled
+    # by class alone, so it renders from anywhere inside the scene.
+    block = html[html.index('class="home-moments"') : html.index('<div class="guide-audio" data-guide="privacy"')]
+    chunks = re.split(r'(?=<div class="listening-invitation household-scene")', block)[1:]
+    chipped = []
+    for chunk in chunks:
+        key = re.search(r'data-explainer-scenario="([a-z]+)"', chunk)
+        assert key is not None, chunk[:120]
+        if "day-one-chip" in chunk:
+            chipped.append(key.group(1))
+    assert chipped == ["quiet"]
+    assert len(chunks) == 4
+
+
+def test_step_three_names_both_gates_before_the_decision_not_after_the_demos() -> None:
+    """A writing key alone does not unlock the household moments.
+
+    A fresh install resolves to narrow ambient context, so laundry/arrival/kitchen
+    are out of reach whatever the operator pays for. The copy that qualifies the
+    choice has to precede the choice, or an assistive-tech user commits first and
+    reads the caveat afterwards.
+    """
+
+    html = _html()
+    invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
+    note_start = invite.index("On day one your station knows the sky")
+    note = invite[note_start : invite.index("</p>", note_start)]
+    assert "weather and daylight" in note
+    assert "does not have yet" in note
+    assert "writing service" in note
+    assert invite.index("On day one your station knows the sky") < invite.index("first-listen-decision")
+    assert "isn\u2019t available in this setup yet" not in html
+
+
+def test_step_three_decision_precedes_the_demos_and_is_named_by_outcome() -> None:
+    """Finishing is the primary action and sits above the demo stack.
+
+    "Keep listening" read as a playback control while it committed the Home
+    privacy choice to the server, and it sat under ~2.5 minutes of audio.
+    """
+
+    html = _html()
+    invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
+    assert invite.index('id="firstListenKeepListeningBtn"') < invite.index('class="home-moments"')
+    assert invite.index('id="firstListenMakeYoursBtn"') < invite.index('class="home-moments"')
+    # Finishing needs nothing else, so it carries the primary tone.
+    keep_at = invite.index('id="firstListenKeepListeningBtn"')
+    assert "btn-trigger" in invite[keep_at - 200 : keep_at]
+    assert ">Finish with Home private<" in invite
+    assert ">Add live host writing<" in invite
+    assert ">Keep listening<" not in invite
+    assert ">Make the show yours<" not in invite
+
+
+def test_staged_scene_group_does_not_reuse_the_moment_receipts_label() -> None:
+    """ "Home moments" already names real HA ritual history elsewhere in this file.
+
+    Reusing it for staged fakes gives a screen reader one label for two opposite
+    things.
+    """
+
+    html = _html()
+    assert 'aria-label="Staged example scenes, not your home"' in html
+    assert html.count('aria-label="Home moments') == 0
 
 
 def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() -> None:
@@ -143,7 +260,7 @@ def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() ->
          ("firstListenEntry!=='completing'",
           "firstListenEntry='complete'", "syncFirstListenSetupMount()")),
         ("resolveFirstListenLanding", "renderGuidedSetupStrip",
-         ("_activeTab==='setup'&&_firstListenUi.showSuccess", "previous==='completing'",
+         ("previous==='required'&&_activeTab==='setup'", "previous==='completing'",
           "preserveSuccess?'completing':required?'required':'complete'")),
     )  # fmt: skip
     for start, end, needles in sections:
@@ -217,9 +334,10 @@ def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None
 
     assert "source.recovery_on_air===true" in html
     assert "source.recovery_cover_available===true" in html
-    assert "The welcome is ready. Backup music will keep the station playing." in html
-    assert "Backup music will play after the welcome." in html
-    assert "Backup music is ready after the welcome." in html
+    assert "Music needs attention" in html
+    assert "Backup audio is available while music needs attention." in html
+    assert "Backup audio can keep the station playing while primary music is repaired." in html
+    assert "Backup music" not in html
     assert "The welcome is ready, but music cannot continue afterward yet." in html
     assert "source.transport_audible" not in html
     cue = _function("firstListenListeningCue", "renderFirstListenProgress")
@@ -227,8 +345,8 @@ def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None
     assert "if(recoveryOnAir)" in cue
     assert "if(recoveryAvailable)" in cue
     assert "then the first song" in cue
-    assert "then backup music" in cue
-    assert "Backup music is ready" in cue
+    assert "then backup audio" in cue
+    assert "Backup audio is available" in cue
     assert "opening may end before music" in cue
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable})" in progress
@@ -253,9 +371,9 @@ def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> Non
         "{heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)" in html
     )
     assert "media-source://mammamiradio/live" in html
-    assert "Start sound check" in html
-    assert "Yes, I hear it" in html
-    assert "Not yet" in html
+    assert "Play my station" in html
+    assert "I hear you" in html
+    assert "No sound yet" in html
     audio_tag = re.search(r'<audio id="firstListenStationAudio"[^>]*>', html)
     assert audio_tag is not None
     assert 'preload="none"' in audio_tag.group(0)
@@ -289,12 +407,21 @@ def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
     privacy = html.index('id="firstListenPrivacyStep"')
     ai = html.index('id="firstListenAiStep"')
     assert privacy < ai
-    assert "Example only. This is not your Home data" in html
+    assert "household-scene" in html
+    assert html.count('class="household-example-play"') == 4
+    assert "toggleHouseholdExample('quiet',this)" in html
+    assert "toggleHouseholdExample('laundry',this)" in html
+    assert "toggleHouseholdExample('arrival',this)" in html
+    assert "toggleHouseholdExample('coffee',this)" in html
+    assert "home_moments" in html
     assert "We won’t request Home details unless you ask for a preview." in html
     assert "Keep Home private and we request nothing." in html
     assert "preview exactly what the hosts would receive, then decide." in html
-    assert "apiResponse('POST','/api/setup/home-context-preview',{})" in html
-    assert "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled})" in html
+    assert "apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview)" in html
+    assert (
+        "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy)"
+        in html
+    )
     assert "Keep Home private" in html
     assert "See what the hosts would receive" in html
     assert "Let Marco and Giulia use these details" in html
@@ -310,16 +437,22 @@ def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
 def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
 
-    assert "const priorInstall=projection.legacy||projection.first.install_origin==='existing'" in progress
+    assert (
+        "const priorInstall=!_firstListenUi.restarting&&"
+        "(projection.legacy||projection.first.install_origin==='existing')" in progress
+    )
     assert "const existingProof=priorInstall&&!_firstListenUi.selectionDirty&&!projection.proofPending" in progress
     assert "const listenAccepted=projection.accepted||existingProof||receiptRepairRequired" in progress
     assert "const listenComplete=projection.heard||existingProof" in progress
     assert "const existingPrivacyReview=existingProof&&!projection.privacyReviewed" in progress
-    assert "listenAccepted?'complete':sourceMilestone?'current':'upcoming'" in progress
+    assert "listenAccepted?'complete':'current'" in progress
     assert "listenComplete?'complete':receiptRepairRequired||listenAccepted?'current':'upcoming'" in progress
     assert "privacyMilestone?'complete':existingPrivacyReview||listenComplete?'current':'upcoming'" in progress
-    assert "configuredKeys.length?'complete':'optional'" in progress
-    assert "aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi" in progress
+    assert "firstListenSetStep('firstListenAiStep','optional')" in progress
+    assert (
+        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
+        in progress
+    )
     assert "You do not need to play the station again." in progress
     assert "Your existing listening check still stands. Review your Home details next." in progress
 
@@ -405,13 +538,13 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
         (
             "loadHomeContextPreview",
             "loadCachedHomeContextDiagnostics",
-            "apiResponse('POST','/api/setup/home-context-preview',{})",
+            "apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview)",
             "_firstListenUi.privacyPreviewValid=true",
         ),
         (
             "chooseFirstListenPrivacy",
             "renderHomeContextPreviewGate",
-            "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled})",
+            "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy)",
             "_firstListenUi.privacyChoice=requestedEnabled",
         ),
     )
@@ -511,33 +644,35 @@ def test_discovery_and_privacy_preview_require_canonical_detached_envelopes() ->
 
 def test_no_ai_key_is_needed_for_first_audio() -> None:
     html = _html()
-    assert "No AI key needed." in html
-    assert "Welcome and live radio" in html
-    assert "New host conversations" in html
-    assert "The station already works without AI." in html
+    assert "Those studio recordings play without a key." in html
+    assert "No keys needed to start listening" in html
+    assert "Hear the studio voices" in html
+    assert "Hear the free voices" in html
     ai_body = re.search(r'<div class="first-listen-body"[^>]*id="firstListenAiBody"[^>]*>', html)
     assert ai_body is not None
     assert "hidden" in ai_body.group(0)
     assert 'aria-hidden="true"' in ai_body.group(0)
     assert "inert" in ai_body.group(0)
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    assert "aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi" in progress
+    assert (
+        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
+        in progress
+    )
     assert "filter(e=>e.key==='llm_keys')" in progress
-    assert "firstListenSetStep('firstListenAiStep',configuredKeys.length?'complete':'optional')" in progress
-    assert "AI service connected" in progress
+    assert "firstListenSetStep('firstListenAiStep','optional')" in progress
+    assert "renderFirstListenConnection()" in progress
     start_block = _function("startFirstListen", "verifyFirstListen")
     assert "setupAnthropicKey" not in start_block
     assert "setupOpenaiKey" not in start_block
 
-    values = _function("firstListenKeyValues", "updateFirstListenKeySaveState")
+    fields = _function("firstListenKeyFields", "firstListenKeyValues")
     update = _function("updateFirstListenKeySaveState", "openFirstListenKeyEditor")
     save = _function("setupSaveKeys", "copySetupSnippet")
-    assert "setupAnthropicKey" in values
-    assert "setupOpenaiKey" in values
-    assert "save.disabled=!firstListenKeyValues().some(Boolean)" in update
-    assert "if(anthropic) payload.ANTHROPIC_API_KEY=anthropic" in save
-    assert "if(openai) payload.OPENAI_API_KEY=openai" in save
-    assert "if(!Object.keys(payload).length)" in save
+    assert "setupAnthropicKey" in fields
+    assert "setupOpenaiKey" in fields
+    assert "save.disabled=_firstListenUi.keySaving||!hasInput" in update
+    assert "firstListenKeyFields()" in save
+    assert "apiResponse('POST','/api/setup/save-keys',payload,FIRST_LISTEN_TIMEOUTS.privacy)" in save
     assert "Saved keys stay hidden." in html
     assert "Leave a field empty to keep its current value." in html
     assert html.count('placeholder="Leave blank to keep saved key"') == 4
@@ -555,7 +690,7 @@ def test_not_yet_has_warm_bounded_repair_and_no_volume_mutation() -> None:
     assert "Confirm the sound is coming from this tab, not another app." in repair
     assert "Technical help is below the journey." in repair
     assert 'id="firstListenRetryBtn"' in repair
-    assert "Try this device again" in repair
+    assert "Play on this device again" in repair
     assert 'id="firstListenChooseAnotherBtn"' not in html
     assert "Choose another speaker" not in html
     retest = _function("retestFirstListenSpeaker", "startFirstListen")
@@ -565,7 +700,7 @@ def test_not_yet_has_warm_bounded_repair_and_no_volume_mutation() -> None:
     assert "_firstListenUi.dispatch='ready'" in retest
     assert "_firstListenUi.verification='awaiting'" in retest
     projection = _function("firstListenProjection", "firstListenSourceStatus")
-    assert "serverProofMatches=!_firstListenUi.selectionDirty" in projection
+    assert "serverProofMatches=!replay&&!_firstListenUi.selectionDirty" in projection
     assert "volume_set" not in html
     assert "volume_level" not in _function("startFirstListen", "verifyFirstListen")
 
@@ -586,7 +721,7 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "Restore the missing sound check without playing it again." in panel
     assert "This will not replay the station." in panel
     assert 'id="firstListenSaveAttemptBtn"' in panel
-    assert "Restore sound check" in panel
+    assert "Save my sound check" in panel
     assert 'id="firstListenVerifyActions"' in html
     assert "receipt_unavailable" in verify
     assert "_firstListenUi.dispatch='receipt_failed'" in verify
@@ -632,7 +767,10 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
     html = _html()
     # Network exceptions use one fixed client-only safe-state message. Every
     # server reason must otherwise have exactly one explicit UI mapping.
-    assert _ui_first_listen_error_codes() == _server_setup_error_codes() | {"persistence_failed"}
+    assert _ui_first_listen_error_codes() == _server_setup_error_codes() | {
+        "persistence_failed",
+        "privacy_save_unconfirmed",
+    }
     assert "stale_attempt:" not in html
 
     error_block = _function("firstListenErrorCopy", "firstListenErrorMessage")
@@ -701,11 +839,11 @@ def test_first_listen_controls_have_accessible_busy_and_mobile_contracts() -> No
 def test_first_listen_uses_truthful_action_copy() -> None:
     html = _html()
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    for copy in ("Preview 16-second welcome", "Start sound check", "Review music readiness", "Review playback",
+    for copy in ("Take your seat", "Play my station", "Music details", "Review playback",
                  "Review sound check", "Review privacy choice", "Review AI setup"):  # fmt: skip
         assert copy in html
-    for copy in ("Start sound check again", "firstListenSetChip('firstListenSpeakerChip','working','Start here')",
-                 "Tap Start sound check to hear it on this device."):  # fmt: skip
+    for copy in ("Play my station again", "firstListenSetChip('firstListenSpeakerChip','idle','Your turn')",
+                 "Tap Play my station to hear it on this device."):  # fmt: skip
         assert copy in progress
     assert "Play the station" not in html
 
@@ -721,9 +859,8 @@ def test_first_listen_program_mark_reuses_canonical_favicon() -> None:
 
 def test_completed_rows_review_inline_without_stealing_current_step() -> None:
     html = _html()
-    assert html.count('onclick="toggleFirstListenReview(') == 4
+    assert html.count('onclick="toggleFirstListenReview(') == 3
     for key, body, label in (
-        ("source", "firstListenSourceBody", "Review music readiness"),
         ("speaker", "firstListenSpeakerBody", "Review playback"),
         ("verify", "firstListenVerifyBody", "Review sound check"),
         ("privacy", "firstListenPrivacyBody", "Review privacy choice"),
@@ -744,8 +881,15 @@ def test_completed_rows_review_inline_without_stealing_current_step() -> None:
     assert "const trigger=_firstListenUi.reviewTrigger" in close
     assert "_firstListenUi.reviewStep=''" in close
     assert "_firstListenUi.optionalStep=''" in close
+    assert "_keysEditMode=false" in close
     assert "if(!focusCurrentFirstListenStep()&&trigger?.isConnected)trigger.focus()" in close
     assert "event.key==='Escape'" in html
+
+    optional = _function("toggleFirstListenOptional", "showFirstListenConnection")
+    assert "_keysEditMode=false" in optional
+    connection = _function("showFirstListenConnection", "returnToFirstListenSetup")
+    assert "if(stage==='voices'){" in connection
+    assert "_keysEditMode=false" in connection
 
 
 def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> None:
@@ -755,7 +899,7 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     assert 'preload="none"' in audio_tag.group(0)
     assert "autoplay" not in audio_tag.group(0)
     assert html.count('id="firstListenGuideAudio"') == 1
-    assert html.count('class="guide-audio-play"') == 7
+    assert html.count('class="guide-audio-play"') == 8
     for key in (
         "welcome",
         "sound-check",
@@ -763,6 +907,7 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
         "receipt-recovery",
         "privacy",
         "ai",
+        "free-voices",
         "success",
     ):
         assert f'data-guide-key="{key}"' in html
@@ -771,15 +916,29 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     guides_start = html.index("const FIRST_LISTEN_GUIDES={")
     guides_end = html.index("function initFirstListenTechnicalDetails", guides_start)
     guide_code = html[guides_start:guides_end]
-    assert "/static/audio/first_listen/${guide.file}" in guide_code
+    assert "/static/audio/${folder}/${guide.file}" in guide_code
     # Playback is raced against a load deadline, so the clip still starts from a
     # click and nothing else, but a stalled one cannot wait forever.
     assert "await Promise.race([" in guide_code
     assert "audio.play()," in guide_code
     assert "function resetFirstListenGuideSource(audio)" in guide_code
     assert "audio.removeAttribute('src')" in guide_code
-    assert "if(!audio.getAttribute('src'))" in guide_code
-    assert "audio.src=`${_base}/static/audio/first_listen/${guide.file}?v=${guide.version}`" in guide_code
+    assert "if(audio.getAttribute('src')!==next)" in guide_code
+    assert "const folder=household?'home_moments':key==='free-voices'?'voice_examples':'first_listen'" in guide_code
+    assert "const next=`${_base}/static/audio/${folder}/${guide.file}?v=${guide.version}`" in guide_code
+    assert "const HOUSEHOLD_EXAMPLES={" in guide_code
+    household = _function("toggleHouseholdExample", "initFirstListenTechnicalDetails")
+    assert "return toggleFirstListenGuide(key,button);" in household
+    # The literals below are a smoke check only. validate-spoken-assets.py is what
+    # binds each version to its manifest sha256 prefix; see
+    # test_home_moment_pack_is_bound_to_the_explainer_source.
+    assert "quiet:{file:'quiet.mp3',version:'02fc7d83734a'}" in guide_code
+    assert "laundry:{file:'laundry.mp3',version:'e7607b0c0566'}" in guide_code
+    assert "arrival:{file:'arrival.mp3',version:'f2dabb786f49'}" in guide_code
+    assert "coffee:{file:'coffee.mp3',version:'048792796ad8'}" in guide_code
+    container = _function("firstListenGuideContainer", "firstListenGuideLocksRoomProof")
+    assert "button?.closest('.guide-audio,.household-example')" in container
+    assert "audio.src=next" in guide_code
     assert "audio.load()" in guide_code
     toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
     # A failed load/play must not strand a station audio paused for this guide --
@@ -816,8 +975,8 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     lock = _function("firstListenGuideLocksRoomProof", "firstListenGuideIdleLabel")
     assert "dataset.state||''" in lock
     # Only a clip that is actually playing may hold the room proof. Locking on
-    # 'loading' let a clip that never arrived disable "Yes, I hear it" and
-    # "Not yet" with no way back short of a reload.
+    # 'loading' let a clip that never arrived disable "I hear you" and
+    # "No sound yet" with no way back short of a reload.
     assert "return state==='playing'" in lock
     assert "loading" not in lock
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
@@ -849,7 +1008,7 @@ def test_existing_install_retest_requires_a_fresh_human_confirmation() -> None:
     assert "const serverProofPending=Boolean(serverAttempt" in projection
     assert "const proofPending=_firstListenUi.retestPending||serverProofPending" in projection
     assert "const localProofPending=Boolean(\n    proofPending||" in projection
-    assert "const serverProofMatches=!_firstListenUi.selectionDirty&&!proofPending" in projection
+    assert "const serverProofMatches=!replay&&!_firstListenUi.selectionDirty&&!proofPending" in projection
     assert "const privacyUnlocked=heard||(existingAccess&&!_firstListenUi.selectionDirty&&!proofPending)" in projection
     assert "proofPending" in projection.split("return{", 1)[1]
     assert "const existingProof=priorInstall&&!_firstListenUi.selectionDirty&&!projection.proofPending" in progress
@@ -873,7 +1032,7 @@ def test_existing_install_without_a_saved_speaker_routes_to_selection() -> None:
     assert 'id="firstListenRetestBtn"' in html
     assert 'id="firstListenChooseSpeakerToRetestBtn"' not in html
     assert "Choose a speaker to test" not in html
-    assert "if(retestBtn)retestBtn.hidden=false" in progress
+    assert "retestBtn.hidden=false" in progress
     assert "startFirstListen(el)" in retest
     assert "chooseAnotherFirstListenSpeaker" not in retest
 
@@ -881,14 +1040,16 @@ def test_existing_install_without_a_saved_speaker_routes_to_selection() -> None:
 def test_fresh_completion_uses_a_separate_success_surface() -> None:
     html = _html()
     assert 'id="firstListenSuccess" aria-labelledby="firstListenSuccessTitle" hidden aria-hidden="true" inert' in html
-    assert "Bravo! Your first broadcast is complete." in html
-    assert "Your station is on air." in html
-    assert "Open full listener" in html
+    assert "Mamma Mi Radio · You’re in" in html
+    assert "You’re part of the show." in html
+    assert 'class="broadcast-seal" href="/static/favicon.svg"' in html
+    assert 'class="seal-mi"' not in html
+    assert "Listen to the station" in html
     assert 'onclick="openFirstListenListener()"' in html
     success_actions = html[html.index('class="success-actions"') : html.index('id="firstListenSuccessRepair"')]
-    assert success_actions.index("Open full listener") < success_actions.index("Station controls")
+    assert success_actions.index("Listen to the station") < success_actions.index("Open station controls")
     assert "Review choices" in html
-    assert "Play the celebration" in html
+    assert "Hear the celebration" in html
     assert "Open your station" not in html
 
     update = _function("updateFirstListenSuccess", "reviewFirstListenChoices")
@@ -904,7 +1065,10 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
     assert update.index(scroll) < update.index(focus)
 
     choice = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
-    assert "const priorInstall=projection.legacy||projection.first.install_origin==='existing'" in choice
+    assert (
+        "const priorInstall=!_firstListenUi.restarting&&"
+        "(projection.legacy||projection.first.install_origin==='existing')" in choice
+    )
     assert "const reviewingPrivacy=_firstListenUi.reviewStep==='privacy'" in choice
     assert "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy" in choice
     assert "_firstListenUi.showSuccess=showCelebration" in choice
@@ -951,8 +1115,8 @@ def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actio
     assert 'id="firstListenSuccessRepair"' in html
     assert 'id="setupConversationsHeading"' in html
     assert 'id="setupVoiceQualityHeading"' in html
-    assert "Choose the clarity, warmth, and presence" in html
-    assert "These providers shape how the hosts sound" in html
+    assert "In the default setup, add an ElevenLabs key" in html
+    assert "new conversations use the free voices" in html
     assert "They do not add new conversations" not in html
 
     strip = _function("renderGuidedSetupStrip", "shouldShowHomeContextPreview")
@@ -967,28 +1131,28 @@ def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actio
     # in the Technical details drawer, which is where machine words belong.
     plain = _function("firstListenPlainSourceDetail", "firstListenSourceRows")
     assert "kind==='recovery'&&value==='on_air'" in plain
-    assert "Backup music is playing, so the station stays on." in html
+    assert "Backup audio is playing, so the station stays on." in html
     assert "proves transport" not in html
     assert "FIRST_LISTEN_PLAIN_SOURCE_DETAIL={" in html
     assert "FIRST_LISTEN_PLAIN_SOURCE_LABEL={" in html
     sources_html = _function("firstListenSourcesHtml", "renderFirstListenSources")
     assert "function firstListenSourcesHtml(source,plain=false)" in sources_html
-    assert "plain?firstListenPlainSourceDetail(item.kind,rawStatus)" in sources_html
+    assert "firstListenPlainSourceDetail(item.kind,emptyLocal?'not_configured':rawStatus)" in sources_html
     assert "FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]" in sources_html
     source_state = _function("firstListenSourceState", "firstListenSourcesHtml")
     assert "firstListenSourceHealthy(source,normalized)" in source_state
     assert "continuity_available===true" in source_state
     sources = _function("renderFirstListenSources", "firstListenPlayerLabel")
     assert "getElementById('firstListenSourcePreview')" in sources
-    assert "preview.innerHTML=sourceKnown?firstListenSourcesHtml(source,true)" in sources
+    assert "const markup=sourceKnown?firstListenSourcesHtml(source,true)" in sources
     assert "technical.innerHTML=firstListenSourcesHtml(source,false)" in sources
     assert "firstListenSourcePreviewDetails" in sources
     assert "firstListenSourceHealthy(source)" in sources
     assert "previousHealth!=='degraded'" in sources
     assert "previewDetails.dataset.sourceHealth=sourceHealth" in sources
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    assert "const sourceComplete=sourceMilestone&&continuityAvailable" in progress
-    assert "sourceKnown&&!continuityAvailable?'repair the music source'" in progress
+    assert "firstListenSetStep('firstListenSourceStep'" not in progress
+    assert "sourceMilestone" not in progress
 
 
 def test_post_hacs_timing_is_local_and_ends_only_on_heard_confirmation() -> None:
@@ -1042,8 +1206,12 @@ def test_every_first_listen_mutation_carries_a_deadline_and_a_way_out() -> None:
     assert "const FIRST_LISTEN_TIMEOUTS={" in html
     assert "function firstListenTimedOut(error){return Boolean(error&&error.name==='AbortError')}" in html
 
-    for route, budget in (("/api/resume", "FIRST_LISTEN_TIMEOUTS.play"),):
-        call = re.search(rf"apiResponse\('POST','{re.escape(route)}',[^;]*?\);", html)
+    for method, route, budget in (
+        ("POST", "/api/resume", "FIRST_LISTEN_TIMEOUTS.play"),
+        ("POST", "/api/setup/home-context-preview", "FIRST_LISTEN_TIMEOUTS.preview"),
+        ("PATCH", "/api/setup/home-context-choice", "FIRST_LISTEN_TIMEOUTS.privacy"),
+    ):
+        call = re.search(rf"apiResponse\('{method}','{re.escape(route)}',[^;]*?\);", html)
         assert call is not None, f"{route} is no longer called through apiResponse"
         assert budget in call.group(0), f"{route} is dispatched with no deadline"
 
@@ -1075,8 +1243,8 @@ def test_a_slow_or_missing_guide_clip_cannot_block_setup() -> None:
 
     A clip whose bytes never arrive settles neither play() nor an error event,
     so without a deadline the container stays on 'loading' forever. That state
-    used to hold the room-proof lock, which disabled "Yes, I hear it" and
-    "Not yet" with no message and no exit short of a page reload.
+    used to hold the room-proof lock, which disabled "I hear you" and
+    "No sound yet" with no message and no exit short of a page reload.
     """
     html = _html()
 
@@ -1089,7 +1257,7 @@ def test_a_slow_or_missing_guide_clip_cannot_block_setup() -> None:
     assert "}finally{" in toggle and "clearTimeout(deadline)" in toggle
     # A timed-out clip lands in the error state with its retry affordance.
     assert "container.dataset.state='error'" in toggle
-    assert "button.textContent='Try example again'" in toggle
+    assert "button.textContent=firstListenGuideLabel(button,'error')" in toggle
 
     # The lock itself must not depend on a state a stalled clip can reach.
     lock = _function("firstListenGuideLocksRoomProof", "firstListenGuideIdleLabel")
@@ -1115,7 +1283,7 @@ def test_a_superseded_guide_clip_never_tidies_up_the_shared_player() -> None:
     assert "const attempt=++_firstListenGuideAttempt;" in toggle
     # The ticket is taken before the await, and both outcomes check it.
     assert toggle.index("const attempt=++_firstListenGuideAttempt;") < toggle.index("await Promise.race([")
-    assert toggle.count("if(attempt!==_firstListenGuideAttempt)return;") == 2
+    assert toggle.count("if(attempt!==_firstListenGuideAttempt)return;") == 3
     success_guard = toggle.index("if(attempt!==_firstListenGuideAttempt)return;")
     assert success_guard < toggle.index("container.dataset.state='playing'")
     assert toggle.index("}catch(error){") < toggle.rindex("if(attempt!==_firstListenGuideAttempt)return;")
@@ -1139,48 +1307,23 @@ def test_pausing_a_loading_guide_invalidates_pending_playback_before_pause() -> 
     assert manual_pause.index("++_firstListenGuideAttempt;") < manual_pause.index("audio.pause()")
 
 
-def test_leaving_first_listen_releases_the_station_audio_element() -> None:
-    """Completion and direct listener opening do not own station teardown.
-
-    `hidden` is display:none and does NOT pause media. Without a teardown the
-    admin tab keeps its own hub subscription while `openListener()` opens a
-    second one in a new tab, and the operator hears two unsynchronized copies
-    of the same live stream. The existing tab-away boundary owns that teardown;
-    completion itself is still inside First Listen and must keep playing.
-    """
+def test_first_listen_navigation_keeps_one_visible_local_player() -> None:
     html = _html()
-    assert "stopFirstListenStationAudio" in html
-
-    open_listener = _function("openListener", "jamendoFailureHint")
-    assert "stopFirstListenStationAudio()" not in open_listener
-
-    finalize = _function("finalizeFirstListenCompletion", "exitFirstListenFlow")
-    assert "stopFirstListenGuide(" not in finalize
-    assert "stopFirstListenStationAudio()" not in finalize
-
-    # Same-tab music-source setup is the one exit that cannot rely on the
-    # protected showAdminTab boundary because it remains inside Setup.
-    exit_flow = _function("exitFirstListenFlow", "showAdminTab")
-    assert exit_flow.count("finalizeFirstListenCompletion()") == 1
-    assert exit_flow.count("stopFirstListenGuide({resumeStation:false})") == 1
-    assert exit_flow.count("stopFirstListenStationAudio()") == 1
-    assert (
-        exit_flow.index("finalizeFirstListenCompletion()")
-        < exit_flow.index("stopFirstListenGuide({resumeStation:false})")
-        < exit_flow.index("stopFirstListenStationAudio()")
-    )
-
-    open_listener_exit = _function("openFirstListenListener", "openFirstListenStation")
-    assert open_listener_exit.index("showAdminTab('scaletta'") < open_listener_exit.index("openListener()")
-
-    open_station = _function("openFirstListenStation", "startFirstListenClock")
-    assert "showAdminTab('scaletta'" in open_station
-
-    # Every other tab switch (direct clicks, "Repair music source", any future
-    # caller of showAdminTab) is covered separately -- see
-    # test_leaving_the_setup_tab_by_any_route_stops_the_station_audio.
-    # Guide narration pauses rather than tearing down -- see
-    # test_guide_narration_pauses_the_station_instead_of_tearing_it_down.
+    assert html.index('id="firstListenPlayer"') < html.index('id="firstListenStationAudio"') < html.index("</main>")
+    assert html.index("/mmr-tabpanels") < html.index('id="firstListenPlayer"')
+    for owner, successor in (
+        ("finalizeFirstListenCompletion", "exitFirstListenFlow"),
+        ("exitFirstListenFlow", "showAdminTab"),
+        ("showAdminTab", "syncFirstListenSetupMount"),
+        ("openFirstListenListener", "mmrConnectListener"),
+    ):
+        assert "stopFirstListenStationAudio()" not in _function(owner, successor)
+    listener = _function("openFirstListenListener", "mmrConnectListener")
+    assert "openListener()" not in listener
+    assert "frame.hidden=true" in listener
+    bridge = _function("mmrConnectListener", "openFirstListenStation")
+    assert "subscribe:notify" in bridge
+    assert "view.document.getElementById('content')?.focus()" in bridge
 
 
 def test_first_listen_force_start_is_confirmed_not_silent() -> None:
@@ -1287,23 +1430,16 @@ def test_first_listen_force_start_accepts_running_station_ok_without_recovering(
     assert start.index("transportFailureCopy(forcePayload,") < start.index("audio.src=`${_base}${FIRST_LISTEN_STREAM}`")
 
 
-def test_guide_narration_pauses_the_station_instead_of_tearing_it_down() -> None:
-    """A hard teardown left steps 4-5 (no Play control) with no way back to
-
-    audio once a guide clip was played. Pausing is reversible; a full
-    pause/removeAttribute('src')/load() teardown is not.
-    """
-    toggle_guide = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
-    assert "stopFirstListenStationAudio()" not in toggle_guide
-    assert "stationAudio.pause()" in toggle_guide
-    assert "stationPausedForGuide=true" in toggle_guide
-
-    stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
-    assert "stationPausedForGuide" in stop_guide
-    assert "stationAudio.play()" in stop_guide
-
-    stop_station = _function("stopFirstListenStationAudio", "firstListenStationPlaying")
-    assert "stationPausedForGuide=false" in stop_station
+def test_narration_ducks_music_without_pausing_or_reconnecting_it() -> None:
+    toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    assert "stationAudio.pause()" not in toggle
+    assert "ensureFirstListenMix" in toggle
+    assert "setFirstListenMusicGain(true)" in toggle
+    stop = _function("stopFirstListenGuide", "toggleFirstListenGuide")
+    assert "setFirstListenMusicGain(false)" in stop
+    assert "++_firstListenGuideAttempt" in stop
+    assert "stationAudio.play()" not in stop
+    assert "dispatch='starting'" not in stop
 
 
 def test_guide_resume_playing_event_does_not_replay_a_confirmed_sound_check() -> None:
@@ -1339,25 +1475,24 @@ def test_guide_resume_playing_event_does_not_replay_a_confirmed_sound_check() ->
     # claiming a fresh start. If that ever sets dispatch='starting', this
     # function can no longer tell a resume from a real start.
     stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
-    assert "stationAudio.play()" in stop_guide
+    assert "stationAudio.play()" not in stop_guide
+    assert "setFirstListenMusicGain(false)" in stop_guide
     assert "dispatch='starting'" not in stop_guide
 
 
-def test_leaving_the_setup_tab_by_any_route_stops_the_station_audio() -> None:
-    """The hidden station element must release its hub subscription on every
-
-    tab switch away from Setup. This is the deliberate phantom-listener fix;
-    First Listen completion must not refactor or bypass its direct teardown.
-    """
-    show_tab = _function("showAdminTab", "syncFirstListenSetupMount")
-    assert "if(name!=='setup')finalizeFirstListenCompletion()" in show_tab
-    assert "stopFirstListenStationAudio()" in show_tab
-    assert show_tab.index("stopFirstListenGuide()") < show_tab.index("stopFirstListenStationAudio()")
-    assert "exitFirstListenFlow()" not in show_tab
-
-    open_setup = _function("openSetupPanel", "firstListenMusicSourceAction")
-    assert "finalizeFirstListenCompletion()" not in open_setup
-    assert "if(focus==='music-sources'&&firstListenRequired)exitFirstListenFlow()" in open_setup
+def test_explicit_pause_and_stop_cancel_pending_local_starts() -> None:
+    pause = _function("stopFirstListenStationAudio", "firstListenStationPlaying")
+    assert pause.index("p.intent=false") < pause.index("audio.pause()")
+    assert "++p.epoch" in pause
+    assert "audio.pause();audio.removeAttribute('src');audio.load()" in pause
+    resume = _function("continueFirstListenStation", "stopFirstListenStationAudio")
+    assert "FIRST_LISTEN_LIVE_STREAM" in resume
+    assert "startFirstListen(" not in resume
+    assert "dispatch='starting'" not in resume
+    assert "stopFirstListenStationAudio()" in _function("doStop", "doResume")
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    assert start.count("if(epoch!==p.epoch||!p.intent)return;") == 3
+    assert "firstListenAudioDeadline(playResult)" in start
 
 
 def test_receipt_and_success_transitions_never_replace_the_owned_station() -> None:
@@ -1373,8 +1508,8 @@ def test_receipt_and_success_transitions_never_replace_the_owned_station() -> No
         assert "FIRST_LISTEN_STREAM" not in body, owner
 
     stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
-    assert "resumeStation=true" in stop_guide
-    assert "if(resumeStation&&stationAudio&&stationAudio.src)stationAudio.play()" in stop_guide
+    assert "setFirstListenMusicGain(false)" in stop_guide
+    assert "stationAudio.play()" not in stop_guide
 
 
 def test_active_setup_csrf_stale_403_is_structured_not_a_bare_string() -> None:

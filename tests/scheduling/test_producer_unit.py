@@ -2907,6 +2907,68 @@ async def test_prewarm_stopped_session():
 
 
 @pytest.mark.asyncio
+async def test_prewarm_owner_fence_rejects_admission_after_the_render():
+    """A caller-owned revocation must be honoured at the admission boundary.
+
+    The First Listen opening needs this: its wait is unshielded now, but a render
+    already handed to a thread finishes whether or not its awaiter was cancelled.
+    Checking only before generation would still let that track land after
+    ordinary production started and skip the third chair. The fence is re-read
+    after the awaited work, so it flips here mid-render.
+    """
+    from mammamiradio.scheduling.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    queue: asyncio.Queue = asyncio.Queue()
+    revoked = {"value": False}
+
+    def _revoke_during_render(*_args, **_kwargs):
+        revoked["value"] = True
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_revoke_during_render),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        result = await prewarm_first_segment(
+            queue,
+            state,
+            config,
+            stale_check=lambda: "stale_continuity" if revoked["value"] else None,
+        )
+
+    assert result is False
+    assert queue.empty(), "a revoked opening track reached the queue"
+
+
+@pytest.mark.asyncio
+async def test_prewarm_owner_fence_does_not_block_an_unrevoked_opening():
+    """The fence must not cost the ordinary success path its pre-roll."""
+    from mammamiradio.scheduling.producer import prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+    ):
+        result = await prewarm_first_segment(queue, state, config, stale_check=lambda: None)
+
+    assert result is True
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
 async def test_prewarm_happy_path():
     """prewarm downloads, normalizes, and queues a music segment."""
     from mammamiradio.scheduling.producer import prewarm_first_segment

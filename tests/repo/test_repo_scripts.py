@@ -131,8 +131,9 @@ if not is_mp3:
     print("invalid audio", file=sys.stderr)
     raise SystemExit(1)
 if "json" in sys.argv:
-    manifest = json.loads((path.parents[1] / "spoken_assets.json").read_text())
-    relative_path = f"first_listen/{path.name}"
+    manifest_root = next(parent for parent in path.parents if (parent / "spoken_assets.json").is_file())
+    manifest = json.loads((manifest_root / "spoken_assets.json").read_text())
+    relative_path = path.relative_to(manifest_root).as_posix()
     entry = next(item for item in manifest["assets"] if item["path"] == relative_path)
     print(json.dumps({
         "streams": [{

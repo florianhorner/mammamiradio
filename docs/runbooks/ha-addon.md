@@ -80,19 +80,46 @@ A successful thaw enables future PR events; it does not re-arm held PRs itself.
 
 ## First-listen operator check
 
-Open the add-on Web UI. A fresh unfinished install opens **First Listen** with a
-recorded English Marco/Giulia station opening, then a source-aware handoff to
-the live stream. It needs no AI key or Home context. Ordinary listener playback
-retains its existing opening. Source readiness is supporting detail under that
-opening; verify that charts, Jamendo, local music, bundled demo music, and
-recovery cover are described honestly. The listening cue must distinguish a
+Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+authored Marco/Giulia welcome (both hosts, about 16 seconds). Starting the
+station plays a separate English opening before the music. After the first
+song, a recorded third-chair break can sit between two startup tracks.
+Neither recording needs an AI key or Home context.
+Music readiness is an unnumbered status above the
+three human steps: **1 Play it here → 2 Can you hear us? → 3 Make it yours**.
+Expand **Music details** to see the playable source first. When music is ready,
+**Add more music** offers Jamendo, local music, and charts only where supported.
+Unavailable legacy demo files and idle backup audio stay in Technical details.
+A confirmed empty local library is optional; failed scans retain repair guidance.
+The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
+Recovery audio alone must say **Music needs attention**, never **Music is ready**.
+A failed station check must show a connection/reload action, preserve saved
+choices, and clear its warning when polling succeeds.
+During the final privacy save, a background completion check must keep First
+Listen open, retain keyboard focus, and leave its station audio connected.
 
 Required First Listen proof is hearing the station on this device in the add-on
-Web UI. Select **Start sound check**, then **Yes, I hear it** only after you hear
+Web UI. Select **Play my station**, then **I hear you** only after you hear
 the opening, or use the [this-device repair
 steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
+
+Music continues beneath the recorded hosts at a lower level, then returns to
+normal. The same player stays available through Make it yours, completion,
+music-source setup and station controls. **Pause music** pauses this device;
+**Continue music** resumes it without changing saved choices. If the browser
+cannot mix the hosts over music, use the transcript or pause music explicitly
+before playing the recording. **Listen elsewhere** offers Music Assistant and
+AirPlay/Bluetooth guidance. Copying a stream address is offered outside
+localhost and Home Assistant ingress; the other player must be able to reach
+the station. Completion plays the existing host celebration once, unless music
+was deliberately paused. **Listen to the station** opens the existing `/listen`
+page; **Open station controls** opens `/admin`. Both keep the same stream.
+In **Motore**, **Restart First Listen** reopens the welcome and all three steps.
+It preserves music and saved settings; existing Home sharing stays active until
+the operator explicitly changes it. Old receipts do not skip the repeated steps.
+The listener page uses its own familiar controls; no second player starts.
 
 Home Assistant speakers remain optional and are no longer part of First Listen.
 The add-on has no speaker picker; the route is Home Assistant's own media
@@ -105,11 +132,34 @@ speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, First Listen offers **Keep Home private** without reading
-Home state, or a fresh filtered preview before **Let Marco and Giulia use these
-details**. If only generic daylight is available, verify that it is disclosed as
-ambient-only and not meaningful personalization, with the private path
-recommended. AI-host setup comes later.
+audible verification, **Make it yours** states the day-one boundary, then offers
+the choice — **Finish with Home private** (primary) or **Add live host
+writing** — and only then the four playable staged scenes from the explainer
+pack. Verify that order: the note qualifying the choice must precede the choice,
+not sit under two minutes of demos. The lead scene, **Hear the evening**,
+carries a `day one` chip: it is the only one a fresh install can actually
+reach, because narrow ambient context grants weather and daylight and nothing
+else. Laundry, arrival and kitchen need household details a fresh station does
+not have, which no key unlocks.
+**Hear weather become a bit** is the Home-details recording. Choosing to share
+still runs through a fresh filtered preview before **Let Marco and Giulia use
+these details**. If only generic daylight is available, verify that it is
+disclosed as ambient-only and not meaningful personalization, with the private
+path recommended.
+
+The staged scenes are byte copies of `docs/explainer/public/audio`, bound to
+that pack by `scripts/validate-spoken-assets.py`. The same gate refuses a pack
+with no `reachability: day-one` entry, and refuses a gated scene that wears the
+`day one` chip, so Step 3 can neither demonstrate only gated capability nor
+mislabel a gated moment as reachable.
+
+**Your ongoing show** is optional. **Hear the studio voices** and **Hear the
+free voices** play recordings. With the default setup, new conversations use
+those studio voices only after an ElevenLabs key is added under **Voice
+quality**. Without that key, new conversations use free voices. **Done with
+setup** and **Back to setup** stay on the same station.
+The English Admin opening is a bundled recording of the studio voices; it needs
+no key to play. The existing Italian opening for ordinary listeners is unchanged. The optional example never counts toward required progress.
 
 If saving the privacy-review receipt fails, verify that the live choice remains
 truthful and AI setup stays locked: the private path retries without a preview;

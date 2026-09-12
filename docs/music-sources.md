@@ -168,7 +168,7 @@ opens the visible chart controls in **Rotazione**. Saving applies live and does
 not restart or interrupt the station. A client ID saved by an older version is
 imported to owner-only secrets where possible, remains disabled, and requires a
 fresh acknowledgement before use. The admin UI never echoes the ID. Bundled
-users see **Use own ID**; **Replace** and **Clear** appear only after an operator
+users see **Use my Jamendo ID**; **Replace my Jamendo ID** and **Remove my Jamendo ID** appear only after an operator
 ID is saved.
 
 The transient boundary is deliberately narrow:

@@ -19,6 +19,14 @@
     return p === '' ? '' : p;
   })();
 
+  // An explicit First Listen handoff keeps one playback owner in the parent.
+  // Direct visits use this page's existing audio controller unchanged.
+  const playbackHost = (() => {
+    try { return window.parent !== window ? window.parent.mmrConnectListener?.(window) || null : null; }
+    catch (_) { return null; }
+  })();
+  let hostPlayback = null;
+
   /* ── CSRF ── */
   const csrfToken = document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '';
   const _nativeFetch = window.fetch.bind(window);
@@ -469,12 +477,12 @@
     // wantsPlay is the single intent source: startStream() sets it,
     // setPlayingUi(true) restores it, and external pauses clear it.
     const hasIntent = !stopped && state.wantsPlay;
-    const label = stopped
+    const label = hostPlayback?.reloadRequired ? _t('listen_reload', 'Reload player') : stopped
       ? _t('listen_stopped', 'Station paused')
       : hasIntent
         ? _t('listen_pause', 'Pause')
         : _t('listen_now', 'Listen Now');
-    const ariaLabel = stopped
+    const ariaLabel = hostPlayback?.reloadRequired ? _t('listen_reload', 'Reload player') : stopped
       ? _t('listen_paused_aria', 'Station paused')
       : hasIntent
         ? _t('listen_pause_aria', 'Pause station')
@@ -550,6 +558,7 @@
   }
 
   function _scheduleStreamRetry(delayMs) {
+    if (playbackHost) return;
     if (!state.wantsPlay || state.retryTimer !== null || _stationIsStopped()) return;
     state.retryTimer = setTimeout(() => {
       state.retryTimer = null;
@@ -560,6 +569,7 @@
   }
 
   function startStream() {
+    if (playbackHost) { if (!_stationIsStopped()) playbackHost.play(); return; }
     if (!audio || _stationIsStopped() || state.isPlaying || state.playPending) return;
     _clearPlaybackRetry();
     state.wantsPlay = true;
@@ -579,6 +589,7 @@
   }
 
   function stopStream() {
+    if (playbackHost) { playbackHost.pause(); return; }
     state.wantsPlay = false;
     state.playPending = false;
     _clearPlaybackRetry();
@@ -603,7 +614,7 @@
       _clearPlaybackRetry();
     }
     _setPlaybackControls(_stationIsStopped());
-    if ('mediaSession' in navigator) {
+    if (!playbackHost && 'mediaSession' in navigator) {
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     }
   }
@@ -653,11 +664,13 @@
           { src: (_base || '') + '/static/icon-192.svg', sizes: '192x192', type: 'image/svg+xml' },
         ];
     try {
-      navigator.mediaSession.metadata = new MediaMetadata({ title, artist, album, artwork });
+      const metadata = { title, artist, album, artwork };
+      if (playbackHost) playbackHost.metadata(metadata);
+      else navigator.mediaSession.metadata = new MediaMetadata(metadata);
     } catch (e) { /* older browsers */ }
   }
 
-  if ('mediaSession' in navigator) {
+  if (!playbackHost && 'mediaSession' in navigator) {
     try {
       navigator.mediaSession.setActionHandler('play', () => { if (!state.isPlaying) startStream(); });
       navigator.mediaSession.setActionHandler('pause', stopStream);
@@ -1921,7 +1934,7 @@
 
   /* ── Wire everything on DOMContentLoaded ── */
   document.addEventListener('DOMContentLoaded', () => {
-    audio = $('radio-audio');
+    audio = playbackHost ? null : $('radio-audio');
     playBtn = $('nav-cta');
     playBtnSmall = $('np-play');
     heroPlay = $('hero-play');
@@ -2012,5 +2025,16 @@
       _scheduleStatusPoll({ immediate: !document.hidden });
     });
     setInterval(fetchRequests, 60000);
+    if (playbackHost) {
+      const release = playbackHost.subscribe(snapshot => {
+        hostPlayback = snapshot;
+        state.isPlaying = snapshot.phase === 'playing';
+        state.wantsPlay = snapshot.intent && snapshot.phase !== 'interrupted';
+        state.playPending = snapshot.phase === 'starting';
+        _setPlaybackControls(_stationIsStopped());
+      });
+      window.addEventListener('pagehide', release, {once:true});
+    }
+
   });
 })();

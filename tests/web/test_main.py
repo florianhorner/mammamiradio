@@ -1974,6 +1974,153 @@ async def test_startup_prewarm_is_capped_to_two_on_addon(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "fresh",
+        "failed",
+        "raised",
+        "existing",
+        "stopped",
+        "handoff",
+        "keyed",
+        "italian",
+        "timeout",
+        "source_revision",
+        "chaos_cutover_epoch",
+        "continuity_epoch",
+        "stop_during_start",
+        "stop_resume",
+        "new_key",
+        "banter_rejected",
+        "revoked_during_banter",
+    ],
+)
+async def test_first_install_orders_the_recorded_show_without_blocking_other_starts(tmp_path, scenario):
+    from mammamiradio.core.models import Segment, SegmentType, Track
+    from mammamiradio.main import app, startup
+
+    config = _privacy_startup_config(tmp_path)
+    config.super_italian_mode = scenario == "italian"
+    config.pacing.lookahead_segments = 1
+    config.audio.bitrate = 192
+    config.cache_dir.mkdir(parents=True)
+    if scenario == "existing":
+        (config.cache_dir / "mammamiradio.db").touch()
+    if scenario == "stopped":
+        (config.cache_dir / "session_stopped.flag").touch()
+    gate, entered, producing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    prepared = []
+    observed = []
+    admitted_late = []
+    keyed = scenario == "keyed"
+    bypass = scenario in {"existing", "stopped", "handoff", "keyed", "italian"}
+
+    async def music(queue, state, config, *, stale_check=None):
+        prepared.append("music")
+        entered.set()
+        await gate.wait()
+        if scenario == "failed":
+            return False
+        if scenario == "raised":
+            raise RuntimeError("prewarm failed")
+        # Model the real admission boundary: the fence is re-read AFTER the
+        # awaited render, not only before it. A late opening track must not
+        # land once ownership is revoked.
+        if stale_check is not None and stale_check() is not None:
+            admitted_late.append("music")
+            return False
+        await queue.put(Segment(type=SegmentType.MUSIC, path=tmp_path / "song.mp3"))
+        return True
+
+    async def speech(queue, state, config, *, stale_check):
+        if stale_check() is not None:
+            return False
+        if scenario == "banter_rejected":
+            # The break could not be rendered at all. The fence is clean, so
+            # this is the leg's own verdict rather than a revocation, and it
+            # still has to end the opening.
+            return False
+        prepared.append("banter")
+        if scenario == "revoked_during_banter":
+            # Ownership moved while the break rendered. The break itself is
+            # real and belongs on air; only what would follow it is revoked.
+            state.source_revision += 1
+        await queue.put(Segment(type=SegmentType.BANTER, path=tmp_path / "chair.mp3"))
+        return True
+
+    async def produce(queue, *_args, **_kwargs):
+        observed.extend(segment.type.value for segment in queue._queue)
+        producing.set()
+
+    def handoff(queue, *_):
+        if scenario == "handoff":
+            queue.put_nowait(Segment(type=SegmentType.MUSIC, path=tmp_path / "resume.mp3"))
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.has_script_llm", side_effect=lambda _: keyed),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="Song", artist="A", duration_ms=180000)], None, ""),
+        ),
+        patch(f"{MODULE}._admit_restart_handoff", side_effect=handoff),
+        patch(f"{MODULE}.prewarm_first_segment", side_effect=music),
+        patch(f"{MODULE}.queue_first_listen_banter", side_effect=speech),
+        patch(f"{MODULE}.run_producer", side_effect=produce),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}._FIRST_LISTEN_OPENING_WAIT_SECONDS", 0.02 if scenario == "timeout" else 15),
+    ):
+        await startup()
+        await asyncio.wait_for(entered.wait(), 2)
+        if bypass or scenario == "timeout":
+            await asyncio.wait_for(producing.wait(), 2)
+        else:
+            assert not producing.is_set(), "producer overtook the opening song"
+        if scenario in {"source_revision", "chaos_cutover_epoch", "continuity_epoch"}:
+            setattr(app.state.station_state, scenario, 1)
+        if scenario == "stop_resume":
+            app.state.station_state.session_stopped = True
+            app.state.station_state.continuity_epoch += 1
+            app.state.station_state.session_stopped = False
+        if scenario == "stop_during_start":
+            app.state.station_state.session_stopped = True
+        if scenario == "new_key":
+            keyed = True
+        gate.set()
+        await asyncio.wait_for(producing.wait(), 2)
+        await asyncio.gather(app.state.prewarm_task, app.state.producer_task, return_exceptions=True)
+
+    if scenario in {"fresh", "revoked_during_banter"}:
+        assert "banter" in prepared, prepared
+    else:
+        assert "banter" not in prepared, prepared
+    if scenario == "fresh":
+        assert observed == ["music", "banter", "music"]
+        assert app.state.queue.maxsize == 3
+        assert app.state.station_state.listeners_active == 0
+    if scenario in {"failed", "raised"}:
+        assert prepared == ["music"]
+    if scenario == "timeout":
+        # The wait revokes opening_pending before releasing the producer, so the
+        # sequence must stop there. Running the trailing prewarm anyway would
+        # contradict "do not retry the opening" and take a Pi FFmpeg admission
+        # slot the producer is already competing for.
+        assert prepared == ["music"], prepared
+    if scenario == "banter_rejected":
+        # No host break means no third chair to introduce. Producing a second
+        # opening track here would air two songs back to back and call it the
+        # recorded show.
+        assert prepared == ["music"], prepared
+    if scenario == "revoked_during_banter":
+        # The break aired; the track behind it did not. The fence is re-read
+        # after the break returns, which is the only place this revocation is
+        # visible — the break's own check ran before the source moved.
+        assert prepared == ["music", "banter"], prepared
+
+
+@pytest.mark.asyncio
 async def test_startup_reads_persisted_source_before_fetching():
     from mammamiradio.core.models import PlaylistSource, Track
 

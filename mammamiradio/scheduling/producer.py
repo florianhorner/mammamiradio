@@ -7,6 +7,7 @@ import contextlib
 import copy
 import datetime
 import logging
+import math
 import os
 import random
 import re
@@ -4241,14 +4242,88 @@ async def _prefetch_next(
             norm_path.unlink(missing_ok=True)
 
 
+async def queue_first_listen_banter(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    config: StationConfig,
+    *,
+    stale_check: StaleCheck,
+) -> bool:
+    """Admit the reviewed invitation once, between the two startup songs."""
+    relative = "banter/20-special-third-chair.mp3"
+    if _stale_check_reason(stale_check) is not None:
+        return False
+    try:
+        entry = next(
+            (
+                item
+                for item in declared_spoken_asset_entries("banter", assets_root=_DEMO_ASSETS_DIR)
+                if item.relative_path == relative
+            ),
+            None,
+        )
+        if (
+            entry is None
+            or entry.kind != "speech"
+            or entry.language != "en"
+            or entry.mode != "normal"
+            or not entry.special
+            or entry.required_previous_starter_id
+        ):
+            return False
+        path = _DEMO_ASSETS_DIR / relative
+        if not await asyncio.to_thread(is_approved_spoken_asset, path, assets_root=_DEMO_ASSETS_DIR):
+            return False
+        duration = await asyncio.to_thread(_probe_segment_duration, path)
+        if not math.isfinite(duration) or duration <= 0:
+            return False
+        lines = [{"host": "Radio", "text": "(pre-recorded banter)"}]
+        segment = Segment(
+            type=SegmentType.BANTER,
+            path=path,
+            duration_sec=duration,
+            ephemeral=False,
+            metadata={
+                "type": "banter",
+                "title": "The third chair",
+                "canned": True,
+                "host": "",
+                "lines": lines,
+                "has_music_tail": False,
+                "transition_track_ref": "",
+                "clip_audio_class": _CLIP_AUDIO_CLASS_UNKNOWN,
+            },
+        )
+        if not await _enqueue_with_egress(queue, state, config, segment, stale_check=stale_check):
+            return False
+        state.after_banter()
+        state.last_banter_script = lines
+        state.last_state_change_at = time.time()
+        _recently_played_clips.append(path.name)
+        logger.info("Queued First Listen host break: %s", path.name)
+        return True
+    except Exception:
+        logger.warning("First Listen host break unavailable; keeping music moving", exc_info=True)
+        return False
+
+
 async def prewarm_first_segment(
     queue: asyncio.Queue[Segment],
     state: StationState,
     config: StationConfig,
+    *,
+    stale_check: StaleCheck | None = None,
 ) -> bool:
     """Pre-produce one music segment at startup so audio is ready before any listener connects.
 
     Returns True if a segment was queued, False on failure (non-fatal).
+
+    ``stale_check`` lets a caller that owns a bounded startup sequence fence this
+    admission with its own revocation rule. The First Listen opening needs it:
+    its wait is shielded, so an in-flight render outlives the timeout and would
+    otherwise land after ordinary production has already started. Cancellation
+    alone cannot guarantee that, because work can outlive its awaiter — the
+    fence at the admission boundary is the guarantee.
     """
     if not state.playlist:
         return False
@@ -4265,6 +4340,10 @@ async def prewarm_first_segment(
     generation_continuity_epoch = state.continuity_epoch
 
     def _prewarm_stale_reason() -> str | None:
+        if stale_check is not None:
+            owner_reason = stale_check()
+            if owner_reason:
+                return owner_reason if isinstance(owner_reason, str) else GenerationWasteReason.STALE_CONTINUITY
         if state.session_stopped:
             return GenerationWasteReason.SESSION_STOPPED
         if state.source_revision != generation_source_revision:

@@ -110,7 +110,7 @@ the shared audio queue:
   (`record_accepted_playback` returns early on `is_complete_listener_proof`).
   Browser-local confirmation presents no attempt id at all.
 - If the audible moment happened but the receipt write failed, the app keeps
-  only a process-local recovery handle so **Restore sound check** can retry the
+  only a process-local recovery handle so **Save my sound check** can retry the
   same fact without replaying audio.
 - Feature-era install origin uses two agreeing witnesses: the owner-only
   `cache/state/first_listen_install_origin_v1.json` sidecar and the private
@@ -854,8 +854,17 @@ The timeline is deliberately **continuous across natural segment boundaries**:
 music → station ID → ad → banter → music share one origin, so the lead is not
 re-accrued at each transition (which would add silence and drift). The pacer
 resets only on a true discontinuity — no listeners (including a subsequent
-mid-segment room refill), playback stop/resume, a real queue gap / fallback, or
-an explicit skip — via a named `reset_timeline(reason)` call.
+mid-segment room refill), playback stop/resume, or a real queue gap / fallback —
+via a named `reset_timeline(reason)` call.
+
+An **explicit skip is not one of them**, and that is load-bearing. The socket
+stays open and every already-delivered byte still plays, so the lead the
+listener holds is real; resetting would re-anchor it to zero by fiat and
+re-accrue a second cushion on top of audio already in their queue. At the 32-of-
+128-slot arithmetic above, four consecutive skips reach the 16 s queue ceiling,
+and `LiveStreamHub.broadcast` does not drop the overflowing packet — it drops
+the listener. Skip-to-audible latency would also degrade 4 s → 8 s → 12 s as the
+buffer inflated. Pinned by `test_repeated_skips_do_not_accumulate_delivery_cushions`.
 
 If a pause is longer than the whole lead, the pacer uses **at most a three-packet
 recovery phase**, then rebases the pacing origin once and records the deficit as
@@ -1332,9 +1341,9 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
-| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped |
+| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped. `?first_listen=live` keeps that resume wait but suppresses the packaged prelude, so the browser that already heard the opening rejoins the live hub on an explicit transport click instead of replaying it while human confirmation is still pending |
 | `/healthz` | GET | Public | Runtime-health probe with process uptime; prolonged silence with active listeners returns `503`, while an intentional Stop remains healthy |
-| `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped` |
+| `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped`. The packaged First Listen prelude counts as accepted audio: it is paced in real time, so on a cold install no listener reaches the shared hub for roughly 23 seconds, and a station audibly covering the speaker must not report `starting` (or trip the silence watchdog) for that whole opening |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), process-local `ad_experiment` completion counts, `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `rescue_rotation` cached-music cooldown telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin (active setup) | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and `first_listen`, `source_readiness`, `speaker`, `verification`, and `privacy` projections |

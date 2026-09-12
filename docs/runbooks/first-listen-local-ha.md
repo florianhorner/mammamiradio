@@ -140,21 +140,17 @@ This lab remains the way to exercise the optional Home Assistant speaker path.
 
 Then, in **First Listen** (the automatic fresh-install landing):
 
-1. Confirm that the opening card leads with the recorded English mini-show:
-   station music, the Marco/Giulia opening, then the live stream.
-   It must say that no AI key or Home context is used. Expand **What plays after
-   the welcome** only as supporting detail. Local music should be ready; live
-   charts are unavailable in this lab; Jamendo is optional and off; bundled
-   demo and recovery audio must be described honestly as included music or a
-   fallback, never as proof that primary music is ready. If the music-repair
-   action is shown, it must wait for capability detection and then open **Music
-   sources**, not hidden chart controls.
-2. Mute the machine before confirming, select **Start sound check**, then **Not
+1. Confirm the welcome leads into the recorded English opening, then live music.
+   Neither recording uses an AI key or Home context. **Music details** shows ready
+   local music and optional setup choices; unavailable or idle sources stay in
+   **Technical details**. Recovery alone must not imply primary music is ready.
+   The repair action must open **Music sources** once capabilities are checked.
+2. Mute the machine before confirming, select **Play my station**, then **No sound
    yet**, and check that the repair guidance names this device's volume and mute
    and offers to try again here.
-3. Unmute, select **Try this device again**, and listen for the music bed,
+3. Unmute, select **Play on this device again**, and listen for the music bed,
    Mamma Mi Radio identity, and the Marco/Giulia exchange.
-4. Only after hearing the opening, select **Yes, I hear it**.
+4. Only after hearing the opening, select **I hear you**.
 5. Separately, exercise the optional speaker route outside First Listen: in
    Home Assistant, **Media → Mamma Mi Radio → Mamma Mi Radio Live** to **Mac Lab
    Speaker**, and confirm the room by ear.
