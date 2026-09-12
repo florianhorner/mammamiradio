@@ -455,6 +455,182 @@ printf '%s' "$WRONG_OUT" | grep -q 'emit-review-evidence.sh' \
   && fail "must not prescribe re-emitting for a failure re-emitting cannot fix"
 pass "remedy is conditional on the failure class"
 
+# ---------------------------------------------------------------------------
+# Rule 1a: the guard only judges PRs against THIS repository.
+#
+# It is registered for every Bash call in the session, and every question it asks
+# is local to this checkout: the ledger is keyed by this repo's slug and branch,
+# and the evidence checker reads receipts under this working tree. Opening a PR
+# on another repo from a session rooted here asked those questions about the
+# wrong repository and denied a PR whose squad had run and was logged in its own
+# repo's ledger.
+#
+# The reader is EMPTY in every case below, so anything that reaches the ledger
+# rule denies. An allow verdict therefore proves the scope check ran; it does
+# not mean a review was found.
+# ---------------------------------------------------------------------------
+
+THIS_REPO="$(git remote get-url origin 2>/dev/null \
+  | sed -E 's#^(https://|git@)[^/:]+[/:]##; s#\.git$##')"
+[ -n "$THIS_REPO" ] || fail "cannot resolve this checkout's owner/repo from origin"
+
+FOREIGN_CREATE='gh pr create --repo florianhorner/gh-workflows --base main --title x --body y'
+[ "$(verdict "$(payload "$FOREIGN_CREATE")" "$DUMMY")" = allow ] \
+  || fail "a PR against another repository must not be judged by this repo's guard"
+pass "foreign --repo is out of scope"
+
+FOREIGN_SHORT='gh pr create -R florianhorner/engineering-standards --fill'
+[ "$(verdict "$(payload "$FOREIGN_SHORT")" "$DUMMY")" = allow ] \
+  || fail "-R naming another repository must be out of scope too"
+pass "foreign -R is out of scope"
+
+FOREIGN_URL='gh pr create --repo https://github.com/florianhorner/gh-workflows --fill'
+[ "$(verdict "$(payload "$FOREIGN_URL")" "$DUMMY")" = allow ] \
+  || fail "a URL form of a foreign repo must be out of scope"
+pass "foreign --repo URL is out of scope"
+
+# The direction that matters. A scope check that let its own repo through would
+# retire the whole guard, so the allow/deny pair is what makes it a check rather
+# than an off switch.
+[ "$(verdict "$(payload "gh pr create --repo $THIS_REPO --fill")" "$DUMMY")" = deny ] \
+  || fail "--repo naming this repository must still be judged"
+pass "--repo naming this repo is still judged"
+
+# GitHub treats these names case-insensitively. Comparing raw would switch the
+# guard off for its own repo on nothing but capitalisation.
+UPPER_REPO="$(printf '%s' "$THIS_REPO" | tr '[:lower:]' '[:upper:]')"
+[ "$(verdict "$(payload "gh pr create --repo $UPPER_REPO --fill")" "$DUMMY")" = deny ] \
+  || fail "a case-different spelling of this repo must still be judged"
+pass "--repo is compared case-insensitively"
+
+# The flagless form resolves to this checkout, so it is unchanged.
+[ "$(verdict "$(payload 'gh pr create --fill')" "$DUMMY")" = deny ] \
+  || fail "a flagless create must still be judged"
+pass "flagless create is still judged"
+
+# Same class as the --base-in-the-body hole: the option reader must see the
+# argument vector, not the body text.
+PROSE_CREATE='gh pr create --fill --body "ports the rule from --repo florianhorner/gh-workflows"'
+[ "$(verdict "$(payload "$PROSE_CREATE")" "$DUMMY")" = deny ] \
+  || fail "a repo named inside --body must not be read as the target"
+pass "--repo inside prose is not a target"
+
+# A later chained command's --repo must not exempt this one. The same shape was
+# fixed for --base; one shared reader means it cannot regress in only one.
+CHAINED_CREATE='gh pr create --fill && gh pr create --repo florianhorner/gh-workflows --fill'
+[ "$(verdict "$(payload "$CHAINED_CREATE")" "$DUMMY")" = deny ] \
+  || fail "a later segment's --repo must not exempt the first create"
+pass "a later segment's --repo does not exempt this one"
+
+# --- Regressions for the three bypasses an adversarial pass found in the first
+# --- draft of Rule 1a. Each one allowed a PR that really lands in THIS repo.
+
+# The CLI is last-wins on a repeated flag; a first-match read called this foreign
+# and stood aside while the PR landed here. Verified against the real CLI.
+REPEATED_REPO="gh pr create --repo florianhorner/gh-workflows --repo $THIS_REPO --fill"
+[ "$(verdict "$(payload "$REPEATED_REPO")" "$DUMMY")" = deny ] \
+  || fail "a repeated --repo must be read last-wins, as the CLI does"
+pass "repeated --repo is read last-wins"
+
+REPEATED_MIXED="gh pr create --repo florianhorner/gh-workflows -R $THIS_REPO --fill"
+[ "$(verdict "$(payload "$REPEATED_MIXED")" "$DUMMY")" = deny ] \
+  || fail "-R after --repo must win, as the CLI does"
+pass "-R overriding --repo is read last-wins"
+
+# Spellings the CLI resolves to this repo that a naive https-only normalizer
+# read as foreign. Each was a silent bypass.
+for form in \
+  "github.com/$THIS_REPO" \
+  "http://github.com/$THIS_REPO" \
+  "ssh://git@github.com/$THIS_REPO.git" \
+  "https://github.com/$THIS_REPO.git" \
+  "git@github.com:$THIS_REPO.git"
+do
+  [ "$(verdict "$(payload "gh pr create --repo $form --fill")" "$DUMMY")" = deny ] \
+    || fail "the --repo spelling '$form' resolves to this repo and must be judged"
+done
+pass "every CLI-accepted spelling of this repo is still judged"
+
+# An opening command is exempt only if EVERY opening command in the string is
+# foreign. Putting a foreign one first exempted the local one behind it, which
+# the mirror ordering (already covered above) did not catch.
+FOREIGN_FIRST="gh pr create --repo florianhorner/gh-workflows --fill && gh pr create --fill"
+[ "$(verdict "$(payload "$FOREIGN_FIRST")" "$DUMMY")" = deny ] \
+  || fail "a foreign first command must not exempt a local one behind it"
+pass "a foreign first command does not exempt a local one"
+
+FOREIGN_FIRST_SEMI="gh pr create --repo florianhorner/gh-workflows --fill ; gh pr create --fill"
+[ "$(verdict "$(payload "$FOREIGN_FIRST_SEMI")" "$DUMMY")" = deny ] \
+  || fail "a foreign first command must not exempt a local one after a semicolon"
+pass "semicolon chaining does not exempt either"
+
+# Two genuinely foreign commands together are still out of scope: the rule is
+# "all foreign", not "more than one means judge".
+BOTH_FOREIGN='gh pr create --repo florianhorner/gh-workflows --fill && gh pr create -R florianhorner/engineering-standards --fill'
+[ "$(verdict "$(payload "$BOTH_FOREIGN")" "$DUMMY")" = allow ] \
+  || fail "several foreign commands together are still out of scope"
+pass "all-foreign chains stay out of scope"
+
+# The attached shorthand the CLI accepts.
+[ "$(verdict "$(payload 'gh pr create -Rflorianhorner/gh-workflows --fill')" "$DUMMY")" = allow ] \
+  || fail "-Rowner/repo attached shorthand must be read as a target"
+pass "-Rowner/repo attached shorthand is read"
+
+# Unbalanced quotes make the tokenizer give up. That must mean "judge it", not
+# "wave it through" — the exemption is the only new way out of this guard.
+UNREADABLE="gh pr create --repo florianhorner/gh-workflows --title \"unterminated --fill"
+[ "$(verdict "$(payload "$UNREADABLE")" "$DUMMY")" = deny ] \
+  || fail "a command line the tokenizer cannot read must still be judged"
+pass "an unreadable command line is still judged"
+
+# Rule ORDERING is load-bearing. The merge deny must run before the scope skip;
+# with the order swapped, appending a foreign-repo opening command to a merge
+# retires the landing contract's hard stop and every other case here still passes.
+ORDER_BYPASS='gh pr create --repo florianhorner/gh-workflows --fill && gh pr merge 5 --squash'
+[ "$(verdict "$(payload "$ORDER_BYPASS")" "$DUMMY")" = deny ] \
+  || fail "a foreign-repo create must not exempt a merge in the same command"
+pass "the scope skip does not retire the merge deny"
+
+# --base=VALUE has its own case; --repo=VALUE goes through the same branch of the
+# shared reader and needs one too, or the fix silently misses the equals form.
+[ "$(verdict "$(payload 'gh pr create --repo=florianhorner/gh-workflows --fill')" "$DUMMY")" = allow ] \
+  || fail "--repo=VALUE must be read as the target"
+pass "--repo=VALUE form is parsed"
+
+# An unreadable origin cannot prove a mismatch, so the guard stays ON. This is
+# the one branch of Rule 1a that deliberately fails toward checking rather than
+# open, and it is the branch a dropped emptiness check would silently delete.
+NO_ORIGIN="$TMPDIR_T/no-origin"
+mkdir -p "$NO_ORIGIN"
+git -C "$NO_ORIGIN" init -q .
+git -C "$NO_ORIGIN" -c core.hooksPath=/dev/null -c user.email=t@t.test -c user.name=t \
+  commit -q --allow-empty -m "chore: base"
+NO_ORIGIN_OUT="$( (cd "$NO_ORIGIN" \
+  && payload 'gh pr create --repo florianhorner/gh-workflows --fill' \
+  | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
+    bash "$HOOK") 2>/dev/null || true)"
+printf '%s' "$NO_ORIGIN_OUT" | grep -q '"permissionDecision":"deny"' \
+  || fail "an unreadable origin must leave the guard on, not switch it off"
+pass "unreadable origin keeps the guard on"
+
+# The option-value skip list is what stops prose being scanned. Only --body was
+# ever exercised; an unquoted --title value goes through the same list.
+TITLE_PROSE='gh pr create --fill --title --repo florianhorner/gh-workflows'
+[ "$(verdict "$(payload "$TITLE_PROSE")" "$DUMMY")" = deny ] \
+  || fail "a value consumed by --title must not be read as the target"
+pass "--title consumes its value like --body"
+
+# KNOWN GAP, pinned so it stays a decision rather than drift: a flagless command
+# run after cd-ing into ANOTHER repository is still judged against this checkout,
+# because the hook is invoked with the session cwd and sees no explicit target.
+# It fails in the safe direction (a false refusal, not a false pass), and R12
+# denies the flagless form fleet-wide so it is largely unreachable. Closing it
+# needs the cwd resolution permission-guard.py R13/R19 already had to build.
+CD_OTHER_REPO='cd /Users/florianhorner/repos/gh-workflows && gh pr create --fill'
+[ "$(verdict "$(payload "$CD_OTHER_REPO")" "$DUMMY")" = deny ] \
+  || fail "known gap changed: a cd-ed flagless create is no longer judged here"
+pass "known gap: a cd-ed flagless create is still judged against this checkout"
+
 # The total is computed, not typed: a hand-maintained count drifted to 47 against
 # 44 real cases on the first pass, and a summary nobody can verify is decoration.
 CASE_COUNT="$(grep -c '^pass ' "$0")"

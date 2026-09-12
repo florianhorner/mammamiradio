@@ -361,6 +361,32 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   is narrower than exit-code equality: only a rendered `landing-evidence:` verdict
   denies, so an unusable Python or a missing checker never blocks a PR.
 
+  "Project-scoped" is now enforced rather than assumed. The hook is registered
+  for every Bash call in the session, so it also saw PRs opened against *other*
+  repositories from a worktree rooted here — and judged them with this repo's
+  ledger and this working tree's receipts, which describe different work. That
+  denied a PR whose squad had genuinely run and was logged in its own repo's
+  ledger (observed 2026-09-12 on a `florianhorner/gh-workflows` PR, where the
+  fleet-wide `permission-guard.py` R19 resolved the right ledger and passed).
+  A `--repo` or `-R` naming a repository that is not this checkout is now
+  skipped, the same reasoning R19 already applies: the question is unanswerable
+  here, and unanswerable must not mean refused. Standing aside requires *every*
+  opening command in the string to be explicitly foreign, read last-wins from
+  each command's own argument vector the way the CLI reads it — never from
+  `--body` prose, never from a later chained command. Both sides of the
+  comparison reduce to `owner/repo`, so the spellings the CLI accepts for one
+  repository (`host/owner/repo`, `http://`, `ssh://…​.git`, `git@host:…`) cannot
+  read as two. The flagless form and a `--repo` naming this repo are unchanged.
+
+  This one branch fails *toward* checking rather than open, unlike the rest of
+  the guard: an unreadable `origin`, a command line the tokenizer cannot parse,
+  and an opening command with no explicit target all keep the guard on, because
+  "cannot prove this is somebody else's PR" has to mean "judge it" or the
+  exemption becomes the bypass. Known gap, pinned by a test rather than closed:
+  a flagless command run after `cd`-ing into another repository is still judged
+  against this checkout, since the hook sees the session cwd and no target. It
+  refuses rather than passes, and R12 denies the flagless form fleet-wide.
+
   The runtime-independent evidence gate is the immutable v2 receipt, and the
   ceremony is single-pass: commit the implementation, run the review on that
   exact content, run `scripts/emit-review-evidence.sh`, and commit the receipt

@@ -133,6 +133,177 @@ fi
 # `gh pr view`, `gh pr checks`, `gh pr list`) passes untouched.
 printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
 
+# Reads the PR-opening command's argument vector, in one of two modes.
+#
+# Shared by the scope check below and the --base lookup further down, so the two
+# cannot drift: the tokenizer is the delicate part (see the --base comment on why
+# word-splitting $cmd is wrong) and having one copy of it means a fix lands in
+# both places at once.
+#
+# Word-splitting $cmd loses quoting, so `--body 'see --base foo'` would hand back
+# `foo`. Tokenize the way the shell would, isolate each matched command's argv,
+# stop at a shell operator, and step over option VALUES so prose is never
+# scanned. Unbalanced quotes print nothing.
+#
+#   option <name>  first opening command, first match -- the pre-existing --base
+#                  behaviour, unchanged and differentially verified against it.
+#   targets        ONE LINE PER opening command in the whole command string,
+#                  holding that command's target repo or empty for none. Two
+#                  things the option mode deliberately does not do, both of which
+#                  were live bypasses:
+#                    * the real CLI is LAST-wins on a repeated flag, so
+#                      `--repo foreign --repo local` lands locally while a
+#                      first-match read calls it foreign;
+#                    * a command string can hold several opening commands, and
+#                      reading only the first let a foreign one exempt a local
+#                      one behind `&&`.
+gh_create_args() {
+  printf '%s' "$cmd" | ARG_MODE="$1" ARG_NAME="${2:-}" python3 -c '
+import os, shlex, sys
+
+mode = os.environ["ARG_MODE"]
+name = os.environ.get("ARG_NAME", "")
+try:
+    lexer = shlex.shlex(sys.stdin.read(), posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    tokens = list(lexer)
+except ValueError:
+    sys.exit(0)          # unbalanced quotes: let the caller default stand
+
+SKIP = {"--body", "--title", "-b", "-t", "--body-file", "-F"}
+
+
+def is_operator(tok):
+    return bool(tok) and all(char in ";&|" for char in tok)
+
+
+def starts():
+    return [i for i in range(len(tokens) - 2)
+            if tokens[i:i + 3] == ["gh", "pr", "create"]]
+
+
+def argv_after(start):
+    """Tokens of one opening command, up to the next shell operator."""
+    out = []
+    for tok in tokens[start + 3:]:
+        if is_operator(tok):
+            break
+        out.append(tok)
+    return out
+
+
+if mode == "option":
+    positions = starts()
+    if not positions:
+        sys.exit(0)
+    argv = argv_after(positions[0])
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in SKIP:      # step over the value so prose is never scanned
+            i += 2
+            continue
+        if tok.startswith(name + "="):
+            print(tok.split("=", 1)[1])
+            break
+        if tok == name and i + 1 < len(argv):
+            print(argv[i + 1])
+            break
+        i += 1
+    sys.exit(0)
+
+if mode == "targets":
+    positions = starts()
+    if not positions:
+        sys.exit(0)
+    for start in positions:
+        argv = argv_after(start)
+        found = ""
+        i = 0
+        while i < len(argv):
+            tok = argv[i]
+            if tok in SKIP:
+                i += 2
+                continue
+            # Last-wins, matching the CLI: keep scanning rather than breaking.
+            if tok.startswith("--repo="):
+                found = tok.split("=", 1)[1]
+            elif tok in ("--repo", "-R") and i + 1 < len(argv):
+                found = argv[i + 1]
+                i += 2
+                continue
+            elif tok.startswith("-R") and len(tok) > 2 and not tok.startswith("-R-"):
+                found = tok[2:]          # attached shorthand, e.g. -Rowner/repo
+            i += 1
+        # Prefixed because an empty record is meaningful and command
+        # substitution eats a trailing blank line, which silently dropped a
+        # flagless command sitting last in a chain.
+        print("target:" + found)
+    sys.exit(0)
+' 2>/dev/null
+}
+
+# Canonical owner/repo, or empty when the input names no repository.
+#
+# One normalizer for both sides of the comparison, because the CLI accepts far
+# more spellings than `owner/repo` and `https://host/owner/repo`: a bare
+# `host/owner/repo`, `http://`, `ssh://git@host/owner/repo.git`, and a `host:port`
+# form all reach the same repository. Each spelling this failed to reduce was a
+# silent bypass in one direction and, on a non-https `origin`, a silently
+# disarmed guard for this very repo in the other.
+#
+# Taking the LAST TWO path segments over-normalizes rather than under-normalizes:
+# a same-named repo on a different host compares equal and the guard stays on.
+# That is the direction to be wrong in.
+norm_repo() {
+  printf '%s' "$1" \
+    | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^/]*@##; s#^([^/]*):#\1/#; s#\.git$##; s#/+$##' \
+    | awk -F/ 'NF >= 2 { printf "%s/%s", $(NF - 1), $NF }' \
+    | tr '[:upper:]' '[:lower:]'
+}
+
+# Rule 1a: this guard only judges PRs against THIS repository.
+#
+# It is registered for every Bash call in the session, and everything it checks
+# is local to this checkout: the gstack ledger is keyed by this repo's slug and
+# branch, and check-preship-evidence.sh reads receipts under this working tree.
+# Opening a PR on a DIFFERENT repository from a session rooted here therefore
+# asked those questions about the wrong repository and denied a PR whose squad
+# had in fact run, logged in its own repo's ledger. Observed 2026-09-12 on a
+# florianhorner/gh-workflows PR, where permission-guard.py R19 (which resolves
+# the ledger per target) passed and this hook refused.
+#
+# permission-guard.py R19 already reasons exactly this way, in its own words:
+# "A --repo naming a different repository means the local branch and its entries
+# describe other work, so the question is unanswerable and R19 must not veto."
+# This is that rule, ported to the repo-local guard that lacked it.
+#
+# Standing aside requires EVERY opening command in the string to be explicitly
+# foreign. One that names this repo, one that names none, an unreadable origin,
+# and a command the tokenizer cannot read all keep the guard on: "cannot prove
+# this is somebody else's PR" has to mean "judge it", or the exemption becomes
+# the bypass. R12 denies the flagless form fleet-wide, so in practice every real
+# opening command carries an explicit target and this reads exactly one value.
+this_repo="$(norm_repo "$(git remote get-url origin 2>/dev/null)")"
+if [ -n "$this_repo" ]; then
+  scope_foreign=0
+  while IFS= read -r record; do
+    case "$record" in target:*) ;; *) continue ;; esac
+    target="${record#target:}"
+    scope_foreign=1
+    if [ -z "$target" ] || [ "$(norm_repo "$target")" = "$this_repo" ]; then
+      scope_foreign=0
+      break
+    fi
+  done <<TARGETS
+$(gh_create_args targets)
+TARGETS
+  # scope_foreign stays 0 when the tokenizer produced nothing at all, so an
+  # unreadable command line is judged rather than waved through.
+  [ "$scope_foreign" = "1" ] && exit 0
+fi
+
 head="$(git rev-parse --short HEAD 2>/dev/null)" || exit 0
 [ -z "$head" ] && exit 0
 
@@ -204,40 +375,7 @@ target="$(git rev-parse HEAD 2>/dev/null)" || exit 0
 # body contains the token `--base`, which is how the hole was found. Tokenize the
 # way the shell would instead, isolate the matched command's argument vector,
 # and read --base only as an option, never as prose or a later command's option.
-base_ref="$(printf '%s' "$cmd" | python3 -c '
-import shlex, sys
-try:
-    lexer = shlex.shlex(sys.stdin.read(), posix=True, punctuation_chars=";&|")
-    lexer.whitespace_split = True
-    lexer.commenters = "#"
-    tokens = list(lexer)
-except ValueError:
-    sys.exit(0)          # unbalanced quotes: let the default stand
-command_start = next(
-    (i for i in range(len(tokens) - 2)
-     if tokens[i:i + 3] == ["gh", "pr", "create"]),
-    None,
-)
-if command_start is None:
-    sys.exit(0)
-tokens = tokens[command_start + 3:]
-skip = {"--body", "--title", "-b", "-t", "--body-file", "-F"}
-i = 0
-while i < len(tokens):
-    tok = tokens[i]
-    if tok and all(char in ";&|" for char in tok):
-        break
-    if tok in skip:      # step over the value so prose is never scanned
-        i += 2
-        continue
-    if tok.startswith("--base="):
-        print(tok.split("=", 1)[1])
-        break
-    if tok == "--base" and i + 1 < len(tokens):
-        print(tokens[i + 1])
-        break
-    i += 1
-' 2>/dev/null)"
+base_ref="$(gh_create_args option --base)"
 [ -z "$base_ref" ] && base_ref="main"
 
 # A bare `main` is the stale LOCAL branch; the PR is cut against the remote, and
