@@ -439,7 +439,18 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
   - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
 - **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
   - On PRs: `check` mode — fails if any module dropped below its floor.
-  - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
+  - On main merge: `update` mode — recomputes the floors and commits them, then tries to
+    push. **That push cannot succeed**, and that is structural, not a bug to retry: the
+    `require-pull-request-before-merging` ruleset on `main` permits no direct push by
+    anyone (its only bypass actor is Admin with `bypass_mode: pull_request`), and a PR
+    opened with `GITHUB_TOKEN` triggers no workflows, so the required contract-drift
+    checks would never report on it. Raising the floors therefore needs one human step:
+    run `make coverage-ratchet` and open a PR. The workflow opens a single
+    `coverage-ratchet-stale` issue carrying the computed diff and closes it once the
+    floors land, so a stale ratchet is visible instead of silent — it was silently inert
+    from 2026-04-15 until this was fixed, because the failing push was swallowed by
+    `|| echo`. A durable no-human path means a GitHub App token or a ruleset bypass
+    actor for the bot; both widen write access to `main` and are a deliberate decision.
   - The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
     pack provenance test reads generator inputs at the revision pinned in the
     manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.

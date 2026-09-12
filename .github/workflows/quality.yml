@@ -222,6 +222,10 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_ci_changed_lanes.sh
 
+      - name: Coverage-ratchet reporting self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_coverage_ratchet_report.sh
+
       # On every PR: audio delivery invariants (FFmpeg eq count, empty-fallback test, post-restart test)
       - name: Release invariants
         if: github.event_name == 'pull_request'
@@ -428,7 +432,13 @@ jobs:
     needs: quality
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
+      # The write scope below cannot currently succeed: the require-pull-request
+      # ruleset has no bypass actor for github-actions[bot], so the push is always
+      # rejected. Kept rather than narrowed to read, because the documented durable
+      # fix is a bypass actor or a GitHub App token, and the push attempt is what
+      # would detect that it became possible.
       contents: write
+      issues: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -443,19 +453,138 @@ jobs:
       # On main: auto-ratchet floors up and commit if changed.
       # The coverage numbers come from the read-only tests job artifact, so
       # only this commit step needs a write-capable token.
+      # Raise the floors and try to land them. The push is expected to fail: the
+      # `require-pull-request-before-merging` ruleset on `main` has exactly one
+      # bypass actor (Admin, `bypass_mode: pull_request`), so no direct push
+      # succeeds for anyone, bot or human. A bot-opened PR does not help either —
+      # commits pushed with GITHUB_TOKEN trigger no workflows, so the three
+      # required contract-drift checks would never report and the PR could never
+      # merge.
+      #
+      # So the push stays best-effort, but the skip is no longer swallowed into a
+      # log nobody reads: a failure opens one tracked issue and keeps it open
+      # until the floors actually land. That is the whole point of this step —
+      # a mechanism that reports to nobody is not a mechanism.
       - name: Coverage ratchet (auto-update floors)
+        id: ratchet
         env:
           COVERAGE_RATCHET_INPUT: coverage-ratchet-current.json
         run: |
+          set -euo pipefail
           python scripts/coverage-ratchet.py update
 
-          # If floors changed, commit them back
-          if ! git diff --quiet .coverage-floors.json pyproject.toml; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add .coverage-floors.json pyproject.toml
-            git commit -m "ci: auto-ratchet coverage floors
+          if git diff --quiet .coverage-floors.json pyproject.toml; then
+            echo "landed=true" >> "$GITHUB_OUTPUT"
+            echo "Floors already current; nothing to raise."
+            exit 0
+          fi
+
+          git diff -- .coverage-floors.json pyproject.toml > "$RUNNER_TEMP/floors.diff"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .coverage-floors.json pyproject.toml
+          git commit -m "ci: auto-ratchet coverage floors
 
           Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-            git push || echo "⚠️  Push blocked by branch protection — coverage floor update skipped. Run 'make coverage-ratchet' and open a PR to apply manually."
+
+          if git push; then
+            echo "landed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "landed=false" >> "$GITHUB_OUTPUT"
+            echo "Push rejected; the drift will be reported as an issue."
           fi
+
+      - name: Report unlanded coverage floors
+        if: always() && steps.ratchet.outcome != 'cancelled'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LANDED: ${{ steps.ratchet.outputs.landed }}
+          RATCHET_OUTCOME: ${{ steps.ratchet.outcome }}
+          TITLE: "Coverage floors are stale: the auto-ratchet cannot land them"
+          LABEL: "coverage-ratchet-stale"
+          CRASH_TITLE: "The coverage ratchet step failed before it could report"
+          CRASH_LABEL: "coverage-ratchet-broken"
+        run: |
+          # Literal markdown below (backticks are code fences, not command
+          # substitution), same convention as advertised-version.yml.
+          set -euo pipefail
+
+          # A crashed ratchet step must NOT be reported as branch protection. If
+          # `coverage-ratchet.py update` throws, `set -e` aborts that step before it
+          # writes `landed`, and this step still runs because `always()` only
+          # excludes `cancelled`. Reading an unset `landed` as "push rejected" would
+          # file an issue asserting a cause that is not the cause, which is the same
+          # untrustworthy-report failure this whole step exists to remove.
+          if [ "${RATCHET_OUTCOME:-}" != "success" ]; then
+            CRASH_EXISTING="$(gh issue list --state open --label "$CRASH_LABEL" --limit 100 \
+              --json number --jq '[.[].number] | first // empty')"
+            if [ -n "$CRASH_EXISTING" ]; then
+              echo "Ratchet failure already tracked in #$CRASH_EXISTING."
+              exit 0
+            fi
+            gh label create "$CRASH_LABEL" \
+              --description "the coverage ratchet step failed before reporting" \
+              --color D93F0B 2>&1 | tail -1 || true
+            CRASH_BODY="$RUNNER_TEMP/coverage-ratchet-crash.md"
+            {
+              printf '%s\n' 'The coverage ratchet step did not finish, so whether the floors are current'
+              printf '%s\n\n' 'is unknown. This is not the branch-protection case.'
+              printf '%s\n' "Step outcome: \`${RATCHET_OUTCOME:-unset}\`. Read the job log for the"
+              printf '%s\n\n' 'traceback; `scripts/coverage-ratchet.py update` is the likely source.'
+              printf '%s\n' 'Until this is fixed the ratchet reports nothing, which is how it sat dead'
+              printf '%s\n' 'from 2026-04-15: a failure that reaches no human is the actual defect.'
+            } > "$CRASH_BODY"
+            gh issue create --title "$CRASH_TITLE" --label "$CRASH_LABEL" --body-file "$CRASH_BODY"
+            exit 0
+          fi
+
+          # Strongly-consistent REST list, not --search: the search index lags and
+          # would let a second push file a duplicate. Match the label, not the
+          # title, so a human editing the title cannot orphan the issue.
+          EXISTING="$(gh issue list --state open --label "$LABEL" --limit 100 \
+            --json number --jq '[.[].number] | first // empty')"
+
+          if [ "${LANDED:-}" = "true" ]; then
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" \
+                --comment "Coverage floors landed on \`main\` again. Closing automatically."
+            else
+              echo "Floors are current; nothing to report."
+            fi
+            exit 0
+          fi
+
+          if [ -n "$EXISTING" ]; then
+            echo "Already tracked in #$EXISTING; not opening a duplicate."
+            exit 0
+          fi
+
+          # Idempotent: succeeds the first time, harmless every time after.
+          # Idempotent, but surface the reason rather than discarding it: an auth or
+          # rate-limit failure here would otherwise only show up as a confusing
+          # `gh issue create` error on the next line.
+          gh label create "$LABEL" \
+            --description "coverage floors computed on main could not be committed" \
+            --color B60205 2>&1 | tail -1 || true
+
+          BODY="$RUNNER_TEMP/coverage-ratchet-issue.md"
+          {
+            printf '%s\n' 'Coverage rose on `main`, but the raised floors could not be committed, so the'
+            printf '%s\n' 'ratchet is not protecting the new level. Coverage can fall back to the stale'
+            printf '%s\n\n' 'floors without failing any pull request.'
+            printf '%s\n' 'This is expected mechanically, not a transient error: the'
+            printf '%s\n' '`require-pull-request-before-merging` ruleset allows no direct push to `main`'
+            printf '%s\n' 'by anyone, and a PR opened with `GITHUB_TOKEN` triggers no workflows, so the'
+            printf '%s\n\n' 'required contract-drift checks would never report on it.'
+            printf '%s\n' '**Fix (one minute):** run `make coverage-ratchet` locally, then open a PR with'
+            printf '%s\n\n' 'the result. The floors this run computed:'
+            printf '%s\n' '```diff'
+            cat "$RUNNER_TEMP/floors.diff" 2>/dev/null || printf '%s\n' '(diff unavailable)'
+            printf '%s\n\n' '```'
+            printf '%s\n' 'This issue closes itself once floors land on `main` again. If it keeps coming'
+            printf '%s\n' 'back, the durable fixes are a GitHub App token that can open a PR which does'
+            printf '%s\n' 'trigger CI, or a ruleset bypass actor for the bot — both widen write access to'
+            printf '%s\n' '`main`, so they are a deliberate decision, not a drive-by.'
+          } > "$BODY"
+          gh issue create --title "$TITLE" --label "$LABEL" --body-file "$BODY"
