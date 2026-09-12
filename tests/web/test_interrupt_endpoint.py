@@ -361,13 +361,18 @@ async def test_fire_interrupt_clears_prior_capacity_exempt_continuity_slot(tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: alert.mp3 absent → packaged bridge tone
+# Scenario 2: manifest-validated emergency tone
+#
+# The missing and tampered bridge cases are covered by
+# test_fire_interrupt_aborts_when_no_bridge_asset_available and
+# test_fire_interrupt_rejects_tampered_manifested_emergency_tone.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_uses_packaged_bridge_when_alert_missing(tmp_path: Path):
-    """Scenario 2: alert.mp3 absent → bundled tone still gives immediate audio."""
+async def test_fire_interrupt_bridges_with_the_validated_packaged_tone(tmp_path: Path):
+    """The interrupt uses only a manifest-validated packaged bridge."""
+    from mammamiradio.core.spoken_assets import DEMO_ASSETS_DIR, is_approved_packaged_audio_asset
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     state = StationState(
@@ -377,12 +382,12 @@ async def test_fire_interrupt_uses_packaged_bridge_when_alert_missing(tmp_path: 
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
 
-    with patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")):
-        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
+    await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
     assert state.interrupt_slot is not None
     assert state.interrupt_slot.exists()
     assert state.interrupt_slot.name == "emergency_tone.mp3"
+    assert is_approved_packaged_audio_asset(state.interrupt_slot, assets_root=DEMO_ASSETS_DIR)
     assert state.interrupt_slot_ephemeral is False
     assert skip_event.is_set()
     assert state.ha_pending_directive == "Svegliati!"
@@ -400,37 +405,13 @@ async def test_fire_interrupt_uses_packaged_bridge_when_ffmpeg_is_unavailable(tm
     skip_event = asyncio.Event()
     spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
 
-    with patch("mammamiradio.scheduling.producer._SFX_DIR", Path("/nonexistent")):
-        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
+    await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
 
     assert state.interrupt_slot is not None
     assert state.interrupt_slot.name == "emergency_tone.mp3"
     assert state.interrupt_slot_ephemeral is False
     assert skip_event.is_set()
     assert state.ha_pending_directive == "Svegliati!"
-
-
-@pytest.mark.asyncio
-async def test_fire_interrupt_keeps_bundled_alert_reusable(tmp_path: Path):
-    """A checked-in alert.mp3 asset must not be marked ephemeral and deleted after first use."""
-    from mammamiradio.scheduling.producer import _fire_interrupt
-
-    sfx_dir = tmp_path / "sfx"
-    sfx_dir.mkdir()
-    alert = sfx_dir / "alert.mp3"
-    alert.touch()
-    state = StationState(
-        playlist=[Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="t1")],
-    )
-    queue: asyncio.Queue[Segment] = asyncio.Queue()
-    skip_event = asyncio.Event()
-    spec = InterruptSpec(directive="Svegliati!", urgency="urgent", cooldown=60)
-
-    with patch("mammamiradio.scheduling.producer._SFX_DIR", sfx_dir):
-        await _fire_interrupt(state, spec, queue, skip_event, bridge_tmp_dir=tmp_path)
-
-    assert state.interrupt_slot == alert
-    assert state.interrupt_slot_ephemeral is False
 
 
 # ---------------------------------------------------------------------------

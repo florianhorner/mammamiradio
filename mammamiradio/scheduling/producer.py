@@ -2062,13 +2062,19 @@ async def _listener_truth_guard(
     return repaired_lines, repaired_transition, True, transition_replaced
 
 
-# SFX assets (alert jingle used as interrupt bridge audio).
-_SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
-
 # Global cooldown for interrupt firing — kept separate from per-entity
 # spec.cooldown so a timer configured with cooldown=300 doesn't suppress a
 # different timer's interrupt for 5 minutes.
 _GLOBAL_INTERRUPT_COOLDOWN_SECONDS = 60
+InterruptFireOutcome = Literal["fired", "cooldown", "bridge_unavailable", "queue_drain_failed"]
+
+
+def _interrupt_fire_result(
+    outcome: InterruptFireOutcome,
+    *,
+    return_outcome: bool,
+) -> bool | InterruptFireOutcome:
+    return outcome if return_outcome else outcome == "fired"
 
 
 def _mark_moment_dropped(state: StationState, moment_id: str, reason: str, context: str) -> None:
@@ -4499,16 +4505,18 @@ async def _fire_interrupt(
     enforce_global_cooldown: bool = False,
     bridge_tmp_dir: Path | None = None,
     directive_source: str = "ha",
-) -> bool:
+    return_outcome: bool = False,
+) -> bool | InterruptFireOutcome:
     """Immediately interrupt the stream with bridge audio + pissed banter.
 
-    Uses alert.mp3 or a packaged emergency tone as a bridge clip, drains
-    the lookahead queue so no buffered music plays between bridge and banter,
-    injects the directive, and fires skip_event to cut the current segment.
+    Uses the manifest-validated packaged emergency tone as the bridge clip,
+    drains the lookahead queue, injects the directive, and fires ``skip_event``
+    to cut the current segment. Every interrupt source uses the same packaged
+    tone regardless of ``spec.urgency``. Failed validation preserves playback.
 
-    Returns True if the interrupt fired, False if suppressed by the global
-    cooldown gate. Per-entity cooldowns are enforced upstream by
-    check_reactive_triggers.
+    Returns a boolean by default. ``return_outcome=True`` distinguishes a fired
+    interrupt from cooldown, bridge-validation, and queue-drain failures.
+    Per-entity cooldowns are enforced upstream by ``check_reactive_triggers``.
     """
     # Retained as a call-site-compatible diagnostic hook; bridge generation no
     # longer writes a temporary file because the fallback is bundled.
@@ -4521,7 +4529,14 @@ async def _fire_interrupt(
                 "Interrupt suppressed — global cooldown %ds remaining",
                 int(_GLOBAL_INTERRUPT_COOLDOWN_SECONDS - elapsed),
             )
-            return False
+            return _interrupt_fire_result("cooldown", return_outcome=return_outcome)
+    # Validate the replacement before changing cooldown, continuity, or prior
+    # interrupt state. An unavailable bridge must leave playback untouched.
+    emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
+    if not is_approved_packaged_audio_asset(emergency_tone, assets_root=_DEMO_ASSETS_DIR):
+        logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
+        return _interrupt_fire_result("bridge_unavailable", return_outcome=return_outcome)
+
     state.last_interrupt_ts = now
 
     # Release any bridge clip a prior interrupt generated but never played.
@@ -4540,23 +4555,9 @@ async def _fire_interrupt(
     # serve stale control audio between that bridge and the urgent banter.
     state.continuity_slot = None
 
-    # Commit an immediate bridge before touching the ready queue. This contains
-    # no await and therefore cannot expose a drained queue to playback. The
-    # packaged tone is intentionally used rather than waiting for FFmpeg tone
-    # generation on a loaded Home Assistant Green.
-    alert_sfx = _SFX_DIR / "alert.mp3"
-    emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
-    if alert_sfx.exists():
-        state.interrupt_slot = alert_sfx
-    elif is_approved_packaged_audio_asset(emergency_tone, assets_root=_DEMO_ASSETS_DIR):
-        state.interrupt_slot = emergency_tone
-    else:
-        # No bridge audio at all: hard-cutting here would drain the queue and
-        # fire skip_event with nothing to air, opening dead air until banter
-        # renders. Preserve whatever is already queued and abort the interrupt
-        # instead of breaking the illusion (INSTANT AUDIO).
-        logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
-        return False
+    # Commit the bridge before touching the ready queue. This synchronous step
+    # cannot expose a drained queue to playback.
+    state.interrupt_slot = emergency_tone
     state.interrupt_slot_source = directive_source
     if _home_owned_directive_source(directive_source):
         # Blank or unknown provenance fails closed as Home-owned, matching the
@@ -4610,7 +4611,7 @@ async def _fire_interrupt(
         state.queued_segments = [_queue_shadow_entry(segment) for segment in residual]
         state.interrupt_slot = None
         logger.error("Interrupt aborted because %d buffered segment(s) could not be drained", len(residual))
-        return False
+        return _interrupt_fire_result("queue_drain_failed", return_outcome=return_outcome)
 
     state.urgent_interrupt_drained_audio = purged > 0
     if purged:
@@ -4656,7 +4657,7 @@ async def _fire_interrupt(
         spec.urgency,
         state.interrupt_slot,
     )
-    return True
+    return _interrupt_fire_result("fired", return_outcome=return_outcome)
 
 
 def _select_ad_wrapper_text(config: StationConfig, selector_name: str, legacy_name: str) -> str:
@@ -6553,15 +6554,19 @@ async def _run_producer_inner(
                 radio_gag_events = _apply_radio_event_matches(state, list(getattr(ha_cache, "radio_events", []) or []))
                 ritual_gag_events, ritual_interrupt = _apply_ritual_recipe_matches(state, ritual_matches)
             if ritual_interrupt is not None:
-                fired = await _fire_interrupt(
-                    state,
-                    ritual_interrupt.spec,
-                    queue,
-                    skip_event,
-                    enforce_global_cooldown=True,
-                    bridge_tmp_dir=config.tmp_dir,
+                interrupt_outcome = cast(
+                    InterruptFireOutcome,
+                    await _fire_interrupt(
+                        state,
+                        ritual_interrupt.spec,
+                        queue,
+                        skip_event,
+                        enforce_global_cooldown=True,
+                        bridge_tmp_dir=config.tmp_dir,
+                        return_outcome=True,
+                    ),
                 )
-                if fired:
+                if interrupt_outcome == "fired":
                     commit_ritual_recipe_match(ritual_interrupt.match)
                     # _fire_interrupt planted the directive (and blanked the
                     # receipt id); attach this moment's row so the urgent
@@ -6575,7 +6580,11 @@ async def _run_producer_inner(
                         ritual_interrupt.match,
                         lane="interrupt",
                         status="dropped",
-                        drop_reason="interrupt_cooldown",
+                        drop_reason={
+                            "cooldown": "interrupt_cooldown",
+                            "bridge_unavailable": "interrupt_bridge_unavailable",
+                            "queue_drain_failed": "interrupt_queue_drain_failed",
+                        }[interrupt_outcome],
                     )
             if home_authorization.mode is not HomeAuthorizationMode.NARROW:
                 _maybe_arm_first_home_context_moment(
