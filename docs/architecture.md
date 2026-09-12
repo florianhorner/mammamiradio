@@ -1242,31 +1242,46 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 
 ### Timer interrupt flow
 
-When a HA timer fires, the station interrupts playback with a pissed/urgent host
-segment whenever a packaged bridge is available:
+`_fire_interrupt` supports three mechanisms. Configured HA timers reach it from
+the lightweight timer poll and the main segment cycle through
+`check_reactive_triggers`. Both paths share the `timer:<entity_id>` cooldown key.
+The admin-authenticated `POST /api/interrupt` endpoint supports direct and Home
+Assistant automation callers. A third call site accepts caller-supplied ritual
+recipes, but the shipped catalog contains no interrupt-lane recipe.
+
+The retired `safety_saves` recipe treated safety sensors and some door
+transitions as urgent radio cut-ins. An ordinary door could therefore cut a song
+and play the emergency bridge before a host explanation was ready. Home Assistant
+remains responsible for safety alerts. A catalog test keeps the shipped
+`interrupt` lane and `urgent` urgency empty without restricting custom recipe
+sequences.
+
+When a configured HA timer fires, the station interrupts playback with a
+pissed/urgent host segment whenever the packaged bridge is available:
 
 ```text
-HA timer fires (timer.xyz → idle, with recent finished_at)
-    ↓
+HA timer fires (timer.xyz -> idle, with recent finished_at)
+    ->
 ha_context.py: lightweight 5s poll detects idle transition (separate from the default 300s full-state prompt-context fetch).
     Cancel/reset filter: only fire when finished_at is set and within the last 30s.
-    ↓
-check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
-    ↓
+    ->
+check_reactive_triggers() -> InterruptSpec(directive, urgency, cooldown)
+    ->
 producer.py: _fire_interrupt(state, spec, queue, skip_event)
-  1. Commit assets/sfx/alert.mp3, or the approved packaged emergency tone,
-     to state.interrupt_slot. If neither exists, abort before draining or skipping.
-  2. Drain lookahead queue and clear stale continuity/music adjacency.
-  3. Demote any directive receipt being superseded, then store spec.directive.
-  4. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
-  5. Clear superseded operator Air Next attribution and set a revision-owned
+  1. Validate the packaged emergency tone. Abort without changing cooldown,
+     continuity, interrupt state, queue contents, or playback when it is unavailable.
+  2. Commit the tone to state.interrupt_slot for every interrupt source.
+  3. Drain lookahead queue and clear stale continuity/music adjacency.
+  4. Demote any directive receipt being superseded, then store spec.directive.
+  5. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT (pissed tone)
+  6. Clear superseded operator Air Next attribution and set a revision-owned
      BANTER force as the urgent safety belt.
-  6. state.chaos_cutover_epoch += 1; skip_event.set() cuts the current segment.
-    ↓
-run_playback_loop: interrupt_slot checked before queue.get() → bridge plays (≤2s)
-    ↓
+  7. state.chaos_cutover_epoch += 1; skip_event.set() cuts the current segment.
+    ->
+run_playback_loop: interrupt_slot checked before queue.get() -> bridge plays within 2s
+    ->
 Producer generates URGENT_INTERRUPT banter with directive (async, LLM)
-    ↓
+    ->
 Pissed banter plays after bridge
 ```
 
@@ -1276,9 +1291,13 @@ remove any ephemeral bridge, advance the cutover epoch, and mark its Moment
 Receipt dropped. That ownership check never mistakes a newer force for the
 urgent one; Panic then publishes recovery `MUSIC`, while Stop clears all forces.
 
-Timer interrupts are configured via `[[homeassistant.timer_interrupt]]` blocks in `radio.toml`. The dedicated timer poll reads those entity IDs without mutating the module-level HA entity lists.
+Timer interrupts are configured with `[[homeassistant.timer_interrupt]]` blocks
+in `radio.toml`. The parser stores them in the internal `timer_interrupts` field.
+The dedicated timer poll reads those entity IDs without mutating the module-level
+HA entity lists.
 
-The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 60s cooldown) — any HA automation can inject a custom directive without `radio.toml` configuration.
+The admin-authenticated `POST /api/interrupt` endpoint applies a 60-second
+cooldown and accepts custom directives without `radio.toml` configuration.
 
 ## Access model
 

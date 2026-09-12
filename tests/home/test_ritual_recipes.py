@@ -27,7 +27,7 @@ def _clean_cooldowns():
 def test_catalog_contains_priority_v1_families():
     families = {recipe.family for recipe in DEFAULT_RITUAL_RECIPES}
 
-    assert CATALOG_VERSION
+    assert CATALOG_VERSION == "2026-09-12.community-v2"
     assert {
         "morning_launch",
         "cooking_kitchen",
@@ -37,7 +37,6 @@ def test_catalog_contains_priority_v1_families():
         "fridge_freezer_raid",
         "windows_airing",
         "chores_reminders",
-        "safety_saves",
         "vacation_house_sitter",
         "vacuum_doorbell_protocol",
     }.issubset(families)
@@ -76,19 +75,104 @@ def test_attribute_media_recipe_matches_sonos_source_change():
     assert any(match.recipe.id == "media_betrayal" for match in matches)
 
 
-def test_safety_recipe_uses_interrupt_lane_and_public_coarse_label():
-    previous = {"binary_sensor.sink_leak": _state("off", device_class="moisture", friendly_name="Sink leak")}
-    current = {"binary_sensor.sink_leak": _state("on", device_class="moisture", friendly_name="Sink leak")}
+def test_safety_signals_no_longer_produce_a_ritual_moment():
+    """Safety device classes must not produce ritual moments."""
+    for device_class in ("moisture", "smoke", "gas", "carbon_monoxide"):
+        entity_id = f"binary_sensor.test_garden_{device_class}"
+        attrs = {
+            "device_class": device_class,
+            "friendly_name": f"Test Garden {device_class}",
+        }
+        previous = {entity_id: _state("off", **attrs)}
+        current = {entity_id: _state("on", **attrs)}
+
+        matches = match_ritual_recipes(None, previous, current, now=300.0)
+
+        assert matches == [], f"{device_class} produced {[m.recipe.id for m in matches]}"
+
+
+def test_match_status_dict_carries_admin_detail():
+    """Cover the admin-facing projection with a synthetic catalog match."""
+    entity_id = "binary_sensor.test_lounge_window"
+    previous = {entity_id: _state("off", device_class="window", friendly_name="Test Lounge Window")}
+    current = {entity_id: _state("on", device_class="window", friendly_name="Test Lounge Window")}
+
+    matches = match_ritual_recipes(None, previous, current, now=300.0)
+    assert matches, "expected a window match to build the projection from"
+
+    payload = matches[0].to_status_dict()
+
+    assert payload["entity_id"] == entity_id
+    assert payload["recipe_id"] == "windows_airing"
+    assert payload["delivery_lane"] == "running_gag"
+    assert payload["public_family_label"] == "Window ritual"
+    assert isinstance(payload["confidence"], float)
+
+
+def test_an_ordinary_door_opening_produces_no_moment():
+    """An ordinary door opening must not produce a ritual match."""
+    entity_id = "binary_sensor.test_front_door"
+    attrs = {"device_class": "door", "friendly_name": "Test Front Door", "area_name": "Test Hallway"}
+    previous = {entity_id: {"state": "off", "attributes": dict(attrs)}}
+    current = {entity_id: {"state": "on", "attributes": dict(attrs)}}
 
     matches = match_ritual_recipes(None, previous, current, now=300.0)
 
-    assert len(matches) == 1
-    match = matches[0]
-    assert match.recipe.id == "safety_saves"
-    assert match.recipe.delivery_lane == "interrupt"
-    assert match.recipe.privacy_class == "safety"
-    assert public_family_labels(matches) == ["Safety moment"]
-    assert match.to_status_dict()["entity_id"] == "binary_sensor.sink_leak"
+    assert matches == [], f"door opening produced {[(m.recipe.id, m.recipe.delivery_lane) for m in matches]}"
+
+
+def test_every_shipped_pattern_clears_its_own_recipe_floor():
+    """Every shipped pattern must clear its recipe's min_confidence.
+
+    Five patterns sit exactly at their floor. Lowering their confidence or
+    raising their floor by 0.01 suppresses them, so this guard catches either
+    catalog edit.
+    """
+    offenders = [
+        (recipe.id, pattern.id, pattern.confidence, recipe.min_confidence)
+        for recipe in DEFAULT_RITUAL_RECIPES
+        for pattern in recipe.evidence_patterns
+        if pattern.confidence < recipe.min_confidence
+    ]
+    assert offenders == [], f"patterns silently suppressed by their own recipe floor: {offenders}"
+
+
+def test_no_default_recipe_may_interrupt_the_stream():
+    """No shipped ritual recipe may use the interrupt lane.
+
+    Callers may pass custom recipe sequences to ``match_ritual_recipes``.
+    Configured timers and ``POST /api/interrupt`` still invoke
+    ``_fire_interrupt``. Reintroducing a shipped interrupt recipe requires
+    explicit operator arming, a bounded delivery deadline, deterministic
+    fallback copy, and per-entity consent.
+    """
+    # Guards against the assertion going vacuous over an emptied or renamed tuple.
+    assert len(DEFAULT_RITUAL_RECIPES) >= 11
+
+    offenders = [r.id for r in DEFAULT_RITUAL_RECIPES if r.delivery_lane == "interrupt"]
+    assert offenders == [], f"recipes on the interrupt lane: {offenders}"
+
+    urgent = [r.id for r in DEFAULT_RITUAL_RECIPES if r.interrupt_urgency == "urgent"]
+    assert urgent == [], f"recipes with urgent urgency: {urgent}"
+
+
+def test_pattern_below_its_recipe_floor_is_suppressed():
+    """A pattern below ``min_confidence`` must be suppressed."""
+    import dataclasses
+
+    recipe = next(r for r in DEFAULT_RITUAL_RECIPES if r.id == "windows_airing")
+    entity_id = "binary_sensor.test_lounge_window"
+    attrs = {"device_class": "window", "friendly_name": "Test Lounge Window"}
+    previous = {entity_id: {"state": "off", "attributes": dict(attrs)}}
+    current = {entity_id: {"state": "on", "attributes": dict(attrs)}}
+
+    assert match_ritual_recipes([recipe], previous, current, now=300.0), "baseline should match"
+
+    weakened = dataclasses.replace(
+        recipe,
+        evidence_patterns=tuple(dataclasses.replace(p, confidence=0.10) for p in recipe.evidence_patterns),
+    )
+    assert match_ritual_recipes([weakened], previous, current, now=300.0) == []
 
 
 def test_sleep_wake_ignores_incidental_bedroom_entities():
@@ -149,8 +233,12 @@ def test_keyword_matching_requires_word_or_phrase_boundary():
 
 
 def test_multiword_keyword_recipes_still_match():
+    """The vacation house-sitter recipe preserves multiword-keyword coverage.
+
+    It matches "House sitter mode" through the two-token "house sitter"
+    phrase. The single-token "housesitter" spelling does not match.
+    """
     previous = {
-        "binary_sensor.front_door": _state("off", device_class="door", friendly_name="Front door"),
         "media_player.music_assistant": _state(
             "playing",
             friendly_name="Music Assistant speaker",
@@ -159,7 +247,6 @@ def test_multiword_keyword_recipes_still_match():
         "input_select.house_sitter_mode": _state("home", friendly_name="House sitter mode"),
     }
     current = {
-        "binary_sensor.front_door": _state("on", device_class="door", friendly_name="Front door"),
         "media_player.music_assistant": _state(
             "playing",
             friendly_name="Music Assistant speaker",
@@ -171,7 +258,7 @@ def test_multiword_keyword_recipes_still_match():
     matches = match_ritual_recipes(None, previous, current, now=380.0)
     matched_ids = {match.recipe.id for match in matches}
 
-    assert {"safety_saves", "media_betrayal", "vacation_house_sitter"}.issubset(matched_ids)
+    assert {"media_betrayal", "vacation_house_sitter"}.issubset(matched_ids)
 
 
 def test_away_mode_ignores_alarm_panel_but_matches_select_helpers():

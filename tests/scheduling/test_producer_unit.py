@@ -36,7 +36,12 @@ from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorization
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
-from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
+from mammamiradio.home.ritual_recipes import (
+    RitualEvidencePattern,
+    RitualRecipe,
+    clear_ritual_recipe_cooldowns,
+    match_ritual_recipes,
+)
 from mammamiradio.hosts.ad_creative import AdBrand, AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import (
@@ -3791,12 +3796,7 @@ def test_ritual_recipe_gag_feeds_ledger_event_path_without_spending_recipe_coold
 def test_ritual_recipe_safety_interrupt_preserves_interrupt_lane():
     clear_ritual_recipe_cooldowns()
     state = _make_state()
-    matches = match_ritual_recipes(
-        None,
-        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
-        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
-        now=300.0,
-    )
+    matches = _interrupt_lane_matches(now=300.0)
 
     with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
         gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
@@ -3806,7 +3806,7 @@ def test_ritual_recipe_safety_interrupt_preserves_interrupt_lane():
     assert interrupt.match is matches[0]
     assert isinstance(interrupt.spec, InterruptSpec)
     assert interrupt.spec.urgency == "urgent"
-    assert "Safety moment" in interrupt.spec.directive
+    assert "Test moment" in interrupt.spec.directive
     assert state.ha_pending_directive == ""
     commit.assert_not_called()
 
@@ -3815,12 +3815,7 @@ def test_ritual_recipe_safety_interrupt_can_supersede_existing_directive():
     clear_ritual_recipe_cooldowns()
     state = _make_state()
     state.ha_pending_directive = "legacy directive"
-    matches = match_ritual_recipes(
-        None,
-        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
-        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
-        now=310.0,
-    )
+    matches = _interrupt_lane_matches(now=310.0)
 
     with patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit:
         gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
@@ -3842,12 +3837,7 @@ async def test_producer_commits_ritual_interrupt_cooldown_only_after_interrupt_f
     config.ha_token = "fake-token"
     config.homeassistant.url = "http://ha.local:8123"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-    matches = match_ritual_recipes(
-        None,
-        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
-        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
-        now=320.0,
-    )
+    matches = _interrupt_lane_matches(now=320.0)
     ha_context = _ha_ctx_mock()
     ha_context.ritual_recipe_matches = matches
 
@@ -3857,7 +3847,7 @@ async def test_producer_commits_ritual_interrupt_cooldown_only_after_interrupt_f
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=True) as fire,
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="fired") as fire,
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
     ):
         await _run_until_queued(queue, state, config)
@@ -3876,12 +3866,7 @@ async def test_producer_keeps_ritual_interrupt_cooldown_when_global_cooldown_sup
     config.ha_token = "fake-token"
     config.homeassistant.url = "http://ha.local:8123"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-    matches = match_ritual_recipes(
-        None,
-        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
-        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
-        now=330.0,
-    )
+    matches = _interrupt_lane_matches(now=330.0)
     ha_context = _ha_ctx_mock()
     ha_context.ritual_recipe_matches = matches
 
@@ -3891,7 +3876,7 @@ async def test_producer_keeps_ritual_interrupt_cooldown_when_global_cooldown_sup
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=False) as fire,
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="cooldown") as fire,
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
     ):
         await _run_until_queued(queue, state, config)
@@ -3907,6 +3892,79 @@ def _moment_store():
     from mammamiradio.home.moment_receipts import MomentStore
 
     return MomentStore()
+
+
+# The shipped catalog contains no interrupt-lane recipe. These tests pass a
+# test-local recipe to exercise the retained ritual interrupt path without
+# adding a shipped trigger.
+_INTERRUPT_LANE_TEST_RECIPE = RitualRecipe(
+    id="test_interrupt_lane",
+    family="test_interrupt_lane",
+    public_family_label="Test moment",
+    delivery_lane="interrupt",
+    privacy_class="private",
+    cooldown_seconds=10 * 60,
+    min_confidence=0.8,
+    interrupt_urgency="urgent",
+    evidence_patterns=(
+        RitualEvidencePattern(
+            id="test_interrupt_trigger",
+            label="test interrupt trigger",
+            domains=("binary_sensor",),
+            device_classes=("occupancy",),
+            from_states=("off",),
+            to_states=("on",),
+            confidence=0.95,
+        ),
+    ),
+    directive="Test moment detected. Interrupt and react.",
+    sample_host_framing=("Test department, subito.",),
+)
+
+
+def _interrupt_lane_matches(now: float):
+    return match_ritual_recipes(
+        [_INTERRUPT_LANE_TEST_RECIPE],
+        {
+            "binary_sensor.test_interrupt_source": _ha_state(
+                "off", device_class="occupancy", friendly_name="Test Interrupt Source"
+            )
+        },
+        {
+            "binary_sensor.test_interrupt_source": _ha_state(
+                "on", device_class="occupancy", friendly_name="Test Interrupt Source"
+            )
+        },
+        now=now,
+    )
+
+
+def test_a_door_opening_has_no_audio_consequence():
+    """An ordinary door transition must not alter playback or arm an interrupt.
+
+    The matcher-level test covers catalog selection. This test verifies the
+    resulting producer state.
+    """
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    entity_id = "binary_sensor.test_front_door"
+    attrs = {"device_class": "door", "friendly_name": "Test Front Door", "area_name": "Test Hallway"}
+    matches = match_ritual_recipes(
+        None,
+        {entity_id: {"state": "off", "attributes": dict(attrs)}},
+        {entity_id: {"state": "on", "attributes": dict(attrs)}},
+        now=300.0,
+    )
+
+    assert matches == [], f"door produced {[(m.recipe.id, m.recipe.delivery_lane) for m in matches]}"
+
+    gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
+
+    assert interrupt is None, "a door opening must never arm an interrupt"
+    assert gag_events == []
+    assert state.interrupt_slot is None, "no bridge audio may be armed"
+    assert state.ha_pending_directive == ""
+    assert state.chaos_pending is None, "a door must not seize the chaos slot"
 
 
 def _coffee_directive_matches(now: float):
@@ -3959,12 +4017,7 @@ def test_ritual_interrupt_slot_busy_records_dropped_moment():
     state = _make_state()
     state.moment_store = _moment_store()
     state.force_next = SegmentType.BANTER  # interrupt lane guard trips
-    matches = match_ritual_recipes(
-        None,
-        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
-        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
-        now=420.0,
-    )
+    matches = _interrupt_lane_matches(now=420.0)
 
     gag_events, interrupt = _apply_ritual_recipe_matches(state, matches)
 
@@ -4037,12 +4090,7 @@ async def test_producer_records_interrupt_moment_elected_on_fire():
     config.ha_token = "fake-token"
     config.homeassistant.url = "http://ha.local:8123"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-    matches = match_ritual_recipes(
-        None,
-        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
-        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
-        now=450.0,
-    )
+    matches = _interrupt_lane_matches(now=450.0)
     ha_context = _ha_ctx_mock()
     ha_context.ritual_recipe_matches = matches
 
@@ -4052,7 +4100,7 @@ async def test_producer_records_interrupt_moment_elected_on_fire():
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=True),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="fired"),
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
     ):
         await _run_until_queued(queue, state, config)
@@ -4060,7 +4108,7 @@ async def test_producer_records_interrupt_moment_elected_on_fire():
     elected = [r for r in state.moment_store.rows if r.status == "elected"]
     assert len(elected) == 1
     assert elected[0].lane == "interrupt"
-    assert elected[0].family == "safety_saves"
+    assert elected[0].family == "test_interrupt_lane"
     assert state.ha_pending_directive_moment_id == elected[0].id
 
 
@@ -4103,12 +4151,7 @@ async def test_producer_records_interrupt_moment_dropped_on_cooldown_suppression
     config.ha_token = "fake-token"
     config.homeassistant.url = "http://ha.local:8123"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-    matches = match_ritual_recipes(
-        None,
-        {"binary_sensor.sink_leak": _ha_state("off", device_class="moisture", friendly_name="Sink leak")},
-        {"binary_sensor.sink_leak": _ha_state("on", device_class="moisture", friendly_name="Sink leak")},
-        now=460.0,
-    )
+    matches = _interrupt_lane_matches(now=460.0)
     ha_context = _ha_ctx_mock()
     ha_context.ritual_recipe_matches = matches
 
@@ -4118,7 +4161,7 @@ async def test_producer_records_interrupt_moment_dropped_on_cooldown_suppression
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=False),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="cooldown"),
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
     ):
         await _run_until_queued(queue, state, config)
@@ -4126,6 +4169,76 @@ async def test_producer_records_interrupt_moment_dropped_on_cooldown_suppression
     (row,) = state.moment_store.rows
     assert row.status == "dropped"
     assert row.drop_reason == "interrupt_cooldown"
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_producer_records_interrupt_moment_dropped_when_bridge_is_unavailable():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = _interrupt_lane_matches(now=470.0)
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._fire_interrupt",
+            new_callable=AsyncMock,
+            return_value="bridge_unavailable",
+        ),
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "interrupt_bridge_unavailable"
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_producer_records_interrupt_moment_dropped_when_queue_drain_fails():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = _interrupt_lane_matches(now=480.0)
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._fire_interrupt",
+            new_callable=AsyncMock,
+            return_value="queue_drain_failed",
+        ),
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "interrupt_queue_drain_failed"
     assert state.ha_pending_directive_moment_id == ""
 
 
@@ -9363,17 +9476,14 @@ async def test_drain_bridge_queues_starter_music_when_norm_cache_is_cold(tmp_pat
             )
         )
     skip_event = asyncio.Event()
-    empty_sfx = tmp_path / "empty-sfx"
-    empty_sfx.mkdir()
 
-    with patch(f"{PRODUCER_MODULE}._SFX_DIR", empty_sfx):
-        fired = await producer._fire_interrupt(
-            state,
-            InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
-            queue,
-            skip_event,
-            bridge_tmp_dir=tmp_path,
-        )
+    fired = await producer._fire_interrupt(
+        state,
+        InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
+        queue,
+        skip_event,
+        bridge_tmp_dir=tmp_path,
+    )
 
     assert fired is True
     assert queue.empty()
@@ -9772,26 +9882,21 @@ async def test_urgent_interrupt_seeds_starter_runway_before_first_producer_bante
     )
     queue.put_nowait(restored)
     state.queued_segments = [producer._queue_shadow_entry(restored)]
-    sfx_dir = tmp_path / "sfx"
-    sfx_dir.mkdir()
-    alert = sfx_dir / "alert.mp3"
-    alert.write_bytes(b"alert")
     skip_event = asyncio.Event()
 
-    with patch(f"{PRODUCER_MODULE}._SFX_DIR", sfx_dir):
-        fired = await producer._fire_interrupt(
-            state,
-            InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
-            queue,
-            skip_event,
-            bridge_tmp_dir=tmp_path,
-        )
+    fired = await producer._fire_interrupt(
+        state,
+        InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
+        queue,
+        skip_event,
+        bridge_tmp_dir=tmp_path,
+    )
 
     assert fired is True
     assert queue.empty()
     assert state.segments_produced == 0
     assert state.urgent_interrupt_drained_audio is True
-    assert state.interrupt_slot == alert
+    assert state.interrupt_slot == producer._DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
 
     track = state.playlist[0]
     rendered_path = tmp_path / "starter-runway.mp3"
@@ -9827,7 +9932,7 @@ async def test_urgent_interrupt_seeds_starter_runway_before_first_producer_bante
             assert len(queued) == 1
             assert queued[0].metadata.get("audio_source") == "starter"
             assert queued[0].metadata.get("queue_drain_recovery") is True
-            assert state.interrupt_slot == alert
+            assert state.interrupt_slot == producer._DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
     finally:
         if producer_task is not None:
             producer_task.cancel()
@@ -9850,24 +9955,20 @@ async def test_urgent_interrupt_does_not_reuse_an_older_purge_for_drain_recovery
     buffered = Segment(type=SegmentType.MUSIC, path=buffered_path, duration_sec=180.0)
     queue.put_nowait(buffered)
     state.queued_segments = [producer._queue_shadow_entry(buffered)]
-    sfx_dir = tmp_path / "sfx"
-    sfx_dir.mkdir()
-    (sfx_dir / "alert.mp3").write_bytes(b"alert")
 
-    with patch(f"{PRODUCER_MODULE}._SFX_DIR", sfx_dir):
-        assert await producer._fire_interrupt(
-            state,
-            InterruptSpec(directive="First safety moment.", urgency="urgent", cooldown=60),
-            queue,
-            None,
-        )
-        assert state.urgent_interrupt_drained_audio is True
-        assert await producer._fire_interrupt(
-            state,
-            InterruptSpec(directive="Second safety moment.", urgency="urgent", cooldown=60),
-            queue,
-            None,
-        )
+    assert await producer._fire_interrupt(
+        state,
+        InterruptSpec(directive="First safety moment.", urgency="urgent", cooldown=60),
+        queue,
+        None,
+    )
+    assert state.urgent_interrupt_drained_audio is True
+    assert await producer._fire_interrupt(
+        state,
+        InterruptSpec(directive="Second safety moment.", urgency="urgent", cooldown=60),
+        queue,
+        None,
+    )
 
     assert state.discard_by_reason[GenerationWasteReason.INTERRUPT] == 1
     assert state.urgent_interrupt_drained_audio is False
@@ -10974,12 +11075,8 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
     state.queued_segments = [{"id": "buffered", "type": "music"}]
 
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
-    # Isolate the emergency-tone branch: with no alert.mp3 available, the bridge
-    # must fall to the packaged emergency tone regardless of a real _SFX_DIR asset.
-    empty_sfx = tmp_path / "empty_sfx"
-    empty_sfx.mkdir()
-    with patch(f"{PRODUCER_MODULE}._SFX_DIR", empty_sfx):
-        assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
+    # Every interrupt source uses the manifest-validated packaged emergency tone.
+    assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert queue.empty()  # buffered tail purged
     assert state.last_enqueued_type is None
@@ -11022,8 +11119,6 @@ async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp
 
     demo_root = tmp_path / "demo"
     _manifest_recovery_clip(demo_root, "emergency_tone.mp3", b"tone", kind="tone")
-    empty_sfx = tmp_path / "empty_sfx"
-    empty_sfx.mkdir()
     original_unlink = Path.unlink
 
     def _unlink_with_one_failure(path: Path, *args, **kwargs):
@@ -11034,7 +11129,6 @@ async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp
     spec = InterruptSpec(directive="Urgent update", urgency="urgent", cooldown=60)
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
-        patch.object(producer, "_SFX_DIR", empty_sfx),
         patch.object(Path, "unlink", new=_unlink_with_one_failure),
     ):
         fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
@@ -11069,11 +11163,8 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     state.queued_segments = [{"id": "asset", "type": "banter"}]
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
 
-    empty_sfx = tmp_path / "empty_sfx"
-    empty_sfx.mkdir()
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
-        patch.object(producer, "_SFX_DIR", empty_sfx),
         patch("mammamiradio.scheduling.queue_mutations._DEMO_ASSETS_DIR", demo_root),
     ):
         assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
@@ -11092,8 +11183,6 @@ async def test_fire_interrupt_rejects_tampered_manifested_emergency_tone(tmp_pat
     demo_root = tmp_path / "assets" / "demo"
     emergency_tone = _manifest_recovery_clip(demo_root, "emergency_tone.mp3", b"reviewed", kind="tone")
     emergency_tone.write_bytes(b"tampered")
-    empty_sfx = tmp_path / "empty_sfx"
-    empty_sfx.mkdir()
     state = _make_state()
     buffered = Segment(type=SegmentType.MUSIC, path=tmp_path / "song.mp3", metadata={"title": "Buffered"})
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
@@ -11103,7 +11192,6 @@ async def test_fire_interrupt_rejects_tampered_manifested_emergency_tone(tmp_pat
 
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
-        patch.object(producer, "_SFX_DIR", empty_sfx),
     ):
         fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
 
@@ -11113,18 +11201,16 @@ async def test_fire_interrupt_rejects_tampered_manifested_emergency_tone(tmp_pat
 
 
 async def test_fire_interrupt_aborts_when_no_bridge_asset_available(tmp_path):
-    """Both bridge assets missing must abort the interrupt, not cut to dead air.
+    """A missing bridge asset must abort the interrupt, not cut to dead air.
 
-    With neither alert.mp3 nor the packaged emergency tone available, hard-cutting
-    would drain the queue and fire skip_event with nothing to air. The interrupt
-    aborts instead, preserving whatever is already queued (INSTANT AUDIO).
+    With the packaged emergency tone unavailable, hard-cutting would drain the
+    queue and fire skip_event with nothing to air. The interrupt aborts instead,
+    preserving whatever is already queued (INSTANT AUDIO).
     """
     from mammamiradio.core.models import InterruptSpec
     from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _fire_interrupt
 
-    empty_sfx = tmp_path / "empty_sfx"
-    empty_sfx.mkdir()
     empty_demo = tmp_path / "empty_demo"
     empty_demo.mkdir()
     state = _make_state()
@@ -11137,7 +11223,6 @@ async def test_fire_interrupt_aborts_when_no_bridge_asset_available(tmp_path):
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
 
     with (
-        patch.object(producer, "_SFX_DIR", empty_sfx),
         patch.object(producer, "_DEMO_ASSETS_DIR", empty_demo),
     ):
         result = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
@@ -11145,6 +11230,63 @@ async def test_fire_interrupt_aborts_when_no_bridge_asset_available(tmp_path):
     assert result is False
     assert list(queue._queue) == [buffered]  # queue preserved — no dead-air cut
     assert state.interrupt_slot is None
+
+
+async def test_fire_interrupt_failed_bridge_validation_preserves_interrupt_state(tmp_path):
+    """Bridge validation must precede cooldown and continuity mutations."""
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    empty_demo = tmp_path / "empty_demo"
+    empty_demo.mkdir()
+    state = _make_state()
+    previous_interrupt = tmp_path / "previous_interrupt.mp3"
+    previous_continuity = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "continuity.mp3",
+        metadata={"title": "Continuity"},
+        ephemeral=False,
+    )
+    previous_timestamp = time.time() - 120
+    state.last_interrupt_ts = previous_timestamp
+    state.interrupt_slot = previous_interrupt
+    state.interrupt_slot_ephemeral = False
+    state.interrupt_slot_source = "studio"
+    state.interrupt_slot_home_context_generation = 7
+    state.continuity_slot = previous_continuity
+
+    buffered = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "song.mp3",
+        metadata={"title": "Buffered"},
+        ephemeral=False,
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(buffered)
+    skip_event = asyncio.Event()
+    spec = InterruptSpec(directive="Test interrupt", urgency="urgent", cooldown=60)
+
+    with patch.object(producer, "_DEMO_ASSETS_DIR", empty_demo):
+        outcome = await _fire_interrupt(
+            state,
+            spec,
+            queue,
+            skip_event,
+            enforce_global_cooldown=True,
+            bridge_tmp_dir=tmp_path,
+            return_outcome=True,
+        )
+
+    assert outcome == "bridge_unavailable"
+    assert state.last_interrupt_ts == previous_timestamp
+    assert state.interrupt_slot is previous_interrupt
+    assert state.interrupt_slot_ephemeral is False
+    assert state.interrupt_slot_source == "studio"
+    assert state.interrupt_slot_home_context_generation == 7
+    assert state.continuity_slot is previous_continuity
+    assert list(queue._queue) == [buffered]
+    assert not skip_event.is_set()
 
 
 @pytest.mark.asyncio
