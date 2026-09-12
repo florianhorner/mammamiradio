@@ -171,6 +171,10 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_advertised_version.sh
 
+      - name: Model-registry watch self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_model_registry_watch.sh
+
       - name: Edge add-on validation self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_validate_addon_edge.sh
