@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -78,12 +79,12 @@ GUIDE_CLIPS = (
         (
             GuideLine(
                 "Marco",
-                "Benvenuti! Sono Marco, and this is Mamma Mi Radio, "
-                "your new favourite station, live from that device right there.",
+                "Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee.",
             ),
             GuideLine(
                 "Giulia",
-                "Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.",
+                "I’m Giulia. I run the desk. Touch my coffee again and you’re in the corridor, Marco. "
+                "Come in. Three small steps. Then we’re on air.",
             ),
         ),
         station_sting=True,
@@ -125,20 +126,20 @@ GUIDE_CLIPS = (
     GuideClip(
         "privacy",
         (
-            GuideLine("Marco", "Give me the weather and I will make it radio."),
+            GuideLine("Marco", "Rain all afternoon. I’ve cancelled the rooftop disco."),
             GuideLine(
                 "Giulia",
-                "Only after you preview the exact details. Keep Home private and we read nothing.",
+                "It was a speaker on a bin, Marco. Bring it inside. We’re not cancelling Saturday.",
             ),
         ),
     ),
     GuideClip(
         "ai",
         (
-            GuideLine("Marco", "Connect an AI provider and the conversations keep changing."),
+            GuideLine("Marco", "Connect a writing service and I’ll have something new to say between records."),
             GuideLine(
                 "Giulia",
-                "Optional. The station already works. Saved keys stay hidden, and an empty field changes nothing.",
+                "Something new, Marco. That rules out the story about your famous cousin.",
             ),
         ),
     ),
@@ -155,16 +156,29 @@ GUIDE_CLIPS = (
     ),
 )
 
+FREE_VOICE_CLIP = GuideClip(
+    "free-voices",
+    (
+        GuideLine("Marco", "Mah… Giulia, somebody’s changed my microphone. My cousin says it’s the future."),
+        GuideLine("Giulia", "Same us. Different voices. And your cousin still owes us the old microphone."),
+    ),
+)
+
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--clip", choices=("welcome",), help="replace only the welcome in an intact canonical pack")
+    selection.add_argument(
+        "--clip",
+        choices=tuple(clip.clip_id for clip in GUIDE_CLIPS),
+        help="replace one clip in an intact canonical pack",
+    )
     selection.add_argument(
         "--station-opening", action="store_true", help="render only the English Admin station opening"
     )
+    selection.add_argument("--free-voice-example", action="store_true", help="render the configured free voices")
     args = parser.parse_args()
     args.output_root = args.output_root or (STATION_OUTPUT_ROOT if args.station_opening else DEFAULT_OUTPUT_ROOT)
     return args
@@ -355,6 +369,7 @@ async def _render_clip(
     destination: Path,
     *,
     motif_notes: list[int],
+    free_voices: bool = False,
 ) -> dict[str, object]:
     from mammamiradio.audio.normalizer import (
         concat_files,
@@ -364,8 +379,9 @@ async def _render_clip(
     )
 
     line_paths = [work_dir / f"{clip.clip_id}-{index}.mp3" for index in range(len(clip.lines))]
+    render_line = _render_free_line if free_voices else _render_line
     await asyncio.gather(
-        *(_render_line(hosts[line.host], line.text, path) for line, path in zip(clip.lines, line_paths, strict=True))
+        *(render_line(hosts[line.host], line.text, path) for line, path in zip(clip.lines, line_paths, strict=True))
     )
 
     dialogue_path = work_dir / f"{clip.clip_id}-dialogue.mp3"
@@ -400,6 +416,80 @@ async def _render_clip(
         "duration_seconds": round(duration, 3),
         "speakers": [line.host for line in clip.lines],
     }
+
+
+async def _render_free_line(host, text: str, output_path: Path) -> Path:
+    import aiohttp
+    import edge_tts
+
+    from mammamiradio.audio.normalizer import normalize
+
+    class SingleAttemptConnector(aiohttp.TCPConnector):
+        attempted = False
+
+        async def connect(self, *args, **kwargs):
+            # Edge's public stream retries a 403. Fence that retry before another
+            # request leaves the machine; this audition must never change voices.
+            if self.attempted:
+                raise RuntimeError("free voice request failed; automatic retry is disabled")
+            self.attempted = True
+            return await super().connect(*args, **kwargs)
+
+    raw = output_path.with_suffix(".edge-raw.mp3")
+    async with SingleAttemptConnector() as connector:
+        voice = edge_tts.Communicate(text, host.edge_fallback_voice, rate="+0%", pitch="+0Hz", connector=connector)
+        await asyncio.wait_for(voice.save(str(raw)), timeout=30)
+    await asyncio.to_thread(normalize, raw, output_path, loudnorm=False)
+    return output_path
+
+
+async def _render_free_example(output_root, hosts, canonical_receipt, motif_notes) -> None:
+    validator = runpy.run_path(str(REPO_ROOT / "scripts" / "validate-spoken-assets.py"))
+    _validated_pack(output_root, canonical_receipt)
+    receipt = validator["free_voice_render_receipt"](REPO_ROOT / "radio.toml")
+    assert [host["voice_id"] for host in receipt["hosts"]] == [
+        hosts[name].edge_fallback_voice for name in CANONICAL_HOST_NAMES
+    ]
+    with _temporary_work_directory() as raw_work_dir:
+        work_dir = Path(raw_work_dir)
+        staging = work_dir / "staging"
+        shutil.copytree(output_root, staging)
+        side = staging / "voice_examples"
+        side.mkdir(exist_ok=True)
+        destination = side / "free-voices.mp3"
+        entry = await _render_clip(
+            FREE_VOICE_CLIP, hosts, work_dir, destination, motif_notes=motif_notes, free_voices=True
+        )
+        entry["path"] = destination.name
+        manifest_path = side / MANIFEST_FILENAME
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "bundle": "first-listen-free-voices",
+                    "render_provider": "edge",
+                    "render_receipt": receipt,
+                    "assets": [entry],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        )
+        _validated_pack(staging, canonical_receipt)
+        target = output_root / "voice_examples"
+        created = not target.exists()
+        target.mkdir(exist_ok=True)
+        try:
+            _publish_staged_pack(
+                [(destination, target / destination.name), (manifest_path, target / MANIFEST_FILENAME)]
+            )
+        except Exception:
+            if created:
+                with contextlib.suppress(OSError):
+                    target.rmdir()  # Only remove the empty directory created by this attempt.
+            raise
+        print(f"rendered free voices: {entry['duration_seconds']}s")
 
 
 async def _render_station_opening(output_root, hosts, canonical_receipt, motif_notes) -> None:
@@ -441,7 +531,7 @@ async def _render_station_opening(output_root, hosts, canonical_receipt, motif_n
 
 async def _run(args: argparse.Namespace) -> None:
     _load_environment(args.env_file)
-    if not os.getenv("ELEVENLABS_API_KEY"):
+    if not getattr(args, "free_voice_example", False) and not os.getenv("ELEVENLABS_API_KEY"):
         raise RuntimeError("canonical rendering requires ELEVENLABS_API_KEY")
 
     config = _load_station_config(REPO_ROOT / "radio.toml")
@@ -451,6 +541,9 @@ async def _run(args: argparse.Namespace) -> None:
     canonical_receipt = _canonical_render_receipt(hosts)
 
     output_root = args.output_root.resolve()
+    if getattr(args, "free_voice_example", False):
+        await _render_free_example(output_root, hosts, canonical_receipt, config.sonic_brand.motif_notes)
+        return
     if getattr(args, "station_opening", False):
         await _render_station_opening(output_root, hosts, canonical_receipt, config.sonic_brand.motif_notes)
         return
@@ -473,6 +566,15 @@ async def _run(args: argparse.Namespace) -> None:
         work_dir = Path(raw_work_dir)
         staging_dir = work_dir / "staging"
         (staging_dir / "first_listen").mkdir(parents=True)
+        if (output_root / "voice_examples").exists() or (output_root / "voice_examples").is_symlink():
+            # Preserve the separately attested audition even for a full guide render.
+            if not selected_clip:
+                errors = runpy.run_path(str(REPO_ROOT / "scripts/validate-spoken-assets.py"))[
+                    "validate_free_voice_example"
+                ](assets_root=output_root, staged_render=True)
+                if errors:
+                    raise RuntimeError("invalid retained free voice example: " + "; ".join(errors))
+            shutil.copytree(output_root / "voice_examples", staging_dir / "voice_examples")
         if selected_clip:
             for entry in manifest["assets"]:
                 shutil.copyfile(output_root / entry["path"], staging_dir / entry["path"])

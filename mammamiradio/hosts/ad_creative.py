@@ -201,13 +201,19 @@ AD_FORMATS: dict[str, str] = {
     ),
 }
 
+# Shared prompt and TTS token for the fast fine-print line.
+DISCLAIMER_ROLE = "disclaimer_goblin"
+
 SPEAKER_ROLES: dict[str, str] = {
     "hammer": "The Hammer: booming national TV voice, dramatic pauses, sells the apocalypse with a smile",
     "seductress": "The Seductress: whisper-ASMR menace, makes everything sound inappropriately intimate",
     "bureaucrat": "The Bureaucrat: dry official notice voice, reads absurd things with total sincerity",
     "maniac": "The Maniac: oversold shopping-channel energy, everything is THE GREATEST THING EVER",
     "witness": "The Witness: fake customer testimonial, suspiciously specific, clearly reading a script",
-    "disclaimer_goblin": "The Disclaimer Goblin: ultra-fast legal cleanup, buries the bad news in speed",
+    "disclaimer_goblin": (
+        "The Disclaimer Goblin: ultra-fast legal cleanup, buries the bad news in speed. "
+        "Use this role for the closing fine print ONLY, never for sales copy."
+    ),
 }
 
 SONIC_ENVIRONMENTS: dict[str, str] = {

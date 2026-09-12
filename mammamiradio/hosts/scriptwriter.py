@@ -22,12 +22,12 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import cycle, pairwise
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anthropic
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
-from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_model
+from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, effort_for, resolve_model
 from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims, home_return_authority_for_directive
 from mammamiradio.core.models import (
@@ -46,7 +46,9 @@ from mammamiradio.core.models import (
     listener_request_pin_revision,
 )
 from mammamiradio.hosts.ad_creative import (
+    _FORMAT_ROLES,
     AD_FORMATS,
+    DISCLAIMER_ROLE,
     SONIC_ENVIRONMENTS,
     SPEAKER_ROLES,
     AdBrand,
@@ -125,11 +127,11 @@ _ANTHROPIC_TRANSIENT_BACKOFF_SECONDS = 20
 _ANTHROPIC_TRANSIENT_BACKOFF_FLOOR = 5
 _ANTHROPIC_TRANSIENT_BACKOFF_MAX = 60
 # gpt-5.x reasoning models bill hidden reasoning tokens against
-# `max_completion_tokens`. We request `reasoning_effort="minimal"` for these
-# short radio snippets (see _call_openai) so reasoning is near-zero — that keeps
+# `max_completion_tokens`. We request `reasoning_effort="none"` for these short
+# radio snippets (see _call_openai) so hidden reasoning is disabled — that keeps
 # the visible JSON from being starved AND keeps the per-request cap small, since
 # OpenAI estimates rate-limit (TPM) usage from the requested cap, not the actual
-# output. This small residual buffer covers minimal-reasoning + JSON framing
+# output. This small residual buffer covers JSON framing
 # without inflating every short fallback into a multi-thousand-token request.
 _OPENAI_REASONING_HEADROOM = 512
 # A max_tokens-truncated response is a budget problem, not a provider-health
@@ -1138,13 +1140,19 @@ async def _generate_json_response(
                     _anthropic_in = _anthropic_out = 0
                     try:
                         client = _get_client(config.anthropic_api_key)
+                        create_kwargs: dict[str, Any] = {
+                            "model": model,
+                            "max_tokens": current_max_tokens,
+                            "system": system_prompt,
+                            "messages": [{"role": "user", "content": prompt}],
+                        }
+                        # Adaptive thinking on Claude 5 creative models. Haiku has
+                        # no effort entry and must never receive output_config.
+                        effort_level = effort_for(config.models, "anthropic", model, caller=caller)
+                        if effort_level:
+                            create_kwargs["extra_body"] = {"output_config": {"effort": effort_level}}
                         resp = await asyncio.wait_for(
-                            client.with_options(max_retries=0).messages.create(
-                                model=model,
-                                max_tokens=current_max_tokens,
-                                system=system_prompt,
-                                messages=[{"role": "user", "content": prompt}],
-                            ),
+                            client.with_options(max_retries=0).messages.create(**create_kwargs),
                             timeout=_attempt_timeout(current_max_tokens),
                         )
                         # Read stop_reason before indexing content: a max_tokens cut can
@@ -1394,11 +1402,10 @@ async def _generate_json_response(
 
         def _call_openai(kwargs=openai_kwargs):
             try:
-                # "minimal" reasoning keeps these short snippets from spending the
-                # completion cap on hidden reasoning tokens (which would starve the
-                # visible JSON) while keeping the request — and its TPM footprint —
-                # small and low-latency.
-                return client.chat.completions.create(reasoning_effort="minimal", **kwargs)
+                # "none" is the lowest effort accepted by the GPT-5.6 ladder. It
+                # keeps these short snippets from spending the completion cap on
+                # hidden reasoning tokens (which would starve the visible JSON).
+                return client.chat.completions.create(reasoning_effort="none", **kwargs)
             except Exception as exc:
                 # An operator can point OPENAI_SCRIPT_MODEL at a non-reasoning model
                 # that rejects `reasoning_effort` with a 400. Retry once without it
@@ -3679,6 +3686,56 @@ def _ad_fallback_text(brand: AdBrand, config: StationConfig) -> str:
     return f"{brand.name}. Because you deserve it, amici."
 
 
+def _resolve_ad_role(raw_role: object, voices: dict[str, AdVoice]) -> str:
+    """Map decorated model output onto a cast key; preserve unknown roles."""
+    role = str(raw_role or "").strip()
+    if not role or role in voices:
+        return role
+    # Accept both old `BUREAUCRAT (Name)` and current `"bureaucrat" — Name` labels.
+    candidate = re.split(r"[(\u2014:,]|\s-\s", role, maxsplit=1)[0]
+    folded = re.sub(r"[^a-z0-9]", "", candidate.casefold())
+    if not folded:
+        return role
+    for key in voices:
+        if re.sub(r"[^a-z0-9]", "", key.casefold()) == folded:
+            return key
+    if folded == re.sub(r"[^a-z0-9]", "", DISCLAIMER_ROLE):
+        return DISCLAIMER_ROLE
+    return role
+
+
+def _cap_disclaimer_parts(parts: list[AdPart], fallback_role: str) -> list[AdPart]:
+    """Keep only the closing fine-print part and never compress the whole ad."""
+    voice_parts = [p for p in parts if p.type == "voice" and p.text]
+    disclaimers = [p for p in voice_parts if p.role == DISCLAIMER_ROLE]
+    if not disclaimers:
+        return parts
+    # A campaign may legitimately use the disclaimer voice as its spokesperson.
+    safe_role = fallback_role if fallback_role and fallback_role != DISCLAIMER_ROLE else "hammer"
+    if len(voice_parts) == 1:
+        disclaimers[0].role = safe_role
+        logger.warning("Ad script was only fine print; demoted it to %r", safe_role)
+        return parts
+    if len(disclaimers) == 1:
+        keep = disclaimers[0]
+    else:
+        keep = disclaimers[-1]
+        for part in disclaimers[:-1]:
+            part.role = safe_role
+        logger.warning(
+            "Ad script labelled %d parts as fine print; demoted %d to %r so the spot is not all blur",
+            len(disclaimers),
+            len(disclaimers) - 1,
+            safe_role,
+        )
+    if voice_parts[-1] is keep:
+        return parts
+    reordered = [part for part in parts if part is not keep]
+    after_last_voice = max(i for i, part in enumerate(reordered) if part.type == "voice" and part.text) + 1
+    reordered.insert(after_last_voice, keep)
+    return reordered
+
+
 def _pharma_disclaimer_text(config: StationConfig) -> str:
     """Return the legally styled fictional-pharma tail for the spoken mode."""
     if _spoken_fallback_language(config) == "it":
@@ -4019,11 +4076,16 @@ CAMPAIGN SPINE:
         else ""
     )
 
-    # Build speaker descriptions for the prompt
+    # Speaker tokens must exactly match the JSON example and parser contract.
     speaker_lines = []
     for role_name, voice in voices.items():
         role_desc = SPEAKER_ROLES.get(role_name, f"Commercial voice: {voice.style}")
-        speaker_lines.append(f"- {role_name.upper()} ({voice.name}): {role_desc}")
+        speaker_lines.append(f'- "{role_name}" — {voice.name}: {role_desc}')
+    if DISCLAIMER_ROLE not in voices:
+        # Other formats address this token but render it with their opening voice.
+        speaker_lines.append(
+            f'- "{DISCLAIMER_ROLE}" — {SPEAKER_ROLES[DISCLAIMER_ROLE]} It is read by the spot\'s opening voice.'
+        )
     speakers_block = "\n".join(speaker_lines)
 
     # Format description
@@ -4037,16 +4099,20 @@ CAMPAIGN SPINE:
     sfx_types = ", ".join(f'"{t}"' for t in AVAILABLE_SFX_TYPES)
 
     role_names = list(voices.keys())
+    # Keep character copy separate from the canonical fine-print token.
+    character_roles = [r for r in role_names if r != DISCLAIMER_ROLE] or list(role_names)
+    opening_role = character_roles[0]
+    second_role = character_roles[1] if len(character_roles) > 1 else character_roles[0]
 
     if sonic.is_recipe_driven:
         sonic_rule = (
             f"- Station recipe: {sonic.recipe_id}. It supplies the bed and any sound details after speech is rendered. "
             "Return only voice and optional pause parts; do not return an sfx or environment part."
         )
-        parts_example = f'''    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
-    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+        parts_example = f'''    {{"type": "voice", "text": "Ad copy line here", "role": "{opening_role}"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{second_role}"}},
     {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{DISCLAIMER_ROLE}"}}'''
     else:
         sonic_rule = (
             "- You may interleave sound effect cues and environment cues between voice lines. "
@@ -4055,11 +4121,11 @@ CAMPAIGN SPINE:
             f"environment name above, never invent new ones: {sfx_types}"
         )
         parts_example = f'''    {{"type": "sfx", "sfx": "{sonic.transition_motif}"}},
-    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
+    {{"type": "voice", "text": "Ad copy line here", "role": "{opening_role}"}},
     {{"type": "sfx", "sfx": "sweep"}},
-    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{second_role}"}},
     {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{DISCLAIMER_ROLE}"}}'''
 
     prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
 Tagline: "{brand.tagline}"
@@ -4089,6 +4155,8 @@ RULES:
 - Think late-night TV shopping meets GTA radio meets a faded political showman's fever dream, with Italian station character.
 - 15-25 seconds when read aloud. Keep each voice line under 30 words.
 - Follow the ad format rules above. Use the assigned speakers by their role names.
+- Every "role" value must be one of the quoted role tokens listed under SPEAKERS, copied exactly. Do not add the voice's name, do not change the capitalisation.
+- The fine print is spoken by "{DISCLAIMER_ROLE}" and is sped up automatically. Write it as ordinary spaced words: never run words together, never join them with hyphens, never use ALL CAPS to suggest speed.
 {direct_spokesperson_rule}
 - Open HARD. The first beat should grab attention immediately.
 {sonic_rule}
@@ -4131,10 +4199,14 @@ Return JSON:
                     text=sanitize_spoken_station_name(p.get("text", ""), config.display_station_name),
                     sfx=p.get("sfx", ""),
                     duration=p.get("duration", 0.0),
-                    role=p.get("role", ""),
+                    role=_resolve_ad_role(p.get("role", ""), voices),
                     environment=p.get("environment", ""),
                 )
             )
+
+        # Pharma replacement below must see the model's original role labels.
+        if brand.category != "pharma":
+            parts = _cap_disclaimer_parts(parts, direct_primary_role or _FORMAT_ROLES.get(ad_format, ["hammer"])[0])
 
         # Ensure we have at least one voice part
         used_owned_fallback = False
@@ -4172,9 +4244,15 @@ Return JSON:
         actual_format = ad_format
         if used_owned_fallback:
             actual_format = AdFormat.CLASSIC_PITCH
-        if ad_format in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) and len(roles_found) < 2:
+        # A disclaimer does not turn a one-character spot into a duo.
+        character_roles_found = roles_found - {DISCLAIMER_ROLE}
+        if ad_format in (AdFormat.DUO_SCENE, AdFormat.TESTIMONIAL) and len(character_roles_found) < 2:
             actual_format = AdFormat.CLASSIC_PITCH
-            logger.info("Demoted %s to classic_pitch (only %d role(s) in output)", ad_format, len(roles_found))
+            logger.info(
+                "Demoted %s to classic_pitch (only %d character role(s) in output)",
+                ad_format,
+                len(character_roles_found),
+            )
 
         summary = data.get("summary", f"Ad for {brand.name}")
         mood = data.get("mood", sonic.music_bed)
@@ -4191,13 +4269,25 @@ Return JSON:
         # its medicine-style ibuprofen disclaimer is intentional, not a category
         # mismatch or defect. Keep its pharma category and disclaimer together.
         if brand.category == "pharma":
+            # Replace model-written fine print with the canonical medicine tail.
+            for dropped in [p for p in parts if p.role == DISCLAIMER_ROLE and p.text]:
+                logger.warning(
+                    "Pharma ad %s: replacing the model's fine print with the canonical tail (dropped: %r)",
+                    brand.name,
+                    dropped.text[:80],
+                )
+            parts = [p for p in parts if p.role != DISCLAIMER_ROLE]
+            if not any(p.type == "voice" and p.text for p in parts):
+                # Keep the brand audible if the model returned only fine print.
+                parts.append(AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role))
             parts.append(
                 AdPart(
                     type="voice",
                     text=_pharma_disclaimer_text(config),
-                    role="disclaimer_goblin",
+                    role=DISCLAIMER_ROLE,
                 )
             )
+            roles_found = {p.role for p in parts if p.type == "voice" and p.role}
 
         voice_texts = [p.text for p in parts if p.type == "voice" and p.text]
         if not _normal_mode_language_ok(voice_texts, config):
@@ -4205,9 +4295,7 @@ Return JSON:
             logger.warning("Ad failed final Normal Mode language check; using deterministic fallback")
             fallback_parts = [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)]
             if brand.category == "pharma":
-                fallback_parts.append(
-                    AdPart(type="voice", text=_pharma_disclaimer_text(config), role="disclaimer_goblin")
-                )
+                fallback_parts.append(AdPart(type="voice", text=_pharma_disclaimer_text(config), role=DISCLAIMER_ROLE))
             parts = _ensure_attention_grabbing_ad_parts(fallback_parts, sonic)
             actual_format = AdFormat.CLASSIC_PITCH
             roles_found = {p.role for p in parts if p.type == "voice" and p.role}
