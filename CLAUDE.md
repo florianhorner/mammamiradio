@@ -371,21 +371,38 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   A `--repo` or `-R` naming a repository that is not this checkout is now
   skipped, the same reasoning R19 already applies: the question is unanswerable
   here, and unanswerable must not mean refused. Standing aside requires *every*
-  opening command in the string to be explicitly foreign, read last-wins from
-  each command's own argument vector the way the CLI reads it — never from
-  `--body` prose, never from a later chained command. Both sides of the
-  comparison reduce to `owner/repo`, so the spellings the CLI accepts for one
-  repository (`host/owner/repo`, `http://`, `ssh://…​.git`, `git@host:…`) cannot
-  read as two. The flagless form and a `--repo` naming this repo are unchanged.
+  opening command in the string to be explicitly foreign, read the way the CLI
+  reads it: last-wins on a repeated flag, from that command's own argument
+  vector, with a newline treated as the command separator it is and every
+  value-taking flag consuming its value — never from `--body` prose, never from
+  a later chained command. Both sides of the comparison reduce to `owner/repo`,
+  so the spellings the CLI accepts for one repository (`host/owner/repo`,
+  `http://`, `ssh://…​.git`, `git@host:…`, `-Rowner/repo`, `-R=owner/repo`)
+  cannot read as two. The flagless form and a `--repo` naming this repo are
+  unchanged.
 
   This one branch fails *toward* checking rather than open, unlike the rest of
-  the guard: an unreadable `origin`, a command line the tokenizer cannot parse,
-  and an opening command with no explicit target all keep the guard on, because
-  "cannot prove this is somebody else's PR" has to mean "judge it" or the
-  exemption becomes the bypass. Known gap, pinned by a test rather than closed:
-  a flagless command run after `cd`-ing into another repository is still judged
-  against this checkout, since the hook sees the session cwd and no target. It
-  refuses rather than passes, and R12 denies the flagless form fleet-wide.
+  the guard: an `origin` that names no hosted repository (a local path or a
+  `file://` clone), a command line the tokenizer cannot parse, a target the
+  guard cannot reduce to `owner/repo`, and an opening command with no explicit
+  target all keep the guard on, because "cannot prove this is somebody else's
+  PR" has to mean "judge it" or the exemption becomes the bypass. Known gap,
+  pinned by a test rather than closed: a flagless command run after `cd`-ing
+  into another repository is still judged against this checkout, since the hook
+  sees the session cwd and no target. It refuses rather than passes, and R12
+  denies the flagless form fleet-wide.
+
+  Command *detection* was the weaker half and is now anchored on parentheses as
+  well as whitespace and `;&|`. A single `(` used to leave `gh` unanchored, so a
+  merge inside a subshell walked past the landing-contract deny below, and a
+  create inside `$( )` went unjudged. That was pre-existing and is the most
+  consequential thing the reviews on this change turned up.
+
+  Everything above is asserted by `tests/workflows/test_preship_squad_gate.sh`,
+  and every acceptance case there is mutation-verified: each one fails against
+  the behaviour it replaced. That matters more than the count, because three
+  separate rounds of review found bypasses in the *fix*, each of which read as
+  correct until a case was written for it.
 
   The runtime-independent evidence gate is the immutable v2 receipt, and the
   ceremony is single-pass: commit the implementation, run the review on that
