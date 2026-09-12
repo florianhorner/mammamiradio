@@ -1044,11 +1044,37 @@ A singleton OpenAI client is reused across OpenAI TTS calls for connection pool 
 
 ### Ad fine print (the fast-talking disclaimer)
 
-Every ad format addresses its closing legal line to `DISCLAIMER_ROLE`. The
-parser normalizes decorated model output onto that token, while unrecognized
-roles retain the existing default-voice fallback. `_FORMAT_ROLES` remains the
-casting contract; formats without a dedicated disclaimer voice use their
-opening voice.
+**Only brands with lawyers carry fine print.** `brand_has_fine_print()` in
+`hosts/ad_creative.py` is a pure lookup: true when the brand's category is in
+`FINE_PRINT_CATEGORIES` (pharma, health, banking — the categories real radio
+actually buries a legal tail under), or when a campaign's owned character *is*
+the disclaimer voice. Over the shipped `radio.toml` that is 13.6% of spots,
+which at `ad_spots_per_break = 2` is roughly a quarter of ad breaks. There is no
+scheduler state, no cooldown and no randomness: the rate falls out of the brand
+inventory, so retuning it means editing one frozenset.
+
+The flag drives three things together, and they must never disagree: whether
+`DISCLAIMER_ROLE` appears in the prompt's SPEAKERS block, whether the JSON example
+asks for a fine-print line, and whether the format description carries
+`AD_FORMAT_DISCLAIMER_SUFFIX`. Listing the role without using it, or the reverse,
+is a self-contradicting prompt — the condition that previously made the model
+return roles the cast did not contain. For a brand with no fine print,
+`_cap_disclaimer_parts(..., allowed=False)` then removes any disclaimer the model
+wrote regardless; a script that is *entirely* fine print is demoted to the
+spot's own role instead, since for that brand the lines are simply ad copy.
+
+An earlier release said the opposite. Ad speed was originally scoped by ad format
+(`CHANGELOG.md [2.12.3]`), then #1129 made the tempo gate role-based so the fast
+tail reached every format — correctly fixing a real bug, and incidentally putting
+a rattle at the end of essentially every spot. This change keeps #1129's gate
+exactly as it is and moves the decision one level up, to which brands write fine
+print at all.
+
+The parser normalizes decorated model output onto the role token, while
+unrecognized roles retain the existing default-voice fallback. `_FORMAT_ROLES`
+remains the casting contract and is unchanged; formats without a dedicated
+disclaimer voice use their opening voice, and `classic_pitch` still casts a
+goblin that simply has no line when the brand carries no fine print.
 
 `audio/tts.py` applies `DISCLAIMER_TEMPO` through the existing `normalize()`
 FFmpeg pass on every engine. Internal breath gaps are removed before `atempo`,

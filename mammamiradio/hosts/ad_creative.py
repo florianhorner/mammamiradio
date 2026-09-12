@@ -169,10 +169,9 @@ class AdScript:
 
 AD_FORMATS: dict[str, str] = {
     AdFormat.CLASSIC_PITCH: (
-        "One aggressive announcer delivers the pitch, ending with a ultra-fast legal disclaimer. "
-        "Structure: hook -> build tension -> deliver the pitch -> DISCLAIMER_GOBLIN rattles off "
-        "the fine print at machine-gun speed. Two speakers: HAMMER sells it, DISCLAIMER_GOBLIN "
-        "buries the bad news. Confident, polished, slightly unhinged sincerity."
+        "One aggressive announcer delivers the pitch. "
+        "Structure: hook -> build tension -> deliver the pitch -> land the tagline. "
+        "HAMMER sells it. Confident, polished, slightly unhinged sincerity."
     ),
     AdFormat.TESTIMONIAL: (
         "A fake customer testimonial followed by an announcer button. Two speakers: "
@@ -203,6 +202,33 @@ AD_FORMATS: dict[str, str] = {
 
 # Shared prompt and TTS token for the fast fine-print line.
 DISCLAIMER_ROLE = "disclaimer_goblin"
+
+# Appended to a format description only for brands that carry fine print, so a
+# spot without it is never told to end on a rattle by its own format blurb.
+#
+# Names no character but the goblin. This rides on every format, and four of the
+# six do not cast a HAMMER -- late_night_whisper has only the seductress,
+# institutional_psa only the bureaucrat. A blurb naming a role the SPEAKERS block
+# does not list is the same self-contradiction that used to make the model return
+# roles the cast did not contain. Who sells the product is already stated by the
+# format's own text and by SPEAKERS.
+AD_FORMAT_DISCLAIMER_SUFFIX = (
+    " A second voice, DISCLAIMER_GOBLIN, closes the spot: it rattles off the legal "
+    "fine print at machine-gun speed and buries the bad news."
+)
+
+# Fine print is a brand trait, not a frequency budget. These are the categories
+# real radio actually buries a legal tail under: medicine, dental, banks. Over the
+# shipped radio.toml this is 13.6% of spots, which at ad_spots_per_break = 2 is
+# roughly 26% of ad breaks -- the axis a listener actually hears. Retune by editing
+# the set; "telecom" (phone contracts) and "finance" (insurance) are the next two in,
+# and adding both takes it to 22.7% of spots / 41% of breaks.
+#
+# Every member must also be a key of OFFICIAL_CATEGORY_SONIC_RECIPES. A category is
+# unvalidated free text defaulting to "general", so a typo here would silently mean
+# "no brand ever gets fine print"; the subset check in tests turns that into a red
+# test instead of a quietly missing gag.
+FINE_PRINT_CATEGORIES: frozenset[str] = frozenset({"pharma", "health", "banking"})
 
 SPEAKER_ROLES: dict[str, str] = {
     "hammer": "The Hammer: booming national TV voice, dramatic pauses, sells the apocalypse with a smile",
@@ -485,6 +511,30 @@ def compile_ad_cast(brands: list[AdBrand], voices: list[AdVoice]) -> AdCastRepor
 # ---------------------------------------------------------------------------
 # Selection helpers
 # ---------------------------------------------------------------------------
+
+
+def brand_has_fine_print(brand: AdBrand) -> bool:
+    """Whether this brand's ads close on the fast legal tail.
+
+    Pure: no history, no randomness, no station state. The rate a listener hears
+    falls out of the brand inventory rather than a scheduler decision, so it is
+    arithmetic rather than a simulation, and it reads as a brand trait -- the bank
+    always has lawyers, the pasta never does.
+
+    A campaign whose owned character *is* the goblin keeps its fine print whatever
+    its category: the SPEAKERS block would otherwise omit a role the prompt's own
+    spokesperson rule still demands, and the owned-fallback recovery would emit a
+    lone ``disclaimer_goblin`` part, airing an entire spot at disclaimer tempo.
+    """
+    if brand.category in FINE_PRINT_CATEGORIES:
+        return True
+    campaign = brand.campaign
+    if not campaign or not isinstance(campaign.spokesperson_role, str):
+        return False
+    # write_ad strips this before using it as direct_primary_role. Reading it raw
+    # here would let " disclaimer_goblin" answer False while the prompt still
+    # demands the role, which is the lone-goblin whole-spot-at-1.95x case above.
+    return campaign.spokesperson_role.strip() == DISCLAIMER_ROLE
 
 
 def _pick_brand(brands: list[AdBrand], ad_history: list[AdHistoryEntry]) -> AdBrand:
