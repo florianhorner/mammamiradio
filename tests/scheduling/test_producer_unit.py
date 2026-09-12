@@ -4208,6 +4208,41 @@ async def test_producer_records_interrupt_moment_dropped_when_bridge_is_unavaila
 
 
 @pytest.mark.asyncio
+async def test_producer_records_interrupt_moment_dropped_when_queue_drain_fails():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = _interrupt_lane_matches(now=480.0)
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._fire_interrupt",
+            new_callable=AsyncMock,
+            return_value="queue_drain_failed",
+        ),
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "interrupt_queue_drain_failed"
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
 async def test_producer_records_gag_moment_for_ritual_sourced_bucket_only():
     from mammamiradio.home.evening_memory import EveningLedger, GagBucket
 
