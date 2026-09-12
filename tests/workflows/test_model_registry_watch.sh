@@ -292,16 +292,95 @@ pass "list/create/comment/close errors fail the run without follow-up actions (7
 # Case 8: --report stays out of every PR and cut path. The checker's own contract:
 # a calendar gate on unrelated PRs gets bumped reflexively. Match invocations, not
 # mentions; comments explaining why it lives elsewhere must stay legal.
-for rel in .github/workflows/quality.yml scripts/pre-release-check.sh scripts/model-registry-gate.sh; do
-  [ -f "$REPO_ROOT/$rel" ] || continue
-  if grep -v '^[[:space:]]*#' "$REPO_ROOT/$rel" | grep -q -- 'check_model_registry.py --report'; then
-    fail "--report must not run on a PR or cut path ($rel); it belongs to the weekly workflow only"
-  fi
-done
-if awk '/^pre-release:/{inrecipe=1; next} /^[^\t]/{inrecipe=0} inrecipe' "$REPO_ROOT/Makefile" \
-   | grep -v '^[[:space:]]*#' | grep -q -- '--report'; then
-  fail "--report must not be in the make pre-release recipe"
-fi
+"$PYTHON_BIN" - "$REPO_ROOT" <<'PYEOF'
+import io, pathlib, shlex, sys, yaml
+
+class ShellInput(io.StringIO):
+    def readline(self, *args):
+        # shlex discards comments through readline(). Leave their newline as a
+        # command boundary, including when the comment ends in a backslash.
+        line = super().readline(*args)
+        if line.endswith('\n'):
+            self.seek(self.tell() - 1)
+        return line
+
+def has_report(command):
+    words = [word[1:-1] if word[:1] in ('"', "'") and word[-1:] == word[:1]
+             else word for word in command]
+    if not words or words[0] in ('echo', 'printf'):
+        return False
+    return '--report' in words and any(
+        word in ('check_model_registry.py', '$checker', '${checker}')
+        or word.endswith('/check_model_registry.py') for word in words
+    )
+
+def forbidden_report(source):
+    # A static guard for literal commands, not a Bash evaluator. Non-POSIX
+    # lexing preserves quoted strings and the explicit continuation token.
+    lexer = shlex.shlex(ShellInput(source), posix=False, punctuation_chars=';&|()\n')
+    lexer.whitespace = ' \t\r'
+    lexer.whitespace_split = True
+    command = []
+    for token in lexer:
+        if token.startswith('\n') and command[-1:] == ['\\']:
+            command.pop()
+            token = token[1:]
+            if not token:
+                continue
+        if token and all(char in ';&|()\n' for char in token):
+            if has_report(command):
+                return True
+            command = []
+        else:
+            command.append(token)
+    return has_report(command)
+
+reject = [
+    'python3 scripts/check_model_registry.py --report',
+    'python3 scripts/check_model_registry.py \\\n  --report',
+    'python3   "scripts/check_model_registry.py"   --report',
+    'python3 scripts/check_model_registry.py --today 2026-09-10 --report',
+    '"$python" "$checker" --report',
+    '# comment \\\npython3 scripts/check_model_registry.py --report',
+    yaml.safe_load('run: >-\n  python3 scripts/check_model_registry.py\n  --report\n')['run'],
+]
+allow = [
+    '# python3 scripts/check_model_registry.py --report',
+    '# comment \\\n',
+    'python3 other.py # scripts/check_model_registry.py --report',
+    'echo "python3 scripts/check_model_registry.py --report"',
+    "printf '%s\\n' 'python3 scripts/check_model_registry.py --report'",
+    '"$python" "$checker" --providers --gate liveness \\\n  "${args[@]}"',
+    'python3 scripts/check_model_registry.py --age # comment\nother --report',
+    *[f'python3 scripts/check_model_registry.py --age{sep}other --report'
+      for sep in ('\n', '; ', ' && ')],
+]
+for source in reject:
+    assert forbidden_report(source), f'guard missed a live report: {source!r}'
+for source in allow:
+    assert not forbidden_report(source), f'guard rejected a non-report: {source!r}'
+
+root = pathlib.Path(sys.argv[1])
+quality = yaml.safe_load((root / '.github/workflows/quality.yml').read_text())
+sources = [(f'quality.yml:{job_name}:{index}', step['run'])
+           for job_name, job in quality['jobs'].items()
+           for index, step in enumerate(job.get('steps', [])) if 'run' in step]
+for rel in ('scripts/pre-release-check.sh', 'scripts/model-registry-gate.sh'):
+    sources.append((rel, (root / rel).read_text()))
+recipe = []
+in_recipe = False
+for line in (root / 'Makefile').read_text().splitlines(keepends=True):
+    if line.startswith('pre-release:'):
+        in_recipe = True
+    elif in_recipe and line.startswith('\t'):
+        recipe.append(line)
+    elif line.strip():
+        in_recipe = False
+sources.append(('Makefile:pre-release', ''.join(recipe)))
+for name, source in sources:
+    assert not forbidden_report(source), f'--report must stay out of PR/cut paths: {name}'
+print(f'Checked {len(reject) + len(allow)} report-guard regression examples.')
+PYEOF
 pass "--report absent from the PR and cut paths"
 
 CASE_COUNT="$(grep -c '^pass ' "$0")"
