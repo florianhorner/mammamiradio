@@ -2062,9 +2062,6 @@ async def _listener_truth_guard(
     return repaired_lines, repaired_transition, True, transition_replaced
 
 
-# SFX assets (alert jingle used as interrupt bridge audio).
-_SFX_DIR = Path(__file__).resolve().parent.parent / "assets" / "sfx"
-
 # Global cooldown for interrupt firing — kept separate from per-entity
 # spec.cooldown so a timer configured with cooldown=300 doesn't suppress a
 # different timer's interrupt for 5 minutes.
@@ -4502,9 +4499,10 @@ async def _fire_interrupt(
 ) -> bool:
     """Immediately interrupt the stream with bridge audio + pissed banter.
 
-    Uses alert.mp3 or a packaged emergency tone as a bridge clip, drains
-    the lookahead queue so no buffered music plays between bridge and banter,
-    injects the directive, and fires skip_event to cut the current segment.
+    Uses the manifest-validated packaged emergency tone as the bridge clip,
+    drains the lookahead queue, injects the directive, and fires ``skip_event``
+    to cut the current segment. Every interrupt source uses the same packaged
+    tone regardless of ``spec.urgency``. Failed validation preserves playback.
 
     Returns True if the interrupt fired, False if suppressed by the global
     cooldown gate. Per-entity cooldowns are enforced upstream by
@@ -4522,6 +4520,13 @@ async def _fire_interrupt(
                 int(_GLOBAL_INTERRUPT_COOLDOWN_SECONDS - elapsed),
             )
             return False
+    # Validate the replacement before changing cooldown, continuity, or prior
+    # interrupt state. An unavailable bridge must leave playback untouched.
+    emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
+    if not is_approved_packaged_audio_asset(emergency_tone, assets_root=_DEMO_ASSETS_DIR):
+        logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
+        return False
+
     state.last_interrupt_ts = now
 
     # Release any bridge clip a prior interrupt generated but never played.
@@ -4540,23 +4545,9 @@ async def _fire_interrupt(
     # serve stale control audio between that bridge and the urgent banter.
     state.continuity_slot = None
 
-    # Commit an immediate bridge before touching the ready queue. This contains
-    # no await and therefore cannot expose a drained queue to playback. The
-    # packaged tone is intentionally used rather than waiting for FFmpeg tone
-    # generation on a loaded Home Assistant Green.
-    alert_sfx = _SFX_DIR / "alert.mp3"
-    emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
-    if alert_sfx.exists():
-        state.interrupt_slot = alert_sfx
-    elif is_approved_packaged_audio_asset(emergency_tone, assets_root=_DEMO_ASSETS_DIR):
-        state.interrupt_slot = emergency_tone
-    else:
-        # No bridge audio at all: hard-cutting here would drain the queue and
-        # fire skip_event with nothing to air, opening dead air until banter
-        # renders. Preserve whatever is already queued and abort the interrupt
-        # instead of breaking the illusion (INSTANT AUDIO).
-        logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
-        return False
+    # Commit the bridge before touching the ready queue. This synchronous step
+    # cannot expose a drained queue to playback.
+    state.interrupt_slot = emergency_tone
     state.interrupt_slot_source = directive_source
     if _home_owned_directive_source(directive_source):
         # Blank or unknown provenance fails closed as Home-owned, matching the

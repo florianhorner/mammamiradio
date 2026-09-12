@@ -435,6 +435,24 @@ This is a Music Assistant player setting; nothing changes on the station side.
 The station's own **On-Air Sound** dial is a separate FM colouring, off by
 default, so it is not what you are hearing.
 
+## A song cut off and an alarm beep played
+
+The retired `safety_saves` recipe could treat an ordinary door transition as an
+urgent radio interrupt. That path cut the song and played the emergency bridge
+before a host explanation was ready. Mamma Mi Radio no longer turns safety
+sensors or doors into ritual moments. Use Home Assistant automations for safety
+alerts.
+
+Configured timers can still interrupt the station. Add each timer with a
+`[[homeassistant.timer_interrupt]]` block in `radio.toml`. Direct and Home
+Assistant automation callers can use the admin-authenticated
+`POST /api/interrupt` endpoint. Both paths use the packaged emergency tone.
+Other household moments continue as host talk at a natural break.
+
+Pre-upgrade "Safety moment" receipts may remain visible in the Casa strip and
+the admin Home-moments panel for up to seven days. The station reads those
+receipts as plain text and cannot create new ones. No operator action is needed.
+
 ## Home Assistant references never show up
 
 Check:
