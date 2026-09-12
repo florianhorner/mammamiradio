@@ -432,11 +432,7 @@ jobs:
     needs: quality
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
-      # The write scope below cannot currently succeed: the require-pull-request
-      # ruleset has no bypass actor for github-actions[bot], so the push is always
-      # rejected. Kept rather than narrowed to read, because the documented durable
-      # fix is a bypass actor or a GitHub App token, and the push attempt is what
-      # would detect that it became possible.
+      # Only this main-only job may push computed floors and manage their issues.
       contents: write
       issues: write
     steps:
@@ -450,21 +446,8 @@ jobs:
         with:
           name: coverage-ratchet-current
 
-      # On main: auto-ratchet floors up and commit if changed.
-      # The coverage numbers come from the read-only tests job artifact, so
-      # only this commit step needs a write-capable token.
-      # Raise the floors and try to land them. The push is expected to fail: the
-      # `require-pull-request-before-merging` ruleset on `main` has exactly one
-      # bypass actor (Admin, `bypass_mode: pull_request`), so no direct push
-      # succeeds for anyone, bot or human. A bot-opened PR does not help either —
-      # commits pushed with GITHUB_TOKEN trigger no workflows, so the three
-      # required contract-drift checks would never report and the PR could never
-      # merge.
-      #
-      # So the push stays best-effort, but the skip is no longer swallowed into a
-      # log nobody reads: a failure opens one tracked issue and keeps it open
-      # until the floors actually land. That is the whole point of this step —
-      # a mechanism that reports to nobody is not a mechanism.
+      # Compute from the read-only tests job's artifact. A failed push is reported
+      # separately from a failed computation; its diagnostic stays in the job log.
       - name: Coverage ratchet (auto-update floors)
         id: ratchet
         env:
@@ -474,7 +457,7 @@ jobs:
           python scripts/coverage-ratchet.py update
 
           if git diff --quiet .coverage-floors.json pyproject.toml; then
-            echo "landed=true" >> "$GITHUB_OUTPUT"
+            echo "landed=unchanged" >> "$GITHUB_OUTPUT"
             echo "Floors already current; nothing to raise."
             exit 0
           fi
@@ -490,15 +473,20 @@ jobs:
 
           if git push; then
             echo "landed=true" >> "$GITHUB_OUTPUT"
+            echo "pushed_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
             echo "landed=false" >> "$GITHUB_OUTPUT"
             echo "Push rejected; the drift will be reported as an issue."
           fi
 
       - name: Report unlanded coverage floors
-        if: always() && steps.ratchet.outcome != 'cancelled'
+        if: always() && !cancelled()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          PUSHED_SHA: ${{ steps.ratchet.outputs.pushed_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LANDED: ${{ steps.ratchet.outputs.landed }}
           RATCHET_OUTCOME: ${{ steps.ratchet.outcome }}
           TITLE: "Coverage floors are stale: the auto-ratchet cannot land them"
@@ -506,85 +494,89 @@ jobs:
           CRASH_TITLE: "The coverage ratchet step failed before it could report"
           CRASH_LABEL: "coverage-ratchet-broken"
         run: |
-          # Literal markdown below (backticks are code fences, not command
-          # substitution), same convention as advertised-version.yml.
+          # Markdown below is literal, including backticks and token names.
           set -euo pipefail
 
-          # A crashed ratchet step must NOT be reported as branch protection. If
-          # `coverage-ratchet.py update` throws, `set -e` aborts that step before it
-          # writes `landed`, and this step still runs because `always()` only
-          # excludes `cancelled`. Reading an unset `landed` as "push rejected" would
-          # file an issue asserting a cause that is not the cause, which is the same
-          # untrustworthy-report failure this whole step exists to remove.
-          if [ "${RATCHET_OUTCOME:-}" != "success" ]; then
-            CRASH_EXISTING="$(gh issue list --state open --label "$CRASH_LABEL" --limit 100 \
-              --json number --jq '[.[].number] | first // empty')"
+          # Old reruns and queued snapshots cannot resolve or create current alerts.
+          CURRENT_MAIN="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')"
+          if [ "$CURRENT_MAIN" != "$SOURCE_SHA" ] && \
+            { [ "${LANDED:-}" != "true" ] || [ "$CURRENT_MAIN" != "${PUSHED_SHA:-}" ]; }; then
+            echo "A newer main commit exists; leaving tracking issues unchanged."
+            exit 0
+          fi
+
+          # List repository issues by label without using the search index.
+          # GH_REPO also permits reporting when checkout failed or was skipped.
+          CRASH_EXISTING="$(gh issue list --state open --label "$CRASH_LABEL" --limit 100 \
+            --json number --jq '[.[].number] | first // empty')"
+
+          # Failed/skipped computation and missing outputs leave floor state
+          # unknown. None of these proves that a push was rejected.
+          if [ "${RATCHET_OUTCOME:-}" != "success" ] || \
+            { [ "${LANDED:-}" != "true" ] && [ "${LANDED:-}" != "false" ] && \
+              [ "${LANDED:-}" != "unchanged" ]; }; then
             if [ -n "$CRASH_EXISTING" ]; then
               echo "Ratchet failure already tracked in #$CRASH_EXISTING."
               exit 0
             fi
             gh label create "$CRASH_LABEL" \
               --description "the coverage ratchet step failed before reporting" \
-              --color D93F0B 2>&1 | tail -1 || true
+              --color D93F0B --force
             CRASH_BODY="$RUNNER_TEMP/coverage-ratchet-crash.md"
+            # shellcheck disable=SC2016
             {
               printf '%s\n' 'The coverage ratchet step did not finish, so whether the floors are current'
-              printf '%s\n\n' 'is unknown. This is not the branch-protection case.'
-              printf '%s\n' "Step outcome: \`${RATCHET_OUTCOME:-unset}\`. Read the job log for the"
-              printf '%s\n\n' 'traceback; `scripts/coverage-ratchet.py update` is the likely source.'
-              printf '%s\n' 'Until this is fixed the ratchet reports nothing, which is how it sat dead'
-              printf '%s\n' 'from 2026-04-15: a failure that reaches no human is the actual defect.'
+              printf '%s\n\n' 'is unknown. This does not establish a push failure or its cause.'
+              printf 'Step outcome: `%s`. Reported floor state: `%s`.\n\n' \
+                "${RATCHET_OUTCOME:-unset}" "${LANDED:-unset}"
+              printf 'Inspect the failed or skipped steps in [the workflow run](%s).\n\n' "$RUN_URL"
+              printf '%s\n' 'This issue closes after a later run computes a valid floor result.'
             } > "$CRASH_BODY"
             gh issue create --title "$CRASH_TITLE" --label "$CRASH_LABEL" --body-file "$CRASH_BODY"
             exit 0
           fi
 
-          # Strongly-consistent REST list, not --search: the search index lags and
-          # would let a second push file a duplicate. Match the label, not the
-          # title, so a human editing the title cannot orphan the issue.
+          if [ -n "$CRASH_EXISTING" ]; then
+            gh issue close "$CRASH_EXISTING" \
+              --comment "The ratchet computed a valid floor result again. Details: $RUN_URL"
+          fi
+
           EXISTING="$(gh issue list --state open --label "$LABEL" --limit 100 \
             --json number --jq '[.[].number] | first // empty')"
 
-          if [ "${LANDED:-}" = "true" ]; then
-            if [ -n "$EXISTING" ]; then
-              gh issue close "$EXISTING" \
-                --comment "Coverage floors landed on \`main\` again. Closing automatically."
-            else
-              echo "Floors are current; nothing to report."
-            fi
-            exit 0
-          fi
-
           if [ -n "$EXISTING" ]; then
-            echo "Already tracked in #$EXISTING; not opening a duplicate."
+            # Today's result cannot prove an earlier, possibly higher candidate
+            # landed. Resolve that issue through its reviewed floor-update PR.
+            echo "Already tracked in #$EXISTING; keep it open until its candidate is verified."
             exit 0
           fi
 
-          # Idempotent: succeeds the first time, harmless every time after.
-          # Idempotent, but surface the reason rather than discarding it: an auth or
-          # rate-limit failure here would otherwise only show up as a confusing
-          # `gh issue create` error on the next line.
+          if [ "$LANDED" != "false" ]; then
+            echo "This snapshot has no unlanded increases; nothing to report."
+            exit 0
+          fi
+
+          # Ensure the label idempotently; permission/API failures must fail the job.
           gh label create "$LABEL" \
             --description "coverage floors computed on main could not be committed" \
-            --color B60205 2>&1 | tail -1 || true
+            --color B60205 --force
 
           BODY="$RUNNER_TEMP/coverage-ratchet-issue.md"
+          # shellcheck disable=SC2016
           {
             printf '%s\n' 'Coverage rose on `main`, but the raised floors could not be committed, so the'
             printf '%s\n' 'ratchet is not protecting the new level. Coverage can fall back to the stale'
             printf '%s\n\n' 'floors without failing any pull request.'
-            printf '%s\n' 'This is expected mechanically, not a transient error: the'
-            printf '%s\n' '`require-pull-request-before-merging` ruleset allows no direct push to `main`'
-            printf '%s\n' 'by anyone, and a PR opened with `GITHUB_TOKEN` triggers no workflows, so the'
-            printf '%s\n\n' 'required contract-drift checks would never report on it.'
-            printf '%s\n' '**Fix (one minute):** run `make coverage-ratchet` locally, then open a PR with'
-            printf '%s\n\n' 'the result. The floors this run computed:'
+            printf 'The push did not succeed. Inspect its diagnostic in [the workflow run](%s).\n\n' "$RUN_URL"
+            printf '%s\n' 'Branch protection, authentication, network errors, or a newer remote commit'
+            printf '%s\n\n' 'can prevent a push. This report does not determine which occurred.'
+            printf '%s\n' '**Fix:** run `make coverage-ratchet` locally, then open a PR with'
+            printf '%s\n' 'the result. Verify the increases below and include `Fixes #<this issue number>`'
+            printf '%s\n\n' 'in that PR to close this report when it lands. The floors this run computed:'
             printf '%s\n' '```diff'
             cat "$RUNNER_TEMP/floors.diff" 2>/dev/null || printf '%s\n' '(diff unavailable)'
             printf '%s\n\n' '```'
-            printf '%s\n' 'This issue closes itself once floors land on `main` again. If it keeps coming'
-            printf '%s\n' 'back, the durable fixes are a GitHub App token that can open a PR which does'
-            printf '%s\n' 'trigger CI, or a ruleset bypass actor for the bot — both widen write access to'
-            printf '%s\n' '`main`, so they are a deliberate decision, not a drive-by.'
+            printf '%s\n' 'A later run needing no increase does not close this issue: coverage may have'
+            printf '%s\n' 'fallen back before the reported floor increase was committed.'
           } > "$BODY"
           gh issue create --title "$TITLE" --label "$LABEL" --body-file "$BODY"
