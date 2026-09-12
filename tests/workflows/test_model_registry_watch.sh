@@ -293,20 +293,39 @@ pass "list/create/comment/close errors fail the run without follow-up actions (7
 # a calendar gate on unrelated PRs gets bumped reflexively. Match invocations, not
 # mentions; comments explaining why it lives elsewhere must stay legal.
 "$PYTHON_BIN" - "$REPO_ROOT" <<'PYEOF'
-import io, pathlib, shlex, sys, yaml
+import pathlib, shlex, sys, yaml
 
-class ShellInput(io.StringIO):
-    def readline(self, *args):
-        # shlex discards comments through readline(). Leave their newline as a
-        # command boundary, including when the comment ends in a backslash.
-        line = super().readline(*args)
-        if line.endswith('\n'):
-            self.seek(self.tell() - 1)
-        return line
+def fold_shell_lines(source):
+    # Delete shell continuations before tokenizing, even inside a word. Preserve
+    # single-quoted text and escaped backslashes. Comments retain their newline
+    # boundary: a backslash at the end of a comment does not continue that line.
+    result, quote, in_word, index = [], None, False, 0
+    while index < len(source):
+        char = source[index]
+        if char == '#' and quote is None and not in_word:
+            newline = source.find('\n', index)
+            index = newline if newline >= 0 else len(source)
+            continue
+        if char == '\\' and quote != "'" and index + 1 < len(source):
+            escaped = source[index + 1]
+            if escaped != '\n':
+                result.extend((char, escaped))
+                in_word = True
+            index += 2
+            continue
+        if char in ('"', "'"):
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+            in_word = True
+        elif quote is None:
+            in_word = char not in ' \t\r\n;&|()'
+        result.append(char)
+        index += 1
+    return ''.join(result)
 
-def has_report(command):
-    words = [word[1:-1] if word[:1] in ('"', "'") and word[-1:] == word[:1]
-             else word for word in command]
+def has_report(words):
     if not words or words[0] in ('echo', 'printf'):
         return False
     return '--report' in words and any(
@@ -315,18 +334,14 @@ def has_report(command):
     )
 
 def forbidden_report(source):
-    # A static guard for literal commands, not a Bash evaluator. Non-POSIX
-    # lexing preserves quoted strings and the explicit continuation token.
-    lexer = shlex.shlex(ShellInput(source), posix=False, punctuation_chars=';&|()\n')
+    # A static guard for literal commands, not a Bash evaluator. YAML folding
+    # and shell continuations are resolved before matching command arguments.
+    lexer = shlex.shlex(fold_shell_lines(source), posix=True, punctuation_chars=';&|()\n')
     lexer.whitespace = ' \t\r'
     lexer.whitespace_split = True
+    lexer.commenters = ''  # comments were removed without losing newlines above
     command = []
     for token in lexer:
-        if token.startswith('\n') and command[-1:] == ['\\']:
-            command.pop()
-            token = token[1:]
-            if not token:
-                continue
         if token and all(char in ';&|()\n' for char in token):
             if has_report(command):
                 return True
@@ -338,6 +353,9 @@ def forbidden_report(source):
 reject = [
     'python3 scripts/check_model_registry.py --report',
     'python3 scripts/check_model_registry.py \\\n  --report',
+    'python3 scripts/check_model_registry.py\\\n  --report',
+    'python3 scripts/check_model_registry.py --re\\\nport',
+    'python3 "scripts/check_model_\\\nregistry.py" --report',
     'python3   "scripts/check_model_registry.py"   --report',
     'python3 scripts/check_model_registry.py --today 2026-09-10 --report',
     '"$python" "$checker" --report',
@@ -347,6 +365,8 @@ reject = [
 allow = [
     '# python3 scripts/check_model_registry.py --report',
     '# comment \\\n',
+    'python3 scripts/check_model_registry.py \\\\\nother --report',
+    "echo 'scripts/check_model_registry.py \\\n--report'",
     'python3 other.py # scripts/check_model_registry.py --report',
     'echo "python3 scripts/check_model_registry.py --report"',
     "printf '%s\\n' 'python3 scripts/check_model_registry.py --report'",
