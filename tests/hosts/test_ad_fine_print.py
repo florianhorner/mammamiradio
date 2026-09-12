@@ -235,14 +235,20 @@ async def test_no_fine_print_brand_never_hears_the_role(config, state, ad_format
 
 
 @pytest.mark.asyncio
-async def test_a_fine_print_brand_still_gets_the_whole_apparatus(config, state):
+@pytest.mark.parametrize("campaign_owned", [False, True])
+async def test_a_fine_print_brand_still_gets_the_whole_apparatus(config, state, campaign_owned):
     captured = {}
 
     async def _capture(prompt, **kwargs):
         captured["prompt"] = prompt
         return {"parts": [{"type": "voice", "text": "Copy.", "role": "hammer"}]}
 
-    brand = AdBrand(name="Bancone", tagline="T", category=FINE_PRINT_CATEGORY)
+    brand = AdBrand(
+        name="Bancone",
+        tagline="T",
+        category=NO_FINE_PRINT_CATEGORY if campaign_owned else FINE_PRINT_CATEGORY,
+        campaign=CampaignSpine(spokesperson_role=f" {DISCLAIMER_ROLE} ") if campaign_owned else None,
+    )
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
         await write_ad(brand, _voices("classic_pitch"), state, config, ad_format="classic_pitch")
 
@@ -654,10 +660,10 @@ def test_the_capper_tolerates_a_non_string_text():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("category", [NO_FINE_PRINT_CATEGORY, "pharma"])
-async def test_a_dropped_fine_print_does_not_retire_the_callback_gag(config, state, category):
-    """The model may bury the gag inside the fine print. Dropping that line means
-    the gag never aired, so it must stay in the ledger for another try."""
+@pytest.mark.parametrize("category", [NO_FINE_PRINT_CATEGORY, "pharma", FINE_PRINT_CATEGORY])
+async def test_callback_retirement_tracks_whether_the_fine_print_survives(config, state, category):
+    """A gag buried in the fine print stays pending when its line is removed,
+    and retires when that line survives."""
     brand = AdBrand(name="Testo", tagline="T", category=category)
     voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
     mock = AsyncMock(
@@ -674,4 +680,4 @@ async def test_a_dropped_fine_print_does_not_retire_the_callback_gag(config, sta
         await write_ad(brand, voices, state, config, ad_format="classic_pitch", callback_gag="the missing goat")
 
     assert mock.await_count == 1
-    assert not state.pending_callback_landed, "a gag that was dropped with the fine print was retired anyway"
+    assert state.pending_callback_landed is (category == FINE_PRINT_CATEGORY)
