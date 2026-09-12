@@ -9,18 +9,30 @@ name: Model registry watch
 # This job is deliberately NOT a PR check: a calendar assertion on unrelated PRs
 # gets bumped reflexively, which is the failure the review stamp exists to prevent.
 #
-# Issue posture is cloned from advertised-version.yml, with one deliberate change.
-# There, an unreachable registry leaves the issue alone, because addon-release.yml
-# is the loud primary detector and a blip must not close a live drift issue. Here
-# --report IS the only detector, and its own contract says a broken scraper must
-# never look green. So exit 2 (docs unreadable, parser lost its anchors) opens or
-# keeps the issue too, with a body that says the watcher itself needs attention.
-# The cost is a weekly issue during a provider-docs outage; it closes itself on
-# the next clean run. The alternative is a watcher that dies silently.
+# Issue posture is cloned from advertised-version.yml, with two deliberate changes
+# and one mechanical one.
 #
-#   exit 0  clean           -> close any open watch issue
-#   exit 1  a finding       -> open the issue, or comment this week's report on it
-#   exit 2  watcher broken  -> same, with a body that names the watcher, not a pin
+# First: a broken watcher files an issue. In the parent, an unreachable registry
+# leaves the issue alone, because addon-release.yml is the loud primary detector
+# and a blip must not close a live drift issue. Here --report IS the only detector,
+# and its own contract says a broken scraper must never look green. So a run that
+# cannot read the provider docs opens or keeps the issue too, with a body and a
+# title that name the watcher rather than a pin. The cost is one comment per bad
+# Monday during a docs outage; it closes itself on the next clean run.
+#
+# Second: an already-open issue gets this week's report as a comment. The parent
+# only notes "already tracked". A nag that goes quiet after the first week is not
+# a nag, and the comment is how a two-month-old finding stays visible.
+#
+# Mechanical: the verdict is read from the exit code plus the report's own
+# headers, because the checker has no VERDICT line. A crash before the checker's
+# main() (an interpreter without tomllib, a syntax error) also exits 1, with a
+# traceback and no report; that is filed as the watcher being broken, never as a
+# pin finding with a traceback for evidence.
+#
+#   clean            -> close any open watch issue
+#   a finding        -> open the issue, or comment this week's report on it
+#   watcher broken   -> same, with a body and title that name the watcher
 
 on:
   schedule:
@@ -38,6 +50,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # A fork running this by workflow_dispatch would file an issue on the fork about
     # someone else's registry.
     if: github.repository == 'florianhorner/mammamiradio'
@@ -59,9 +72,11 @@ jobs:
           RC=$?
           set -e
           echo "$OUTPUT"
+          # Exit 1 is a finding only if a report was actually rendered. Every
+          # report carries at least one '== ' section header; a traceback has none.
           case "$RC" in
             0) VERDICT=pass ;;
-            1) VERDICT=fail ;;
+            1) if printf '%s\n' "$OUTPUT" | grep -q '^== '; then VERDICT=fail; else VERDICT=broken; fi ;;
             *) VERDICT=broken ;;
           esac
           {
@@ -77,7 +92,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERDICT: ${{ steps.report.outputs.verdict }}
           DETAIL: ${{ steps.report.outputs.output }}
-          TITLE: "Model registry needs a decision"
           LABEL: "model-registry-watch"
         run: |
           # The single-quoted printf args below are literal markdown; the backticks
@@ -102,21 +116,23 @@ jobs:
 
           BODY="$RUNNER_TEMP/model-registry-watch.md"
           if [ "$VERDICT" = "broken" ]; then
+            TITLE="Model registry watch cannot read the provider docs"
             {
               printf '%s\n\n' 'The weekly model registry watch could not read the provider documentation, so it cannot say whether the pinned models are still current.'
               printf '%s\n' '```'
               printf '%s\n' "$DETAIL"
               printf '%s\n\n' '```'
-              printf '%s\n' '**Fix:** run `python scripts/check_model_registry.py --providers` locally. If it fails the same way, the provider pages changed shape and the parser in `scripts/check_model_registry.py` needs its anchors updated. If it passes locally, this was a transient outage and the next weekly run closes this on its own.'
+              printf '%s\n' '**Fix:** run `python scripts/check_model_registry.py --providers` locally. If it fails the same way, the provider pages changed shape and the parser in `scripts/check_model_registry.py` needs updating to match the new page layout. If it passes locally, the pages were briefly unreachable and the next weekly run closes this on its own.'
             } > "$BODY"
           else
+            TITLE="Model registry needs a decision"
             {
               printf '%s\n\n' 'The weekly model registry watch found something to decide: a pinned model is no longer current at its provider, or `model_registry.toml` has not been reviewed in over 45 days.'
               printf '%s\n' '```'
               printf '%s\n' "$DETAIL"
               printf '%s\n\n' '```'
               printf '%s\n' '**Fix:** run `python scripts/check_model_registry.py --providers`, decide each flagged pin (bump it or deliberately hold it), then set `last_reviewed` in `model_registry.toml` to today and say which in the comment beside it. Holding is a valid decision; an undated one is not.'
-              printf '%s\n\n' 'This is the weekly half of the watch. The release cut runs the same check for age and liveness and refuses to cut on a stale stamp.'
+              printf '%s\n\n' 'The release cut runs the same check and refuses to cut on a stale stamp, so deciding now saves a red cut later.'
             } > "$BODY"
           fi
           printf '%s\n' 'This issue closes itself once a weekly run comes back clean.' >> "$BODY"
@@ -126,8 +142,11 @@ jobs:
             echo "Updated #$EXISTING with this week's report."
             exit 0
           fi
-          # Idempotent: succeeds the first time, harmless every time after.
-          gh label create "$LABEL" \
+          # --force updates an existing label instead of erroring, which makes this
+          # idempotent without swallowing a real failure: if the token cannot manage
+          # labels, the run goes red here with gh's own message rather than one line
+          # later on a missing label.
+          gh label create "$LABEL" --force \
             --description "model_registry.toml has a pin that is not current or a review stamp older than 45 days" \
-            --color B60205 2>/dev/null || true
+            --color B60205
           gh issue create --title "$TITLE" --label "$LABEL" --body-file "$BODY"

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **The hosts move to the Claude 5 generation (Opus 5, Sonnet 5)**, the cost counter uses current prices, and the balanced profile gets cheaper.
+- **The hosts move to the Claude 5 generation.** Opus 5 and Sonnet 5 write the show, the cost counter uses current prices, and the balanced profile's Claude hosts cost less than before.
 - **First Listen opens in English.** The Admin station opening uses recorded Marco/Giulia voices; ordinary listener playback keeps its existing Italian opening. Maintainers can regenerate just the welcome or Admin opening, with retained-pack checks before synthesis and staged publication with rollback.
 
 - **Your own music stops waiting behind the whole starter bag.** When your files and the bundled starter songs share a playlist, the station used to play the starter bag in order and only reach your music once it was exhausted. Both are now picked together, with your own songs weighted twice as heavily, so how often you hear them grows with how many you have added. A playlist of starter songs alone still plays its bag in order without early repeats, and the recovery that fills an empty queue still reaches for a starter song, so fixing the mix cannot cost you a bundled track when the station needs one.
