@@ -631,6 +631,83 @@ CD_OTHER_REPO='cd /Users/florianhorner/repos/gh-workflows && gh pr create --fill
   || fail "known gap changed: a cd-ed flagless create is no longer judged here"
 pass "known gap: a cd-ed flagless create is still judged against this checkout"
 
+# --- Regressions for three bypasses three review bots found independently.
+# --- Each let the guard stand aside for a PR that really lands in THIS repo.
+
+# A newline is a command separator. The tokenizer folded it into whitespace and
+# the argv scan stopped only on ;&| , so a local flagless command absorbed the
+# NEXT command's foreign target and the whole call read as out of scope.
+NEWLINE_BYPASS='gh pr create --fill
+gh pr create --repo florianhorner/gh-workflows --fill'
+[ "$(verdict "$(payload "$NEWLINE_BYPASS")" "$DUMMY")" = deny ] \
+  || fail "a newline must separate commands; a local create must not absorb the next target"
+pass "a newline separates commands"
+
+# Reversed order, same shape.
+NEWLINE_BYPASS_REV='gh pr create --repo florianhorner/gh-workflows --fill
+gh pr create --fill'
+[ "$(verdict "$(payload "$NEWLINE_BYPASS_REV")" "$DUMMY")" = deny ] \
+  || fail "a local create on a later line must still be judged"
+pass "a local create on a later line is judged"
+
+# A backslash continues the line, as the shell does, so this really is ONE
+# foreign command and stays out of scope.
+CONTINUED='gh pr create --repo florianhorner/gh-workflows \
+  --title x --body y'
+[ "$(verdict "$(payload "$CONTINUED")" "$DUMMY")" = allow ] \
+  || fail "a backslash-continued foreign command is still one command"
+pass "a backslash continues the line"
+
+# Two genuinely foreign commands on separate lines are still out of scope: the
+# rule is "every command is foreign", and newline handling must not break that.
+BOTH_FOREIGN_LINES='gh pr create --repo florianhorner/gh-workflows --fill
+gh pr create -R florianhorner/engineering-standards --fill'
+[ "$(verdict "$(payload "$BOTH_FOREIGN_LINES")" "$DUMMY")" = allow ] \
+  || fail "all-foreign commands on separate lines are still out of scope"
+pass "all-foreign separate lines stay out of scope"
+
+# Every value-taking flag must consume its value. Otherwise the value itself is
+# read as an option: the CLI treats "--repo=..." as the label, lands the PR
+# here, and the guard saw a foreign target.
+for consuming in --assignee -a --label -l --milestone -m --project -p \
+                 --reviewer -r --template -T --head -H --recover --base -B
+do
+  CONSUMED="gh pr create --fill $consuming --repo=florianhorner/gh-workflows"
+  [ "$(verdict "$(payload "$CONSUMED")" "$DUMMY")" = deny ] \
+    || fail "$consuming must consume its value, not leak it as the target"
+done
+pass "every value-taking flag consumes its value"
+
+# Boolean flags must NOT consume the next token, or a real target goes unread.
+for boolean in --draft -d --fill-first --fill-verbose --web -w --dry-run --editor -e
+do
+  BOOLEAN_THEN_REPO="gh pr create $boolean --repo florianhorner/gh-workflows"
+  [ "$(verdict "$(payload "$BOOLEAN_THEN_REPO")" "$DUMMY")" = allow ] \
+    || fail "$boolean must not swallow the following --repo"
+done
+pass "boolean flags do not swallow the target"
+
+# A local clone names no owner/repo, so the origin is UNKNOWN and the guard must
+# stay on. Reducing it to its last two path segments made it mismatch its own
+# --repo and switched the guard off for its own repo.
+LOCAL_ORIGIN="$TMPDIR_T/local-origin"
+mkdir -p "$LOCAL_ORIGIN"
+git -C "$LOCAL_ORIGIN" init -q .
+git -C "$LOCAL_ORIGIN" -c core.hooksPath=/dev/null -c user.email=t@t.test -c user.name=t \
+  commit -q --allow-empty -m "chore: base"
+for local_url in "file://$TMPDIR_T/mammamiradio" "$TMPDIR_T/mammamiradio" "../mammamiradio"
+do
+  git -C "$LOCAL_ORIGIN" remote remove origin 2>/dev/null || true
+  git -C "$LOCAL_ORIGIN" remote add origin "$local_url"
+  LOCAL_OUT="$( (cd "$LOCAL_ORIGIN" \
+    && payload 'gh pr create --repo florianhorner/mammamiradio --fill' \
+    | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
+      bash "$HOOK") 2>/dev/null || true)"
+  printf '%s' "$LOCAL_OUT" | grep -q '"permissionDecision":"deny"' \
+    || fail "a local origin ($local_url) names no owner/repo and must keep the guard on"
+done
+pass "a local or file:// origin keeps the guard on"
+
 # The total is computed, not typed: a hand-maintained count drifted to 47 against
 # 44 real cases on the first pass, and a summary nobody can verify is decoration.
 CASE_COUNT="$(grep -c '^pass ' "$0")"

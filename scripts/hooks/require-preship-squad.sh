@@ -142,8 +142,19 @@ printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+cre
 #
 # Word-splitting $cmd loses quoting, so `--body 'see --base foo'` would hand back
 # `foo`. Tokenize the way the shell would, isolate each matched command's argv,
-# stop at a shell operator, and step over option VALUES so prose is never
-# scanned. Unbalanced quotes print nothing.
+# stop at a shell operator OR A NEWLINE, and step over option VALUES so prose is
+# never scanned. Unbalanced quotes print nothing.
+#
+# The newline half was a bypass. shlex with whitespace_split folds a newline into
+# whitespace, and the argv scan stopped only on `;&|`, so in
+#
+#     gh pr create --fill
+#     gh pr create --repo other/repo --fill
+#
+# the FIRST (local, flagless) command absorbed the second command's target, both
+# records read foreign, and the guard stood aside for a local PR. Three review
+# bots found it independently. Commands are therefore split per line first; a
+# trailing backslash still continues a line, as the shell does.
 #
 #   option <name>  first opening command, first match -- the pre-existing --base
 #                  behaviour, unchanged and differentially verified against it.
@@ -159,19 +170,39 @@ printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+cre
 #                      one behind `&&`.
 gh_create_args() {
   printf '%s' "$cmd" | ARG_MODE="$1" ARG_NAME="${2:-}" python3 -c '
-import os, shlex, sys
+import os, re, shlex, sys
 
 mode = os.environ["ARG_MODE"]
 name = os.environ.get("ARG_NAME", "")
-try:
-    lexer = shlex.shlex(sys.stdin.read(), posix=True, punctuation_chars=";&|")
-    lexer.whitespace_split = True
-    lexer.commenters = "#"
-    tokens = list(lexer)
-except ValueError:
-    sys.exit(0)          # unbalanced quotes: let the caller default stand
+raw = sys.stdin.read()
+# A newline ends a command; a backslash-newline does not.
+raw = re.sub(r"\\\n", " ", raw)
+tokens = []
+for line in raw.split("\n"):
+    if not line.strip():
+        continue
+    try:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        line_tokens = list(lexer)
+    except ValueError:
+        sys.exit(0)      # unbalanced quotes: let the caller default stand
+    if tokens:
+        tokens.append(";")   # the newline itself, as the operator it is
+    tokens.extend(line_tokens)
 
-SKIP = {"--body", "--title", "-b", "-t", "--body-file", "-F"}
+# Every value-taking flag of the opening command, long and short, verified
+# against its own --help. A flag missing from this set lets its VALUE be read as
+# an option: "--label --repo=other/repo" made the scan report a foreign target
+# while the CLI landed the PR here. Boolean flags (--draft, --fill, --web, ...)
+# are deliberately absent. The "--flag=value" form is one token and consumes
+# nothing, so only an exact bare match skips the next token.
+SKIP = {
+    "--assignee", "-a", "--base", "-B", "--body", "-b", "--body-file", "-F",
+    "--head", "-H", "--label", "-l", "--milestone", "-m", "--project", "-p",
+    "--recover", "--reviewer", "-r", "--template", "-T", "--title", "-t",
+}
 
 
 def is_operator(tok):
@@ -263,6 +294,30 @@ norm_repo() {
     | tr '[:upper:]' '[:lower:]'
 }
 
+# Canonical owner/repo for the CHECKOUT, or empty when this remote does not name
+# a hosted repository at all.
+#
+# norm_repo alone reduces any string with two path segments, so a local clone
+# (`file:///tmp/mammamiradio`, or a plain path) yielded `tmp/mammamiradio` and
+# then mismatched its own `--repo florianhorner/mammamiradio` — switching the
+# guard OFF for its own repo, which is the one direction that must never happen.
+# A local remote carries no owner/repo, so the honest answer is "unknown", and
+# unknown keeps the guard on.
+origin_repo() {
+  local url="$1"
+  case "$url" in
+    file://*|/*|.*|~*) return 0 ;;          # local clone: no owner/repo to know
+    *://*)
+      # A scheme needs a non-empty authority before the path.
+      printf '%s' "$url" | grep -Eq '^[A-Za-z][A-Za-z0-9+.-]*://[^/]+/' || return 0
+      ;;
+    *@*:*) : ;;                             # scp-like: user@host:owner/repo
+    */*)   : ;;                             # bare owner/repo
+    *)     return 0 ;;
+  esac
+  norm_repo "$url"
+}
+
 # Rule 1a: this guard only judges PRs against THIS repository.
 #
 # It is registered for every Bash call in the session, and everything it checks
@@ -285,7 +340,7 @@ norm_repo() {
 # this is somebody else's PR" has to mean "judge it", or the exemption becomes
 # the bypass. R12 denies the flagless form fleet-wide, so in practice every real
 # opening command carries an explicit target and this reads exactly one value.
-this_repo="$(norm_repo "$(git remote get-url origin 2>/dev/null)")"
+this_repo="$(origin_repo "$(git remote get-url origin 2>/dev/null)")"
 if [ -n "$this_repo" ]; then
   scope_foreign=0
   while IFS= read -r record; do
