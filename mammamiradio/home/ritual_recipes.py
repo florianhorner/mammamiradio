@@ -18,12 +18,20 @@ from typing import Literal
 from mammamiradio.home.ha_enrichment import HomeEvent
 
 DeliveryLane = Literal["interrupt", "directive", "running_gag", "ambient_context"]
-PrivacyClass = Literal["public", "private", "intimate", "safety"]
+PrivacyClass = Literal["public", "private", "intimate"]
 PatternTrigger = Literal["state", "attribute", "numeric_threshold"]
 
-CATALOG_VERSION = "2026-07-06.community-v1"
+CATALOG_VERSION = "2026-09-12.community-v2"
 
-DENIED_DEVICE_CLASSES = {"signal_strength", "timestamp", "battery"}
+DENIED_DEVICE_CLASSES = {
+    "battery",
+    "carbon_monoxide",
+    "gas",
+    "moisture",
+    "signal_strength",
+    "smoke",
+    "timestamp",
+}
 DENIED_ENTITY_CATEGORIES = {"diagnostic", "config"}
 DENIED_PRIVACY_DOMAINS = {"device_tracker", "camera", "alarm_control_panel"}
 IGNORED_STATES = {"unknown", "unavailable"}
@@ -198,7 +206,10 @@ def match_ritual_recipes(
                 if transition is None:
                     continue
                 old_raw, new_raw = transition
-                confidence = min(1.0, max(pattern.confidence, recipe.min_confidence))
+                # Keep the raw pattern confidence. Clamping it up to
+                # recipe.min_confidence makes the comparison below unreachable
+                # and disables the per-recipe threshold.
+                confidence = min(1.0, pattern.confidence)
                 if confidence < recipe.min_confidence:
                     continue
                 candidate = RitualRecipeMatch(
@@ -770,51 +781,6 @@ DEFAULT_RITUAL_RECIPES: tuple[RitualRecipe, ...] = (
             "The chore department has issued another memo.",
             "Laundry has reached the applause phase.",
         ),
-    ),
-    RitualRecipe(
-        id="safety_saves",
-        family="safety_saves",
-        public_family_label="Safety moment",
-        delivery_lane="interrupt",
-        privacy_class="safety",
-        cooldown_seconds=10 * 60,
-        min_confidence=0.8,
-        interrupt_urgency="urgent",
-        evidence_patterns=(
-            RitualEvidencePattern(
-                id="leak_detected",
-                label="leak detected",
-                domains=("binary_sensor",),
-                device_classes=("moisture",),
-                from_states=tuple(CLOSED_STATES),
-                to_states=tuple(OPEN_STATES),
-                confidence=0.95,
-            ),
-            RitualEvidencePattern(
-                id="smoke_or_gas_detected",
-                label="smoke, gas, or CO detected",
-                domains=("binary_sensor",),
-                device_classes=("smoke", "gas", "carbon_monoxide"),
-                from_states=tuple(CLOSED_STATES),
-                to_states=tuple(OPEN_STATES),
-                confidence=1.0,
-            ),
-            RitualEvidencePattern(
-                id="garage_or_door_opened",
-                label="garage or critical door opens",
-                domains=("binary_sensor", "cover", "lock"),
-                device_classes=("garage_door", "door", "opening", "lock"),
-                keywords=("garage", "front door", "entrance", "eingang", "haustur", "haustr", "door left"),
-                from_states=tuple(CLOSED_STATES),
-                to_states=tuple(OPEN_STATES),
-                confidence=0.8,
-            ),
-        ),
-        directive=(
-            "Safety moment detected. Interrupt with calm urgency, say only the coarse safety family, and tell the "
-            "household to check Home Assistant."
-        ),
-        sample_host_framing=("Safety department, subito.", "Small interruption, important: check the house."),
     ),
     RitualRecipe(
         id="vacation_house_sitter",
