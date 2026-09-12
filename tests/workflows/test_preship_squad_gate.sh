@@ -708,6 +708,105 @@ do
 done
 pass "a local or file:// origin keeps the guard on"
 
+# --- Round 3. One bypass, one regression this branch introduced, three narrow
+# --- unsafe-direction gaps. All verified against the real CLI where relevant.
+
+# The shared option reader lives inside the hook as a single-quoted python
+# program. Pull it out so `option` mode can be tested directly: its only
+# consumer (base_ref) is consumed internally and is not observable from the
+# hook's own output, which is exactly how the regression below went unnoticed.
+extract_arg_reader() {
+  awk "/python3 -c '\$/{f=1;next} f&&/^' 2>\/dev\/null\$/{exit} f" "$HOOK"
+}
+
+# pflag strips one "=" from an attached shorthand, so -R=owner/repo names that
+# repo. Keeping the "=" made the value never match this checkout.
+[ "$(verdict "$(payload "gh pr create -R=$THIS_REPO --fill")" "$DUMMY")" = deny ] \
+  || fail "-R=<this repo> must still be judged"
+pass "-R=VALUE attached shorthand is read"
+
+[ "$(verdict "$(payload 'gh pr create -R=florianhorner/gh-workflows --fill')" "$DUMMY")" = allow ] \
+  || fail "-R=<foreign> must be read as a foreign target"
+pass "-R=VALUE foreign form is out of scope"
+
+# REGRESSION this branch introduced: adding --base/-B to the skip list retired
+# the --base extraction Rule 1b reads, because the skip ran before the name
+# match. base_ref then fell back to main and a stacked PR was verified against
+# an older fork point than its own -- a silently wider receipt window.
+for spelling in "--base release/1.2" "-B release/1.2" "--base=release/1.2"
+do
+  got="$(printf '%s' "gh pr create $spelling --fill" \
+    | ARG_MODE=option ARG_NAME=--base python3 -c "$(extract_arg_reader)" 2>/dev/null || true)"
+  [ "$got" = "release/1.2" ] \
+    || fail "option mode must return the --base value for '$spelling' (got '${got:-empty}')"
+done
+pass "--base extraction survives the skip list in all three spellings"
+
+# An unreducible target is UNKNOWN, not foreign. Only an ABSENT target reached
+# the keep-the-guard-on branch, so a present-but-unreadable one claimed to be
+# somebody else's repo.
+for unreadable in '"$REPO"' '"-n"' 'notarepo'
+do
+  [ "$(verdict "$(payload "gh pr create --repo $unreadable --fill")" "$DUMMY")" = deny ] \
+    || fail "an unreducible target ($unreadable) is unknown and must keep the guard on"
+done
+pass "an unreducible target keeps the guard on"
+
+# A subshell defeated all three command greps, including the landing-contract
+# hard stop. Pre-existing, and the one that mattered most.
+[ "$(verdict "$(payload '(gh pr merge 5 --squash)')" "$DUMMY")" = deny ] \
+  || fail "a merge inside a subshell must still be denied"
+pass "a subshell does not defeat the merge deny"
+
+[ "$(verdict "$(payload '(gh api -X PUT repos/a/b/pulls/5/merge)')" "$DUMMY")" = deny ] \
+  || fail "a REST merge inside a subshell must still be denied"
+pass "a subshell does not defeat the REST merge deny"
+
+[ "$(verdict "$(payload 'X=$(gh pr create --fill)')" "$DUMMY")" = deny ] \
+  || fail "a create inside a command substitution must still be judged"
+pass "a command substitution does not hide a create"
+
+# --disable-auto must still disarm, and must not be smuggled in from a subshell.
+[ "$(verdict "$(payload 'gh pr merge 5 --disable-auto')" "$DUMMY")" = allow ] \
+  || fail "disarming must still be allowed"
+pass "disarming a queued merge is still allowed"
+
+# A backslash-newline is deleted by the shell, not turned into a space, so a
+# token split across lines rejoins into one target.
+SPLIT_TOKEN="gh pr create --repo florianhorner/mammamira\\
+dio --fill"
+[ "$(verdict "$(payload "$SPLIT_TOKEN")" "$DUMMY")" = deny ] \
+  || fail "a target split across a backslash-newline must rejoin to this repo"
+pass "a backslash-newline rejoins a split token"
+
+# An origin URL with a trailing slash after .git, or an uppercase .GIT, must
+# still reduce to this repo -- the strip order used to leave one of them behind
+# and switch the guard off for its own repo.
+for odd_origin in "https://github.com/$THIS_REPO.git/" "https://github.com/$THIS_REPO.GIT" \
+                  "https://GITHUB.com/$THIS_REPO"
+do
+  git -C "$LOCAL_ORIGIN" remote remove origin 2>/dev/null || true
+  git -C "$LOCAL_ORIGIN" remote add origin "$odd_origin"
+  ODD_OUT="$( (cd "$LOCAL_ORIGIN" \
+    && payload "gh pr create --repo $THIS_REPO --fill" \
+    | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
+      bash "$HOOK") 2>/dev/null || true)"
+  printf '%s' "$ODD_OUT" | grep -q '"permissionDecision":"deny"' \
+    || fail "origin '$odd_origin' names this repo and must keep the guard on"
+done
+pass "odd but hosted origin spellings still name this repo"
+
+# A bare relative path names no host, so it is not a repository identity.
+git -C "$LOCAL_ORIGIN" remote remove origin 2>/dev/null || true
+git -C "$LOCAL_ORIGIN" remote add origin "repos/mammamiradio"
+REL_OUT="$( (cd "$LOCAL_ORIGIN" \
+  && payload "gh pr create --repo $THIS_REPO --fill" \
+  | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
+    bash "$HOOK") 2>/dev/null || true)"
+printf '%s' "$REL_OUT" | grep -q '"permissionDecision":"deny"' \
+  || fail "a bare relative origin path names no repository and must keep the guard on"
+pass "a bare relative origin keeps the guard on"
+
 # The total is computed, not typed: a hand-maintained count drifted to 47 against
 # 44 real cases on the first pass, and a summary nobody can verify is decoration.
 CASE_COUNT="$(grep -c '^pass ' "$0")"

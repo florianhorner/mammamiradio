@@ -105,11 +105,11 @@ graphql_file_payload_mentions_merge() {
 }
 
 # Rule 2: deny raw `gh pr merge` (except --disable-auto). Landing = land-pr.sh.
-if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
   # --disable-auto must be an argument OF the merge command itself (no shell
   # operator between them) — `... merge 5 && echo "--disable-auto"` is a
   # bypass attempt, not a disarm.
-  if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?[[:space:]]--disable-auto([[:space:]]|$|[^-A-Za-z])'; then
+  if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|()]*)?[[:space:]]--disable-auto([[:space:]]|$|[^-A-Za-z])'; then
     exit 0
   fi
   deny_raw_merge
@@ -117,13 +117,13 @@ fi
 
 # Rule 2b: deny raw GitHub API merge attempts. Read-only `gh api` calls still
 # pass; the REST deny requires the pull merge endpoint AND an explicit PUT.
-if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+api([[:space:]]|$)'; then
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+api([[:space:]]|$)'; then
   if printf '%s' "$cmd" | grep -Eq '/pulls/[0-9]+/merge([^[:alnum:]_-]|$)' \
     && printf '%s' "$cmd" | grep -Eiq '(^|[[:space:]])((--method)(=|[[:space:]]+)PUT|-X(=|[[:space:]]*)PUT)([^A-Za-z]|$)'; then
     deny_raw_merge
   fi
 
-  if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+api[[:space:]]+graphql([[:space:]]|$)' \
+  if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+api[[:space:]]+graphql([[:space:]]|$)' \
     && { printf '%s' "$cmd" | grep -Eq "$_graphql_merge_pattern" || graphql_file_payload_mentions_merge; }; then
     deny_raw_merge
   fi
@@ -131,7 +131,7 @@ fi
 
 # Rule 1: only guard `gh pr create` beyond this point. Everything else (incl.
 # `gh pr view`, `gh pr checks`, `gh pr list`) passes untouched.
-printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
+printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
 
 # Reads the PR-opening command's argument vector, in one of two modes.
 #
@@ -175,8 +175,9 @@ import os, re, shlex, sys
 mode = os.environ["ARG_MODE"]
 name = os.environ.get("ARG_NAME", "")
 raw = sys.stdin.read()
-# A newline ends a command; a backslash-newline does not.
-raw = re.sub(r"\\\n", " ", raw)
+# A newline ends a command. A backslash-newline is deleted outright,
+# as the shell does, so a token split across lines rejoins.
+raw = re.sub(r"\\\n", "", raw)   # POSIX deletes the pair; a space splits a token
 tokens = []
 for line in raw.split("\n"):
     if not line.strip():
@@ -229,16 +230,27 @@ if mode == "option":
     if not positions:
         sys.exit(0)
     argv = argv_after(positions[0])
+    # A caller asks for the long name; the CLI also accepts the shorthand, and
+    # a value given as -B was never returned at all. Silent before this branch
+    # existed, and silently SKIPPED once the short forms joined SKIP.
+    wanted = {name} | {"--base": {"-B"}, "--repo": {"-R"}}.get(name, set())
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok in SKIP:      # step over the value so prose is never scanned
-            i += 2
+        if tok == "--":      # end of options; nothing after it is a flag
+            break
+        # The requested name wins over SKIP. Both sets overlap now that SKIP
+        # holds every value-taking flag, and skipping first meant asking for
+        # --base returned nothing at all -- so base_ref fell back to "main" and
+        # a stacked PR was verified against an older fork point than its own.
+        if tok in SKIP and tok not in wanted:
+            i += 2           # step over the value so prose is never scanned
             continue
-        if tok.startswith(name + "="):
+        hit = next((w for w in wanted if tok.startswith(w + "=")), None)
+        if hit:
             print(tok.split("=", 1)[1])
             break
-        if tok == name and i + 1 < len(argv):
+        if tok in wanted and i + 1 < len(argv):
             print(argv[i + 1])
             break
         i += 1
@@ -254,6 +266,8 @@ if mode == "targets":
         i = 0
         while i < len(argv):
             tok = argv[i]
+            if tok == "--":  # end of options; nothing after it is a flag
+                break
             if tok in SKIP:
                 i += 2
                 continue
@@ -265,7 +279,11 @@ if mode == "targets":
                 i += 2
                 continue
             elif tok.startswith("-R") and len(tok) > 2 and not tok.startswith("-R-"):
-                found = tok[2:]          # attached shorthand, e.g. -Rowner/repo
+                # Attached shorthand, -Rowner/repo. pflag also accepts -R=owner/repo
+                # and strips that one "="; keeping it made the value never match
+                # this repo, so the guard stood aside for a PR landing here.
+                rest = tok[2:]
+                found = rest[1:] if rest.startswith("=") else rest
             i += 1
         # Prefixed because an empty record is meaningful and command
         # substitution eats a trailing blank line, which silently dropped a
@@ -289,9 +307,10 @@ if mode == "targets":
 # That is the direction to be wrong in.
 norm_repo() {
   printf '%s' "$1" \
-    | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^/]*@##; s#^([^/]*):#\1/#; s#\.git$##; s#/+$##' \
-    | awk -F/ 'NF >= 2 { printf "%s/%s", $(NF - 1), $NF }' \
-    | tr '[:upper:]' '[:lower:]'
+    | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^/]*@##; s#^([^/]*):#\1/#; s#/+$##' \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's#\.git$##; s#/+$##' \
+    | awk -F/ 'NF >= 2 { printf "%s/%s", $(NF - 1), $NF }'
 }
 
 # Canonical owner/repo for the CHECKOUT, or empty when this remote does not name
@@ -312,8 +331,9 @@ origin_repo() {
       printf '%s' "$url" | grep -Eq '^[A-Za-z][A-Za-z0-9+.-]*://[^/]+/' || return 0
       ;;
     *@*:*) : ;;                             # scp-like: user@host:owner/repo
-    */*)   : ;;                             # bare owner/repo
-    *)     return 0 ;;
+    *)     return 0 ;;                      # anything else names no host, so no
+                                            # owner/repo: a bare `repos/foo` is a
+                                            # relative path, not a repository
   esac
   norm_repo "$url"
 }
@@ -347,7 +367,13 @@ if [ -n "$this_repo" ]; then
     case "$record" in target:*) ;; *) continue ;; esac
     target="${record#target:}"
     scope_foreign=1
-    if [ -z "$target" ] || [ "$(norm_repo "$target")" = "$this_repo" ]; then
+    norm_target="$(norm_repo "$target")"
+    # An unreducible target (a shell variable the guard cannot expand, a bare
+    # word, a flag) is UNKNOWN, not foreign. Only an absent target used to reach
+    # the "keep the guard on" branch, so a present-but-unreadable one claimed to
+    # be somebody else's repo -- exactly the class the comment above says is
+    # closed.
+    if [ -z "$target" ] || [ -z "$norm_target" ] || [ "$norm_target" = "$this_repo" ]; then
       scope_foreign=0
       break
     fi
