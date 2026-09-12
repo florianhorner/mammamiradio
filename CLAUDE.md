@@ -483,7 +483,7 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
 - **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
   - On PRs: `check` mode — fails if any module dropped below its floor.
   - On main merge: `update` mode recomputes the floors and tries to commit and push
-    increases. A rejected push opens one `coverage-ratchet-stale` issue with the
+    updates. A rejected push opens one `coverage-ratchet-stale` issue with the
     computed diff and a link to the run's diagnostic; it does not infer the cause.
     For a protected branch, run `make coverage-ratchet` locally and submit the
     resulting changes through a PR. Verify the reported increases and link that PR

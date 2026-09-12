@@ -121,6 +121,7 @@ grep -qF 'coverage-floors.json' "$TMP/coverage-ratchet-issue.md" || fail "missin
 grep -qF 'make coverage-ratchet' "$TMP/coverage-ratchet-issue.md" || fail "missing remedy"
 grep -qF "$RUN_URL" "$TMP/coverage-ratchet-issue.md" || fail "missing diagnostic run"
 grep -qF 'does not determine which' "$TMP/coverage-ratchet-issue.md" || fail "push cause inferred"
+grep -qF 'may also remove obsolete' "$TMP/coverage-ratchet-issue.md" || fail "report assumes every update raises coverage"
 grep -qF 'Fixes #<this issue number>' "$TMP/coverage-ratchet-issue.md" || fail "missing resolution path"
 pass "actual push rejection opens one issue with diff, diagnostic, and remedy"
 

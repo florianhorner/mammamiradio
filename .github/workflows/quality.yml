@@ -489,7 +489,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LANDED: ${{ steps.ratchet.outputs.landed }}
           RATCHET_OUTCOME: ${{ steps.ratchet.outcome }}
-          TITLE: "Coverage floors are stale: the auto-ratchet cannot land them"
+          TITLE: "Coverage floor updates could not be pushed"
           LABEL: "coverage-ratchet-stale"
           CRASH_TITLE: "The coverage ratchet step failed before it could report"
           CRASH_LABEL: "coverage-ratchet-broken"
@@ -552,7 +552,7 @@ jobs:
           fi
 
           if [ "$LANDED" != "false" ]; then
-            echo "This snapshot has no unlanded increases; nothing to report."
+            echo "This snapshot has no unlanded changes; nothing to report."
             exit 0
           fi
 
@@ -564,9 +564,9 @@ jobs:
           BODY="$RUNNER_TEMP/coverage-ratchet-issue.md"
           # shellcheck disable=SC2016
           {
-            printf '%s\n' 'Coverage rose on `main`, but the raised floors could not be committed, so the'
-            printf '%s\n' 'ratchet is not protecting the new level. Coverage can fall back to the stale'
-            printf '%s\n\n' 'floors without failing any pull request.'
+            printf '%s\n' 'A computed update to the coverage-floor files could not be pushed.'
+            printf '%s\n' 'Pending increases are not yet enforced; the diff may also remove obsolete'
+            printf '%s\n\n' 'module floors.'
             printf 'The push did not succeed. Inspect its diagnostic in [the workflow run](%s).\n\n' "$RUN_URL"
             printf '%s\n' 'Branch protection, authentication, network errors, or a newer remote commit'
             printf '%s\n\n' 'can prevent a push. This report does not determine which occurred.'
