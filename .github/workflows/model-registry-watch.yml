@@ -116,13 +116,13 @@ jobs:
 
           BODY="$RUNNER_TEMP/model-registry-watch.md"
           if [ "$VERDICT" = "broken" ]; then
-            TITLE="Model registry watch cannot read the provider docs"
+            TITLE="Model registry watch could not complete"
             {
-              printf '%s\n\n' 'The weekly model registry watch could not read the provider documentation, so it cannot say whether the pinned models are still current.'
+              printf '%s\n\n' 'The weekly model registry watch could not complete its checks, so it cannot verify the review stamp and pinned models.'
               printf '%s\n' '```'
               printf '%s\n' "$DETAIL"
               printf '%s\n\n' '```'
-              printf '%s\n' '**Fix:** run `python scripts/check_model_registry.py --providers` locally. If it fails the same way, the provider pages changed shape and the parser in `scripts/check_model_registry.py` needs updating to match the new page layout. If it passes locally, the pages were briefly unreachable and the next weekly run closes this on its own.'
+              printf '%s\n' '**Fix:** run `python3 scripts/check_model_registry.py --report` locally with Python 3.11 or newer and read the reported error. Check provider availability or page parsing for documentation errors, `model_registry.toml` for registry errors, and the Python environment or checker code for import, syntax, or other crashes. If the report passes locally, compare the failed run logs and environment before concluding the problem was temporary.'
             } > "$BODY"
           else
             TITLE="Model registry needs a decision"

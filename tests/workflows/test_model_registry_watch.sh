@@ -120,6 +120,7 @@ for flag in ('--today', '--fixture-dir', '--registry'):
     assert flag not in inv[0], f"weekly invocation must not carry {flag}: {inv[0]}"
 (out / 'report.sh').write_text(rep['run'])
 iss = steps[-1]
+assert iss['env']['GH_TOKEN'] == '${{ secrets.GITHUB_TOKEN }}', iss['env']
 assert iss['env']['VERDICT'] == '${{ steps.report.outputs.verdict }}', iss['env']
 assert iss['env']['DETAIL'] == '${{ steps.report.outputs.output }}', iss['env']
 assert iss['env']['LABEL'] == 'model-registry-watch'
@@ -150,11 +151,36 @@ for tc in "0:pass:report" "1:fail:report" "2:broken:report" "3:broken:report" "1
   : > "$TMP/gh-out"
   (cd "$REPO_ROOT" && PATH="$TMP/bin:$PATH" GITHUB_OUTPUT="$TMP/gh-out" bash -e "$TMP/steps/report.sh" >/dev/null) \
     || fail "report step aborted on checker exit $code/$shape (lost its set +e?)"
-  grep -q "^verdict=$want\$" "$TMP/gh-out" || fail "checker exit $code/$shape should give verdict=$want, got: $(grep verdict= "$TMP/gh-out")"
-  if [ "$shape" = report ]; then
-    { grep -q "^== Review age ==\$" "$TMP/gh-out" && grep -q "^anthropic.opus stub-model unlisted\$" "$TMP/gh-out"; } \
-      || fail "multi-line report must round-trip through the GITHUB_OUTPUT heredoc (exit $code)"
-  fi
+  # Decode the runner's key=value and key<<delimiter forms. Finding the right
+  # lines is not enough: an unterminated output block prevents the next step.
+  "$PYTHON_BIN" - "$TMP/gh-out" "$want" "$shape" <<'PYEOF'
+import pathlib, sys
+lines = iter(pathlib.Path(sys.argv[1]).read_text().splitlines())
+values = {}
+for line in lines:
+    if '<<' in line:
+        key, delimiter = line.split('<<', 1)
+        assert key and delimiter, f"invalid output header: {line!r}"
+        body = []
+        for part in lines:
+            if part == delimiter:
+                break
+            body.append(part)
+        else:
+            raise AssertionError(f"unterminated output block: {key}")
+        value = '\n'.join(body)
+    else:
+        key, separator, value = line.partition('=')
+        assert key and separator, f"invalid output assignment: {line!r}"
+    assert key not in values, f"duplicate output: {key}"
+    values[key] = value
+expected_output = (
+    '== Review age ==\nanthropic.opus stub-model unlisted'
+    if sys.argv[3] == 'report'
+    else 'Traceback (most recent call last):\nModuleNotFoundError: No module named tomllib'
+)
+assert values == {'output': expected_output, 'verdict': sys.argv[2]}, values
+PYEOF
 done
 rm -f "$TMP/bin/python3"
 pass "report step: 0/1/2/3 map to pass/fail/broken/broken, a traceback on exit 1 is broken, output round-trips"
@@ -164,6 +190,9 @@ pass "report step: 0/1/2/3 map to pass/fail/broken/broken, a traceback on exit 1
 cat > "$TMP/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_MOCK_LOG"
+if [ "$1 $2" = "${GH_FAIL_ACTION:-}" ]; then
+  exit 23
+fi
 case "$1 $2" in
   "issue list")   printf '%s' "${GH_EXISTING:-}"; exit 0 ;;
   "label create") exit "${GH_LABEL_RC:-0}" ;;
@@ -217,15 +246,16 @@ pass "fail + open issue: comment with the report, no duplicate"
 
 run_issue broken ""
 [ "$(calls 'issue create')" = 1 ] || fail "broken must open an issue (a silent dead watcher is the failure this exists to catch)"
-grep -q '^issue create --title Model registry watch cannot read the provider docs --label' "$TMP/gh.log" || fail "broken must open under the watcher title, not the decision title"
-grep -q 'could not read the provider documentation' "$BODY_FILE" || fail "broken body must name the watcher, not a pin"
+grep -q '^issue create --title Model registry watch could not complete --label' "$TMP/gh.log" || fail "broken must open under the watcher title, not the decision title"
+grep -q 'could not complete its checks' "$BODY_FILE" || fail "broken body must name the watcher, not a pin"
+grep -qF 'python3 scripts/check_model_registry.py --report' "$BODY_FILE" || fail "broken recovery must rerun age and providers together"
 grep -q 'found something to decide' "$BODY_FILE" && fail "broken must not reuse the decision copy"
 grep -qF 'claude-opus-99-fake unlisted' "$BODY_FILE" || fail "broken body must still include the raw output"
 pass "broken + no issue: opened with the watcher body"
 
 run_issue broken 42
 { [ "$(calls 'issue comment 42')" = 1 ] && [ "$(calls 'issue close')" = 0 ]; } || fail "broken with an open issue must comment, never close"
-grep -q 'could not read the provider documentation' "$BODY_FILE" || fail "broken comment must name the watcher"
+grep -q 'could not complete its checks' "$BODY_FILE" || fail "broken comment must name the watcher"
 pass "broken + open issue: comment, never close"
 
 # --force makes an existing label a no-op, so the only way `label create` fails is
@@ -239,6 +269,25 @@ if (cd "$REPO_ROOT" && PATH="$TMP/bin:$PATH" GH_TOKEN=x GH_MOCK_LOG="$TMP/gh.log
 fi
 [ "$(calls 'issue create')" = 0 ] || fail "after a label failure no issue must be created"
 pass "a real label-create failure aborts loudly before the issue is filed"
+
+# Any GitHub error must fail the run and stop further issue actions. Exercise
+# the same error on finding/broken paths, because both must remain visible.
+for tc in "list:fail:" "list:pass:42" "create:fail:" "create:broken:" "comment:fail:42" "comment:broken:42" "close:pass:42"; do
+  IFS=: read -r action verdict existing <<<"$tc"
+  : > "$TMP/gh.log"; rm -f "$BODY_FILE"
+  rc=0
+  (cd "$REPO_ROOT" && PATH="$TMP/bin:$PATH" GH_TOKEN=x GH_MOCK_LOG="$TMP/gh.log" GH_EXISTING="$existing" \
+      GH_FAIL_ACTION="issue $action" RUNNER_TEMP="$TMP/rt" VERDICT="$verdict" DETAIL="$DETAIL_TEXT" \
+      LABEL="model-registry-watch" \
+      bash -e "$TMP/steps/issue.sh" >/dev/null 2>&1) || rc=$?
+  [ "$rc" = 23 ] || fail "issue $action error must propagate for $verdict, got $rc"
+  [ "$(calls "issue $action")" = 1 ] || fail "issue $action must be attempted exactly once"
+  case "$(tail -1 "$TMP/gh.log")" in
+    "issue $action"*) ;;
+    *) fail "no further GitHub action may follow a failed issue $action" ;;
+  esac
+done
+pass "list/create/comment/close errors fail the run without follow-up actions (7 scenarios)"
 
 # Case 8: --report stays out of every PR and cut path. The checker's own contract:
 # a calendar gate on unrelated PRs gets bumped reflexively. Match invocations, not

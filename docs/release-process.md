@@ -130,8 +130,8 @@ there is a real discipline on top of it:
   `pyproject.toml` note it and skip) and always under `make pre-release`, so a stale
   registry surfaces at the cut, not as a red Dependabot PR. Between cuts,
   `.github/workflows/model-registry-watch.yml` runs `--report` every Monday and
-  opens, updates, or closes a `model-registry-watch` issue, so a stale stamp is
-  raised weeks before it can block a cut.
+  opens, updates, or closes a `model-registry-watch` issue to surface stale
+  stamps and provider drift between cuts.
 
 ## Coordinating parallel workspaces
 
