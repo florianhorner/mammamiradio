@@ -78,9 +78,12 @@ rc=0; report "$REGISTRY" "$TMP/no-such-dir" || rc=$?
 [ "$rc" = "2" ] || fail "unreadable fixtures should exit 2, got $rc"
 pass "unreadable provider docs exit 2 (broken, not a finding)"
 
-# Case 5: the workflow runs --report, not one half of the watch.
-grep -q -- 'check_model_registry.py --report' "$WF" || fail "workflow must run --report"
-pass "workflow runs --report"
+# Case 5: the workflow runs --report, not one half of the watch. Match the
+# invocation, not a mention: the header comment names --report too, and a grep
+# that counts comments let a mutant that ran --providers instead survive.
+grep -v '^[[:space:]]*#' "$WF" | grep -q -- 'python3 scripts/check_model_registry.py --report' \
+  || fail "workflow must invoke --report (not merely mention it)"
+pass "workflow invokes --report"
 
 # Case 6: all three exit codes reach a named verdict.
 grep -q '0) VERDICT=pass' "$WF" || fail "exit 0 must map to pass"
