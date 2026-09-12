@@ -6,6 +6,7 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+- **The hosts move to the Claude 5 generation (Opus 5, Sonnet 5)**, the cost counter uses current prices, and the balanced profile gets cheaper.
 - **First Listen opens in English.** The Admin station opening uses recorded Marco/Giulia voices; ordinary listener playback keeps its existing Italian opening. Maintainers can regenerate just the welcome or Admin opening, with retained-pack checks before synthesis and staged publication with rollback.
 
 - **The top strip in the control room no longer stamps a box across the page.** The live console and its tabs sit in a strip that stays at the top while you scroll, and that strip painted a solid panel behind itself at all times. The page's warm glow is at its warmest exactly there, so the panel read as a hard-edged rectangle across the top of the screen. The strip is now clear while the page is sitting still, and fills in only once it is actually holding its place with content sliding underneath it, which is the moment the fill is doing something. Tabbing into a panel you have scrolled also stops putting the control you jumped to underneath the strip.
