@@ -4284,7 +4284,7 @@ Return JSON:
             )
 
         # Pharma replacement below must see the model's original role labels.
-        # Pharma skips the capper entirely, so nothing is dropped on that path.
+        # Pharma skips the capper; its canonical-tail replacement tracks drops below.
         dropped_fine_print = False
         if brand.category != "pharma":
             before = len(parts)
@@ -4369,6 +4369,7 @@ Return JSON:
         if brand.category == "pharma":
             # Replace model-written fine print with the canonical medicine tail.
             for dropped in [p for p in parts if p.role == DISCLAIMER_ROLE and p.text]:
+                dropped_fine_print = True
                 logger.warning(
                     "Pharma ad %s: replacing the model's fine print with the canonical tail (dropped: %r)",
                     brand.name,

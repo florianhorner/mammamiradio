@@ -489,7 +489,7 @@ async def test_dropping_the_disclaimer_keeps_the_opener_sting(config, state):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("copy", ["Dolorfin funziona, forse. La capra e sparita.", "   "])
+@pytest.mark.parametrize("copy", ["Dolorfin funziona, forse.", "   "])
 async def test_pharma_still_gets_the_canonical_medicine_tail(config, state, copy):
     # Super Italian keeps the language guard from rejecting the mocked copy, the
     # same way the pharma test in test_scriptwriter.py does.
@@ -503,7 +503,7 @@ async def test_pharma_still_gets_the_canonical_medicine_tail(config, state, copy
         return_value={
             "parts": [
                 {"type": "voice", "text": copy, "role": "default"},
-                {"type": "voice", "text": "Termini e condizioni.", "role": DISCLAIMER_ROLE},
+                {"type": "voice", "text": "Termini e condizioni. La capra e sparita.", "role": DISCLAIMER_ROLE},
             ],
             "summary": "Dolorfin ad",
             "callback_used": True,
@@ -515,7 +515,7 @@ async def test_pharma_still_gets_the_canonical_medicine_tail(config, state, copy
     assert len(disclaimers) == 1
     assert result.parts[-1] is disclaimers[0]
     assert any(p.type == "voice" and p.role != DISCLAIMER_ROLE and "Dolorfin" in p.text for p in result.parts)
-    assert state.pending_callback_landed is bool(copy.strip())
+    assert not state.pending_callback_landed
 
 
 @pytest.mark.asyncio
@@ -617,18 +617,27 @@ async def test_a_blank_tagline_cannot_become_a_silent_recovery(config, state):
     assert "Testo" in " ".join(speaks), f"the spot does not even name the brand: {speaks}"
 
 
-def test_the_renderable_filter_rejects_a_whitespace_voice_part():
-    """`synthesize("   ")` draws NoAudioReceived from edge-tts, which benches the
-    voice in `_failed_edge_voices` for the rest of the process and fails the whole
-    ad render. A blank line is not speech and must never reach the engine."""
-    from mammamiradio.audio.tts import AdScript as _AdScript  # noqa: F401  (same symbol)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("copy", ["Real copy.", ""])
+@pytest.mark.parametrize("blank", ["", " \t ", None, 123])
+async def test_the_renderable_filter_rejects_a_whitespace_voice_part(copy, blank, tmp_path, caplog):
+    """Exercise admission/recovery; stop at the engine boundary before audio I/O."""
+    from mammamiradio.audio.tts import synthesize_ad
+    from mammamiradio.hosts.ad_creative import AdScript
 
-    parts = [
-        AdPart(type="voice", text="Real copy.", role="hammer"),
-        AdPart(type="voice", text="   ", role="hammer"),
-    ]
-    renderable = [p for p in parts if p.type != "voice" or (isinstance(p.text, str) and p.text.strip())]
-    assert [p.text for p in renderable] == ["Real copy."]
+    parts = [AdPart(type="voice", text=blank, role="hammer")]
+    if copy:
+        parts.insert(0, AdPart(type="voice", text=copy, role="hammer"))
+    voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
+    with (
+        patch(
+            "mammamiradio.audio.tts.synthesize", new_callable=AsyncMock, side_effect=RuntimeError("stop at engine")
+        ) as synth,
+        pytest.raises(RuntimeError, match="stop at engine"),
+    ):
+        await synthesize_ad(AdScript(brand="Testo", parts=parts), voices, tmp_path)
+    assert [call.args[0] for call in synth.await_args_list] == [copy or "Testo"]
+    assert "dropped 1 empty voice part(s)" in caplog.text
 
 
 def test_the_capper_tolerates_a_non_string_text():
@@ -645,10 +654,11 @@ def test_the_capper_tolerates_a_non_string_text():
 
 
 @pytest.mark.asyncio
-async def test_a_dropped_fine_print_does_not_retire_the_callback_gag(config, state):
+@pytest.mark.parametrize("category", [NO_FINE_PRINT_CATEGORY, "pharma"])
+async def test_a_dropped_fine_print_does_not_retire_the_callback_gag(config, state, category):
     """The model may bury the gag inside the fine print. Dropping that line means
     the gag never aired, so it must stay in the ledger for another try."""
-    brand = AdBrand(name="Testo", tagline="T", category=NO_FINE_PRINT_CATEGORY)
+    brand = AdBrand(name="Testo", tagline="T", category=category)
     voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
     mock = AsyncMock(
         return_value={

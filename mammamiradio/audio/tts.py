@@ -1737,7 +1737,9 @@ async def synthesize_ad(
     # A voice part with empty text drops out here. has_required_voice below only
     # asserts that SOME voice survived, so the ad still airs with a hole where
     # that copy was — leave a trace rather than losing it silently.
-    dropped_voice_parts = sum(1 for part in script.parts if part.type == "voice" and not part.text)
+    dropped_voice_parts = sum(part.type == "voice" for part in script.parts) - sum(
+        part.type == "voice" for part, _ in renderable
+    )
     if dropped_voice_parts:
         logger.warning(
             "Ad %s dropped %d empty voice part(s) of %d before render",
