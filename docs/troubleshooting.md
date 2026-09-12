@@ -440,8 +440,8 @@ default, so it is not what you are hearing.
 The retired `safety_saves` recipe could treat an ordinary door transition as an
 urgent radio interrupt. That path cut the song and played the emergency bridge
 before a host explanation was ready. Mamma Mi Radio no longer turns safety
-sensors or doors into ritual moments. Use Home Assistant automations for safety
-alerts.
+sensors or ordinary entry-door transitions into ritual moments. Use Home
+Assistant automations for safety alerts.
 
 Configured timers can still interrupt the station. Add each timer with a
 `[[homeassistant.timer_interrupt]]` block in `radio.toml`. Direct and Home

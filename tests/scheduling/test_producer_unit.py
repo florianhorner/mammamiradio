@@ -3847,7 +3847,7 @@ async def test_producer_commits_ritual_interrupt_cooldown_only_after_interrupt_f
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=True) as fire,
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="fired") as fire,
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
     ):
         await _run_until_queued(queue, state, config)
@@ -3876,7 +3876,7 @@ async def test_producer_keeps_ritual_interrupt_cooldown_when_global_cooldown_sup
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=False) as fire,
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="cooldown") as fire,
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match") as commit,
     ):
         await _run_until_queued(queue, state, config)
@@ -4100,7 +4100,7 @@ async def test_producer_records_interrupt_moment_elected_on_fire():
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=True),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="fired"),
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
     ):
         await _run_until_queued(queue, state, config)
@@ -4161,7 +4161,7 @@ async def test_producer_records_interrupt_moment_dropped_on_cooldown_suppression
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value=False),
+        patch(f"{PRODUCER_MODULE}._fire_interrupt", new_callable=AsyncMock, return_value="cooldown"),
         patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
     ):
         await _run_until_queued(queue, state, config)
@@ -4169,6 +4169,41 @@ async def test_producer_records_interrupt_moment_dropped_on_cooldown_suppression
     (row,) = state.moment_store.rows
     assert row.status == "dropped"
     assert row.drop_reason == "interrupt_cooldown"
+    assert state.ha_pending_directive_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_producer_records_interrupt_moment_dropped_when_bridge_is_unavailable():
+    clear_ritual_recipe_cooldowns()
+    state = _make_state()
+    state.moment_store = _moment_store()
+    config = _make_config()
+    config.homeassistant.enabled = True
+    config.ha_token = "fake-token"
+    config.homeassistant.url = "http://ha.local:8123"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    matches = _interrupt_lane_matches(now=470.0)
+    ha_context = _ha_ctx_mock()
+    ha_context.ritual_recipe_matches = matches
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._fire_interrupt",
+            new_callable=AsyncMock,
+            return_value="bridge_unavailable",
+        ),
+        patch(f"{PRODUCER_MODULE}.commit_ritual_recipe_match"),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    (row,) = state.moment_store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "interrupt_bridge_unavailable"
     assert state.ha_pending_directive_moment_id == ""
 
 
@@ -11198,16 +11233,17 @@ async def test_fire_interrupt_failed_bridge_validation_preserves_interrupt_state
     spec = InterruptSpec(directive="Test interrupt", urgency="urgent", cooldown=60)
 
     with patch.object(producer, "_DEMO_ASSETS_DIR", empty_demo):
-        fired = await _fire_interrupt(
+        outcome = await _fire_interrupt(
             state,
             spec,
             queue,
             skip_event,
             enforce_global_cooldown=True,
             bridge_tmp_dir=tmp_path,
+            return_outcome=True,
         )
 
-    assert fired is False
+    assert outcome == "bridge_unavailable"
     assert state.last_interrupt_ts == previous_timestamp
     assert state.interrupt_slot is previous_interrupt
     assert state.interrupt_slot_ephemeral is False
