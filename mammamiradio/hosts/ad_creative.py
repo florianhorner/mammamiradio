@@ -219,10 +219,10 @@ AD_FORMAT_DISCLAIMER_SUFFIX = (
 
 # Fine print is a brand trait, not a frequency budget. These are the categories
 # real radio actually buries a legal tail under: medicine, dental, banks. Over the
-# shipped radio.toml this is 13.6% of spots, which at ad_spots_per_break = 2 is
-# roughly 26% of ad breaks -- the axis a listener actually hears. Retune by editing
-# the set; "telecom" (phone contracts) and "finance" (insurance) are the next two in,
-# and adding both takes it to 22.7% of spots / 41% of breaks.
+# shipped radio.toml their configured weighted share is 12/88 (13.6%), not an
+# aired-rate guarantee: recent-brand exclusions, break composition and generation
+# fallbacks affect playback. Retune by editing the set; adding "telecom" (phone
+# contracts) and "finance" (insurance) raises the configured share to 22.7%.
 #
 # Every member must also be a key of OFFICIAL_CATEGORY_SONIC_RECIPES. A category is
 # unvalidated free text defaulting to "general", so a typo here would silently mean
@@ -516,10 +516,9 @@ def compile_ad_cast(brands: list[AdBrand], voices: list[AdVoice]) -> AdCastRepor
 def brand_has_fine_print(brand: AdBrand) -> bool:
     """Whether this brand's ads close on the fast legal tail.
 
-    Pure: no history, no randomness, no station state. The rate a listener hears
-    falls out of the brand inventory rather than a scheduler decision, so it is
-    arithmetic rather than a simulation, and it reads as a brand trait -- the bank
-    always has lawyers, the pasta never does.
+    Pure: no history, no randomness, no station state. This is a brand trait --
+    the bank has lawyers, the pasta does not -- rather than an aired-rate budget.
+    Selection and generation still determine how often a listener hears the tail.
 
     A campaign whose owned character *is* the goblin keeps its fine print whatever
     its category: the SPEAKERS block would otherwise omit a role the prompt's own

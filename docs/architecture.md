@@ -1048,10 +1048,11 @@ A singleton OpenAI client is reused across OpenAI TTS calls for connection pool 
 `hosts/ad_creative.py` is a pure lookup: true when the brand's category is in
 `FINE_PRINT_CATEGORIES` (pharma, health, banking — the categories real radio
 actually buries a legal tail under), or when a campaign's owned character *is*
-the disclaimer voice. Over the shipped `radio.toml` that is 13.6% of spots,
-which at `ad_spots_per_break = 2` is roughly a quarter of ad breaks. There is no
-scheduler state, no cooldown and no randomness: the rate falls out of the brand
-inventory, so retuning it means editing one frozenset.
+the disclaimer voice. The shipped `radio.toml` gives those categories a configured
+weighted share of 12/88 (13.6%). Recent-brand exclusions, break composition and
+generation fallbacks mean this is not a guaranteed aired rate. The gate itself
+has no scheduler state, cooldown or randomness; retuning it means editing one
+frozenset.
 
 The flag drives three things together, and they must never disagree: whether
 `DISCLAIMER_ROLE` appears in the prompt's SPEAKERS block, whether the JSON example
@@ -1065,8 +1066,8 @@ spot's own role instead, since for that brand the lines are simply ad copy.
 
 An earlier release said the opposite. Ad speed was originally scoped by ad format
 (`CHANGELOG.md [2.12.3]`), then #1129 made the tempo gate role-based so the fast
-tail reached every format — correctly fixing a real bug, and incidentally putting
-a rattle at the end of essentially every spot. This change keeps #1129's gate
+tail reached every format — correctly fixing a real bug while the prompt still
+requested fine print for every brand. This change keeps #1129's gate
 exactly as it is and moves the decision one level up, to which brands write fine
 print at all.
 

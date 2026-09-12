@@ -4375,9 +4375,10 @@ Return JSON:
                     dropped.text[:80],
                 )
             parts = [p for p in parts if p.role != DISCLAIMER_ROLE]
-            if not any(p.type == "voice" and p.text for p in parts):
+            if not any(p.type == "voice" and isinstance(p.text, str) and p.text.strip() for p in parts):
                 # Keep the brand audible if the model returned only fine print.
                 parts.append(AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role))
+                used_owned_fallback = True
             parts.append(
                 AdPart(
                     type="voice",

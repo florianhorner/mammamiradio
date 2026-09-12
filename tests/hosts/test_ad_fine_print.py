@@ -75,8 +75,7 @@ def test_configured_fine_print_share_matches_the_designed_rate():
 
     Not the aired rate: `_pick_brand` excludes the last three brands and the
     producer excludes same-break repeats, so what a listener hears drifts from
-    this number, and with ad_spots_per_break = 2 the per-break figure is roughly
-    double it. This asserts the one quantity that is exact arithmetic. Retuning
+    this number. This asserts only the quantity that is exact arithmetic. Retuning
     FINE_PRINT_CATEGORIES is expected to move it; the band is wide enough to allow
     one category in or out and narrow enough to catch the set emptying.
     """
@@ -94,11 +93,10 @@ def test_configured_fine_print_share_matches_the_designed_rate():
     fine = sum(weight(b) for b in brands if b.get("category") in FINE_PRINT_CATEGORIES)
     share = fine / total
 
-    print(f"\nconfigured fine-print share: {fine}/{total} = {share:.1%} of spots")
+    print(f"\nconfigured fine-print weighted share: {fine}/{total} = {share:.1%}")
     assert 0.10 <= share <= 0.20, (
-        f"fine print is configured for {share:.1%} of spots ({fine}/{total}); "
-        "if that is deliberate, move the band, but a listener hears roughly "
-        "double this per ad break"
+        f"fine-print configured weighted share is {share:.1%} ({fine}/{total}); "
+        "if that is deliberate, move the band; this does not assert an aired rate"
     )
 
 
@@ -491,7 +489,8 @@ async def test_dropping_the_disclaimer_keeps_the_opener_sting(config, state):
 
 
 @pytest.mark.asyncio
-async def test_pharma_still_gets_the_canonical_medicine_tail(config, state):
+@pytest.mark.parametrize("copy", ["Dolorfin funziona, forse. La capra e sparita.", "   "])
+async def test_pharma_still_gets_the_canonical_medicine_tail(config, state, copy):
     # Super Italian keeps the language guard from rejecting the mocked copy, the
     # same way the pharma test in test_scriptwriter.py does.
     config.super_italian_mode = True
@@ -502,15 +501,21 @@ async def test_pharma_still_gets_the_canonical_medicine_tail(config, state):
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
         return_value={
-            "parts": [{"type": "voice", "text": "Dolorfin funziona, forse.", "role": "default"}],
+            "parts": [
+                {"type": "voice", "text": copy, "role": "default"},
+                {"type": "voice", "text": "Termini e condizioni.", "role": DISCLAIMER_ROLE},
+            ],
             "summary": "Dolorfin ad",
+            "callback_used": True,
         },
     ):
-        result = await write_ad(brand, voices, state, config)
+        result = await write_ad(brand, voices, state, config, callback_gag="la capra sparita")
 
     disclaimers = [p for p in result.parts if p.role == DISCLAIMER_ROLE]
     assert len(disclaimers) == 1
     assert result.parts[-1] is disclaimers[0]
+    assert any(p.type == "voice" and p.role != DISCLAIMER_ROLE and "Dolorfin" in p.text for p in result.parts)
+    assert state.pending_callback_landed is bool(copy.strip())
 
 
 @pytest.mark.asyncio
