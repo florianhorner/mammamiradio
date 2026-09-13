@@ -311,8 +311,17 @@ hostAudio.addEventListener("waiting", () => {
   gateLabel.textContent = "Tuning…";
 });
 hostAudio.addEventListener("playing", () => {
-  if (body.dataset.audio === "loading") body.dataset.audio = "";
-  if (body.dataset.phase === "onair") gateLabel.textContent = "On air";
+  // A retry can begin from the revealed failure state. Once the browser is
+  // actually playing, retire the stale warning and restore the same revealed
+  // view a successful first attempt would have produced.
+  body.dataset.audio = "";
+  audioTrouble.hidden = true;
+  if (body.dataset.phase === "onair") {
+    gateLabel.textContent = "On air";
+  } else if (body.dataset.phase === "revealed") {
+    gateLabel.textContent = "That was your house";
+    hostQuote.hidden = false;
+  }
 });
 
 // Where the mobile experience lives or dies: on a narrow viewport the panels

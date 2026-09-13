@@ -138,6 +138,16 @@ test("the voice plays on the first click, not the second", () => {
   assert.match(js, /speakButton\.addEventListener\("click"/);
 });
 
+test("a successful retry clears the stale audio failure", () => {
+  const playingHandler = js.match(/hostAudio\.addEventListener\("playing", \(\) => \{([\s\S]*?)\n\}\);/);
+  assert.ok(playingHandler, "the audio playing handler exists");
+  assert.match(playingHandler[1], /body\.dataset\.audio = ""/);
+  assert.match(playingHandler[1], /audioTrouble\.hidden = true/);
+  assert.match(playingHandler[1], /body\.dataset\.phase === "revealed"/);
+  assert.match(playingHandler[1], /gateLabel\.textContent = "That was your house"/);
+  assert.match(playingHandler[1], /hostQuote\.hidden = false/);
+});
+
 test("the day-one boundary is said in plain words", () => {
   assert.match(html, /On day one the house stays off the air\./);
   assert.match(html, /day-one-chip/);
