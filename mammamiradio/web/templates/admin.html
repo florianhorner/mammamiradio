@@ -887,7 +887,7 @@ input[type="range"]:focus-visible {
 .programme-toolbar .filter-pills { margin: 0; min-width: 0; }
 #programmeList { max-width: 100%; min-width: 0; overflow-x: hidden; }
 .a-programme { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
-.a-programme .col-time { width: 54px; }
+.a-programme .col-time { width: 72px; }
 .a-programme .col-type { width: 82px; }
 .a-programme .col-title { width: auto; }
 .a-programme .col-host { width: 120px; }
@@ -4286,12 +4286,24 @@ function splitTrackLabel(seg){
 function normaliseSegmentLabel(value){
   return String(value||'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');
 }
-// Subtitle line shown under the NEXT row's title: artist·source / hosts / brand / category.
-// Surfaces the "what is it" detail even on narrow viewports where the Fonte column hides.
+function programmeSourceLabel(it,typeKey,actionable){
+  if(typeKey!=='music')return actionable?'Studio':'Planned';
+  const sourceKind=segmentSourceKind(it);
+  switch(sourceKind){
+    case 'local':return 'Local music';
+    case 'jamendo':return 'Jamendo';
+    case 'starter':return 'Starter crate';
+    case 'youtube':
+    case 'download':
+    case 'external':return 'Download';
+    default:return actionable?(typeKey==='music'?'Music':'Studio'):'Planned';
+  }
+}
+// Subtitle line shown under a music title or the NEXT non-music title.
+// Surfaces the artist on every visible music row, including where Fonte hides.
 function buildSubtitle(it,typeKey,parts){
   if(typeKey==='music'){
-    if(parts.artist&&it.source_kind)return `${parts.artist} · ${it.source_kind}`;
-    return parts.artist||it.source_kind||'';
+    return parts.artist||'';
   }
   if(typeKey==='banter')return (it.metadata&&it.metadata.title)||'';
   if(typeKey==='ad'){const m=String(it.label||'').match(/^Ad:\s*(.+?)(?:\s*\+\d+.*)?$/i);return m?m[1].trim():'';}
@@ -4462,7 +4474,7 @@ function renderProgramme(st){
   // different copy when stopped vs building, so a stop/resume with an unchanged
   // upcoming list must still re-render.
   const faderDown=shouldFaderDown(st);
-  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.source_kind,u.source,u.predicted,u.duration_ms,u.metadata?.duration_ms]),st?.current_source?.kind,st?.current_source?.label,st?.playlist_source?.kind,st?.playlist_source?.label,st?.golden_path?.stage,_programmeFilter,!!st?.session_stopped,faderDown,[..._pendingRemovals],_pendingPurge]);
+  const hash=JSON.stringify([st?.upcoming?.map(u=>[u.id,u.label,u.type,u.segment_type,u.playlist_index,u.spotify_id,u.source_kind,u.source,u.predicted,u.duration_sec,u.duration_ms,u.metadata?.source_kind,u.metadata?.title_only,u.metadata?.artist,u.metadata?.title,u.metadata?.category,u.metadata?.duration_s,u.metadata?.duration_ms]),st?.current_source?.kind,st?.current_source?.label,st?.playlist_source?.kind,st?.playlist_source?.label,st?.golden_path?.stage,_programmeFilter,!!st?.session_stopped,faderDown,[..._pendingRemovals],_pendingPurge]);
   if(hash===_lastProgrammeHash)return;
   _lastProgrammeHash=hash;
   const el=document.getElementById('programmeList');
@@ -4504,13 +4516,13 @@ function renderProgramme(st){
     const source=it.source||'rendered_queue';
     const actionable=source==='rendered_queue';
     const rowClass=[it._queueIndex===0?'next':'', actionable?'rendered-queue':'predicted'].filter(Boolean).join(' ');
-    const sourceText=actionable?(parts.artist||it.source_kind||'rendered'):(parts.artist||'planned');
+    const sourceText=programmeSourceLabel(it,typeKey,actionable);
     // Predicted (non-actionable) rows render NO control — clickable things must
     // look clickable (Steve Krug). Only rendered_queue rows get a remove button.
     const action=actionable
       ? `<button type="button" class="queue-remove-btn" title="Remove from queue" aria-label="Remove from queue" data-queue-remove-id="${esc(it.id||'')}"><svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button>`
       : '';
-    const subtitle=it._queueIndex===0&&!titleIsBareSegment?buildSubtitle(it,typeKey,parts):'';
+    const subtitle=(typeKey==='music'&&parts.artist)||(it._queueIndex===0&&!titleIsBareSegment)?buildSubtitle(it,typeKey,parts):'';
     const titleCell=`${esc(titleText||(typeKey==='music'?segmentText(typeKey):''))}${subtitle?`<span class="prog-subtitle">${esc(subtitle)}</span>`:''}`;
     rows.push(`<tr class="${rowClass}" ${clickAttrs}><td class="ts">${relLabel(it._queueIndex)}</td><td>${segmentInline(typeKey)}</td><td class="ti">${titleCell}</td><td class="ho">${esc(sourceText)}</td><td class="du">${fmtDur(it,typeKey)}</td><td class="ac">${action}</td></tr>`);
   });

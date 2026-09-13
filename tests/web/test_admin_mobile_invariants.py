@@ -1159,6 +1159,12 @@ def test_programme_table_desktop_colgroup_has_all_columns() -> None:
         assert f'class="{col}"' in text, f'renderProgramme() must emit <col class="{col}"> inside the colgroup.'
 
 
+def test_programme_time_column_keeps_heading_clear_of_type() -> None:
+    """The relative-time heading needs enough fixed width for its longest label."""
+    text = _read_admin_html()
+    assert re.search(r"\.a-programme \.col-time\s*\{[^}]*width\s*:\s*72px", text)
+
+
 def test_scaletta_category_only_labels_are_not_repeated() -> None:
     """A category badge must not be followed by the same category as its title."""
     text = _read_admin_html()
@@ -1183,6 +1189,63 @@ def test_now_playing_reads_source_kind_from_metadata_too() -> None:
     assert "seg.source_kind==='local'" not in text, (
         "splitTrackLabel() must resolve source_kind through segmentSourceKind(), not the bare segment field."
     )
+
+
+def test_scaletta_source_labels_are_safe_and_do_not_control_actions() -> None:
+    """Fonte labels are a presentation mapping; queue source remains the action gate."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+    source_helper = text[text.index("function programmeSourceLabel") : text.index("// Subtitle line")]
+
+    assert "const sourceKind=segmentSourceKind(it);" in source_helper
+    assert "switch(sourceKind)" in source_helper
+    for label in ("Local music", "Jamendo", "Starter crate", "Download", "Music", "Studio", "Planned"):
+        assert f"'{label}'" in source_helper
+    assert "if(typeKey!=='music')return actionable?'Studio':'Planned';" in source_helper
+    assert "default:return actionable?(typeKey==='music'?'Music':'Studio'):'Planned';" in source_helper
+    assert "const sourceText=programmeSourceLabel(it,typeKey,actionable);" in render_block
+    assert "const actionable=source==='rendered_queue'" in render_block
+    assert "esc(sourceText)" in render_block
+
+
+def test_scaletta_music_subtitles_cover_later_rows_without_source_suffix() -> None:
+    """Artist subtitles remain useful when Fonte is hidden at tablet widths."""
+    text = _read_admin_html()
+    subtitle = text[text.index("function buildSubtitle") : text.index('// "In produzione"')]
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+
+    assert "if(typeKey==='music'){\n    return parts.artist||'';" in subtitle
+    assert (
+        "const subtitle=(typeKey==='music'&&parts.artist)||(it._queueIndex===0&&"
+        "!titleIsBareSegment)?buildSubtitle(it,typeKey,parts):'';"
+    ) in render_block
+    assert "parts.artist&&it.source_kind" not in subtitle
+    assert "if(typeKey==='banter')return (it.metadata&&it.metadata.title)||'';" in subtitle
+    assert "if(typeKey==='news_flash')return (it.metadata&&it.metadata.category)||'breaking';" in subtitle
+
+
+def test_scaletta_render_cache_covers_consumed_row_metadata() -> None:
+    """A same-ID metadata update must invalidate the presentation cache."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+    cache_line = next(line for line in render_block.splitlines() if "const hash=JSON.stringify" in line)
+
+    for field in (
+        "u.spotify_id",
+        "u.label",
+        "u.source_kind",
+        "u.source",
+        "u.duration_sec",
+        "u.duration_ms",
+        "u.metadata?.source_kind",
+        "u.metadata?.title_only",
+        "u.metadata?.artist",
+        "u.metadata?.title",
+        "u.metadata?.category",
+        "u.metadata?.duration_s",
+        "u.metadata?.duration_ms",
+    ):
+        assert field in cache_line, f"renderProgramme cache key must include {field}"
 
 
 def test_playlist_rows_format_title_only_tracks_without_leading_dash() -> None:
