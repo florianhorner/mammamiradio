@@ -7,8 +7,9 @@ notes.
 
 The scenarios are invented. The clips in `public/audio/` use the station's own
 hosts and cast voices. One of the four moments ("Evening, officially") uses only
-the sun and weather. That is the fresh-install ceiling after explicit opt-in; a
-fresh install shares no Home context before that choice. The other three are
+the sun and weather. That is the fresh-install ceiling after explicit opt-in;
+with default settings, a fresh install shares no Home context before that
+choice. The other three are
 staged examples of the wider Home Profile planned for a later update and may
 reflect an existing home-aware station. The page reads no Home Assistant data
 and sends nothing anywhere.

@@ -281,8 +281,8 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     assert "Yes, I hear it" not in first_listen
     assert "current device" in lowered_first_listen or "device in front of you" in lowered_first_listen
     assert any(route in first_listen for route in ("Bluetooth", "AirPlay"))
-    assert "**See what the hosts would receive**" in first_listen
-    assert "**Let Marco and Giulia use these details**" in first_listen
+    assert "**See what the hosts would receive**" in rendered_first_listen
+    assert "**Let Marco and Giulia use these details**" in rendered_first_listen
     assert "No HACS integration" in first_listen
 
     admin_default = first_listen.index("producer desk")
@@ -314,7 +314,11 @@ def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
     assert "offline, attributed twelve-track starter collection" in rendered
     assert "no provider account or network music source is required" in rendered
     assert "**Host home context** choice is omitted and remains off" in rendered
+    assert "MAMMAMIRADIO_HA_CONTEXT_ENABLED=true" in readme
     assert "Previewing does not publish the snapshot into host scripts or send it to an AI provider" in rendered
+    assert "spoken text also goes to the configured voice service or Edge" in rendered
+    assert "no account system, central service, or project-operated analytics upload" in rendered
+    assert "Edge is keyless but still online" in rendered
     assert "## Operator checks" in readme
 
 

@@ -94,7 +94,7 @@ test("explainer reachability stays aligned with the H4 Home-moment pack", () => 
 test("the local concept makes its privacy boundary explicit", () => {
   assert.match(html, /This demo reads no Home Assistant data/);
   assert.match(html, /No live data connected/);
-  assert.match(html, /fresh install shares no Home context/i);
+  assert.match(html, /With default settings, a fresh install shares no Home context/i);
   assert.match(html, /planned for a later update/i);
 });
 
@@ -146,7 +146,7 @@ test("the day-one boundary is said in plain words", () => {
   // audio from the narrower fresh-install Home authorization.
   assert.match(html, /cast premium voices/);
   assert.match(html, /starts with packaged audio/);
-  assert.match(html, /Home access stays off until you opt in/);
+  assert.match(html, /with default settings, Home access stays off until you opt in/);
 });
 
 test("exactly two calls to action carry the gold", () => {

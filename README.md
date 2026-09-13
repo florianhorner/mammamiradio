@@ -51,15 +51,16 @@ material only when there is something worth airing. The show keeps going when
 the house has nothing to say.
 
 The four public demos are staged recordings made with invented data, so anyone
-can play them without sharing a home. In a fresh installation, Home context
-starts off. After you inspect the filtered preview and opt in, the current grant
-is limited to coarse daylight and weather. The arrival, coffee, and laundry
-moments show the wider Home Profile planned for a later update; existing
-home-aware stations may already have broader context.
+can play them without sharing a home. With the default Home-context setting, a
+fresh installation starts off. After you inspect the filtered preview and opt
+in, its current authorization is limited to coarse daylight and weather. The
+arrival, coffee, and laundry moments show the wider Home Profile planned for a
+later update; existing home-aware stations may already have broader context.
 
 The station runs on your hardware, takes no commands, and controls nothing in
-your home. There is no Mamma Mi Radio account, subscription, or telemetry. You
-add provider keys only when you want freshly written dialogue or premium voices.
+your home. There is no Mamma Mi Radio account, subscription, or project-operated
+analytics upload. You add provider keys only when you want freshly written
+dialogue or premium voices.
 
 **Status:** stable, single maintainer, running daily in one household. [The full
 honest assessment](docs/status-quo.md) separates engineering maturity from the
@@ -90,11 +91,11 @@ you can find First Listen under **Motore -> Setup**.
 2. Select **I hear you** only after you hear Mamma Mi Radio. Select **No sound yet**
    for [repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
 3. Select **Finish with Home private**, or choose **Add live host writing**.
-   Home context still stays off unless you open **See what the hosts would receive**
-   and then select **Let Marco and Giulia use these details**. You can choose
-   **Keep Home private** from that review instead. If the preview contains only
-   daylight and weather, the app labels it ambient-only and recommends the private
-   path.
+   With default settings, Home context stays off unless you open **See what the
+   hosts would receive** and then select **Let Marco and Giulia use these details**.
+   You can choose **Keep Home private** from that review instead. If the preview
+   contains only daylight and weather, the app labels it ambient-only and
+   recommends the private path.
 4. Select **Listen to the station** to enter the `/listen` station page, or
    **Open station controls** to return to `/admin`. The handoff preserves the
    audio already playing. Install the [HACS
@@ -135,9 +136,10 @@ macOS users can run `./setup-mac.sh`; venv installs can run `./start.sh`.
 
 | You add | The station adds |
 |---------|------------------|
-| Nothing | Twelve credited local tracks, station imaging, the reviewed First Listen recording, and 21 packaged host breaks. Edge TTS is a keyless online fallback for other stock copy |
+| Nothing | Twelve packaged, credited tracks, station imaging, the 15-second First Listen opening, and 21 prerecorded Demo Radio breaks. Those assets make no provider call; other stock copy can use keyless online Edge TTS |
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Written-on-the-fly banter, news flashes, and ad breaks for forty fictional brands. Billed to you; the control room shows a running estimate |
-| OpenAI, Azure Speech, or ElevenLabs voice credentials | The premium voices the hosts were cast with, with keyless online Edge TTS as the fallback |
+| ElevenLabs voice credentials | The cast Marco and Giulia voices used in the public demos, with keyless online Edge TTS as the fallback |
+| OpenAI or Azure Speech credentials | Alternative cloud voices where you explicitly select them |
 | An AI key plus approved, filtered Home context | On fresh installs today, opted-in coarse daylight and weather. Broader household moments remain for existing home-aware stations and a later Home Profile update |
 
 The same OpenAI API key can cover both writing and OpenAI TTS when you select
@@ -147,20 +149,23 @@ ElevenLabs change only the voices.
 
 ## Privacy
 
-On a fresh install, Home context is off. The **Host home context** choice is
-omitted and remains off until you hear the station, inspect the filtered
-preview, and explicitly choose **Let Marco and Giulia use these details**. The
-station does not poll Home state for host material. You can keep Home private
-without fetching a preview. If you want household details on air, mute any
-entity the hosts should ignore. Previewing does not publish the snapshot into
-host scripts or send it to an AI provider.
+With the default Home-context setting, a fresh install starts off. The **Host
+home context** choice is omitted and remains off until you hear the station,
+inspect the filtered preview, and explicitly choose **Let Marco and Giulia use
+these details**. An explicit `MAMMAMIRADIO_HA_CONTEXT_ENABLED=true` operator
+setting overrides that guided default. The station does not poll Home state for
+host material while context is off. You can keep Home private without fetching
+a preview. If you want household details on air, mute any entity the hosts
+should ignore. Previewing does not publish the snapshot into host scripts or
+send it to an AI provider.
 
-With Home context on and an AI host key set, the approved, filtered details may
-go to that provider to write the show and extract post-air memory. That memory
-is only written after generated material airs, and only while Home context
-stays on. Without a script key, no Home context reaches an AI writing
-provider. Generated writing and premium voices use online services; Edge TTS
-is online too.
+After opt-in, the active writing provider receives the authorized, filtered
+prompt slice. If a Home-derived line uses online speech synthesis, that spoken
+text also goes to the configured voice service or Edge. Existing legacy
+installations may also use Anthropic to generate labels from sanitized entity
+metadata; optional AI mood naming sends a bounded Home-state summary. Post-air
+memory is written only after generated material airs and only while Home context
+stays on. Without a script key, no Home context reaches an AI writing provider.
 
 Turning Home context off stops Home-state and timer polling. It cancels
 Home-derived generation and memory work, removes queued Home-derived breaks,
@@ -169,9 +174,11 @@ it cannot write Home memory afterward. Home Assistant entity publishing can
 stay on while host context stays off.
 
 The station itself runs on your hardware. Mamma Mi Radio has no account system,
-central service, or telemetry. Provider calls use your own keys. In the Home
-Assistant app, saved keys live in `/config/secrets.env`; the UI never echoes
-them.
+central service, or project-operated analytics upload. Operational counters and
+the optional provenance ledger remain local. Paid AI calls use credentials you
+supply; Edge is keyless but still online. In the Home Assistant app, saved keys
+live in `/config/secrets.env`; the UI never echoes them. Provider-side processing
+follows each provider's terms.
 
 ## Music
 

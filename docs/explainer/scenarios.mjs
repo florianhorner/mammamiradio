@@ -161,7 +161,7 @@ const scenarios = {
     time: "21:48 · Sunday",
     tag: "Sun and weather",
     heading: "Evening, officially.",
-    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. After you explicitly allow daylight and weather, this is the fresh-install ceiling. Nothing from Home is shared before that choice.",
+    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. After you explicitly allow daylight and weather, this is the fresh-install ceiling. The guided default shares nothing from Home before that choice.",
     host: "Giulia checks the sky",
     quote: "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
     reachability: "day-one",
