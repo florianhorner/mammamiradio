@@ -336,7 +336,7 @@ def has_report(words):
 def forbidden_report(source):
     # A static guard for literal commands, not a Bash evaluator. YAML folding
     # and shell continuations are resolved before matching command arguments.
-    lexer = shlex.shlex(fold_shell_lines(source), posix=True, punctuation_chars=';&|()\n')
+    lexer = shlex.shlex(fold_shell_lines(source), posix=True, punctuation_chars=';&|()<>\n')
     lexer.whitespace = ' \t\r'
     lexer.whitespace_split = True
     lexer.commenters = ''  # comments were removed without losing newlines above
@@ -358,6 +358,7 @@ reject = [
     'python3 "scripts/check_model_\\\nregistry.py" --report',
     'python3   "scripts/check_model_registry.py"   --report',
     'python3 scripts/check_model_registry.py --today 2026-09-10 --report',
+    'python3 scripts/check_model_registry.py --report>/tmp/report',
     '"$python" "$checker" --report',
     '# comment \\\npython3 scripts/check_model_registry.py --report',
     yaml.safe_load('run: >-\n  python3 scripts/check_model_registry.py\n  --report\n')['run'],
@@ -368,6 +369,7 @@ allow = [
     'python3 scripts/check_model_registry.py \\\\\nother --report',
     "echo 'scripts/check_model_registry.py \\\n--report'",
     'python3 other.py # scripts/check_model_registry.py --report',
+    'python3 other.py --report>/tmp/report',
     'echo "python3 scripts/check_model_registry.py --report"',
     "printf '%s\\n' 'python3 scripts/check_model_registry.py --report'",
     '"$python" "$checker" --providers --gate liveness \\\n  "${args[@]}"',
