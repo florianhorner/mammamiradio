@@ -326,6 +326,31 @@ def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
     assert "## Operator checks" in readme
 
 
+def test_readme_separates_italian_hosts_from_the_default_broadcast_language() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    opening = " ".join(readme.split("## ▶", 1)[0].split())
+
+    assert "two Italian hosts" in opening
+    assert "mostly in English" in opening
+    assert "Italian radio show" not in opening
+
+
+def test_readme_preserves_existing_home_use_alongside_fresh_install_privacy() -> None:
+    """Keep the author's reported use, demo fixtures, and new-install grants distinct."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Why it feels like radio", 1)[1].split("\n## ", 1)[0]
+    rendered = " ".join(section.split())
+
+    assert "I chose to share those details with the station" in rendered
+    assert "public demos use invented data" in rendered
+    assert "Existing home-aware stations already use broader household context" in rendered
+    assert "Home context off under the default settings" in rendered
+    assert "one unambiguous weather source" in rendered
+    assert "temperature rounded to five-degree Celsius bands" in rendered
+    assert "Home Profile update will add per-category controls" in rendered
+    assert "Household-aware banter on existing home-aware stations" in readme
+
+
 def test_optional_ha_playback_docs_keep_the_frozen_media_source_way_out() -> None:
     """HACS remains optional, but its room-playback route must stay actionable."""
     doc = DOC.read_text(encoding="utf-8")

@@ -9,7 +9,8 @@
 
 ## You built the sensors. You wrote the automations. Now somebody finally notices.
 
-Marco and Giulia host a late-night Italian radio show on hardware you control.
+Marco and Giulia, two Italian hosts, broadcast a late-night show mostly in
+English. The station runs on hardware you control.
 They play music, argue like hosts who have known each other too long, and read
 ads for forty companies that do not exist. If you invite the house in, its small
 dramas become part of the show.
@@ -50,13 +51,17 @@ imaging, music, and forty fictional sponsors. Home details enter as editorial
 material only when there is something worth airing. The show keeps going when
 the house has nothing to say.
 
-The four public demos are staged recordings made with invented data, so anyone
-can play them without sharing a home. With the default Home-context setting, a
-fresh installation starts off. After you inspect the filtered preview and opt
-in, it can share a daylight state and one unambiguous weather source, with
-temperature rounded to five-degree Celsius bands. The arrival, coffee, and
-laundry moments show the wider Home Profile planned for a later update;
-existing home-aware stations may already have broader context.
+At home, they regularly call me out about the washing machine, what I'm watching
+or listening to, and which room I'm in. I chose to share those details with the
+station. The four public demos use invented data so you can hear that kind of
+exchange without connecting your home.
+
+Existing home-aware stations already use broader household context. Fresh
+installations start with Home context off under the default settings. After you
+inspect the filtered preview, their current guided opt-in is limited to daylight
+and one unambiguous weather source, with temperature rounded to five-degree
+Celsius bands. A later Home Profile update will add per-category controls for
+broader sharing.
 
 The station runs on your hardware. It is not a voice assistant and does not run
 household automations. If you explicitly choose a Home Assistant speaker, it
@@ -143,7 +148,7 @@ macOS users can run `./setup-mac.sh`; venv installs can run `./start.sh`.
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Written-on-the-fly banter, news flashes, and ad breaks for forty fictional brands. Billed to you; the control room shows a running estimate |
 | ElevenLabs voice credentials | The cast Marco and Giulia voices used in the public demos, with keyless online Edge TTS as the fallback |
 | OpenAI or Azure Speech credentials | Alternative cloud voices where you explicitly select them |
-| An AI key plus approved, filtered Home context | On fresh installs today, opted-in coarse daylight and weather. Broader household moments remain for existing home-aware stations and a later Home Profile update |
+| An AI key plus approved, filtered Home context | Household-aware banter on existing home-aware stations. Today's guided opt-in on fresh installs is limited to coarse daylight and weather |
 
 The same OpenAI API key can cover both writing and OpenAI TTS when you select
 OpenAI for each. Provider usage is charged to the API account behind your key;
