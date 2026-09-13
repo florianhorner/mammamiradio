@@ -15,8 +15,14 @@ def _config(*, models: list[str] | None = None, unpriced: bool = False):
 
     return SimpleNamespace(
         models=SimpleNamespace(
-            catalog={"openai": {"large": "registry-large", "small": "registry-small"}},
-            default_openai_eval_models=lambda: models or ["registry-large", "registry-small"],
+            catalog={
+                "openai": {
+                    "large": "registry-large",
+                    "mid": "registry-mid",
+                    "small": "registry-small",
+                }
+            },
+            default_openai_eval_models=lambda: models or ["registry-large", "registry-mid", "registry-small"],
             price_for_model=price_for_model,
         ),
         display_station_name="Mamma Mi Radio",
@@ -317,6 +323,11 @@ async def test_run_one_emits_schema_versioned_floor_receipt(monkeypatch) -> None
     assert record["result_status"] == "evaluated"
     assert record["floor"]["status"] == "FAIL"
     assert record["floor"]["gates"]["station_name"]["reason"] == "foreign_station_name"
+    assert config.models.catalog["openai"] == {
+        "large": "registry-large",
+        "mid": "registry-large",
+        "small": "registry-large",
+    }
 
 
 @pytest.mark.asyncio

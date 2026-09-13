@@ -172,7 +172,7 @@ def test_first_listen_plain_status_chips_meet_normal_text_contrast() -> None:
     chip = _css_declarations(_css_block(first_listen_css, ".first-listen-panel .status-chip"))
 
     assert preview.get("background") == "var(--bg-elevated)"
-    assert _normalized_css_value(chip.get("background", "")) == "color-mix(insrgb,var(--cream)4%,transparent)"
+    assert chip.get("background") == "transparent", "Status text must not regain a button-like fill."
 
     expected_declarations = {
         "ready": "var(--ok-text)",
@@ -188,8 +188,7 @@ def test_first_listen_plain_status_chips_meet_normal_text_contrast() -> None:
             f"{selector} color must remain {expected}, got {actual!r}."
         )
 
-    preview_background = _hex_rgb(tokens["--bg-elevated"])
-    chip_background = _alpha_composite(_hex_rgb(tokens["--cream"]), preview_background, 0.04)
+    chip_background = _hex_rgb(tokens["--bg-elevated"])
     status_colors = {
         "ready": _hex_rgb(tokens["--ok-text"]),
         "working": _hex_rgb(tokens["--sun"]),

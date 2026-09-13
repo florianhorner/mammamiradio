@@ -5,13 +5,13 @@ already running, and somewhere inside it the hosts mention something only your
 house could have told them. The sensor data arrives after the moment, as liner
 notes.
 
-The scenarios are invented. Marco and Giulia are not: the clips in
-`public/audio/` are the station's own hosts in their own configured voices.
-One of the four moments ("Evening, officially") uses only the sun and the
-weather: the narrowest grant after you opt in. A fresh install shares no Home
-context until that choice. The other three need a wider grant, and the page
-says so. The page reads no Home Assistant data and sends
-nothing anywhere.
+The scenarios are invented. The clips in `public/audio/` use the station's own
+hosts and cast voices. One of the four moments ("Evening, officially") uses only
+the sun and weather. That is the fresh-install ceiling after explicit opt-in; a
+fresh install shares no Home context before that choice. The other three are
+staged examples of the wider Home Profile planned for a later update and may
+reflect an existing home-aware station. The page reads no Home Assistant data
+and sends nothing anywhere.
 
 ## How it is put together
 
@@ -48,13 +48,14 @@ npm run test:e2e  # drives the funnel in Chromium; run `npx playwright install c
 ```
 
 The build fails rather than shipping a broken page when a scenario in
-`index.html` and `scenarios.mjs` disagree, a clip is missing, a derived
-transcript is empty, no ambient-grant scenario exists, or a produced
-clip has a `revealAtSec` that is absent or falls outside the clip.
+`index.html` and `scenarios.mjs` disagree, the explainer reachability labels
+drift from the H4 Home-moment pack, a clip is missing, a derived transcript is
+empty, no post-opt-in `day-one` scenario exists, or a produced clip has a
+`revealAtSec` that is absent or falls outside the clip.
 
 The unit tests pin the framing (station first, sensors as the reveal, no
 pipeline ordinals, including the meta description), the failure contract, the
-transport, the ambient-grant scenario's sun/weather-only entities, and the responsive
+transport, the `day-one` scenario's sun/weather-only entities, and the responsive
 and reduced-motion treatments, plus the link-preview card: that its URLs
 agree, that the og: and twitter: copy cannot drift apart, that the card ships
 in `dist/`, and that the declared size matches the real PNG. The end-to-end

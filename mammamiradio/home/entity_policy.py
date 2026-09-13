@@ -9,9 +9,10 @@ import os
 import re
 import threading
 import time
-import uuid
 from pathlib import Path
 from typing import Any
+
+from mammamiradio.home.atomic_json import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -207,18 +208,7 @@ def policy_revision(cache_dir: Path | None) -> int:
 def _write_policy(cache_dir: Path, policy: dict[str, Any]) -> None:
     path = policy_path(cache_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp_path.write_text(json.dumps(policy, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
-        os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, path)
-        os.chmod(path, 0o600)
-    except OSError:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(path, policy, ensure_ascii=False)
 
 
 def _policy_parts(policy: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], int]:

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import scenarios from "../scenarios.mjs";
 
-const [html, css, js, scenariosSource] = await Promise.all([
+const [html, css, js, scenariosSource, h4ManifestSource] = await Promise.all([
   readFile("index.html", "utf8"),
   readFile("styles.css", "utf8"),
   readFile("app.js", "utf8"),
   readFile("scenarios.mjs", "utf8"),
+  readFile("../../mammamiradio/web/static/audio/home_moments/spoken_assets.json", "utf8"),
 ]);
+const h4Manifest = JSON.parse(h4ManifestSource);
 const addonUrl = "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio";
 const sourceUrl = "https://github.com/florianhorner/mammamiradio";
 const pilotUrl = "https://github.com/florianhorner/mammamiradio/discussions/831";
@@ -67,23 +70,37 @@ test("no scenario accent is green", () => {
   assert.doesNotMatch(css, /--sage/);
 });
 
-test("at least one moment is the narrowest post-opt-in grant", () => {
+test("the day-one moment is the sun and weather ceiling after opt-in", () => {
   // Narrow ambient context projects only the sun and the weather
   // (home/authorization.py), and only after the operator opts in. This
-  // guard keeps the ambient-grant scenario from being silently traded away.
-  assert.match(scenariosSource, /reachability: "ambient-grant"/);
-  const ambientBlocks = scenariosSource.match(/reachability: "ambient-grant"/g);
-  assert.ok(ambientBlocks.length >= 1);
-  const quietBlock = scenariosSource.slice(scenariosSource.indexOf("quiet: {"));
-  const sensorNames = [...quietBlock.matchAll(/\["[^"]*", "([^"]+)"/g)].map((m) => m[1]);
-  for (const name of sensorNames.slice(0, 5)) {
-    assert.match(name, /^(sun\.sun|weather\.home)/, `ambient-grant scenario uses non-ambient entity: ${name}`);
+  // guard keeps that scenario from being silently traded away.
+  const dayOneScenarios = Object.values(scenarios).filter((scenario) => scenario.reachability === "day-one");
+  assert.equal(dayOneScenarios.length, 1);
+  for (const [, name] of dayOneScenarios[0].sensors) {
+    assert.match(name, /^(sun\.sun|weather\.home)/, `day-one scenario uses non-ambient entity: ${name}`);
   }
+});
+
+test("explainer reachability stays aligned with the H4 Home-moment pack", () => {
+  const explainerReachability = Object.fromEntries(
+    Object.entries(scenarios).map(([id, scenario]) => [id, scenario.reachability]),
+  );
+  const h4Reachability = Object.fromEntries(
+    h4Manifest.assets.map((asset) => [asset.path.replace(/\.mp3$/, ""), asset.reachability]),
+  );
+  assert.deepEqual(explainerReachability, h4Reachability);
 });
 
 test("the local concept makes its privacy boundary explicit", () => {
   assert.match(html, /This demo reads no Home Assistant data/);
   assert.match(html, /No live data connected/);
+  assert.match(html, /fresh install shares no Home context/i);
+  assert.match(html, /planned for a later update/i);
+});
+
+test("public demo identifiers are plainly fictional", () => {
+  const personIds = [...`${html}\n${scenariosSource}`.matchAll(/\bperson\.[a-z0-9_]+/g)].map((match) => match[0]);
+  assert.deepEqual([...new Set(personIds)].sort(), ["person.guest"]);
 });
 
 test("the page offers the install and source exits without a dead live link", () => {
@@ -125,11 +142,11 @@ test("the day-one boundary is said in plain words", () => {
   assert.match(html, /On day one the house stays off the air\./);
   assert.match(html, /day-one-chip/);
   assert.match(html, /class="aired-truth"/);
-  // The demos are the fully-wired dreamstate (premium voices). The page may
-  // lead with the top trim, but it must say the trim exists: a fresh install
-  // starts simpler. This clause is the honesty; do not lose it in a rewrite.
-  assert.match(html, /fully wired/);
-  assert.match(html, /starts simpler/);
+  // The demos may lead with cast voices, but must distinguish packaged first
+  // audio from the narrower fresh-install Home authorization.
+  assert.match(html, /cast premium voices/);
+  assert.match(html, /starts with packaged audio/);
+  assert.match(html, /Home access stays off until you opt in/);
 });
 
 test("exactly two calls to action carry the gold", () => {

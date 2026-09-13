@@ -678,3 +678,62 @@ def test_broadcast_chain_cpu_budget_logged(tmp_path, capsys):
         print(f"\n[broadcast-chain CPU] 3s segment colour pass: {elapsed:.2f}s")
     assert out.exists() and out.stat().st_size > 0
     assert elapsed < 60.0  # loose sanity bound; a pathological hang fails, real timing is the log
+
+
+def _render_lavfi_mp3(path, *sources, filter_complex=None):
+    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+    for source in sources:
+        cmd.extend(["-f", "lavfi", "-i", source])
+    if filter_complex:
+        cmd.extend(["-filter_complex", filter_complex, "-map", "[out]"])
+    subprocess.run([*cmd, "-c:a", "libmp3lame", str(path)], check=True)
+
+
+@pytest.mark.requires_ffmpeg
+def test_atempo_compresses_while_normal_speed_preserves_duration(tmp_path):
+    """Exercise the real FFmpeg filter used by all TTS engines on arm64 CI."""
+    src = tmp_path / "src.mp3"
+    _render_lavfi_mp3(src, "sine=frequency=440:duration=6")
+    baseline = probe_duration_sec(src)
+    assert baseline is not None
+
+    plain, fast = tmp_path / "plain.mp3", tmp_path / "fast.mp3"
+    normalize(src, plain, loudnorm=False, tempo=1.0)
+    normalize(src, fast, loudnorm=False, tempo=1.55)
+    plain_duration, fast_duration = probe_duration_sec(plain), probe_duration_sec(fast)
+    assert plain_duration == pytest.approx(baseline, abs=0.3)
+    assert fast_duration is not None and fast_duration < baseline * 0.75
+
+
+@pytest.mark.requires_ffmpeg
+@pytest.mark.parametrize("tempo", [1.95, 3.1])
+def test_tempo_pass_survives_speech_with_real_gaps(tmp_path, tempo):
+    """Exercise gap removal and a multi-factor chain against real FFmpeg."""
+    src = tmp_path / "gapped.mp3"
+    _render_lavfi_mp3(
+        src,
+        "sine=frequency=440:duration=1",
+        "anullsrc=r=44100:cl=mono:d=1",
+        filter_complex="[0:a][1:a][0:a][1:a][0:a]concat=n=5:v=0:a=1[out]",
+    )
+    baseline = probe_duration_sec(src)
+    assert baseline is not None and baseline > 4
+
+    out = tmp_path / "fast.mp3"
+    normalize(src, out, loudnorm=False, tempo=tempo)
+    fast = probe_duration_sec(out)
+
+    assert fast is not None and fast > 0.2, "gap-strip plus compression emptied the file"
+    assert fast < baseline / tempo, "silence was not removed before compressing"
+
+
+@pytest.mark.requires_ffmpeg
+def test_tempo_pass_does_not_empty_a_quiet_render(tmp_path):
+    """The internal-gap threshold must preserve quiet provider output."""
+    src = tmp_path / "quiet.mp3"
+    _render_lavfi_mp3(src, "sine=frequency=440:duration=5,volume=-32dB")
+    out = tmp_path / "quiet_fast.mp3"
+    normalize(src, out, loudnorm=False, tempo=1.95)
+
+    duration = probe_duration_sec(out)
+    assert duration is not None and duration > 0.5, f"quiet render collapsed to {duration}s"

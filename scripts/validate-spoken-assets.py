@@ -92,6 +92,32 @@ BROWSER_GUIDE_PATHS = (
     "first_listen/success.mp3",
 )
 BROWSER_GUIDE_HOSTS = ("Marco", "Giulia")
+FREE_VOICE_PATH = "voice_examples/free-voices.mp3"
+FREE_VOICE_TRANSCRIPT = (
+    "Marco: Mah… Giulia, somebody’s changed my microphone. My cousin says it’s the future. "
+    "Giulia: Same us. Different voices. And your cousin still owes us the old microphone."
+)
+# Home moments are the Step 3 demo pack. They are byte copies of the explainer's
+# rendered segments, so the explainer manifest stays the single source of truth and
+# this validator binds to it rather than restating durations and hashes a third
+# time. They keep their own budget and duration band: they are ~30-36s station
+# segments, three times longer and ~1.7 MB heavier than the narration guides, and
+# folding them into BROWSER_GUIDE_MAX_BYTES would overflow that budget instead of
+# measuring it.
+HOME_MOMENT_DIRNAME = "home_moments"
+HOME_MOMENT_BUNDLE = "first-listen-home-moments"
+HOME_MOMENT_SOURCE_ROOT = REPO_ROOT / "docs" / "explainer" / "public" / "audio"
+HOME_MOMENT_SOURCE_MANIFEST = HOME_MOMENT_SOURCE_ROOT / "segments.manifest.json"
+HOME_MOMENT_MAX_BYTES = 2 * 1024 * 1024
+HOME_MOMENT_MIN_DURATION_SECONDS = 20.0
+HOME_MOMENT_MAX_DURATION_SECONDS = 45.0
+HOME_MOMENT_DURATION_TOLERANCE_SECONDS = 0.05
+# "day-one" is reachable by a fresh install in narrow ambient context;
+# "home-grant" needs household details it does not have. The vocabulary is the
+# explainer's (docs/explainer/scenarios.mjs) and means the same thing here.
+HOME_MOMENT_DAY_ONE = "day-one"
+HOME_MOMENT_HOME_GRANT = "home-grant"
+HOME_MOMENT_REACHABILITIES = frozenset({HOME_MOMENT_DAY_ONE, HOME_MOMENT_HOME_GRANT})
 DEMO_BANTER_CODEC = "mp3"
 DEMO_BANTER_SAMPLE_RATE_HZ = 48_000
 DEMO_BANTER_CHANNELS = 2
@@ -537,11 +563,97 @@ def _browser_route_error(path: Path, *, relative_path: str, static_root: Path) -
     return None
 
 
-class _GuideTranscriptParser(HTMLParser):
-    """Collect plain-text transcripts from First Listen guide blocks."""
+class _HomeMomentSceneParser(HTMLParser):
+    """Collect each Step 3 scene's declared reachability and whether it wears a chip.
+
+    A regex over the ``<h5>`` was the first attempt and it was wrong: the chip is
+    styled by class alone (``.first-listen-panel .day-one-chip`` in
+    first-listen.css), so it renders identically from anywhere inside the scene.
+    Moving it one line down into the caption defeated the check while a reader
+    still saw "day one" on a gated moment. Walking the whole subtree is what
+    makes the guard see what the reader sees.
+    """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
+        self.scenes: dict = {}
+        self.duplicate_keys: set = set()
+        self.unkeyed_scenes = 0
+        self._depth = 0
+        self._active = None
+        self._root_depth = 0
+        self._in_quote = False
+        self._quote_parts: list = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if tag == "div":
+            self._depth += 1
+            if self._active is None and "household-scene" in classes:
+                key = attributes.get("data-explainer-scenario")
+                if key is None:
+                    self.unkeyed_scenes += 1
+                    return
+                if key in self.scenes:
+                    self.duplicate_keys.add(key)
+                self.scenes[key] = {
+                    "reachability": attributes.get("data-reachability"),
+                    "chipped": False,
+                    "quote": None,
+                }
+                self._active = key
+                self._root_depth = self._depth
+                return
+        if self._active is not None and "day-one-chip" in classes:
+            self.scenes[self._active]["chipped"] = True
+        # The pull quote is the first <span> in the scene; later spans belong to
+        # the play-button copy inside .household-example.
+        if tag == "span" and self._active is not None and self.scenes[self._active]["quote"] is None:
+            self._in_quote = True
+            self._quote_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "span" and self._in_quote and self._active is not None:
+            self.scenes[self._active]["quote"] = " ".join("".join(self._quote_parts).split())
+            self._in_quote = False
+            self._quote_parts = []
+        if tag == "div":
+            if self._active is not None and self._depth == self._root_depth:
+                self._active = None
+                self._root_depth = 0
+                self._in_quote = False
+                self._quote_parts = []
+            self._depth = max(0, self._depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._in_quote:
+            self._quote_parts.append(data)
+
+
+class _GuideTranscriptParser(HTMLParser):
+    """Collect plain-text transcripts from one family of First Listen audio blocks.
+
+    The container class, its key attribute and the play-button class are
+    parameters so the home-moment pack is held to the same DOM contract as the
+    narration guides instead of being validated by a near-copy of this class.
+    """
+
+    def __init__(
+        self,
+        *,
+        container_class: str = "guide-audio",
+        key_attribute: str = "data-guide",
+        button_class: str = "guide-audio-play",
+        button_key_attribute: str = "data-guide-key",
+        toggle_function: str = "toggleFirstListenGuide",
+    ) -> None:
+        super().__init__(convert_charrefs=True)
+        self._container_class = container_class
+        self._key_attribute = key_attribute
+        self.button_class = button_class
+        self.button_key_attribute = button_key_attribute
+        self.toggle_function = toggle_function
         self.guide_keys: set[str] = set()
         self.duplicate_keys: set[str] = set()
         self.transcripts: dict[str, str] = {}
@@ -559,8 +671,8 @@ class _GuideTranscriptParser(HTMLParser):
         classes = set((attributes.get("class") or "").split())
         if tag == "div":
             self._div_depth += 1
-            guide_key = attributes.get("data-guide")
-            if self._active_guide is None and "guide-audio" in classes and guide_key:
+            guide_key = attributes.get(self._key_attribute)
+            if self._active_guide is None and self._container_class in classes and guide_key:
                 if guide_key in self.guide_keys:
                     self.duplicate_keys.add(guide_key)
                 self.guide_keys.add(guide_key)
@@ -571,9 +683,9 @@ class _GuideTranscriptParser(HTMLParser):
         elif tag == "p" and self._in_transcript and self._active_guide is not None:
             self._collecting_paragraph = True
             self._parts = []
-        elif tag == "button" and "guide-audio-play" in classes:
+        elif tag == "button" and self.button_class in classes:
             button = {
-                "data-guide-key": attributes.get("data-guide-key"),
+                "key": attributes.get(self.button_key_attribute),
                 "onclick": attributes.get("onclick"),
             }
             if self._active_guide is None:
@@ -606,15 +718,156 @@ class _GuideTranscriptParser(HTMLParser):
 
 
 _GUIDE_MAP_PATTERN = re.compile(r"const\s+FIRST_LISTEN_GUIDES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
+_HOME_MOMENT_MAP_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
+_HOME_MOMENT_NOUN_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLE_NOUNS\s*=\s*\{(?P<body>[^}]*)\}")
+_HOME_MOMENT_NOUN_ENTRY_PATTERN = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]*)\s*:\s*'(?P<noun>[^']*)'")
 _GUIDE_ENTRY_PATTERN = re.compile(
     r"(?:'(?P<quoted_key>[^']+)'|(?P<plain_key>[A-Za-z][A-Za-z0-9_-]*))\s*:\s*"
     r"\{\s*file\s*:\s*'(?P<file>[^']+)'\s*,\s*version\s*:\s*'(?P<version>[^']+)'\s*\}"
 )
 
 
+def _validate_audio_block_dom(
+    source: str,
+    expected: dict,
+    *,
+    parser: _GuideTranscriptParser,
+    noun: str,
+    container_hint: str,
+) -> list[str]:
+    """Bind one family of audio blocks in the admin template to its manifest.
+
+    Container/button/transcript checks are identical for the narration guides and
+    the home-moment pack; only the markup shape and the noun differ. Keeping one
+    implementation is what stops a second pack from shipping with a weaker
+    contract than the first.
+    """
+
+    errors: list[str] = []
+    expected_keys = set(expected)
+    parser.feed(source)
+    parser.close()
+    for key in sorted(parser.duplicate_keys):
+        errors.append(f"admin {noun} transcript contains duplicate key {key}")
+    missing_containers = sorted(expected_keys - parser.guide_keys)
+    unexpected_containers = sorted(parser.guide_keys - expected_keys)
+    if missing_containers:
+        errors.append(f"admin {noun} containers are missing: {', '.join(missing_containers)}")
+    if unexpected_containers:
+        errors.append(f"admin {noun} containers have unexpected keys: {', '.join(unexpected_containers)}")
+    if parser.orphan_buttons:
+        errors.append(f"admin {noun} play buttons must be inside a {container_hint} container")
+    unexpected_button_containers = sorted(set(parser.buttons) - expected_keys)
+    if unexpected_button_containers:
+        errors.append(
+            f"admin {noun} play buttons have unrecognized container keys: {', '.join(unexpected_button_containers)}"
+        )
+    key_attribute = parser.button_key_attribute
+    for key in sorted(expected_keys):
+        buttons = parser.buttons.get(key, [])
+        if not buttons:
+            errors.append(f"admin {noun} {key} must contain exactly one {parser.button_class} button; found 0")
+            continue
+        if len(buttons) != 1:
+            errors.append(
+                f"admin {noun} {key} must contain exactly one {parser.button_class} button; found {len(buttons)}"
+            )
+        expected_onclick = f"{parser.toggle_function}('{key}',this)"
+        for button in buttons:
+            button_key = button["key"]
+            if button_key is None:
+                errors.append(f"admin {noun} {key} play button is missing {key_attribute}")
+            elif button_key not in expected_keys:
+                errors.append(f"admin {noun} {key} play button has unrecognized {key_attribute} {button_key!r}")
+            elif button_key != key:
+                errors.append(
+                    f"admin {noun} {key} play button {key_attribute} {button_key!r} does not match its container"
+                )
+            onclick = button["onclick"]
+            if onclick != expected_onclick:
+                errors.append(
+                    f"admin {noun} {key} play button onclick {onclick!r} must be exactly {expected_onclick!r}"
+                )
+    missing_transcripts = sorted(expected_keys - set(parser.transcripts))
+    unexpected_transcripts = sorted(set(parser.transcripts) - expected_keys)
+    if missing_transcripts:
+        errors.append(f"admin {noun} transcripts are missing: {', '.join(missing_transcripts)}")
+    if unexpected_transcripts:
+        errors.append(f"admin {noun} transcripts have unexpected keys: {', '.join(unexpected_transcripts)}")
+    for key in sorted(expected_keys & set(parser.transcripts)):
+        transcript = expected[key].get("transcript")
+        if isinstance(transcript, str) and parser.transcripts[key] != " ".join(transcript.split()):
+            errors.append(f"admin {noun} {key} transcript does not match spoken_assets.json")
+    return errors
+
+
+def _parse_admin_audio_map(source: str, pattern: re.Pattern, label: str) -> tuple[dict, list[str]]:
+    """Read one `{key: {file, version}}` map out of the admin template."""
+
+    errors: list[str] = []
+    entries: dict = {}
+    map_match = pattern.search(source)
+    if map_match is None:
+        return entries, [f"admin {label} map is missing"]
+    body = map_match.group("body")
+    for match in _GUIDE_ENTRY_PATTERN.finditer(body):
+        key = match.group("quoted_key") or match.group("plain_key")
+        if key in entries:
+            errors.append(f"admin {label} contains duplicate key {key}")
+        entries[key] = {"file": match.group("file"), "version": match.group("version")}
+    residual = _GUIDE_ENTRY_PATTERN.sub("", body).strip(" \t\r\n,")
+    if residual:
+        errors.append(f"admin {label} contains unrecognized metadata")
+    return entries, errors
+
+
+def _validate_admin_audio_map(
+    entries: dict,
+    expected: dict,
+    *,
+    label: str,
+    noun: str,
+) -> list[str]:
+    """Bind a `{key: {file, version}}` map to its manifest inventory.
+
+    `version` is the cache-bust token in the audio URL. Holding it to the
+    manifest's sha256 prefix is what makes a regenerated clip impossible to ship
+    behind a stale URL — the failure the hardcoded literals could not catch.
+    """
+
+    errors: list[str] = []
+    expected_keys = set(expected)
+    declared_keys = set(entries)
+    missing = sorted(expected_keys - declared_keys)
+    unexpected = sorted(declared_keys - expected_keys)
+    if missing:
+        errors.append(f"admin {label} is missing: {', '.join(missing)}")
+    if unexpected:
+        errors.append(f"admin {label} has unexpected keys: {', '.join(unexpected)}")
+    for key in sorted(expected_keys & declared_keys):
+        manifest_entry = expected[key]
+        relative_path = manifest_entry.get("path")
+        sha256 = manifest_entry.get("sha256")
+        if not isinstance(relative_path, str):
+            continue
+        expected_file = Path(relative_path).name
+        if entries[key]["file"] != expected_file:
+            errors.append(f"admin {noun} {key} file {entries[key]['file']!r} does not match manifest {expected_file!r}")
+        if isinstance(sha256, str):
+            expected_version = sha256[:12]
+            if entries[key]["version"] != expected_version:
+                errors.append(
+                    f"admin {noun} {key} version {entries[key]['version']!r} does not match "
+                    f"manifest sha256 prefix {expected_version!r}"
+                )
+    return errors
+
+
 def _validate_admin_guide_metadata(
     manifest: dict[str, object],
     *,
+    voice_manifest: dict[str, object] | None = None,
+    home_moment_manifest: dict[str, object] | None = None,
     admin_template_path: Path = ADMIN_TEMPLATE_PATH,
 ) -> list[str]:
     """Keep the admin's cache keys and visible transcripts bound to the manifest."""
@@ -635,99 +888,172 @@ def _validate_admin_guide_metadata(
         if not isinstance(relative_path, str) or not relative_path.startswith("first_listen/"):
             continue
         expected[Path(relative_path).stem] = raw_entry
+    voice_assets = voice_manifest.get("assets") if voice_manifest is not None else None
+    if isinstance(voice_assets, list):
+        for entry in voice_assets:
+            if isinstance(entry, dict) and entry.get("path") == "free-voices.mp3":
+                expected["free-voices"] = entry
+
+    guide_entries, errors = _parse_admin_audio_map(source, _GUIDE_MAP_PATTERN, "FIRST_LISTEN_GUIDES")
+    errors.extend(_validate_admin_audio_map(guide_entries, expected, label="FIRST_LISTEN_GUIDES", noun="guide"))
+
+    errors.extend(
+        _validate_audio_block_dom(
+            source,
+            expected,
+            parser=_GuideTranscriptParser(),
+            noun="guide",
+            container_hint="guide-audio data-guide",
+        )
+    )
+    home_errors, home_keys = _validate_admin_home_moment_metadata(source, home_moment_manifest)
+    errors.extend(home_errors)
+    # toggleFirstListenGuide reads HOUSEHOLD_EXAMPLES before FIRST_LISTEN_GUIDES, so a
+    # shared key silently re-points a narration button at a home moment. The two maps
+    # are validated against disjoint manifests, so only this check can see it.
+    shared = sorted(set(guide_entries) & home_keys)
+    if shared:
+        errors.append(
+            f"admin FIRST_LISTEN_GUIDES and HOUSEHOLD_EXAMPLES share keys: {', '.join(shared)}; "
+            "the home moment would shadow the narration clip"
+        )
+    return errors
+
+
+def _validate_admin_home_moment_metadata(source: str, manifest: dict | None) -> tuple[list[str], set]:
+    """Hold the Step 3 demo pack to the same binding as the narration guides.
+
+    Returns its errors plus the declared key set, so the caller can check the two
+    audio maps do not shadow each other.
+    """
+
+    if manifest is None:
+        return [], set()
+    raw_assets = manifest.get("assets")
+    if not isinstance(raw_assets, list):
+        return [], set()  # validate_home_moments reports the malformed inventory.
+    expected = {
+        Path(entry["path"]).stem: entry
+        for entry in raw_assets
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+
+    entries, errors = _parse_admin_audio_map(source, _HOME_MOMENT_MAP_PATTERN, "HOUSEHOLD_EXAMPLES")
+    errors.extend(_validate_admin_audio_map(entries, expected, label="HOUSEHOLD_EXAMPLES", noun="home moment"))
+    errors.extend(
+        _validate_audio_block_dom(
+            source,
+            expected,
+            parser=_GuideTranscriptParser(
+                container_class="household-example",
+                key_attribute="data-home-moment",
+                button_class="household-example-play",
+                button_key_attribute="data-household-example",
+                toggle_function="toggleHouseholdExample",
+            ),
+            noun="home moment",
+            container_hint="household-example data-home-moment",
+        )
+    )
+
+    errors.extend(_validate_home_moment_nouns(source, set(expected)))
+    errors.extend(_validate_home_moment_reachability(source, expected))
+    return errors, set(expected) | set(entries)
+
+
+def _validate_home_moment_nouns(source: str, expected_keys: set) -> list[str]:
+    """Every playable key needs a spoken noun, or its button label degrades silently.
+
+    A key without one falls through to the generic "recording" in
+    ``firstListenGuideLabel``, which reads as a narration clip rather than a
+    scene. Nothing else notices.
+    """
+
+    match = _HOME_MOMENT_NOUN_PATTERN.search(source)
+    if match is None:
+        return ["admin HOUSEHOLD_EXAMPLE_NOUNS map is missing"]
+    entries = {
+        entry.group("key"): entry.group("noun")
+        for entry in _HOME_MOMENT_NOUN_ENTRY_PATTERN.finditer(match.group("body"))
+    }
+    declared = set(entries)
+    errors = [
+        f"admin HOUSEHOLD_EXAMPLE_NOUNS {key} is empty; its button label would fall back to 'recording'"
+        for key in sorted(key for key, noun in entries.items() if not noun.strip())
+    ]
+    missing = sorted(expected_keys - declared)
+    unexpected = sorted(declared - expected_keys)
+    if missing:
+        errors.append(f"admin HOUSEHOLD_EXAMPLE_NOUNS is missing: {', '.join(missing)}")
+    if unexpected:
+        errors.append(f"admin HOUSEHOLD_EXAMPLE_NOUNS has unexpected keys: {', '.join(unexpected)}")
+    return errors
+
+
+def _validate_home_moment_reachability(source: str, expected: dict) -> list[str]:
+    """Bind every scene's visible day-one boundary to the manifest.
+
+    docs/explainer/scripts/build.mjs refuses to build a page that demonstrates
+    only gated capability; Step 3 makes the same promise to a cold install and
+    needs the same refusal.
+
+    Presence alone is not enough, and an earlier version of this check made that
+    mistake: it asked whether *a* day-one scene carried the chip and never asked
+    whether a gated one carried it too. A ``home-grant`` scene wearing the chip
+    tells a fresh install that the laundry works today, which narrow ambient
+    context can never deliver -- the exact drift this guard exists to stop. So
+    the binding runs both ways, per scene.
+    """
 
     errors: list[str] = []
-    map_match = _GUIDE_MAP_PATTERN.search(source)
-    guide_entries: dict[str, dict[str, str]] = {}
-    if map_match is None:
-        errors.append("admin FIRST_LISTEN_GUIDES map is missing")
-    else:
-        body = map_match.group("body")
-        for match in _GUIDE_ENTRY_PATTERN.finditer(body):
-            key = match.group("quoted_key") or match.group("plain_key")
-            if key in guide_entries:
-                errors.append(f"admin FIRST_LISTEN_GUIDES contains duplicate key {key}")
-            guide_entries[key] = {"file": match.group("file"), "version": match.group("version")}
-        residual = _GUIDE_ENTRY_PATTERN.sub("", body).strip(" \t\r\n,")
-        if residual:
-            errors.append("admin FIRST_LISTEN_GUIDES contains unrecognized metadata")
+    manifest_reach = {key: entry.get("reachability") for key, entry in expected.items() if isinstance(entry, dict)}
+    if HOME_MOMENT_DAY_ONE not in manifest_reach.values():
+        errors.append(
+            "admin home moments demonstrate only gated capability: no manifest entry is "
+            f"reachability {HOME_MOMENT_DAY_ONE!r}"
+        )
 
-    expected_keys = set(expected)
-    declared_keys = set(guide_entries)
-    missing_guides = sorted(expected_keys - declared_keys)
-    unexpected_guides = sorted(declared_keys - expected_keys)
-    if missing_guides:
-        errors.append(f"admin FIRST_LISTEN_GUIDES is missing: {', '.join(missing_guides)}")
-    if unexpected_guides:
-        errors.append(f"admin FIRST_LISTEN_GUIDES has unexpected keys: {', '.join(unexpected_guides)}")
-
-    for key in sorted(expected_keys & declared_keys):
-        manifest_entry = expected[key]
-        relative_path = manifest_entry.get("path")
-        sha256 = manifest_entry.get("sha256")
-        assert isinstance(relative_path, str)
-        expected_file = Path(relative_path).name
-        if guide_entries[key]["file"] != expected_file:
-            errors.append(
-                f"admin guide {key} file {guide_entries[key]['file']!r} does not match manifest {expected_file!r}"
-            )
-        if isinstance(sha256, str):
-            expected_version = sha256[:12]
-            if guide_entries[key]["version"] != expected_version:
-                errors.append(
-                    f"admin guide {key} version {guide_entries[key]['version']!r} does not match "
-                    f"manifest sha256 prefix {expected_version!r}"
-                )
-
-    parser = _GuideTranscriptParser()
+    parser = _HomeMomentSceneParser()
     parser.feed(source)
     parser.close()
+    scenes = parser.scenes
+    for _ in range(parser.unkeyed_scenes):
+        errors.append("admin home moment scene is missing data-explainer-scenario")
     for key in sorted(parser.duplicate_keys):
-        errors.append(f"admin guide transcript contains duplicate key {key}")
-    missing_containers = sorted(expected_keys - parser.guide_keys)
-    unexpected_containers = sorted(parser.guide_keys - expected_keys)
-    if missing_containers:
-        errors.append(f"admin guide containers are missing: {', '.join(missing_containers)}")
-    if unexpected_containers:
-        errors.append(f"admin guide containers have unexpected keys: {', '.join(unexpected_containers)}")
-    if parser.orphan_buttons:
-        errors.append("admin guide play buttons must be inside a guide-audio data-guide container")
-    unexpected_button_containers = sorted(set(parser.buttons) - expected_keys)
-    if unexpected_button_containers:
-        errors.append(
-            f"admin guide play buttons have unrecognized container keys: {', '.join(unexpected_button_containers)}"
-        )
-    for key in sorted(expected_keys):
-        buttons = parser.buttons.get(key, [])
-        if not buttons:
-            errors.append(f"admin guide {key} must contain exactly one guide-audio-play button; found 0")
+        errors.append(f"admin home moment scene {key} is declared more than once")
+
+    missing_scenes = sorted(set(manifest_reach) - set(scenes))
+    unexpected_scenes = sorted(set(scenes) - set(manifest_reach))
+    if missing_scenes:
+        errors.append(f"admin home moment scenes are missing: {', '.join(missing_scenes)}")
+    if unexpected_scenes:
+        errors.append(f"admin home moment scenes have unexpected keys: {', '.join(unexpected_scenes)}")
+
+    for key in sorted(set(manifest_reach) & set(scenes)):
+        declared = scenes[key]["reachability"]
+        chipped = scenes[key]["chipped"]
+        manifest_value = manifest_reach[key]
+        if declared != manifest_value:
+            errors.append(
+                f"admin home moment scene {key} declares data-reachability {declared!r} "
+                f"but its manifest entry is {manifest_value!r}"
+            )
             continue
-        if len(buttons) != 1:
-            errors.append(f"admin guide {key} must contain exactly one guide-audio-play button; found {len(buttons)}")
-        expected_onclick = f"toggleFirstListenGuide('{key}',this)"
-        for button in buttons:
-            button_key = button["data-guide-key"]
-            if button_key is None:
-                errors.append(f"admin guide {key} play button is missing data-guide-key")
-            elif button_key not in expected_keys:
-                errors.append(f"admin guide {key} play button has unrecognized data-guide-key {button_key!r}")
-            elif button_key != key:
-                errors.append(
-                    f"admin guide {key} play button data-guide-key {button_key!r} does not match its container"
-                )
-            onclick = button["onclick"]
-            if onclick != expected_onclick:
-                errors.append(f"admin guide {key} play button onclick {onclick!r} must be exactly {expected_onclick!r}")
-    missing_transcripts = sorted(expected_keys - set(parser.transcripts))
-    unexpected_transcripts = sorted(set(parser.transcripts) - expected_keys)
-    if missing_transcripts:
-        errors.append(f"admin guide transcripts are missing: {', '.join(missing_transcripts)}")
-    if unexpected_transcripts:
-        errors.append(f"admin guide transcripts have unexpected keys: {', '.join(unexpected_transcripts)}")
-    for key in sorted(expected_keys & set(parser.transcripts)):
-        transcript = expected[key].get("transcript")
-        if isinstance(transcript, str) and parser.transcripts[key] != " ".join(transcript.split()):
-            errors.append(f"admin guide {key} transcript does not match spoken_assets.json")
+        expected_quote = expected[key].get("quote") if isinstance(expected[key], dict) else None
+        shown = scenes[key]["quote"]
+        if isinstance(expected_quote, str):
+            normalized = " ".join(expected_quote.split())
+            if shown is None:
+                errors.append(f"admin home moment {key} scene shows no pull quote")
+            elif shown.strip('\u201c\u201d"') != normalized:
+                errors.append(f"admin home moment {key} scene quote does not match its manifest quote")
+        if manifest_value == HOME_MOMENT_DAY_ONE and not chipped:
+            errors.append(f"admin home moment {key} is reachable today but its scene carries no day-one-chip")
+        elif manifest_value != HOME_MOMENT_DAY_ONE and chipped:
+            errors.append(
+                f"admin home moment {key} is {manifest_value!r} but its scene carries a day-one-chip, "
+                "promising a fresh install something it cannot reach"
+            )
     return errors
 
 
@@ -761,8 +1087,28 @@ def validate_browser_narration_pack(
     raw_assets = manifest.get("assets")
     if not isinstance(raw_assets, list):
         return errors
+    side_root = root / "voice_examples"
+    if not staged_render or side_root.exists() or side_root.is_symlink():
+        errors.extend(
+            validate_free_voice_example(
+                assets_root=root,
+                static_root=static_root,
+                radio_config_path=radio_config_path,
+                staged_render=staged_render,
+            )
+        )
+    home_moment_root = root / HOME_MOMENT_DIRNAME
+    if not staged_render or home_moment_root.exists() or home_moment_root.is_symlink():
+        errors.extend(validate_home_moments(assets_root=root, static_root=static_root, staged_render=staged_render))
     if not staged_render:
-        errors.extend(_validate_admin_guide_metadata(manifest, admin_template_path=admin_template_path))
+        errors.extend(
+            _validate_admin_guide_metadata(
+                manifest,
+                voice_manifest=_read_manifest(side_root),
+                home_moment_manifest=_read_manifest(home_moment_root),
+                admin_template_path=admin_template_path,
+            )
+        )
 
     entries_by_path: dict[str, dict[str, object]] = {}
     for raw_entry in raw_assets:
@@ -781,6 +1127,20 @@ def validate_browser_narration_pack(
     if unexpected:
         errors.append(f"browser narration inventory has unexpected clips: {', '.join(unexpected)}")
 
+    return errors + _validate_browser_media(
+        root=root,
+        entries_by_path=entries_by_path,
+        paths=BROWSER_GUIDE_PATHS,
+        static_root=static_root,
+        staged_render=staged_render,
+    )
+
+
+def _validate_browser_media(*, root, entries_by_path, paths, static_root, staged_render) -> list[str]:
+    """Apply identical media limits to both packs without combining their provenance."""
+
+    errors = []
+
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         errors.append("ffprobe is required to validate the browser narration pack")
@@ -789,7 +1149,7 @@ def validate_browser_narration_pack(
         errors.append("ffmpeg is required to measure browser narration loudness and true peak")
 
     total_bytes = 0
-    for relative_path in BROWSER_GUIDE_PATHS:
+    for relative_path in paths:
         entry = entries_by_path.get(relative_path)
         if entry is None:
             continue
@@ -882,10 +1242,244 @@ def validate_browser_narration_pack(
                         f"{BROWSER_GUIDE_MAX_TRUE_PEAK_DBTP:.1f} dBTP"
                     )
 
+    for relative_path in set((*BROWSER_GUIDE_PATHS, FREE_VOICE_PATH)) - set(paths):
+        try:
+            total_bytes += (root / relative_path).stat().st_size
+        except OSError:
+            pass
     if total_bytes > BROWSER_GUIDE_MAX_BYTES:
         errors.append(
             f"browser narration bundle is {total_bytes} bytes; maximum is {BROWSER_GUIDE_MAX_BYTES} bytes (2.5 MiB)"
         )
+    return errors
+
+
+def free_voice_render_receipt(config_path: Path = RADIO_CONFIG_PATH) -> dict[str, object]:
+    with Path(config_path).open("rb") as handle:
+        hosts = {host["name"]: host for host in tomllib.load(handle).get("hosts", [])}
+    voices = []
+    for name in BROWSER_GUIDE_HOSTS:
+        voice = hosts.get(name, {}).get("edge_fallback_voice")
+        if not isinstance(voice, str) or not voice.endswith("Neural"):
+            raise ValueError(f"{name} must configure its free fallback voice")
+        voices.append({"name": name, "voice_id": voice, "rate": "+0%", "pitch": "+0Hz"})
+    return {"schema_version": 1, "source": "radio.toml", "provider": "edge", "hosts": voices}
+
+
+def validate_free_voice_example(
+    *, assets_root=BROWSER_AUDIO_ROOT, static_root=STATIC_ROOT, radio_config_path=RADIO_CONFIG_PATH, staged_render=False
+) -> list[str]:
+    from mammamiradio.core.path_safety import safe_path_within
+
+    root = Path(assets_root)
+    side_root = root / "voice_examples"
+    paths = (side_root, side_root / "spoken_assets.json", root / FREE_VOICE_PATH)
+    if any(safe_path_within(path, root, reject_symlinks=True) is None for path in paths):
+        return ["free voice example path escapes its asset root or is a symlink"]
+    manifest = _read_manifest(side_root)
+    if manifest is None:
+        return ["free voice example manifest is missing or unreadable"]
+    errors = []
+    if manifest.get("schema_version") != 1 or manifest.get("bundle") != "first-listen-free-voices":
+        errors.append("free voice example schema or bundle is invalid")
+    try:
+        receipt = free_voice_render_receipt(radio_config_path)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        errors.append(f"cannot derive free voice receipt: {exc}")
+    else:
+        if manifest.get("render_provider") != "edge" or manifest.get("render_receipt") != receipt:
+            errors.append("free voice example receipt does not match radio.toml")
+    assets = manifest.get("assets")
+    if (
+        not isinstance(assets, list)
+        or len(assets) != 1
+        or not isinstance(assets[0], dict)
+        or assets[0].get("path") != "free-voices.mp3"
+    ):
+        return [*errors, "free voice example inventory must contain only free-voices.mp3"]
+    if {p.relative_to(side_root).as_posix() for p in side_root.rglob("*.mp3")} != {"free-voices.mp3"}:
+        errors.append("free voice example inventory contains missing or unlisted audio")
+    entry = assets[0]
+    if (
+        entry.get("kind") != "speech"
+        or entry.get("language") != "en"
+        or entry.get("speakers") != list(BROWSER_GUIDE_HOSTS)
+        or entry.get("transcript") != FREE_VOICE_TRANSCRIPT
+    ):
+        errors.append("free voice example must retain its approved English Marco/Giulia dialogue")
+    try:
+        digest = hashlib.sha256((root / FREE_VOICE_PATH).read_bytes()).hexdigest()
+        if entry.get("sha256") != digest:
+            errors.append("free voice example sha256 does not match")
+    except OSError:
+        errors.append("free voice example audio is missing or unreadable")
+    return errors + _validate_browser_media(
+        root=root,
+        entries_by_path={FREE_VOICE_PATH: entry},
+        paths=(FREE_VOICE_PATH,),
+        static_root=static_root,
+        staged_render=staged_render,
+    )
+
+
+def validate_home_moments(
+    *,
+    assets_root: Path = BROWSER_AUDIO_ROOT,
+    static_root: Path = STATIC_ROOT,
+    staged_render: bool = False,
+) -> list[str]:
+    """Validate the Step 3 demo pack against the explainer segments it copies.
+
+    The explainer already renders, hashes and audits these segments, so this pack
+    is bound to that manifest rather than re-asserting durations and hashes a
+    third time: drift in either direction fails here, and there is exactly one
+    place to change a clip.
+
+    Deliberately not routed through ``_validate_browser_media``: these are ~30-36s
+    station segments, outside the 4-20s narration band, and their ~1.7 MB would
+    consume the 2.5 MiB narration budget rather than be measured by it.
+    """
+
+    from mammamiradio.core.path_safety import safe_path_within
+
+    root = Path(assets_root)
+    side_root = root / HOME_MOMENT_DIRNAME
+    if any(
+        safe_path_within(path, root, reject_symlinks=True) is None
+        for path in (side_root, side_root / "spoken_assets.json")
+    ):
+        return ["home moment path escapes its asset root or is a symlink"]
+
+    manifest = _read_manifest(side_root)
+    if manifest is None:
+        return ["home moment manifest is missing or unreadable"]
+
+    errors: list[str] = []
+    if manifest.get("schema_version") != 1 or manifest.get("bundle") != HOME_MOMENT_BUNDLE:
+        errors.append("home moment schema or bundle is invalid")
+
+    raw_assets = manifest.get("assets")
+    if not isinstance(raw_assets, list) or not raw_assets:
+        errors.append("home moment manifest declares no assets")
+        return errors
+
+    try:
+        source_manifest = json.loads(HOME_MOMENT_SOURCE_MANIFEST.read_text(encoding="utf-8"))
+        source_segments = source_manifest["segments"]
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+        errors.append(f"home moment source manifest {HOME_MOMENT_SOURCE_MANIFEST} is missing or unreadable")
+        return errors
+
+    declared: set = set()
+    total_bytes = 0
+    day_one_keys: list = []
+    for entry in raw_assets:
+        if not isinstance(entry, dict):
+            errors.append("home moment manifest contains a malformed entry")
+            continue
+        relative_path = entry.get("path")
+        if not isinstance(relative_path, str) or "/" in relative_path or not relative_path.endswith(".mp3"):
+            errors.append(f"home moment path {relative_path!r} must be a bare .mp3 name")
+            continue
+        declared.add(relative_path)
+        key = Path(relative_path).stem
+
+        reachability = entry.get("reachability")
+        if reachability not in HOME_MOMENT_REACHABILITIES:
+            errors.append(
+                f"home moment {key} reachability {reachability!r} must be one of {sorted(HOME_MOMENT_REACHABILITIES)}"
+            )
+        elif reachability == HOME_MOMENT_DAY_ONE:
+            day_one_keys.append(key)
+
+        asset_path = side_root / relative_path
+        if safe_path_within(asset_path, root, reject_symlinks=True) is None:
+            errors.append(f"home moment {relative_path} escapes its asset root or is a symlink")
+            continue
+        try:
+            payload = asset_path.read_bytes()
+        except OSError:
+            errors.append(f"home moment {relative_path} is missing or unreadable")
+            continue
+        total_bytes += len(payload)
+
+        digest = hashlib.sha256(payload).hexdigest()
+        if entry.get("sha256") != digest:
+            errors.append(f"home moment {relative_path} sha256 does not match its manifest entry")
+
+        segment = source_segments.get(key) if isinstance(source_segments, dict) else None
+        if not isinstance(segment, dict):
+            errors.append(f"home moment {key} has no matching segment in {HOME_MOMENT_SOURCE_MANIFEST.name}")
+        else:
+            if segment.get("sha256") != digest:
+                errors.append(f"home moment {relative_path} is not the explainer segment it claims to copy")
+            # Hash the source file itself, not only its manifest. Without this the
+            # chain is copy bytes -> copy manifest -> source manifest, so a source
+            # that drifts while both manifests stay put passes clean and the pack
+            # silently stops being a copy of anything.
+            source_path = HOME_MOMENT_SOURCE_ROOT / relative_path
+            if safe_path_within(source_path, HOME_MOMENT_SOURCE_ROOT, reject_symlinks=True) is None:
+                errors.append(f"home moment source {relative_path} escapes its source root or is a symlink")
+            else:
+                try:
+                    source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+                except OSError:
+                    errors.append(f"home moment source {relative_path} is missing or unreadable")
+                else:
+                    if source_digest != segment.get("sha256"):
+                        errors.append(f"home moment source {relative_path} does not match its own segment manifest")
+                    if source_digest != digest:
+                        errors.append(f"home moment {relative_path} is not a byte copy of its source")
+            source_duration = segment.get("durationSec")
+            duration = entry.get("duration_seconds")
+            if (
+                isinstance(source_duration, _PY39_NUMERIC_TYPES)
+                and isinstance(duration, _PY39_NUMERIC_TYPES)
+                and abs(float(duration) - float(source_duration)) > HOME_MOMENT_DURATION_TOLERANCE_SECONDS
+            ):
+                errors.append(f"home moment {key} duration {duration} does not match the explainer's {source_duration}")
+
+        duration = entry.get("duration_seconds")
+        if not isinstance(duration, _PY39_NUMERIC_TYPES):
+            errors.append(f"home moment {key} duration_seconds is missing or malformed")
+        elif not HOME_MOMENT_MIN_DURATION_SECONDS <= float(duration) <= HOME_MOMENT_MAX_DURATION_SECONDS:
+            errors.append(
+                f"home moment {key} duration {duration}s is outside "
+                f"{HOME_MOMENT_MIN_DURATION_SECONDS}-{HOME_MOMENT_MAX_DURATION_SECONDS}s"
+            )
+
+        transcript = entry.get("transcript")
+        if not isinstance(transcript, str) or not transcript.strip():
+            errors.append(f"home moment {key} transcript is missing")
+
+        quote = entry.get("quote")
+        if not isinstance(quote, str) or not quote.strip():
+            # The scene comparison in _validate_home_moment_reachability only
+            # runs when the manifest carries a quote, so an absent one would
+            # silently unbind the line a reader actually reads.
+            errors.append(f"home moment {key} quote is missing")
+
+        if not staged_render:
+            route_error = _browser_route_error(
+                asset_path, relative_path=f"{HOME_MOMENT_DIRNAME}/{relative_path}", static_root=Path(static_root)
+            )
+            if route_error is not None:
+                errors.append(f"home moment {relative_path} {route_error}")
+
+    try:
+        present = {path.relative_to(side_root).as_posix() for path in side_root.rglob("*.mp3")}
+    except OSError:
+        present = set()
+    if present != declared:
+        errors.append("home moment inventory contains missing or unlisted audio")
+
+    if not day_one_keys:
+        errors.append(
+            f"home moment pack has no {HOME_MOMENT_DAY_ONE!r} entry: Step 3 would demonstrate only gated capability"
+        )
+
+    if total_bytes > HOME_MOMENT_MAX_BYTES:
+        errors.append(f"home moment bundle is {total_bytes} bytes; maximum is {HOME_MOMENT_MAX_BYTES} bytes (2 MiB)")
     return errors
 
 

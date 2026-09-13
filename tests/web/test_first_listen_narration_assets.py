@@ -66,8 +66,9 @@ def stub_browser_media_tools(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def probe(path: Path, *, ffprobe: str):
         del ffprobe
-        manifest = json.loads((path.parents[1] / "spoken_assets.json").read_text(encoding="utf-8"))
-        relative_path = f"first_listen/{path.name}"
+        side = path.parent.name == "voice_examples"
+        manifest = json.loads(((path.parent if side else path.parents[1]) / "spoken_assets.json").read_text())
+        relative_path = path.name if side else f"first_listen/{path.name}"
         entry = next(item for item in manifest["assets"] if item["path"] == relative_path)
         return (
             {
@@ -289,6 +290,10 @@ def test_generator_cli_keeps_staging_inputs_and_rejects_provider_selection(
 
     monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--clip", "welcome"])
     assert GENERATOR._arguments().clip == "welcome"
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--clip", "privacy"])
+    assert GENERATOR._arguments().clip == "privacy"
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--clip", "ai"])
+    assert GENERATOR._arguments().clip == "ai"
 
     monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--station-opening"])
     assert GENERATOR._arguments().output_root == GENERATOR.STATION_OUTPUT_ROOT
@@ -305,6 +310,207 @@ def test_generator_cli_keeps_staging_inputs_and_rejects_provider_selection(
 @pytest.fixture
 def generator_media_tools(stub_browser_media_tools, monkeypatch):
     monkeypatch.setattr(GENERATOR, "_load_pack_validator", lambda: VALIDATOR.validate_browser_narration_pack)
+    monkeypatch.setattr(GENERATOR.runpy, "run_path", lambda _path: vars(VALIDATOR))
+
+
+def _free_manifest():
+    return json.loads((SHIPPED_AUDIO_ROOT / "voice_examples/spoken_assets.json").read_text())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("host_name", ["Marco", "Giulia"])
+async def test_free_voice_render_uses_exact_voice_and_blocks_transport_retry(tmp_path, monkeypatch, retry, host_name):
+    import aiohttp
+    import edge_tts
+
+    from mammamiradio.audio import normalizer
+    from mammamiradio.core.config import load_config
+
+    host = next(host for host in load_config(str(ROOT / "radio.toml")).hosts if host.name == host_name)
+    requests = []
+
+    async def connect(*args, **kwargs):
+        requests.append(1)
+
+    class Voice:
+        def __init__(self, text, voice, *, rate, pitch, connector):
+            assert (text, voice, rate, pitch) == ("approved line", host.edge_fallback_voice, "+0%", "+0Hz")
+            self.connector = connector
+
+        async def save(self, path):
+            await self.connector.connect()
+            if retry:
+                await self.connector.connect()
+            Path(path).write_bytes(b"raw provider take")
+
+    monkeypatch.setattr(aiohttp.TCPConnector, "connect", connect)
+    monkeypatch.setattr(edge_tts, "Communicate", Voice)
+    monkeypatch.setattr(normalizer, "normalize", lambda raw, out, **kwargs: out.write_bytes(raw.read_bytes()))
+    out = tmp_path / "voice.mp3"
+    if retry:
+        with pytest.raises(RuntimeError, match="automatic retry is disabled"):
+            await GENERATOR._render_free_line(host, "approved line", out)
+        assert not out.exists()
+    else:
+        assert await GENERATOR._render_free_line(host, "approved line", out) == out
+        assert out.read_bytes() == out.with_suffix(".edge-raw.mp3").read_bytes()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "audio",
+        "extra",
+        "symlink",
+        "manifest-link",
+        "directory-link",
+        "assets-null",
+        "assets-scalar",
+        "hash",
+        "path",
+        "duplicate",
+        "receipt",
+        "transcript",
+        "media",
+        "budget",
+    ],
+)
+def test_free_example_damage_blocks_release_and_generation_before_provider(
+    copied_pack, monkeypatch, generator_media_tools, damage
+):
+    static, root = copied_pack
+    side = root / "voice_examples"
+    manifest = side / "spoken_assets.json"
+    data = json.loads(manifest.read_text())
+    asset = side / "free-voices.mp3"
+    if damage == "missing":
+        manifest.unlink()
+    elif damage == "audio":
+        asset.unlink()
+    elif damage == "extra":
+        (side / "extra.mp3").write_bytes(b"unlisted")
+    elif damage in {"symlink", "manifest-link"}:
+        target = asset if damage == "symlink" else manifest
+        outside = root.parent / target.name
+        target.rename(outside)
+        target.symlink_to(outside)
+    elif damage == "directory-link":
+        shutil.rmtree(side)
+        side.symlink_to(root.parent / "missing-directory", target_is_directory=True)
+    elif damage in {"assets-null", "assets-scalar"}:
+        data["assets"] = None if damage == "assets-null" else 3
+        manifest.write_text(json.dumps(data))
+    elif damage == "media":
+        monkeypatch.setattr(VALIDATOR, "_probe_audio", lambda *a, **kw: (None, "not playable audio"))
+    elif damage == "budget":
+        monkeypatch.setattr(
+            VALIDATOR, "BROWSER_GUIDE_MAX_BYTES", sum(p.stat().st_size for p in (root / "first_listen").glob("*.mp3"))
+        )
+    else:
+        if damage == "receipt":
+            data["render_receipt"]["hosts"][0]["voice_id"] = "wrong voice"
+        elif damage == "duplicate":
+            data["assets"].append(data["assets"][0])
+        else:
+            data["assets"][0][{"hash": "sha256", "path": "path", "transcript": "transcript"}[damage]] = "changed"
+        manifest.write_text(json.dumps(data))
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert VALIDATOR.validate_browser_narration_pack(assets_root=root, static_root=static)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("provider called before retained pack rejection")
+
+    monkeypatch.setattr(GENERATOR, "_render_clip", forbidden)
+    for free, selected in [(True, None), (False, "welcome"), (False, None)]:
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "unused-test-key")
+        with pytest.raises(RuntimeError):
+            asyncio.run(
+                GENERATOR._run(
+                    argparse.Namespace(
+                        env_file=root / "absent.env", output_root=root, clip=selected, free_voice_example=free
+                    )
+                )
+            )
+    assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("failure", [None, "synthesis", "validation", "publish-audio", "publish-manifest"])
+def test_free_example_stages_without_paid_key_and_rolls_back(
+    copied_pack, monkeypatch, generator_media_tools, existing, failure
+):
+    static, root = copied_pack
+    original = _free_manifest()
+    if not existing:
+        shutil.rmtree(root / "voice_examples")
+        # static_root is required: without it the pack resolves against the repo
+        # STATIC_ROOT and an intact pack already yields 12 route errors, so a
+        # bare truthiness assertion here passes no matter what was removed.
+        errors = VALIDATOR.validate_browser_narration_pack(assets_root=root, static_root=static)
+        assert any("free voice example manifest is missing" in error for error in errors), errors
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    calls = []
+
+    async def render(clip, _hosts, _work, destination, **kwargs):
+        assert kwargs["free_voices"] is True and clip is GENERATOR.FREE_VOICE_CLIP
+        calls.append(clip.clip_id)
+        destination.write_bytes(b"new approved free sample")
+        if failure == "synthesis":
+            raise RuntimeError("synthesis failed")
+        return {
+            **original["assets"][0],
+            "sha256": GENERATOR._sha256(destination),
+            "transcript": "wrong" if failure == "validation" else clip.transcript,
+        }
+
+    publish = GENERATOR._publish_staged_file
+
+    def guarded_publish(source, destination):
+        if failure == "publish-audio" or (failure == "publish-manifest" and destination.name == "spoken_assets.json"):
+            raise OSError("simulated publication failure")
+        publish(source, destination)
+
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.setattr(GENERATOR, "_load_environment", lambda path: None)
+    monkeypatch.setattr(GENERATOR, "_render_clip", render)
+    monkeypatch.setattr(GENERATOR, "_publish_staged_file", guarded_publish)
+    args = argparse.Namespace(env_file=root / "absent.env", output_root=root, clip=None, free_voice_example=True)
+    if failure:
+        with pytest.raises((RuntimeError, OSError)):
+            asyncio.run(GENERATOR._run(args))
+        assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+        if not existing:
+            assert not (root / "voice_examples").exists(), "failed creation stranded a partial pack"
+    else:
+        asyncio.run(GENERATOR._run(args))
+        assert VALIDATOR.validate_free_voice_example(assets_root=root, staged_render=True) == []
+        assert all(
+            (root / p).read_bytes() == content for p, content in before.items() if p.parts[0] != "voice_examples"
+        )
+    assert calls == ["free-voices"]
+
+
+def test_free_example_bindings_and_cli_are_exact(monkeypatch):
+    entry = _free_manifest()["assets"][0]
+    assert entry["transcript"] == GENERATOR.FREE_VOICE_CLIP.transcript == VALIDATOR.FREE_VOICE_TRANSCRIPT
+    source = (ROOT / "mammamiradio/web/templates/admin.html").read_text()
+    block = source.split('data-guide="free-voices"', 1)[1].split("</details>", 1)[0]
+    assert f"{round(entry['duration_seconds'])} seconds on this device" in block
+    for field in ["sha256", "transcript"]:
+        damaged = _free_manifest()
+        damaged["assets"][0][field] = "wrong"
+        assert VALIDATOR._validate_admin_guide_metadata(
+            json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text()), voice_manifest=damaged
+        )
+    monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--free-voice-example"])
+    assert GENERATOR._arguments().free_voice_example
+    for selection in [["--clip", "welcome"], ["--station-opening"]]:
+        monkeypatch.setattr(sys, "argv", ["generate-first-listen-guide.py", "--free-voice-example", *selection])
+        with pytest.raises(SystemExit):
+            GENERATOR._arguments()
 
 
 @pytest.mark.parametrize("publish_failure", [False, True])
@@ -587,7 +793,18 @@ def test_generator_publish_handles_cross_filesystem_output(
 def test_admin_guide_metadata_matches_shipped_manifest() -> None:
     manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
 
-    assert VALIDATOR._validate_admin_guide_metadata(manifest) == []
+    assert VALIDATOR._validate_admin_guide_metadata(manifest, voice_manifest=_free_manifest()) == []
+
+
+def test_welcome_transcript_duration_and_cache_binding_are_synchronized() -> None:
+    manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    welcome = next(entry for entry in manifest["assets"] if entry["path"] == "first_listen/welcome.mp3")
+    assert welcome["transcript"] == GENERATOR.GUIDE_CLIPS[0].transcript
+    assert "Three small steps" in welcome["transcript"]
+    assert "I run the desk" in welcome["transcript"]
+    assert f"version:'{welcome['sha256'][:12]}'" in template
+    assert f"{round(welcome['duration_seconds'])} seconds on this device" in template
 
 
 def test_admin_guide_metadata_rejects_hash_and_transcript_drift(tmp_path: Path) -> None:
@@ -611,7 +828,9 @@ def test_admin_guide_metadata_rejects_hash_and_transcript_drift(tmp_path: Path) 
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert any("admin guide welcome version" in error and "manifest sha256 prefix" in error for error in errors)
     assert "admin guide welcome transcript does not match spoken_assets.json" in errors
@@ -624,7 +843,9 @@ def test_admin_guide_metadata_rejects_container_inventory_drift(tmp_path: Path) 
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide containers are missing: welcome" in errors
     assert "admin guide containers have unexpected keys: extra" in errors
@@ -642,7 +863,9 @@ def test_admin_guide_metadata_rejects_button_key_and_onclick_mismatch(tmp_path: 
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide welcome play button data-guide-key 'sound-check' does not match its container" in errors
     assert any(
@@ -658,7 +881,9 @@ def test_admin_guide_metadata_rejects_unrecognized_button_key(tmp_path: Path) ->
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide welcome play button has unrecognized data-guide-key 'unknown'" in errors
 
@@ -669,7 +894,7 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     welcome_button = (
         '<button type="button" class="guide-audio-play" data-guide-key="welcome" '
         'aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide(\'welcome\',this)">'
-        "Preview 16-second welcome</button>"
+        "Take your seat</button>"
     )
     assert source.count(welcome_button) == 1
     source = source.replace(welcome_button, f"{welcome_button}{welcome_button}", 1)
@@ -681,7 +906,9 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
-    errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        manifest, voice_manifest=_free_manifest(), admin_template_path=template_path
+    )
 
     assert "admin guide welcome must contain exactly one guide-audio-play button; found 2" in errors
     assert "admin guide sound-check must contain exactly one guide-audio-play button; found 0" in errors
@@ -944,6 +1171,352 @@ async def test_all_browser_narration_clips_are_public_audio_mpeg() -> None:
             assert response.status_code == 200, relative_path
             assert response.headers["content-type"].startswith("audio/mpeg"), relative_path
             assert response.content, relative_path
+
+
+HOME_MOMENTS = ("quiet.mp3", "laundry.mp3", "arrival.mp3", "coffee.mp3")
+HOME_MOMENT_ROOT = SHIPPED_AUDIO_ROOT / "home_moments"
+EXPLAINER_AUDIO_ROOT = ROOT / "docs" / "explainer" / "public" / "audio"
+
+
+def test_home_moments_copy_explainer_bytes_outside_the_guide_pack() -> None:
+    manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    declared = {entry["path"] for entry in manifest["assets"]}
+    for name in HOME_MOMENTS:
+        shipped = HOME_MOMENT_ROOT / name
+        source = EXPLAINER_AUDIO_ROOT / name
+        assert shipped.is_file(), name
+        assert not shipped.is_symlink(), name
+        assert shipped.read_bytes() == source.read_bytes(), name
+        assert f"home_moments/{name}" not in declared
+        assert f"first_listen/{name}" not in declared
+
+
+def test_home_moment_pack_is_bound_to_the_explainer_source() -> None:
+    """The explainer manifest is the single source of truth for these clips.
+
+    Three copies of the same audio exist (explainer page, shipped pack, admin
+    cache-bust tokens). Only a binding makes that safe: regenerate a clip and the
+    validator fails rather than the pack silently drifting behind a stale URL.
+    """
+
+    manifest = json.loads((HOME_MOMENT_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    segments = json.loads((EXPLAINER_AUDIO_ROOT / "segments.manifest.json").read_text(encoding="utf-8"))["segments"]
+    admin = (ROOT / "mammamiradio" / "web" / "templates" / "admin.html").read_text(encoding="utf-8")
+
+    assert manifest["bundle"] == "first-listen-home-moments"
+    reachabilities = {entry["path"]: entry["reachability"] for entry in manifest["assets"]}
+    # Without a day-one entry Step 3 demonstrates only capability a fresh install
+    # cannot reach. validate-spoken-assets.py refuses that; this pins the data.
+    assert "day-one" in reachabilities.values()
+    assert reachabilities["quiet.mp3"] == "day-one"
+
+    for entry in manifest["assets"]:
+        key = entry["path"].removesuffix(".mp3")
+        digest = hashlib.sha256((HOME_MOMENT_ROOT / entry["path"]).read_bytes()).hexdigest()
+        assert entry["sha256"] == digest, key
+        assert segments[key]["sha256"] == digest, key
+        assert f"{key}:{{file:'{entry['path']}',version:'{digest[:12]}'}}" in admin, key
+
+
+def _rewrite_home_moments(audio_root: Path, mutate) -> None:
+    manifest_path = audio_root / "home_moments" / "spoken_assets.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mutate(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _home_moment_errors(copied_pack) -> list[str]:
+    static_root, audio_root = copied_pack
+    return VALIDATOR.validate_home_moments(assets_root=audio_root, static_root=static_root)
+
+
+def test_home_moments_accept_the_shipped_pack(copied_pack) -> None:
+    assert _home_moment_errors(copied_pack) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "needle"),
+    [
+        (lambda m: m.__setitem__("bundle", "wrong-bundle"), "schema or bundle is invalid"),
+        (lambda m: m.__setitem__("assets", []), "declares no assets"),
+        (lambda m: m["assets"].__setitem__(0, "not-a-dict"), "malformed entry"),
+        (lambda m: m["assets"][0].__setitem__("path", "nested/quiet.mp3"), "must be a bare .mp3 name"),
+        (lambda m: m["assets"][0].__setitem__("sha256", "0" * 64), "sha256 does not match"),
+        (lambda m: m["assets"][0].__setitem__("reachability", "someday"), "reachability"),
+        (lambda m: m["assets"][0].__setitem__("duration_seconds", 3.0), "is outside"),
+        (lambda m: m["assets"][0].__setitem__("transcript", "   "), "transcript is missing"),
+        (lambda m: m["assets"][0].__setitem__("quote", "   "), "quote is missing"),
+        (lambda m: m["assets"][0].pop("quote"), "quote is missing"),
+        (lambda m: m["assets"][0].pop("duration_seconds"), "duration_seconds is missing"),
+    ],
+)
+def test_home_moment_manifest_drift_is_rejected(copied_pack, mutation, needle) -> None:
+    """Every failure branch must actually fire.
+
+    `scripts/` is outside the coverage ratchet (`[tool.coverage.run] source =
+    ["mammamiradio"]`), so nothing else would notice a guard that cannot fail.
+    """
+
+    _, audio_root = copied_pack
+    _rewrite_home_moments(audio_root, mutation)
+    errors = _home_moment_errors(copied_pack)
+    assert any(needle in error for error in errors), errors
+
+
+def test_home_moments_reject_a_pack_with_nothing_reachable_today(copied_pack) -> None:
+    """The refusal docs/explainer/scripts/build.mjs already makes, for Step 3."""
+
+    _, audio_root = copied_pack
+
+    def demote_all(manifest):
+        for entry in manifest["assets"]:
+            entry["reachability"] = "home-grant"
+
+    _rewrite_home_moments(audio_root, demote_all)
+    errors = _home_moment_errors(copied_pack)
+    assert any("day-one" in error and "gated capability" in error for error in errors), errors
+
+
+def test_home_moments_reject_unlisted_audio_and_missing_files(copied_pack) -> None:
+    _, audio_root = copied_pack
+    room = audio_root / "home_moments"
+    shutil.copy(room / "quiet.mp3", room / "stray.mp3")
+    assert any("unlisted audio" in error for error in _home_moment_errors(copied_pack))
+    (room / "stray.mp3").unlink()
+    (room / "quiet.mp3").unlink()
+    # Assert the missing-file branch specifically: the generic inventory error
+    # fires here too, so matching that would keep this green if the branch went.
+    errors = _home_moment_errors(copied_pack)
+    assert any("quiet.mp3 is missing or unreadable" in error for error in errors), errors
+
+
+def test_home_moments_reject_bytes_that_are_not_the_explainer_segment(copied_pack) -> None:
+    """The explainer pack is the single source of truth; drift either way fails."""
+
+    _, audio_root = copied_pack
+    room = audio_root / "home_moments"
+    shutil.copy(room / "laundry.mp3", room / "quiet.mp3")
+    errors = _home_moment_errors(copied_pack)
+    assert any("is not the explainer segment it claims to copy" in error for error in errors), errors
+
+
+def test_home_moments_reject_source_drift_with_both_manifests_unchanged(copied_pack, monkeypatch, tmp_path) -> None:
+    """The source file itself must be hashed, not only its manifest.
+
+    Without this the chain is copy bytes -> copy manifest -> source manifest, so
+    a source that drifts while both manifests stay put passes clean and the pack
+    silently stops being a copy of anything.
+    """
+
+    source = tmp_path / "explainer_audio"
+    shutil.copytree(EXPLAINER_AUDIO_ROOT, source)
+    (source / "quiet.mp3").write_bytes((source / "laundry.mp3").read_bytes())
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_ROOT", source)
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_MANIFEST", source / "segments.manifest.json")
+
+    errors = _home_moment_errors(copied_pack)
+    assert any("does not match its own segment manifest" in error for error in errors), errors
+    assert any("is not a byte copy of its source" in error for error in errors), errors
+
+
+def test_home_moments_reject_a_missing_source_file(copied_pack, monkeypatch, tmp_path) -> None:
+    source = tmp_path / "explainer_audio"
+    shutil.copytree(EXPLAINER_AUDIO_ROOT, source)
+    (source / "quiet.mp3").unlink()
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_ROOT", source)
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_SOURCE_MANIFEST", source / "segments.manifest.json")
+
+    errors = _home_moment_errors(copied_pack)
+    assert any("source quiet.mp3 is missing or unreadable" in error for error in errors), errors
+
+
+def test_home_moments_reject_a_symlinked_clip(copied_pack) -> None:
+    _, audio_root = copied_pack
+    room = audio_root / "home_moments"
+    (room / "quiet.mp3").unlink()
+    (room / "quiet.mp3").symlink_to(room / "laundry.mp3")
+    errors = _home_moment_errors(copied_pack)
+    assert any("symlink" in error for error in errors), errors
+
+
+def test_home_moments_reject_a_bundle_over_budget(copied_pack, monkeypatch) -> None:
+    """Live headroom is thin: the pack is ~1.6 MiB against a 2 MiB cap."""
+
+    monkeypatch.setattr(VALIDATOR, "HOME_MOMENT_MAX_BYTES", 1024)
+    errors = _home_moment_errors(copied_pack)
+    assert any("home moment bundle is" in error for error in errors), errors
+
+
+def _admin_home_moment_errors(source: str) -> list[str]:
+    manifest = json.loads((SHIPPED_AUDIO_ROOT / "home_moments" / "spoken_assets.json").read_text(encoding="utf-8"))
+    errors, _ = VALIDATOR._validate_admin_home_moment_metadata(source, manifest)
+    return errors
+
+
+def test_admin_home_moment_metadata_accepts_the_shipped_template() -> None:
+    assert _admin_home_moment_errors(VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_admin_home_moment_metadata_rejects_a_stale_cache_bust_token() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "quiet:{file:'quiet.mp3',version:'02fc7d83734a'}",
+        "quiet:{file:'quiet.mp3',version:'deadbeef0000'}",
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("does not match manifest sha256 prefix" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_chip_on_a_gated_scene() -> None:
+    """Presence alone is not proof.
+
+    An earlier version of this guard asked only whether *a* day-one scene wore
+    the chip. A gated scene wearing one tells a fresh install the laundry works
+    today, which narrow ambient context can never deliver.
+    """
+
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "<h5>The laundry finished. Nobody noticed.</h5>",
+        '<h5>The laundry finished. Nobody noticed. <em class="day-one-chip">day one</em></h5>',
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("carries a day-one-chip" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_reachability_swapped_against_the_manifest() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    source = source.replace(
+        'data-explainer-scenario="quiet" data-reachability="day-one"',
+        'data-explainer-scenario="quiet" data-reachability="home-grant"',
+    ).replace(
+        'data-explainer-scenario="laundry" data-reachability="home-grant"',
+        'data-explainer-scenario="laundry" data-reachability="day-one"',
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("scene quiet declares data-reachability 'home-grant'" in e for e in errors), errors
+    assert any("scene laundry declares data-reachability 'day-one'" in e for e in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_chip_outside_the_heading() -> None:
+    """The chip is styled by class alone, so it renders anywhere in the scene.
+
+    An h5-bounded check passed while a reader still saw "day one" on a gated
+    moment; this pins the subtree walk that replaced it.
+    """
+
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    for mutation in (
+        (
+            "<h5>The laundry finished. Nobody noticed.</h5>",
+            '<h5>The laundry finished. Nobody noticed.</h5><em class="day-one-chip">day one</em>',
+        ),
+        (
+            '<p class="scene-caption">Washing machine · finished</p>',
+            '<p class="scene-caption">Washing machine · finished <em class="day-one-chip">day one</em></p>',
+        ),
+    ):
+        errors = _admin_home_moment_errors(template.replace(*mutation))
+        assert any("laundry is 'home-grant' but its scene carries a day-one-chip" in e for e in errors), mutation
+
+
+def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
+    """The visible quote is the line a reader actually reads.
+
+    Two of the four quotes are paraphrases of their own transcripts (the
+    explainer stores quote and transcript separately), so the transcript check
+    cannot stand in for this one.
+    """
+
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    errors = _admin_home_moment_errors(
+        template.replace(
+            "Sunset was twenty minutes ago, eleven degrees and clear.",
+            "Sunset was ten minutes ago, nine degrees and cloudy.",
+        )
+    )
+    assert any("quote does not match its manifest quote" in error for error in errors), errors
+
+
+def test_home_moment_quotes_are_the_explainer_quotes() -> None:
+    """One source of truth for the quote, as for the bytes and the transcript."""
+
+    manifest = json.loads((HOME_MOMENT_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+    scenarios = (ROOT / "docs" / "explainer" / "scenarios.mjs").read_text(encoding="utf-8")
+    for entry in manifest["assets"]:
+        assert f'quote: "{entry["quote"]}"' in scenarios, entry["path"]
+
+
+def test_admin_home_moment_metadata_rejects_an_empty_spoken_noun() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'evening',", "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'',"
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("quiet is empty" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_missing_chip_and_a_missing_scene() -> None:
+    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    stripped = template.replace(' <em class="day-one-chip">day one</em>', "")
+    assert any("carries no day-one-chip" in error for error in _admin_home_moment_errors(stripped))
+
+    start = template.index('<div class="listening-invitation household-scene" data-explainer-scenario="quiet"')
+    end = template.rindex(
+        '<div class="listening-invitation household-scene"', 0, template.index('data-explainer-scenario="laundry"')
+    )
+    errors = _admin_home_moment_errors(template[:start] + template[end:])
+    assert any("scenes are missing: quiet" in error for error in errors), errors
+
+
+def test_admin_home_moment_metadata_rejects_a_key_without_a_spoken_noun() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "const HOUSEHOLD_EXAMPLE_NOUNS={quiet:'evening',", "const HOUSEHOLD_EXAMPLE_NOUNS={"
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("HOUSEHOLD_EXAMPLE_NOUNS is missing: quiet" in error for error in errors), errors
+
+
+def test_admin_metadata_rejects_a_home_moment_shadowing_a_narration_clip(tmp_path: Path) -> None:
+    """toggleFirstListenGuide reads HOUSEHOLD_EXAMPLES before FIRST_LISTEN_GUIDES.
+
+    A shared key silently re-points a narration button at a home moment. The two
+    maps are validated against disjoint manifests, so neither can see the other's
+    keys and only the cross-check catches it.
+    """
+
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
+        "quiet:{file:'quiet.mp3',version:'02fc7d83734a'}",
+        "privacy:{file:'quiet.mp3',version:'02fc7d83734a'}",
+    )
+    template_path = tmp_path / "admin.html"
+    template_path.write_text(source, encoding="utf-8")
+
+    # The runtime shadow is JS-vs-JS, so the JS rename alone must be enough; the
+    # manifest is deliberately left untouched.
+    home_manifest = json.loads((SHIPPED_AUDIO_ROOT / "home_moments" / "spoken_assets.json").read_text(encoding="utf-8"))
+    guide_manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
+
+    errors = VALIDATOR._validate_admin_guide_metadata(
+        guide_manifest,
+        voice_manifest=_free_manifest(),
+        home_moment_manifest=home_manifest,
+        admin_template_path=template_path,
+    )
+    assert any("share keys: privacy" in error for error in errors), errors
+
+
+@pytest.mark.asyncio
+async def test_home_moment_clips_are_public_audio_mpeg() -> None:
+    from mammamiradio.web.streamer import router
+
+    app = FastAPI()
+    app.include_router(router)
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for name in HOME_MOMENTS:
+            response = await client.get(f"/static/audio/home_moments/{name}")
+            assert response.status_code == 200, name
+            assert response.headers["content-type"].startswith("audio/mpeg"), name
+            assert response.content == (HOME_MOMENT_ROOT / name).read_bytes()
 
 
 @pytest.mark.parametrize("default_root", [False, True])

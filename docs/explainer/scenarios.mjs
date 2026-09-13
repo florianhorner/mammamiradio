@@ -13,13 +13,13 @@
 // in Node (scripts/produce-segments.mjs, scripts/build.mjs), and in tests.
 //
 // Field notes:
-// - reachability: "ambient-grant" means every entity shown is available only
-//   after the operator opts in to narrow ambient context (weather.ambient +
-//   sun.ambient only, per mammamiradio/home/authorization.py). "home-grant"
-//   means the moment needs a wider household grant. A fresh install shares
-//   no Home context. The page must always contain at least one
-//   "ambient-grant" scenario — a build guard and a test enforce it, so the
-//   narrowest post-opt-in demo cannot regress silently.
+// - reachability: "day-one" matches the H4 Home-moment pack. It means every
+//   entity shown is available only after the operator explicitly opts in to
+//   narrow ambient context (weather.ambient + sun.ambient only, per
+//   mammamiradio/home/authorization.py). It never means pre-consent access.
+//   "home-grant" marks staged wider household examples for existing home-aware
+//   stations and the later Home Profile. The page must always contain at least
+//   one "day-one" scenario; build and test guards keep both surfaces aligned.
 // - beats: the segment script for scripts/produce-segments.mjs. Ordered.
 //   "tail" is a starter-catalog music tail (CC-BY, attribution required on
 //   the page), "imaging" ids reference assets/imaging/manifest.json (CC0),
@@ -45,7 +45,7 @@ const scenarios = {
     color: "#f4d048",
     rgb: "244, 208, 72",
     sensors: [
-      ["⌂", "person.flo", "home · 4 min"],
+      ["⌂", "person.guest", "home · 4 min"],
       ["↗", "binary_sensor.front_door", "closed"],
       ["☼", "sensor.living_room_lux", "36 lx"],
       ["°", "sensor.outdoor_temperature", "14 °C"],
@@ -86,7 +86,7 @@ const scenarios = {
     rgb: "232, 160, 48",
     sensors: [
       ["◉", "sensor.coffee_machine_power", "842 W"],
-      ["⌂", "person.flo", "home · early"],
+      ["⌂", "person.guest", "home · early"],
       ["°", "sensor.kitchen_temperature", "14 °C"],
       ["◌", "binary_sensor.kitchen_presence", "detected"],
       ["☼", "sensor.kitchen_lux", "118 lx"],
@@ -161,10 +161,10 @@ const scenarios = {
     time: "21:48 · Sunday",
     tag: "Sun and weather",
     heading: "Evening, officially.",
-    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. After you allow daylight and weather, this is the narrowest segment. A fresh install shares nothing until that choice.",
+    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. After you explicitly allow daylight and weather, this is the fresh-install ceiling. Nothing from Home is shared before that choice.",
     host: "Giulia checks the sky",
     quote: "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
-    reachability: "ambient-grant",
+    reachability: "day-one",
     color: "#60a5fa",
     rgb: "96, 165, 250",
     sensors: [

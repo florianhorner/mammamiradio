@@ -99,13 +99,10 @@ Assistant. The media-player ownership choice above does not change this route.
 1. Open the Mamma Mi Radio add-on Web UI. A fresh unfinished install opens
    **First Listen** automatically; completed installs review or repair it under
    **Motore → Setup**.
-2. The opening card puts a recorded English Mamma Mi Radio mini-show on deck:
-   an original music bed plus the Marco/Giulia welcome, then a
-   handoff to the live stream. It uses neither an AI key nor Home context.
-   Source readiness for live charts, Jamendo, local music, bundled demo music,
-   and recovery cover says whether primary music, recovery cover, or a music
-   repair follows the opening; it never blocks the speaker controls. Bundled
-   demo music is reported as unavailable when this build has no song library.
+2. First Listen offers a recorded welcome, then an English Marco/Giulia opening
+   when playback starts. Neither uses an AI key or Home details. **Music details**
+   shows ready and optional music sources; unavailable legacy sources and idle
+   backups stay in **Technical details**.
 3. Open Home Assistant's own media browser: **Media → Mamma Mi Radio → Mamma Mi
    Radio Live**, and send it to one physical speaker — not
    `media_player.mammamiradio`. The equivalent service call is **Developer tools
@@ -141,12 +138,12 @@ disposable HAOS/add-on test.
 
 ### First-listen repair
 
-If First Listen says the listening check was not saved, select **Restore sound
+If First Listen says the listening check was not saved, select **Save my sound
 check**. That action only retries the local receipt write; it does not replay
 the station or send another playback request. A refresh in the same app process
 restores that recovery choice. If the app restarted and the unsaved proof is
-gone, First Listen says so and asks you to refresh, then select **Start sound
-check** on this device once more.
+gone, First Listen says so and asks you to refresh, then select **Play my
+station** on this device once more.
 
 If the privacy choice takes effect but its setup review is not saved, the live
 choice remains in force. For the private choice, select **Save private choice

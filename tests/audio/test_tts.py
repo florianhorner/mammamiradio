@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from mammamiradio.audio.tts import DISCLAIMER_TEMPO
 from mammamiradio.core.models import HostPersonality, StationState
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
 
@@ -22,8 +23,12 @@ def _touch(path: Path) -> Path:
     return path
 
 
-def _normalize_side_effect(input_path, output_path, config=None, *, loudnorm=True):
-    """Side-effect for normalize(input_path, output_path, config, loudnorm)."""
+def _normalize_side_effect(input_path, output_path, config=None, **kwargs):
+    """Side-effect for normalize(); tolerant of keyword-only options.
+
+    Accepts **kwargs rather than naming each one so a new normalize() option
+    (loudnorm, music_eq, background, tempo, ...) does not break every caller.
+    """
     _touch(output_path)
     return output_path
 
@@ -2279,7 +2284,7 @@ async def test_synthesize_elevenlabs_full_failure_fails_closed(_mock_all, tmp_pa
 
 @pytest.mark.asyncio
 async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
-    """Disclaimer speed is format-scoped and no longer the old near-2x spike."""
+    """The fine print is time-compressed, uniformly, on whatever voice is cast."""
     from mammamiradio.audio.tts import synthesize_ad
 
     script = AdScript(
@@ -2296,16 +2301,88 @@ async def test_synthesize_ad_disclaimer_goblin_rate(_mock_all, tmp_path):
     result = await synthesize_ad(script, voices, tmp_path)
     assert result.exists()
 
-    # Check that Communicate was called with the classic-pitch disclaimer rate.
-    calls = _mock_all["Communicate"].call_args_list
-    assert len(calls) >= 1
-    found_rate = False
-    for call in calls:
-        kwargs = call.kwargs if call.kwargs else {}
-        if kwargs.get("rate") == "+55%":
-            found_rate = True
-            break
-    assert found_rate, f"Expected rate='+55%' in Communicate calls, got: {calls}"
+    # Speed is an atempo filter, not SSML rate: only two of the four engines
+    # honour rate, so routing the gag through it made delivery depend on casting.
+    tempos = [(c.kwargs or {}).get("tempo", 1.0) for c in _mock_all["normalize"].call_args_list]
+    assert DISCLAIMER_TEMPO in tempos, f"disclaimer was not time-compressed: {tempos}"
+    rates = {(c.kwargs or {}).get("rate", "+0%") for c in _mock_all["Communicate"].call_args_list}
+    assert rates == {"+0%"}, f"fine print must not also carry an SSML rate: {rates}"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_ad_copy_is_never_sped_up(_mock_all, tmp_path):
+    """The rate gate is a disclaimer gate. A normal sales line stays at +0%.
+
+    The suite only ever pinned the positive case, so nothing stopped a future
+    change from speeding up ordinary copy.
+    """
+    from mammamiradio.audio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="PharmaCo",
+        parts=[
+            AdPart(type="voice", text="Buy PharmaCo today!", role="hammer"),
+            AdPart(type="voice", text="Side effects may include...", role="disclaimer_goblin"),
+        ],
+        mood="lounge",
+    )
+    voices = {
+        "hammer": AdVoice(name="Loud", voice="it-IT-DiegoNeural", style="hard sell", role="hammer"),
+        "disclaimer_goblin": AdVoice(name="Speed", voice="it-IT-DiegoNeural", style="fast", role="disclaimer_goblin"),
+    }
+
+    await synthesize_ad(script, voices, tmp_path)
+
+    tempos = [(c.kwargs or {}).get("tempo", 1.0) for c in _mock_all["normalize"].call_args_list]
+    assert sorted(tempos) == [1.0, DISCLAIMER_TEMPO], f"expected exactly one sped-up line, got {tempos}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["elevenlabs", "openai", "azure"])
+async def test_disclaimer_is_time_compressed_on_every_engine(_mock_all, tmp_path, engine, monkeypatch):
+    """The gag must land identically whichever engine the voice is cast on.
+
+    AdVoice.engine defaults to "edge", so a test that omits it passes while
+    production runs the role on a cloud voice. Each cloud renderer is pinned
+    explicitly here; the Edge path is covered by
+    test_synthesize_ad_disclaimer_goblin_rate above.
+    """
+    from mammamiradio.audio import tts as tts_mod
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "k")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+
+    seen: dict[str, float] = {}
+
+    async def _fake_cloud(*args, **kwargs):
+        seen["tempo"] = kwargs.get("tempo", 1.0)
+        out = args[2]
+        out.write_bytes(b"\xff\xfb" + b"\x00" * 4096)
+        return out
+
+    monkeypatch.setattr(tts_mod, "synthesize_elevenlabs", _fake_cloud)
+    monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_cloud)
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_cloud)
+
+    script = AdScript(
+        brand="PharmaCo",
+        parts=[AdPart(type="voice", text="Side effects may include...", role="disclaimer_goblin")],
+        mood="lounge",
+    )
+    voices = {
+        "disclaimer_goblin": AdVoice(
+            name="Cloud", voice="cloud-voice", style="fast", role="disclaimer_goblin", engine=engine
+        ),
+    }
+
+    await tts_mod.synthesize_ad(script, voices, tmp_path)
+
+    assert seen.get("tempo") == pytest.approx(DISCLAIMER_TEMPO), (
+        f"{engine} disclaimer was not time-compressed (tempo={seen.get('tempo')!r}); "
+        "delivery must not depend on which engine the voice is cast on"
+    )
 
 
 @pytest.mark.asyncio
@@ -3264,11 +3341,11 @@ async def test_synthesize_dialogue_normalize_cancellation_waits_then_cleans_scra
     normalize_started = threading.Event()
     release_normalize = threading.Event()
 
-    def _slow_final_normalize(input_path, output_path, config=None, *, loudnorm=True):
+    def _slow_final_normalize(input_path, output_path, config=None, **kwargs):
         if input_path.name.startswith("dialogue_raw_"):
             normalize_started.set()
             assert release_normalize.wait(timeout=2.0)
-        return _normalize_side_effect(input_path, output_path, config, loudnorm=loudnorm)
+        return _normalize_side_effect(input_path, output_path, config, **kwargs)
 
     _mock_all["normalize"].side_effect = _slow_final_normalize
     task = asyncio.create_task(
@@ -5205,3 +5282,102 @@ async def test_synthesize_ad_recipe_restore_skips_motif_without_signature(_mock_
     assert result.exists()
     _mock_all["generate_sfx"].assert_called_once()
     _mock_all["generate_brand_motif"].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renderer", ["elevenlabs", "openai", "azure"])
+async def test_cloud_renderer_bodies_forward_tempo_to_normalize(_mock_all, tmp_path, monkeypatch, renderer):
+    """Execute the renderer bodies, not a stub of them.
+
+    The engine-matrix test above monkeypatches the three renderers wholesale, so
+    it proves synthesize() passes the kwarg to the boundary and nothing about
+    what happens inside. Deleting the tempo forward from any renderer body would
+    break every cloud voice with no test failing. That is the same shape as the
+    bug this branch exists to fix: a parameter accepted at the signature and
+    dropped inside.
+    """
+    from mammamiradio.audio import tts as tts_mod
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kwargs):
+            return httpx.Response(200, content=b"\x00" * 2048, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _Client)
+    out = tmp_path / "line.mp3"
+
+    if renderer == "elevenlabs":
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+        await tts_mod.synthesize_elevenlabs("fine print", "voice-id", out, api_key="k", tempo=1.95)
+    elif renderer == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+        class _Resp:
+            content = b"\x00" * 2048
+
+        class _Speech:
+            @staticmethod
+            def create(**kwargs):
+                return _Resp()
+
+        class _Audio:
+            speech = _Speech()
+
+        class _OpenAI:
+            audio = _Audio()
+
+        monkeypatch.setattr("mammamiradio.audio.tts._get_openai_client", lambda api_key: _OpenAI())
+        await tts_mod.synthesize_openai("fine print", "coral", out, api_key="k", tempo=1.95)
+    else:
+        monkeypatch.setenv("AZURE_SPEECH_KEY", "k")
+        await tts_mod.synthesize_azure(
+            "fine print", "it-IT-DiegoNeural", out, api_key="k", region="westeurope", tempo=1.95
+        )
+
+    tempos = [(c.kwargs or {}).get("tempo", 1.0) for c in _mock_all["normalize"].call_args_list]
+    assert pytest.approx(DISCLAIMER_TEMPO) in tempos, (
+        f"{renderer} renderer body dropped tempo before normalize(): {tempos}"
+    )
+
+
+@pytest.mark.parametrize("failure", ["exception", "too_small", "too_short"])
+def test_tempo_normalization_retries_once_at_normal_speed(_mock_all, tmp_path, failure):
+    from mammamiradio.audio.tts import _normalize_tolerating_tempo
+
+    raw, out = tmp_path / "raw.mp3", tmp_path / "out.mp3"
+    raw.write_bytes(b"raw")
+    if failure == "too_short":
+        _mock_all["ffprobe_duration"].return_value = 0.1
+
+    def first_failure(input_path, output_path, config=None, **kwargs):
+        if _mock_all["normalize"].call_count == 1:
+            if failure == "exception":
+                raise RuntimeError("tempo filter failed")
+            output_path.write_bytes(b"tiny" if failure == "too_small" else b"sized" * 1024)
+            return output_path
+        return _normalize_side_effect(input_path, output_path, config, **kwargs)
+
+    _mock_all["normalize"].side_effect = first_failure
+    assert _normalize_tolerating_tempo(raw, out, False, DISCLAIMER_TEMPO) == out
+    assert out.stat().st_size >= 1024
+    assert _mock_all["normalize"].call_count == 2
+    assert "tempo" not in _mock_all["normalize"].call_args_list[-1].kwargs
+
+
+def test_unprobeable_sized_tempo_output_is_accepted(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import _normalize_tolerating_tempo
+
+    raw, out = tmp_path / "raw.mp3", tmp_path / "out.mp3"
+    raw.write_bytes(b"raw")
+    _mock_all["ffprobe_duration"].return_value = None
+
+    assert _normalize_tolerating_tempo(raw, out, False, DISCLAIMER_TEMPO) == out
+    _mock_all["normalize"].assert_called_once()

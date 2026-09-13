@@ -38,12 +38,14 @@ from mammamiradio.core.first_listen import (
     capture_first_listen_install_origin,
     migrate_first_listen_install_origin,
 )
-from mammamiradio.core.models import PlaylistSource, StationState
+from mammamiradio.core.models import GenerationWasteReason, PlaylistSource, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.atomic_json import prune_stale_atomic_json_tmp_files
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.context_director import HomeContextDirector
-from mammamiradio.home.entity_policy import muted_entity_ids
-from mammamiradio.home.evening_memory import EveningLedger
+from mammamiradio.home.entity_policy import muted_entity_ids, policy_path
+from mammamiradio.home.evening_memory import LEDGER_FILENAME, EveningLedger
+from mammamiradio.home.ha_context import _ha_registry_cache_path
 from mammamiradio.home.migration import (
     LegacyHomePreflightV1,
     capture_legacy_home_preflight_v1,
@@ -53,8 +55,9 @@ from mammamiradio.home.migration import (
     rewrite_legacy_home_preflight_cold_v1,
     seal_legacy_home_provenance_v1,
 )
-from mammamiradio.home.moment_receipts import MomentStore
+from mammamiradio.home.moment_receipts import STORE_FILENAME, MomentStore
 from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.hosts.scriptwriter import has_script_llm
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.blocklist import load_blocklist
@@ -81,7 +84,12 @@ from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME, prune_stale_keepsake_tmp_files
-from mammamiradio.scheduling.producer import _queue_shadow_entry, prewarm_first_segment, run_producer
+from mammamiradio.scheduling.producer import (
+    _queue_shadow_entry,
+    prewarm_first_segment,
+    queue_first_listen_banter,
+    run_producer,
+)
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.media_sources import router as media_sources_router
 from mammamiradio.web.streamer import (
@@ -117,6 +125,7 @@ def _configure_http_logging() -> None:
 
 _configure_http_logging()
 logger = logging.getLogger("mammamiradio")
+_FIRST_LISTEN_OPENING_WAIT_SECONDS = 15.0
 
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
@@ -391,6 +400,16 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    household_json_paths = (
+        _ha_registry_cache_path(config.cache_dir),
+        policy_path(config.cache_dir),
+        config.cache_dir / STORE_FILENAME,
+        config.cache_dir / LEDGER_FILENAME,
+    )
+    pruned_household_json_tmp = prune_stale_atomic_json_tmp_files(config.cache_dir, household_json_paths)
+    if pruned_household_json_tmp:
+        logger.info("Household JSON cleanup: pruned %d stale scratch file(s)", pruned_household_json_tmp)
 
     # Prune stale temp render scratch left by a prior run (crash/restart debris)
     # so the HA add-on's /data/tmp doesn't grow unbounded across restarts.
@@ -867,28 +886,82 @@ async def startup():
         # reading a spooled file must never abort startup (INSTANT AUDIO).
         logger.warning("Restart handoff admission failed; continuing without it", exc_info=True)
 
-    # Pre-produce music segments in the background so app startup is instant.
-    # If a listener connects before prewarm finishes, the producer's idle-resume
-    # logic queues a canned clip as an immediate fallback.
-    # Keep prewarm capped at 2 across environments to avoid ffmpeg pileups on
-    # constrained addon hardware while still buffering enough for smooth start.
+    # A fresh recorded station opens music -> third chair -> music. Keep the
+    # producer from overtaking that sequence; playback still starts immediately.
+    # The minimum queue capacity is three, so no listener is needed to fill it.
+    opening = (
+        app.state.first_listen_cold_install
+        and queue.empty()
+        and not state.session_stopped
+        and not config.super_italian_mode
+        and not has_script_llm(config)
+    )
+    opening_pending = opening
+    opening_epochs = (state.source_revision, state.chaos_cutover_epoch, state.continuity_epoch)
+
+    def _opening_stale_reason():
+        if state.session_stopped:
+            return GenerationWasteReason.SESSION_STOPPED
+        if state.source_revision != opening_epochs[0]:
+            return GenerationWasteReason.STALE_SOURCE
+        if state.chaos_cutover_epoch != opening_epochs[1]:
+            return GenerationWasteReason.STALE_CHAOS
+        if (
+            not opening_pending
+            or state.continuity_epoch != opening_epochs[2]
+            or config.super_italian_mode
+            or has_script_llm(config)
+        ):
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
     async def _prewarm_multiple():
-        total = 2
-        for _ in range(total):
+        if opening:
+            # Every leg of the opening carries the same revocation rule, enforced
+            # at its admission boundary rather than only before generation. The
+            # wait below can time out while a render is still in flight, and on a
+            # Pi cold install that is the ordinary path, not a freak event: an
+            # unfenced late track would land after ordinary production started
+            # and skip the third chair.
+            if not await prewarm_first_segment(queue, state, config, stale_check=_opening_stale_reason):
+                return  # Release ordinary production; do not retry the opening.
+            if not await queue_first_listen_banter(queue, state, config, stale_check=_opening_stale_reason):
+                return  # A rejected host break ends the opening; no second track.
+            if _opening_stale_reason() is not None:
+                return  # Revoked while the host break rendered.
+            await prewarm_first_segment(queue, state, config, stale_check=_opening_stale_reason)
+            return
+        # Existing/keyed/stopped stations retain two concurrent music prewarms.
+        for _ in range(2):
             await prewarm_first_segment(queue, state, config)
 
     _prewarm_task = asyncio.create_task(_prewarm_multiple())
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
-    _producer_task = asyncio.create_task(
-        run_producer(
+
+    async def _produce_after_opening():
+        nonlocal opening_pending
+        if opening:
+            try:
+                await asyncio.wait_for(_prewarm_task, timeout=_FIRST_LISTEN_OPENING_WAIT_SECONDS)
+            except Exception:
+                # No shield: the timeout cancels the opening instead of leaving
+                # it racing ordinary production. A render already awaiting a
+                # thread can still finish, which is why every opening admission
+                # is fenced by _opening_stale_reason rather than by this
+                # cancellation alone.
+                logger.warning("Opening preparation did not finish; continuing ordinary production", exc_info=True)
+            finally:
+                opening_pending = False
+        await run_producer(
             queue,
             state,
             config,
             skip_event=app.state.skip_event,
             jamendo_provider=jamendo_provider,
         )
-    )
+
+    _producer_task = asyncio.create_task(_produce_after_opening())
     local_library_task = asyncio.create_task(
         run_local_library_scanner(app.state),
         name="local-library-scanner",

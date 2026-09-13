@@ -7,6 +7,25 @@
 <h1 align="center">Mamma Mi Radio</h1>
 <p align="center"><em>A radio station that lives in your house and talks about it.</em></p>
 
+## You built the sensors. You wrote the automations. Now somebody finally notices.
+
+Marco and Giulia host a late-night Italian radio show on hardware you control.
+They play music, argue like hosts who have known each other too long, and read
+ads for forty companies that do not exist. If you invite the house in, its small
+dramas become part of the show.
+
+> *"Breaking news from the laundry room: it's done. It's been done for two
+> hours. Nobody cares but us."*
+>
+## ▶ [Hear it happen: four half-minute moments](https://florianhorner.github.io/mammamiradio/)
+
+**Sound on. No install, no account.** Each clip starts as ordinary radio, then
+the house turns up as part of the show and the page reveals the invented Home
+details behind the moment. The demo never touches your Home Assistant.
+
+Another minute and a half: **[three short films from Studio B](https://florianhorner.github.io/mammamiradio/shorts/)**: Archive Receipt, Jealous
+Microphone, Third Chair. Synthetic voices throughout.
+
 <p align="center">
   <a href="https://github.com/florianhorner/mammamiradio/releases"><img alt="Release" src="https://img.shields.io/github/v/release/florianhorner/mammamiradio"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
@@ -14,59 +33,37 @@
   <a href="https://github.com/florianhorner/mammamiradio/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/florianhorner/mammamiradio"></a>
 </p>
 
-You built the sensors. You wrote the automations. Your partner still wants to
-know why they cannot have a normal light switch instead.
-
-Marco and Giulia host a complete late-night Italian radio show that runs on your own
-hardware. They play music, they insult each other just like hosts do, they advertise forty
-companies that (fortunately?) do not exist. And if you let them, they make your home part of the show.
-
-> *"Breaking news from the laundry room: it's done. It's been done for two
-> hours. Nobody cares but us."*
->
-> *"Live from Studio B, Mamma Mi Radio — brought to you by the espresso
-> machine. Check your cup. It may already be billing you."*
->
-> *"Qualcuno out there just turned on the TV. During our show. During aperitivo hour. On a Friday. I'm not even angry, I'm just taking notes."*
-
-## ▶ [Hear it happen: four moments, 30 seconds each](https://florianhorner.github.io/mammamiradio/)
-
-**Sound on. No install, no account.** Each clip starts as ordinary radio, then
-the house turns up as part of the show and the page shows you the exact sensor readings the
-hosts were given. This demo runs on invented data and
-never touches your Home Assistant.
-
-Two minutes more: **[three short films from Studio B](https://florianhorner.github.io/mammamiradio/shorts/)** — Archive Receipt, Jealous
-Microphone, Third Chair. Synthetic voices throughout.
-
 I built this because a smart home is invisible to everyone who did not build
-it. And many people don't get excited by presence sensors and humidity sensors in the kitchen, or a clever automation logic. With radio as a medium, you weave your entities into a storyline that anyone can listen to. From a dinner with seven guests: the hosts called me out on air for ignoring the pasta timer, and someone stopped the
-conversation to ask what the radio had just said. They didn't question the radio until the first 4th wall break.
+it. At dinner with seven guests, the hosts called me out for ignoring the pasta
+timer. Someone stopped the conversation to ask what the radio had said. Nobody
+questioned the station until the first fourth-wall break.
 
 <p align="center">
   <img src="docs/screenshots/01-house-made-it-on-air.webp" width="960" alt="Marco and Giulia on air reacting to completed laundry, with a privacy-safe Casa receipt">
 </p>
 <p align="center"><em>The laundry room made it on air.</em></p>
 
-## What this is, and what it isn't
+## Why it feels like radio
 
-| It is | It isn't |
-|---|---|
-| Self-hosted: your hardware, your provider keys, no Mamma Mi Radio account, no telemetry | A cloud service or a subscription |
-| A player for twelve licensed starter tracks plus your own local music files | A streaming client — no Spotify, Apple Music, or YouTube |
-| Mostly English by default (hosts run roughly 75% English / 25% Italian; **Super Italian** mode switches everything to 100% Italian) | An Italian-only show you will not understand |
-| Playable with zero API keys: real music, station imaging, and hosts speaking reviewed stock copy through free Edge voices | An endless, always-fresh show for free — new dialogue needs your own Anthropic or OpenAI key, billed to you |
-| Reading only the home details you explicitly approve, previewed before anything is sent | A voice assistant — it takes no commands and controls nothing |
-| Two recurring AI hosts with a written show | Real people, or a real station |
+Marco and Giulia have a written relationship, recurring Studio B lore, station
+imaging, music, and forty fictional sponsors. Home details enter as editorial
+material only when there is something worth airing. The show keeps going when
+the house has nothing to say.
 
-Fresh installs keep Home context off. Hear the station, inspect the filtered
-preview, then choose what Marco and Giulia may use. The sunset clip in the demo
-is the narrowest grant after that choice — daylight and weather only. Laundry,
-arrival, and coffee need a wider grant.
+The four public demos are staged recordings made with invented data, so anyone
+can play them without sharing a home. In a fresh installation, Home context
+starts off. After you inspect the filtered preview and opt in, the current grant
+is limited to coarse daylight and weather. The arrival, coffee, and laundry
+moments show the wider Home Profile planned for a later update; existing
+home-aware stations may already have broader context.
 
-**Status:** stable, single maintainer, running daily in one household. The
-engineering is further along than the evidence that other people want this —
-[the full honest assessment is here](docs/status-quo.md).
+The station runs on your hardware, takes no commands, and controls nothing in
+your home. There is no Mamma Mi Radio account, subscription, or telemetry. You
+add provider keys only when you want freshly written dialogue or premium voices.
+
+**Status:** stable, single maintainer, running daily in one household. [The full
+honest assessment](docs/status-quo.md) separates engineering maturity from the
+evidence that other people want this.
 
 ## First listen
 
@@ -85,24 +82,26 @@ No AI key is required for your first listen. Fresh installs open **First Listen*
 at the producer desk (`/admin`). Returning installs open the control room;
 you can find First Listen under **Motore -> Setup**.
 
-1. Select **Start sound check**. A 27-second opening plays `/stream` on the
-   current device: Marco and Giulia over an original music bed, then the live
-   stream. Use its speakers, headphones, Bluetooth, or AirPlay. You need no AI
-   key, Home context, or HACS integration. No HACS integration is required.
-2. Select **Yes, I hear it** after you hear the opening. Select **Not yet**
+1. Select **Play my station**. A reviewed English opening plays `/stream` on
+   the current device for about 15 seconds, then hands off to the live stream.
+   Use its speakers, headphones, Bluetooth, or AirPlay. You need no AI key or
+   Home context. No HACS integration is required.
+2. Select **I hear you** only after you hear Mamma Mi Radio. Select **No sound yet**
    for [repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
-3. Select **Keep Home private**, or open **See what the hosts would receive**
-   before choosing **Let Marco and Giulia use these details**. If the preview
-   contains only daylight, the app labels it ambient-only and recommends
-   **Keep Home private**.
+3. Select **Finish with Home private**, or choose **Add live host writing**.
+   Home context still stays off unless you open **See what the hosts would receive**
+   and then select **Let Marco and Giulia use these details**. You can choose
+   **Keep Home private** from that review instead. If the preview contains only
+   daylight and weather, the app labels it ambient-only and recommends the private
+   path.
 4. The success screen's **Open full listener** is the seam to the `/listen` station page.
    `/admin` stays the add-on default. Completed admin already has a **Listen** action
    when stages are ready. Install the [HACS
    integration](docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker)
    later if you want native `media-source://mammamiradio/live` playback on Home
-   Assistant speakers, or the [Music Assistant
-   provider](https://www.music-assistant.io/music-providers/mamma-mi-radio/) on
-   the 2.10 pre-release channel.
+   Assistant speakers. The [Music Assistant
+   provider](https://www.music-assistant.io/music-providers/mamma-mi-radio/) can
+   also play it as one live station with current and up-next metadata.
 
 <p align="center">
   <img src="docs/screenshots/02-first-listen-private.webp" width="960" alt="Completed First Listen screen showing audio heard on this device and Home staying private">
@@ -135,13 +134,15 @@ macOS users can run `./setup-mac.sh`; venv installs can run `./start.sh`.
 
 | You add | The station adds |
 |---------|------------------|
-| Nothing | Twelve credited tracks, station imaging, the 27-second First Listen, and hosts speaking reviewed stock copy through free Edge voices |
+| Nothing | Twelve credited local tracks, station imaging, the reviewed First Listen recording, and 21 packaged host breaks. Edge TTS is a keyless online fallback for other stock copy |
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Written-on-the-fly banter, news flashes, and ad breaks for forty fictional brands. Billed to you; the control room shows a running estimate |
-| OpenAI, Azure Speech, or ElevenLabs voice credentials | The premium voices the hosts were cast with, Edge as the fallback |
-| An AI key plus approved, filtered Home context | The details you allowed — an arrival, a forgotten load of laundry, a timer you are ignoring |
+| OpenAI, Azure Speech, or ElevenLabs voice credentials | The premium voices the hosts were cast with, with keyless online Edge TTS as the fallback |
+| An AI key plus approved, filtered Home context | On fresh installs today, opted-in coarse daylight and weather. Broader household moments remain for existing home-aware stations and a later Home Profile update |
 
-One OpenAI key covers both writing and voice. Azure Speech and ElevenLabs
-change only the voices.
+The same OpenAI API key can cover both writing and OpenAI TTS when you select
+OpenAI for each. Provider usage is charged to the API account behind your key;
+OpenAI API billing is separate from ChatGPT subscriptions. Azure Speech and
+ElevenLabs change only the voices.
 
 ## Privacy
 
@@ -180,7 +181,8 @@ The Home Assistant app scans audio under `/data/music`; use **Rotazione >
 Local music > Scan now** to refresh without a restart. Standalone installs can
 set `MAMMAMIRADIO_MUSIC_DIR`.
 
-Jamendo is off by default. To enable it, acknowledge non-commercial use.
+Jamendo is off by default. To enable it, acknowledge that your Jamendo API use
+is non-commercial.
 Provider confirmation for this station model remains pending. The station
 prepares one track at a time and deletes it after play or cancellation. Jamendo
 is not a recovery or restart source. Read [Music sources and rights
@@ -193,8 +195,10 @@ stays marked unhealthy.
 
 `radio.toml` defines the hosts, voices, pacing, and ad brands. The `/admin`
 control room lets you reorder the queue, ban a song on air, change AI quality,
-and switch between Festival, Chaos, and Super Italian modes. See the full
-configuration in [`.env.example`](.env.example) and [Operations](docs/operations.md).
+and switch between Festival, Chaos, and Super Italian modes. The default show
+is roughly 75% English and 25% Italian; Super Italian switches the hosts to 100%
+Italian. See the full configuration in [`.env.example`](.env.example) and
+[Operations](docs/operations.md).
 
 <p align="center">
   <img src="docs/screenshots/03-producer-desk.webp" width="960" alt="Producer desk with Marco and Giulia live, quick actions, and a short broadcast queue">

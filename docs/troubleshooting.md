@@ -390,9 +390,9 @@ Voice validation now runs at config load, not at synthesis time:
 ## First Listen does not play on this device
 
 Required First Listen proof is hearing the station in the add-on Web UI on this
-device. If **Start sound check** is quiet, check mute and volume on this tab,
+device. If **Play my station** is quiet, check mute and volume on this tab,
 confirm the sound is coming from this browser and not another app, then try
-**Start sound check** again. Technical details under the journey name the stream
+**Play my station again**. Technical details under the journey name the stream
 URL. Home Assistant speakers are an optional later route, not this step.
 
 ## First Listen: the optional Home Assistant speaker route is quiet
@@ -434,6 +434,24 @@ audio that arrives already levelled, there is nothing left for it to fix.
 This is a Music Assistant player setting; nothing changes on the station side.
 The station's own **On-Air Sound** dial is a separate FM colouring, off by
 default, so it is not what you are hearing.
+
+## A song cut off and an alarm beep played
+
+The retired `safety_saves` recipe could treat an ordinary door transition as an
+urgent radio interrupt. That path cut the song and played the emergency bridge
+before a host explanation was ready. Mamma Mi Radio no longer turns safety
+sensors or ordinary entry-door transitions into ritual moments. Use Home
+Assistant automations for safety alerts.
+
+Configured timers can still interrupt the station. Add each timer with a
+`[[homeassistant.timer_interrupt]]` block in `radio.toml`. Direct and Home
+Assistant automation callers can use the admin-authenticated
+`POST /api/interrupt` endpoint. Both paths use the packaged emergency tone.
+Other household moments continue as host talk at a natural break.
+
+Pre-upgrade "Safety moment" receipts may remain visible in the Casa strip and
+the admin Home-moments panel for up to seven days. The station reads those
+receipts as plain text and cannot create new ones. No operator action is needed.
 
 ## Home Assistant references never show up
 

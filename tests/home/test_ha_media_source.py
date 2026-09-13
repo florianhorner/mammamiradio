@@ -269,9 +269,16 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     lowered_first_listen = rendered_first_listen.lower()
 
     stream_proof = first_listen.index("`/stream`")
-    human_confirmation = first_listen.index("**Yes, I hear it**")
+    human_confirmation = first_listen.index("**I hear you**")
     privacy_choice = first_listen.index("**Keep Home private**")
     assert stream_proof < human_confirmation < privacy_choice
+    assert "**Play my station**" in first_listen
+    assert "**No sound yet**" in first_listen
+    assert "**Finish with Home private**" in first_listen
+    assert "**Add live host writing**" in first_listen
+    assert "about 15 seconds" in first_listen
+    assert "Start sound check" not in first_listen
+    assert "Yes, I hear it" not in first_listen
     assert "current device" in lowered_first_listen or "device in front of you" in lowered_first_listen
     assert any(route in first_listen for route in ("Bluetooth", "AirPlay"))
     assert "**See what the hosts would receive**" in first_listen

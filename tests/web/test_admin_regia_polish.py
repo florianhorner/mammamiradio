@@ -261,14 +261,14 @@ def test_setup_keys_are_deliberate_and_collapse_voice_providers() -> None:
     assert "Leave a field empty to keep its current value." in html
     assert "Change AI services" in html
     assert 'id="setupPremiumVoices"' in html
-    assert "Voice providers" in html
+    assert "Other voice setups" in html
     assert html.index('id="setupOpenaiKey"') < html.index('id="setupPremiumVoices"')
     assert html.index('id="setupAzureSpeechKey"') > html.index('id="setupPremiumVoices"')
     assert 'id="setupSaveBtn" data-stopped-exempt disabled' in html
     save_state = html[
         html.index("function updateFirstListenKeySaveState") : html.index("function openFirstListenKeyEditor")
     ]
-    assert "save.disabled=!firstListenKeyValues().some(Boolean)" in save_state
+    assert "save.disabled=_firstListenUi.keySaving||!hasInput" in save_state
 
 
 def test_home_context_preview_uses_plain_privacy_actions_and_sanitized_endpoint() -> None:

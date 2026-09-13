@@ -19,7 +19,6 @@ import os
 import re
 import threading
 import time
-import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures.process import BrokenProcessPool
@@ -33,6 +32,7 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from mammamiradio.core.config import DEFAULT_STATION_NAME, RadioEventRule, TimerInterruptConfig, is_absolute_http_url
 from mammamiradio.core.models import InterruptSpec, ScoredEntityStatus
+from mammamiradio.home.atomic_json import atomic_write_json
 from mammamiradio.home.authorization import (
     HomeAuthorization,
     HomeAuthorizationMode,
@@ -2043,7 +2043,6 @@ def _load_registry_snapshot(cache_dir: Path, *, now: float | None = None) -> Hom
 def _write_registry_snapshot(cache_dir: Path, snapshot: HomeRegistrySnapshot) -> None:
     path = _ha_registry_cache_path(cache_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     payload = {
         "schema_version": 1,
         "fetched_at": snapshot.fetched_at,
@@ -2052,16 +2051,9 @@ def _write_registry_snapshot(cache_dir: Path, snapshot: HomeRegistrySnapshot) ->
         "entity_device_names": snapshot.entity_device_names,
     }
     try:
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
-        os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, path)
-        os.chmod(path, 0o600)
+        atomic_write_json(path, payload, ensure_ascii=False)
     except OSError as exc:
         logger.warning("Failed to write HA registry cache %s: %s", path, exc)
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 async def _fetch_ha_registry_snapshot(

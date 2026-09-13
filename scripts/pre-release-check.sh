@@ -45,6 +45,10 @@ EOF
     ;;
 esac
 
+# shellcheck source=scripts/model-registry-gate.sh
+source "$SCRIPT_DIR/model-registry-gate.sh"
+model_registry_gate_validate || exit 2
+
 PASS=0
 FAIL=0
 WAIVED=0
@@ -298,6 +302,11 @@ if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
 else
     fail "strict media proof failed — release/publish paths must remain blocked"
 fi
+
+echo ""
+echo "11. Model registry (review age + pinned models alive)"
+# Body and contract: scripts/model-registry-gate.sh and CLAUDE.md, Quality gates, "Model registry watch".
+model_registry_gate "$MEDIA_PYTHON" "$SCRIPT_DIR/check_model_registry.py"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

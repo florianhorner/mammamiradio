@@ -145,8 +145,8 @@ private durable system for strategy or relationship context.
 - **HA add-on option durability:** Supervisor's stored app options are the sole durable authority for the admin mode controls and pacing. Each admin change is committed through Supervisor before live state changes. `/data/options.json` is a Supervisor-generated startup projection; `run.sh` and startup loaders may read it, but runtime code must never write it directly. The one sanctioned write is `run.sh`'s one-time Jamendo secret migration at startup, before the app: guarded by the `/data/.jamendo_client_id_migrated_v1` marker, it atomically rewrites the file once (temp file + rename) to drop the legacy `jamendo_client_id` key, and only after a non-empty value is durably relocated into the owner-only `/config/secrets.env`. An upgrade cannot reconstruct a pre-fix selection that existed only in process memory after Supervisor rematerializes an older stored value.
 - `STATION_NAME`: override the listener-facing station identity from `radio.toml`
 - `STATION_THEME`: override the internal scriptwriter prompt from `radio.toml`
-- **Dynamic LLM routing (`model_registry.toml`)**: script generation never names a model in code. A task asks for a **role** (`creative` for banter/news/ads/direction, `fast` for transitions and post-air memory extraction); the registry catalog maps a catalog key to a model ID (the canonical place model IDs live), and a **quality profile** (`premium`|`balanced`|`economy`) selects which catalog key each role uses. Resolution chain: `task → role → active profile → catalog key → model id`. The same registry holds the OpenAI TTS model and catalog-keyed token pricing. Swap a model by editing its catalog line and matching price entry — no code change. `fast` is pinned to the lowest-latency model in every profile (transitions must not risk dead air, and memory extraction must not crowd out the live show). A missing/malformed registry disables provider calls and degrades to stock scripts and Edge TTS, so the station still boots and airs. `resolve_model()` in `core/config.py` is the single resolver; it never raises. A legacy `[models]` block in `radio.toml` is read-only compatibility input and logs a deprecation warning.
-- `MAMMAMIRADIO_QUALITY`: active quality profile (`premium`|`balanced`|`economy`; default `balanced`). Creative work resolves to Opus/large for `premium`, Sonnet/small for `balanced`, and Haiku/small for `economy`; latency-sensitive `fast` work stays on Haiku/small in every profile. Operator-toggleable from the admin Engine Room "AI Quality" dial (hot-swaps live with no restart and no queue purge; the current segment finishes airing first). Persisted to `.env` in standalone mode and Supervisor's stored `quality_profile` option in HA add-on mode. The HA add-on option replaced the old `claude_model` dropdown; a stored legacy `claude_model` remains a compatibility input only while no `quality_profile` exists, and any later Supervisor-backed admin save (not just a quality_profile save) safely removes it.
+- **Dynamic LLM routing (`model_registry.toml`)**: script generation never names a model in code. A task asks for a **role** (`creative` for banter/news/ads/direction, `fast` for transitions and post-air memory extraction); the registry catalog maps a catalog key to a model ID (the canonical place model IDs live), and a **quality profile** (`premium`|`balanced`|`economy`) selects which catalog key each role uses. Resolution chain: `task → role → active profile → catalog key → model id`. The same registry holds the OpenAI TTS model, catalog-keyed token pricing, and optional Anthropic adaptive-thinking effort (`[models.effort.<provider>]`, levels `low|medium|high|xhigh|max`). Effort is keyed by catalog key and applied only on the Anthropic creative path via `extra_body.output_config.effort`; Haiku must never carry an effort entry (it rejects the parameter). Swap a model by editing its catalog line and matching price entry — no code change. `fast` is pinned to the lowest-latency model in every profile (transitions must not risk dead air, and memory extraction must not crowd out the live show). A missing/malformed registry disables provider calls and degrades to stock scripts and Edge TTS, so the station still boots and airs. `resolve_model()` / `effort_for()` in `core/config.py` are the single resolvers; they never raise. A legacy `[models]` block in `radio.toml` is read-only compatibility input and logs a deprecation warning.
+- `MAMMAMIRADIO_QUALITY`: active quality profile (`premium`|`balanced`|`economy`; default `balanced`). Creative work resolves to Opus/Sol for `premium`, Sonnet/Terra for `balanced`, and Haiku/Luna for `economy`; latency-sensitive `fast` work stays on Haiku/Luna in every profile. Operator-toggleable from the admin Engine Room "AI Quality" dial (hot-swaps live with no restart and no queue purge; the current segment finishes airing first). Persisted to `.env` in standalone mode and Supervisor's stored `quality_profile` option in HA add-on mode. The HA add-on option replaced the old `claude_model` dropdown; a stored legacy `claude_model` remains a compatibility input only while no `quality_profile` exists, and any later Supervisor-backed admin save (not just a quality_profile save) safely removes it.
 - `CLAUDE_MODEL` / `CLAUDE_CREATIVE_MODEL` / `OPENAI_SCRIPT_MODEL`: back-compat emergency overrides. Each replaces the registry catalog value its role resolves to under the default profile, so it takes effect under any profile (precedence: env > catalog). `CLAUDE_CREATIVE_MODEL` → anthropic creative-role model; `CLAUDE_MODEL` → anthropic fast-role model; `OPENAI_SCRIPT_MODEL` → every OpenAI catalog entry (one global OpenAI fallback model). The anthropic vars target their role's catalog key under the default profile; `OPENAI_SCRIPT_MODEL` does not affect the separately configured TTS model. `scripts/eval_openai_script_model.py` uses the registry's OpenAI catalog by default; `--models` remains an explicit experiment override.
 - **OpenAI fallback script evaluator:** `scripts/eval_openai_script_model.py` is an online,
   paid operator command that forces the OpenAI fallback path; it is not a CI gate, a proof of
@@ -172,6 +172,7 @@ private durable system for strategy or relationship context.
 
 ## Runtime behavior
 
+- **Household JSON scratch cleanup.** Before the Home writers start, startup sweeps only the four owned destination patterns for HA registry, entity policy, Moment Receipts, and evening memory. `prune_stale_atomic_json_tmp_files` removes unique dotted scratch and the old fixed `*.json.tmp` form only after a 6h age gate; it is best-effort, rejects symlinked or out-of-cache paths, and caps both raw scanning (5000) and deletion (500) per destination per boot.
 - Startup loads `radio.toml`, validates config and the attributed starter manifest, prunes stale temp render scratch (`*.mp3` older than 6h in `tmp_dir` — crash/restart debris that otherwise piles up in the addon's `/data/tmp`; `prune_stale_tmp_files` in `playlist/downloader.py`, best-effort, symlink-checked, runs before the producer so nothing is in-flight), prunes orphaned keepsake scratch (`.keepsake-*.tmp` older than 6h in `cache/keepsakes/`, left by a hard kill mid-publish; `prune_stale_keepsake_tmp_files` in `scheduling/clip.py`), prunes orphaned restart-handoff scratch files (`.manifest-*.tmp` / `.handoff-*.tmp` older than 6h in `cache/restart_handoff/` and `cache/restart_handoff/segments/` — write-in-progress debris left by a hard kill mid-`mkstemp`; `prune_stale_handoff_tmp_files` in `restart_handoff.py`, best-effort, symlink- and path-containment-checked, capped per directory at 500 candidates per pass so a pathological backlog can't stall boot — a second, independent 5000-candidate ceiling on the raw glob enumeration itself keeps even an extreme backlog from making the scan/sort step unbounded before that prune cap ever applies), purges suspect cache files (< 10KB, except generated `synth_` layers — stings and motifs are legitimately short), captures and cross-checks the Home install-origin witnesses before/after SQLite initialization (`home/migration.py`; uncertainty fails narrow), restores only an eligible persisted base selection, otherwise chooses operator-owned local files or the starter catalog, initializes the clip ring buffer, synchronously admits any safe non-Jamendo `cache/restart_handoff/` music segments into the queue (skipped when `session_stopped`), then launches producer and playback tasks. A retired persisted `jamendo://` source migrates to the current base and never restores provider audio. Logs a one-line boot summary at the end.
 - **Restart handoff spool.** `mammamiradio/restart_handoff.py` shortens the post-update cold open: after eligible non-transient music queues, the producer best-effort copies it (hash-addressed, content-verified) into `cache/restart_handoff/segments/` and atomically publishes a `manifest.json` capping at 3 entries (6h max age). On the next boot, `main.py::_admit_restart_handoff` validates and enqueues whatever passes (existence, size, SHA-256, age, operator blocklist, and media admission) before the producer/playback tasks start. Jamendo is excluded at write and read boundaries. A missing/stale/corrupt manifest is a silent no-op; the local-or-starter base and protected recovery ladder remain underneath it. Scratch files from an interrupted write (a hard kill between `mkstemp` and `os.replace`) are swept by `prune_stale_handoff_tmp_files` at the next startup (see the Runtime behavior bullet above) — never by this write path itself.
 - **Release beat campaign.** `mammamiradio/release_campaign.py` turns an optional packaged `mammamiradio/assets/release/release_beat.toml` manifest (absent/disabled by default — complete no-op) into a bounded, listener-safe on-air cold-open campaign after an update. `scripts/validate-release-beat.py` gates the manifest's schema and listener-safe copy in CI (`scripts/check-release-invariants.sh`) and against the release target in `scripts/pre-release-check.sh` / `scripts/cut-edge-release.sh`. `ReleaseCampaign` offers the scriptwriter a prompt block on the first eligible banter break; delivery counts only once a segment actually airs to a real listener (`_emit_release_campaign_result` in `web/streamer.py`, independent of whether Show Memory/the provenance ledger is enabled), and the campaign self-retires on `max_airings` (default 5) or `campaign_window_seconds` (default 72h). State persists to `cache/release_campaign_ledger.json`.
@@ -350,8 +351,58 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook
   (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`)
   refuses a bare `gh pr create` unless a `review`/`adversarial-review` entry is
-  logged for HEAD (or a recent ancestor) within 2h. The hook is fail-open,
-  project-scoped, and Claude-only; Codex has no hook layer.
+  logged for HEAD (or a recent ancestor) within 2h **and** the committed v2
+  receipt covers HEAD's content. The ledger half proves the squad ran on this
+  machine; the receipt half is what the landing gate actually reads, so the hook
+  runs `scripts/check-preship-evidence.sh` — the same checker `land-pr.sh` uses —
+  before the PR exists rather than after CI. A logged squad whose receipt was
+  never emitted is denied here, with the emit command in the message. The hook is
+  fail-open, project-scoped, and Claude-only; Codex has no hook layer. Fail-open
+  is narrower than exit-code equality: only a rendered `landing-evidence:` verdict
+  denies, so an unusable Python or a missing checker never blocks a PR.
+
+  "Project-scoped" is now enforced rather than assumed. The hook is registered
+  for every Bash call in the session, so it also saw PRs opened against *other*
+  repositories from a worktree rooted here — and judged them with this repo's
+  ledger and this working tree's receipts, which describe different work. That
+  denied a PR whose squad had genuinely run and was logged in its own repo's
+  ledger (observed 2026-09-12 on a `florianhorner/gh-workflows` PR, where the
+  fleet-wide `permission-guard.py` R19 resolved the right ledger and passed).
+  A `--repo` or `-R` naming a repository that is not this checkout is now
+  skipped, the same reasoning R19 already applies: the question is unanswerable
+  here, and unanswerable must not mean refused. Standing aside requires *every*
+  opening command in the string to be explicitly foreign, read the way the CLI
+  reads it: last-wins on a repeated flag, from that command's own argument
+  vector, with a newline treated as the command separator it is and every
+  value-taking flag consuming its value — never from `--body` prose, never from
+  a later chained command. Both sides of the comparison reduce to `owner/repo`,
+  so the spellings the CLI accepts for one repository (`host/owner/repo`,
+  `http://`, `ssh://…​.git`, `git@host:…`, `-Rowner/repo`, `-R=owner/repo`)
+  cannot read as two. The flagless form and a `--repo` naming this repo are
+  unchanged.
+
+  This one branch fails *toward* checking rather than open, unlike the rest of
+  the guard: an `origin` that names no hosted repository (a local path or a
+  `file://` clone), a command line the tokenizer cannot parse, a target the
+  guard cannot reduce to `owner/repo`, and an opening command with no explicit
+  target all keep the guard on, because "cannot prove this is somebody else's
+  PR" has to mean "judge it" or the exemption becomes the bypass. Known gap,
+  pinned by a test rather than closed: a flagless command run after `cd`-ing
+  into another repository is still judged against this checkout, since the hook
+  sees the session cwd and no target. It refuses rather than passes, and R12
+  denies the flagless form fleet-wide.
+
+  Command *detection* was the weaker half and is now anchored on parentheses as
+  well as whitespace and `;&|`. A single `(` used to leave `gh` unanchored, so a
+  merge inside a subshell walked past the landing-contract deny below, and a
+  create inside `$( )` went unjudged. That was pre-existing and is the most
+  consequential thing the reviews on this change turned up.
+
+  Everything above is asserted by `tests/workflows/test_preship_squad_gate.sh`,
+  and every acceptance case there is mutation-verified: each one fails against
+  the behaviour it replaced. That matters more than the count, because three
+  separate rounds of review found bypasses in the *fix*, each of which read as
+  correct until a case was written for it.
 
   The runtime-independent evidence gate is the immutable v2 receipt, and the
   ceremony is single-pass: commit the implementation, run the review on that
@@ -426,12 +477,23 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
   - Admin QA: run / reused / not applicable / deferred
   ```
   For stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when the PR itself is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. The pre-ship review squad is unchanged; this rule scopes only manual `/qa`.
-- **Coverage ratchet (automatic)**: Coverage can only go up, never down. Two layers enforce this:
+- **Coverage floors**: Coverage must stay above the committed minimums. Two layers enforce this:
   - **Aggregate floor**: `fail_under` in `pyproject.toml` — the overall minimum.
   - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
 - **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
   - On PRs: `check` mode — fails if any module dropped below its floor.
-  - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
+  - On main merge: `update` mode recomputes the floors and tries to commit and push
+    updates. A rejected push opens one `coverage-ratchet-stale` issue with the
+    computed diff and a link to the run's diagnostic; it does not infer the cause.
+    For a protected branch, run `make coverage-ratchet` locally and submit the
+    resulting changes through a PR. Verify the reported increases and link that PR
+    with `Fixes #<issue number>`; a later no-change run cannot prove an earlier
+    increase landed, so it leaves the issue open for that verification.
+    A failed/skipped computation or missing result opens a separate
+    `coverage-ratchet-broken` issue, closed when computation recovers even if the
+    push still fails. Cancelled workflows and obsolete main snapshots do not change
+    reports. Reporting API failures fail the job. Token permissions and
+    branch-protection rules are not bypassed.
   - The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
     pack provenance test reads generator inputs at the revision pinned in the
     manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.
@@ -455,7 +517,9 @@ report-only shadow queue), with a current local gstack ledger as supplemental pr
   `docs/explainer/README.md`. The workflow is in its own path filter so a
   change to the CI invocation is exercised by the job it changes.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
-- **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
+- **Adding tests**: CI computes higher floors after merge. They become enforced only
+  after the updated floor files land; follow any ratchet issue to finish that step.
+- **Model registry watch** (`scripts/check_model_registry.py`): two questions about `model_registry.toml`, answered without provider keys. `--age` reads `[models].last_reviewed`, the day a maintainer last *decided* the pins (bump or hold; the comment beside it says which), and fails when the stamp is missing, malformed, in the future, or older than 45 days. The limit is a constant with no override on purpose: the honest escape is the stamp, refreshed only after reading the provider report. `--providers` reads the public Anthropic models overview and per-ID lifecycle table plus OpenAI's models and deprecations pages and classifies every catalog entry as `current`, `legacy`, `unlisted`, `deprecated(<date>)` or `retired`; `--gate drift` (default) fails on anything not current, `--gate liveness` only on deprecated or retired. Exit 2 means the docs could not be read or lost the anchors the parser relies on, so a broken scraper is never green. It runs as `scripts/pre-release-check.sh` section 11 (body in `scripts/model-registry-gate.sh`): review age PASS/FAIL; liveness PASS/FAIL, or WAIVED with the reason when the docs are unreachable or the checker fails. Because that script also runs in CI on any PR touching `pyproject.toml` (Dependabot included), in CI the section runs only when the diff against `origin/main` changes a version line and notes itself and skips otherwise; under `make pre-release` it always runs, and `MMR_MODEL_REGISTRY_GATE=always` forces it. It is deliberately **not** an every-PR calendar assertion: the normal pytest suite runs the gate's shell contract with committed fixtures, while only a release cut asks whether the real review stamp is still fresh. `--report` runs both checks unconditionally with one combined exit code, and `.github/workflows/model-registry-watch.yml` runs it every Monday: exit 0 closes any open `model-registry-watch` issue, exit 1 (a stale stamp, or a pin that is no longer current at its provider: legacy, unlisted, deprecated or retired) opens one or comments the week's report on it, and a run that could not read the docs, or crashed before rendering a report, does the same under a title and body naming the watcher rather than a pin, because a broken scraper that stays silent is the one outcome the check exists to prevent. Self-test: `bash tests/workflows/test_model_registry_watch.sh`. Agents never refresh the stamp to make a gate green. The cut-gate shell self-test (`tests/workflows/test_model_registry_gate.sh`) passes alternate registry and fixture paths explicitly to the sourced gate function; the production pre-release call ignores ambient overrides. Fixtures are trimmed real captures under `tests/scripts/fixtures/model_registry/`. Liveness at runtime is separate: a 404 on a retired model trips the provider backoff and the station keeps airing (PR #315).
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on PRs that touch workflow/script paths, and on every push to `main`). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
 - **UI copy lint** (`scripts/check-ui-copy-lint.sh`): Principle #5 guard over human-facing
   strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,

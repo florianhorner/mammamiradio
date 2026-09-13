@@ -743,11 +743,22 @@ try:
     import tomllib
 except ImportError:
     import tomli as tomllib
+import datetime
+import re
 with open('model_registry.toml', 'rb') as f:
     raw = tomllib.load(f)
 models = raw.get('models')
 if not isinstance(models, dict):
     raise SystemExit('model_registry.toml schema invalid: [models] table is required')
+# Shape only (a date, or a YYYY-MM-DD string); calendar validity and age are the cut's
+# question, parse_last_reviewed in scripts/check_model_registry.py, run by pre-release-check.sh.
+last_reviewed = models.get('last_reviewed')
+if isinstance(last_reviewed, datetime.datetime) or not (
+    isinstance(last_reviewed, datetime.date)
+    or (isinstance(last_reviewed, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', last_reviewed))
+):
+    raise SystemExit('model_registry.toml schema invalid: [models].last_reviewed must be a YYYY-MM-DD date, '
+                     'the day a maintainer last decided the pins')
 catalog = models.get('catalog')
 profiles = models.get('profiles')
 routing = models.get('routing') or {}
@@ -787,6 +798,38 @@ for profile_name, profile_data in profiles.items():
                 raise SystemExit(
                     f'model_registry.toml schema invalid: {profile_name}/{provider}/{task} role {role!r} '
                     'does not resolve to a model id'
+                )
+# Optional [models.effort.<provider>]: levels must be known, keys must exist in
+# that provider's catalog, and Haiku must never carry an effort entry.
+# Mirrored from core/config.py; test_validate_addon_effort_levels_match_runtime
+# fails if the release validator and runtime schema drift apart.
+allowed_effort = {'low', 'medium', 'high', 'xhigh', 'max'}
+effort = models.get('effort')
+if effort is not None:
+    if not isinstance(effort, dict):
+        raise SystemExit('model_registry.toml schema invalid: [models.effort] must be a table')
+    for provider, levels in effort.items():
+        if not isinstance(levels, dict):
+            raise SystemExit(
+                f'model_registry.toml schema invalid: models.effort.{provider} must be a table'
+            )
+        provider_catalog = catalog.get(provider) or {}
+        for key, level in levels.items():
+            if key not in provider_catalog:
+                raise SystemExit(
+                    f'model_registry.toml schema invalid: models.effort.{provider}.{key} is not in '
+                    f'models.catalog.{provider}'
+                )
+            if level not in allowed_effort:
+                raise SystemExit(
+                    f'model_registry.toml schema invalid: models.effort.{provider}.{key} level '
+                    f'{level!r} is not one of {sorted(allowed_effort)}'
+                )
+            model_id = provider_catalog.get(key)
+            if isinstance(model_id, str) and model_id.startswith('claude-haiku'):
+                raise SystemExit(
+                    f'model_registry.toml schema invalid: models.effort.{provider}.{key} must not '
+                    f'set effort on Haiku ({model_id})'
                 )
 tts = raw.get('tts')
 openai_tts = tts.get('openai') if isinstance(tts, dict) else None

@@ -5848,7 +5848,8 @@ async def run_playback_loop(app) -> None:
                             logger.info("Skipping current segment")
                             was_skipped = True
                             terminal_reason = "skip"
-                            pacer.reset_timeline("explicit_skip")
+                            # Already delivered bytes still play on every listener.
+                            # A new origin would add another full cushion per skip.
                             skip_event.clear()
                             break
 
@@ -6577,7 +6578,7 @@ async def _wait_for_first_listen_resume(request: Request) -> bool:
     return True
 
 
-async def _audio_generator(request: Request, *, first_listen: bool = False):
+async def _audio_generator(request: Request, *, first_listen: bool = False, prelude: bool = True):
     """Stream an eligible first-listen prelude, then the shared live station.
 
     The packaged show is emitted before subscribing to ``LiveStreamHub``.  It
@@ -6589,7 +6590,7 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
     if first_listen and state.session_stopped and not await _wait_for_first_listen_resume(request):
         return
     show_path = None
-    if first_listen_show_required(request.app.state):
+    if prelude and first_listen_show_required(request.app.state):
         try:
             show_path = await asyncio.wait_for(
                 asyncio.to_thread(approved_first_listen_show_path, english=first_listen),
@@ -6606,25 +6607,43 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
             return
         logger.info("First Listen client prelude: %s", show_path.name)
         try:
+            # Keep a small decoder cushion so WebKit can start immediately,
+            # while bounding the backlog instead of sending the whole opening.
+            opening_pacer = StreamPacer(DEFAULT_CLIP_BITRATE_KBPS * 125)
             chunk_iter = iter(iter_first_listen_show_chunks(show_path))
+            chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
             while True:
-                chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
+                if await request.is_disconnected() or state.session_stopped:
+                    return
                 if chunk is None:
                     break
                 yield chunk
+                # The prelude is audio a listener accepted, so it counts as air.
+                # Pacing it in real time means nobody reaches the hub for ~23s on
+                # a cold install; without this stamp the station would report
+                # `503 starting` and could trip the silence watchdog while the
+                # opening is audibly covering the speaker. Only the timestamp is
+                # set: `current_stream_audible` belongs to a queued segment, and
+                # no segment is on air yet.
+                state.last_air_monotonic = _runtime_monotonic()
+                pacing = opening_pacer.after_send(len(chunk))
+                chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
+                # Join live immediately at EOF, with the last packet still buffered.
+                if chunk is not None and pacing.sleep_seconds > 0:
+                    await asyncio.sleep(pacing.sleep_seconds)
         except OSError:
             # The reviewed package asset is optional at runtime: corruption or
             # an unreadable installation falls through to the normal instant-
             # audio ladder instead of terminating the speaker request.
             logger.warning("First Listen client prelude became unreadable; joining live station", exc_info=True)
-        if await request.is_disconnected():
+        if await request.is_disconnected() or state.session_stopped:
             return
 
     listener_id, listener_queue = hub.subscribe()
 
     try:
         while True:
-            if await request.is_disconnected():
+            if await request.is_disconnected() or not hub.has_listener(listener_id):
                 break
 
             try:
@@ -6634,7 +6653,7 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
                     break
                 continue
 
-            if chunk is None:
+            if chunk is None or not hub.has_listener(listener_id):
                 break
 
             yield chunk
@@ -6998,11 +7017,15 @@ async def stream(request: Request):
     # Omit ``icy-genre`` when no listener-facing tagline survives header folding.
     if icy_genre:
         headers["icy-genre"] = icy_genre
-    audio = (
-        _audio_generator(request, first_listen=True)
-        if request.query_params.get("first_listen") == "1"
-        else _audio_generator(request)
-    )
+    # The existing browser owner rejoins live after an explicit transport click.
+    # It must not replay either opening while human confirmation is still pending.
+    first_listen_mode = request.query_params.get("first_listen")
+    if first_listen_mode == "live":
+        audio = _audio_generator(request, first_listen=True, prelude=False)
+    elif first_listen_mode == "1":
+        audio = _audio_generator(request, first_listen=True)
+    else:
+        audio = _audio_generator(request)
     return StreamingResponse(
         audio,
         headers=headers,
