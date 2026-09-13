@@ -31,6 +31,7 @@ async (page) => {
           button: style(button), note: note && style(note), title: style(title),
           labels: [...panel.querySelectorAll('.card-label,.ttl-eyebrow')].map(style),
           grouped: Boolean(note && group.contains(note)),
+          uniqueNote: Boolean(note && document.querySelectorAll(`[id="${note.id}"]`).length === 1),
           noteText: note?.textContent,
           fits: Boolean(note && [group, button, note].every(fits)),
           touchHeight: button.getBoundingClientRect().height,
@@ -38,7 +39,7 @@ async (page) => {
             - group.getBoundingClientRect().bottom,
         };
       });
-      assert(metrics.grouped && metrics.noteText.includes('Your settings stay saved.'),
+      assert(metrics.grouped && metrics.uniqueNote && metrics.noteText.includes('Your settings stay saved.'),
         'Motore restart lost its grouped, accessible settings reassurance');
       assert(metrics.button.font.includes('Outfit') && metrics.note.font.includes('Outfit')
         && metrics.button.size === 13 && metrics.note.size === 13,
