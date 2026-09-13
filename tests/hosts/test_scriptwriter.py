@@ -8751,7 +8751,8 @@ async def test_ad_prompt_forbids_faking_speed_in_the_text(config, state):
         captured["prompt"] = prompt
         return {"parts": [{"type": "voice", "text": "Copy.", "role": "hammer"}]}
 
-    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    # A fine-print category: the anti-glue rule only exists where fine print does.
+    brand = AdBrand(name="Bancone", tagline="T", category="banking")
     voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
         await write_ad(brand, voices, state, config, ad_format="classic_pitch")
@@ -8765,8 +8766,13 @@ async def test_ad_prompt_forbids_faking_speed_in_the_text(config, state):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ad_format", list(ALL_FORMATS))
 async def test_the_fine_print_rule_reaches_every_format(config, state, ad_format):
-    """classic_pitch is the one format that casts the goblin, and was the only
-    one whose roster omitted the never-for-sales-copy rule."""
+    """For a brand that carries fine print, every format states the restriction.
+
+    classic_pitch is the one format that casts the goblin, and was the only one
+    whose roster omitted the never-for-sales-copy rule. Fine print is now a brand
+    trait, so the brand here is in a fine-print category; the no-fine-print side
+    is covered by test_no_fine_print_brand_never_hears_the_role.
+    """
     from mammamiradio.hosts.ad_creative import _FORMAT_ROLES
 
     captured = {}
@@ -8775,7 +8781,7 @@ async def test_the_fine_print_rule_reaches_every_format(config, state, ad_format
         captured["prompt"] = prompt
         return {"parts": [{"type": "voice", "text": "Copy.", "role": _FORMAT_ROLES[ad_format][0]}]}
 
-    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    brand = AdBrand(name="Bancone", tagline="T", category="banking")
     voices = {
         r: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=r)
         for i, r in enumerate(_FORMAT_ROLES[ad_format])
@@ -8829,7 +8835,9 @@ async def test_write_ad_normalizes_the_role_the_model_returns(config, state):
     """
     from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE
 
-    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    # A fine-print category, so the normalized disclaimer part survives to the
+    # script rather than being dropped as copy this brand should not carry.
+    brand = AdBrand(name="Bancone", tagline="T", category="banking")
     voices = {"hammer": AdVoice(name="Voce Uno", voice="it-IT-DiegoNeural", style="hard sell", role="hammer")}
 
     with patch(
@@ -8853,18 +8861,26 @@ async def test_write_ad_normalizes_the_role_the_model_returns(config, state):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ad_format", list(ALL_FORMATS))
-async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad_format):
+@pytest.mark.parametrize("category", ["banking", "tech"])
+async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad_format, category):
     """The SPEAKERS block, the role rule and the JSON example must agree.
 
-    The prompt tells the model every role must come from SPEAKERS. Only
-    classic_pitch casts a disclaimer voice, yet the fine print is addressed to
-    DISCLAIMER_ROLE in every format — so that token has to appear in SPEAKERS
-    too, or the prompt contradicts itself. A self-inconsistent prompt is exactly
-    what put the roster and the example out of step before.
+    The prompt tells the model every role must come from SPEAKERS, so the roster
+    and the example have to move together. They can be consistent in two ways and
+    both are asserted here:
+
+    * a fine-print brand lists DISCLAIMER_ROLE *and* asks for it, in every format,
+      including the five that do not cast a goblin voice;
+    * a no-fine-print brand does neither, including classic_pitch, which casts a
+      goblin the prompt must then not offer.
+
+    Listing the token without using it (or the reverse) is the self-inconsistency
+    that put the roster and the example out of step before, so `requested <=
+    listed` holds on both sides of the split.
     """
     import re
 
-    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES, DISCLAIMER_ROLE
+    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES, DISCLAIMER_ROLE, brand_has_fine_print
 
     captured = {}
 
@@ -8872,7 +8888,9 @@ async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad
         captured["prompt"] = prompt
         return {"parts": [{"type": "voice", "text": "Copy.", "role": _FORMAT_ROLES[ad_format][0]}]}
 
-    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    brand = AdBrand(name="Testo", tagline="T", category=category)
+    fine_print = brand_has_fine_print(brand)
+    assert fine_print == (category == "banking"), "fixture drifted from FINE_PRINT_CATEGORIES"
     voices = {
         role: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=role)
         for i, role in enumerate(_FORMAT_ROLES[ad_format])
@@ -8885,12 +8903,21 @@ async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad
     listed = set(re.findall(r'^- "([a-z_]+)"', prompt, re.M))
     requested = set(re.findall(r'"role": "([a-z_]+)"', prompt))
 
-    assert requested, f"{ad_format}: no roles in the JSON example"
+    assert requested, f"{ad_format}/{category}: no roles in the JSON example"
     assert requested <= listed, (
-        f"{ad_format}: example asks for {sorted(requested - listed)} but SPEAKERS only lists {sorted(listed)}"
+        f"{ad_format}/{category}: example asks for {sorted(requested - listed)} "
+        f"but SPEAKERS only lists {sorted(listed)}"
     )
-    assert DISCLAIMER_ROLE in listed, f"{ad_format}: fine-print role missing from SPEAKERS"
-    assert DISCLAIMER_ROLE in requested, f"{ad_format}: fine print not addressed to the rate-gated role"
+    if fine_print:
+        assert DISCLAIMER_ROLE in listed, f"{ad_format}: fine-print role missing from SPEAKERS"
+        assert DISCLAIMER_ROLE in requested, f"{ad_format}: fine print not addressed to the rate-gated role"
+    else:
+        assert DISCLAIMER_ROLE not in listed, (
+            f"{ad_format}: SPEAKERS offers the fine-print role to a brand that carries none"
+        )
+        assert DISCLAIMER_ROLE not in requested, (
+            f"{ad_format}: the example still asks for fine print on a brand that carries none"
+        )
 
 
 @pytest.mark.asyncio

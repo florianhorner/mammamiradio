@@ -1725,7 +1725,10 @@ async def synthesize_ad(
         (part, tmp_dir / f"adpart_{uuid4().hex[:8]}.mp3")
         for part in script.parts
         if part.type in ("voice", "sfx", "pause")
-        and (part.type != "voice" or part.text)
+        # .strip(): edge-tts answers a whitespace-only line with NoAudioReceived,
+        # which benches the voice process-wide in _failed_edge_voices and then
+        # fails the whole ad render. A blank line is not speech.
+        and (part.type != "voice" or (isinstance(part.text, str) and part.text.strip()))
         # The scriptwriter strips these for recipe-driven spots, but enforce
         # the boundary here too: direct callers cannot sneak a third or fourth
         # decorative effect into a three-layer recipe mix.
@@ -1734,7 +1737,9 @@ async def synthesize_ad(
     # A voice part with empty text drops out here. has_required_voice below only
     # asserts that SOME voice survived, so the ad still airs with a hole where
     # that copy was — leave a trace rather than losing it silently.
-    dropped_voice_parts = sum(1 for part in script.parts if part.type == "voice" and not part.text)
+    dropped_voice_parts = sum(part.type == "voice" for part in script.parts) - sum(
+        part.type == "voice" for part, _ in renderable
+    )
     if dropped_voice_parts:
         logger.warning(
             "Ad %s dropped %d empty voice part(s) of %d before render",
