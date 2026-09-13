@@ -82,8 +82,9 @@ No AI key is required for your first listen. Fresh installs open **First Listen*
 at the producer desk (`/admin`). Returning installs open the control room;
 you can find First Listen under **Motore -> Setup**.
 
-1. Select **Play my station**. A reviewed English opening plays `/stream` on
-   the current device for about 15 seconds, then hands off to the live stream.
+1. Select **Play my station**. A reviewed English opening plays
+   `/stream?first_listen=1` on the current device for about 15 seconds, then
+   hands off to the live stream.
    Use its speakers, headphones, Bluetooth, or AirPlay. You need no AI key or
    Home context. No HACS integration is required.
 2. Select **I hear you** only after you hear Mamma Mi Radio. Select **No sound yet**
@@ -94,9 +95,9 @@ you can find First Listen under **Motore -> Setup**.
    **Keep Home private** from that review instead. If the preview contains only
    daylight and weather, the app labels it ambient-only and recommends the private
    path.
-4. The success screen's **Open full listener** is the seam to the `/listen` station page.
-   `/admin` stays the add-on default. Completed admin already has a **Listen** action
-   when stages are ready. Install the [HACS
+4. Select **Listen to the station** to enter the `/listen` station page, or
+   **Open station controls** to return to `/admin`. The handoff preserves the
+   audio already playing. Install the [HACS
    integration](docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker)
    later if you want native `media-source://mammamiradio/live` playback on Home
    Assistant speakers. The [Music Assistant

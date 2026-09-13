@@ -268,7 +268,7 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     rendered_first_listen = " ".join(first_listen.split())
     lowered_first_listen = rendered_first_listen.lower()
 
-    stream_proof = first_listen.index("`/stream`")
+    stream_proof = first_listen.index("`/stream?first_listen=1`")
     human_confirmation = first_listen.index("**I hear you**")
     privacy_choice = first_listen.index("**Keep Home private**")
     assert stream_proof < human_confirmation < privacy_choice
@@ -289,8 +289,10 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     admin_route = first_listen.index("`/admin`", admin_default)
     listener_seam = first_listen.index("`/listen` station page")
     assert admin_default < admin_route < listener_seam
-    assert "**Open full listener**" in first_listen
-    assert "**Listen** action" in first_listen
+    assert "**Listen to the station**" in first_listen
+    assert "**Open station controls**" in first_listen
+    assert "Open full listener" not in first_listen
+    assert "preserves the audio already playing" in rendered_first_listen
 
     assert "This integration is optional" in doc
     assert "First Listen flow, `/listen` page, and `/stream` work without HACS" in rendered_doc
