@@ -266,6 +266,16 @@ async (page) => {
       `Scaletta actionability or stable playlist links drifted: ${JSON.stringify(sourceRows)}`,
     );
 
+    const sourceCompatibilityRows = await renderRows([
+      { id: 'source-download', type: 'music', label: 'Download Artist – Download Title', source_kind: ' DOWNLOAD ', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-empty-kind', type: 'music', label: 'Empty Artist – Empty Title', source_kind: '', source: 'rendered_queue', duration_ms: 240000 },
+    ]);
+    assert(
+      sourceCompatibilityRows.length === 2
+        && sourceCompatibilityRows.map(({ source }) => source).join('|') === 'Download|Music',
+      `Scaletta compatibility source mapping drifted: ${JSON.stringify(sourceCompatibilityRows)}`,
+    );
+
     const sourceFallbackRows = await renderRows([
       { id: 'source-studio', type: 'banter', label: 'Host break', source_kind: 'mystery', source: 'rendered_queue' },
       { id: 'source-planned-studio', type: 'banter', label: 'Forecast break', source_kind: 'mystery', source: 'forecast', predicted: true },
@@ -509,15 +519,17 @@ async (page) => {
         );
       }
     }
-    // Capture to the guaranteed OS temp root so a clean checkout does not need
-    // a gitignored parent directory before the opt-in smoke can run.
+    const screenshotDir = 'tmp/listening-slice-d-qa';
+    // run-code executes in Playwright's VM context, so use its file-writing
+    // API to create the parent directory without relying on Node globals.
+    await page.context().storageState({ path: `${screenshotDir}/.browser-state.json` });
     for (const width of [1280, 900, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.evaluate((state) => renderProgramme(state), { ...scalettaState, upcoming: geometryFixture });
-      await page.screenshot({ path: `/tmp/mammamiradio-slice-d-after-${width}.png`, fullPage: true });
+      await page.screenshot({ path: `${screenshotDir}/slice-d-after-${width}.png`, fullPage: true });
     }
     await page.setViewportSize({ width: 1024, height: 900 });
-    return { sourceRows, sourceFallbackRows, artistRows, nonMusicRows, cacheResults, truncationAndFilter, geometry };
+    return { sourceRows, sourceCompatibilityRows, sourceFallbackRows, artistRows, nonMusicRows, cacheResults, truncationAndFilter, geometry };
   }
   const scalettaPresentation = await exerciseScalettaPresentation();
   await exerciseListenerSongFailureRows();
@@ -2394,15 +2406,16 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 86,
+    checks: 87,
     viewports: [320, 375, 414, 600, 768],
     scaletta: {
-      checks: 25,
+      checks: 26,
       source_rows: scalettaPresentation.sourceRows.length,
+      compatibility_rows: scalettaPresentation.sourceCompatibilityRows.length,
       fallback_rows: scalettaPresentation.sourceFallbackRows.length,
       artist_rows: scalettaPresentation.artistRows.length,
       geometry_viewports: scalettaPresentation.geometry.map(({ width }) => width),
-      screenshots: [1280, 900, 390].map((width) => `/tmp/mammamiradio-slice-d-after-${width}.png`),
+      screenshots: [1280, 900, 390].map((width) => `tmp/listening-slice-d-qa/slice-d-after-${width}.png`),
     },
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

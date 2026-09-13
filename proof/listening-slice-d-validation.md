@@ -75,9 +75,9 @@ Before the implementation, the isolated browser probe showed the regression:
 The baseline focused invariants passed 75 tests. Baseline screenshots were
 captured from the isolated pre-change renderer:
 
-- [before 1280px](/Users/florianhorner/conductor/workspaces/mammamiradio/providence/tmp/listening-slice-d-qa/before-1280.png) — 1280×903
-- [before 900px](/Users/florianhorner/conductor/workspaces/mammamiradio/providence/tmp/listening-slice-d-qa/before-900.png) — 900×903
-- [before 390px](/Users/florianhorner/conductor/workspaces/mammamiradio/providence/tmp/listening-slice-d-qa/before-390.png) — 390×1262
+- [before 1280px](../tmp/listening-slice-d-qa/before-1280.png) — 1280×903
+- [before 900px](../tmp/listening-slice-d-qa/before-900.png) — 900×903
+- [before 390px](../tmp/listening-slice-d-qa/before-390.png) — 390×1262
 
 The old probe used one long row; the after fixture deliberately uses three
 rows to exercise later-row subtitles and source/actionability states. They are
@@ -92,14 +92,15 @@ otherwise noted.
 |---|---|
 | `.venv/bin/python -m pytest tests/web/test_admin_mobile_invariants.py` | PASS — 79 passed |
 | `ADMIN_BROWSER_SMOKE_URL=http://127.0.0.1:18765 .venv/bin/python -m pytest tests/web/test_admin_browser_smoke.py` | PASS — 2 passed |
-| `PLAYER_SMOKE_URL=http://127.0.0.1:18765 ./scripts/player-smoke.sh tests/web/admin_browser_smoke.js` | PASS — `ok=true`, 86 checks; Scaletta 25 checks, 8 source rows, 8 fallback rows, 7 artist rows; no page/console errors |
+| `PLAYER_SMOKE_URL=http://127.0.0.1:18765 ./scripts/player-smoke.sh tests/web/admin_browser_smoke.js` | PASS — `ok=true`, 87 checks; Scaletta 26 checks, 8 source rows, 2 compatibility rows, 8 fallback rows, 7 artist rows; no page/console errors |
 | Browser geometry | PASS at 1280, 1024, 1023, 900, 880, 769, 768, and 390px; no document/table/row horizontal overflow |
 | Browser controls and responsive visibility | PASS — visible controls are at least 44×44px; heading columns, source/duration visibility, phone card layout, and source/artist behavior match the requested breakpoints |
 | `node --check tests/web/admin_browser_smoke.js` and `git diff --check` | PASS |
-| `make check` | PASS — 9,425 passed, 4 skipped, 58 deselected, 1 warning; 92.62% coverage against a 92.0% floor; media proof, Ruff, formatting, mypy, vulture, and coverage ratchet all passed |
+| `make check` | PASS — 9,425 passed, 4 skipped, 58 deselected, 1 warning; 92.63% coverage against a 92.0% floor; media proof, Ruff, formatting, mypy, vulture, and coverage ratchet all passed |
 
 The browser fixture also verified source precedence and trimming/case
-normalization, unsafe/unknown values and HTML escaping, rendered versus planned
+normalization, explicit `download` and effective-empty source-kind compatibility
+labels, unsafe/unknown values and HTML escaping, rendered versus planned
 actionability, `playlist_index`/`spotify_id` links, stable remove IDs, no more
 than eight rendered rows, filter-relative labels, nonmusic and Station ID
 subtitles, and same-ID updates for title-only, artist, source, Spotify, title,
@@ -108,9 +109,9 @@ category, and duration metadata without clearing `_lastProgrammeHash`.
 The browser smoke captured the after screenshots through the same isolated
 loopback server:
 
-- [after 1280px](/Users/florianhorner/conductor/workspaces/mammamiradio/providence/tmp/listening-slice-d-qa/slice-d-after-1280.png) — 1280×903
-- [after 900px](/Users/florianhorner/conductor/workspaces/mammamiradio/providence/tmp/listening-slice-d-qa/slice-d-after-900.png) — 900×903
-- [after 390px](/Users/florianhorner/conductor/workspaces/mammamiradio/providence/tmp/listening-slice-d-qa/slice-d-after-390.png) — 390×1474
+- [after 1280px](../tmp/listening-slice-d-qa/slice-d-after-1280.png) — 1280×903
+- [after 900px](../tmp/listening-slice-d-qa/slice-d-after-900.png) — 900×903
+- [after 390px](../tmp/listening-slice-d-qa/slice-d-after-390.png) — 390×1474
 
 Visual comparison confirms separated Quando/Tipo headings at desktop width,
 the intended tablet visibility, phone card overflow containment, artist-only
@@ -126,9 +127,11 @@ history was:
 
 - A classic-source mapping was corrected to the explicit Slice D generic
   `Music`/`Planned` fallback contract.
-- The screenshot fixture was hardened to write first to an OS temporary path,
-  so a clean checkout does not fail when the ignored destination parent has not
-  been created.
+- The screenshot fixture now creates `tmp/listening-slice-d-qa/` before capture
+  and returns those workspace-relative paths, keeping the proof portable across
+  checkouts.
+- The browser matrix now has an explicit `download` row and an effective-empty
+  source-kind row, asserting `Download` and `Music` respectively.
 - A reviewer suggestion to create distinct demo/classic labels was not adopted:
   the attached Slice D contract explicitly requires those values to use the
   generic rendered/non-rendered fallbacks. Dedicated demo/classic browser rows
