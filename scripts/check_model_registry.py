@@ -19,8 +19,8 @@ could not be read, lost the anchors this parser relies on, or the checker itself
 Exit 2 is deliberate: a broken scraper must look broken, never green.
 
 Where it runs: scripts/pre-release-check.sh section 11 (release cuts and `make
-pre-release`) runs --age and --providers --gate liveness. --report is ready for the
-planned weekly workflow, which is not in this slice. It is never an every-PR pytest
+pre-release`) runs --age and --providers --gate liveness. --report is what
+.github/workflows/model-registry-watch.yml runs every Monday. It is never an every-PR pytest
 assertion: a calendar gate on unrelated PRs gets bumped reflexively.
 
 Parsing is deliberately dumb and anchored: tables are read by their own header row,

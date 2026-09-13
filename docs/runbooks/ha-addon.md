@@ -468,7 +468,8 @@ TTS selection, and script-token prices live in the root `model_registry.toml`
 (see "Dynamic LLM routing" in the root `CLAUDE.md`).
 **To add or swap a model:** update the relevant registry catalog entry and its
 matching `[pricing.catalog.<provider>]` key in the same change—no code or schema
-change. The add-on image copies this canonical root file; do not create an
+change. Restamp `last_reviewed` in the same change and say why in the comment
+beside it; the weekly watch and the cut gate both read it. The add-on image copies this canonical root file; do not create an
 add-on-specific registry copy. An unknown experimental `--models` candidate in
 the evaluator uses the registry's conservative fallback price and is marked
 unpriced in its JSONL output.

@@ -128,7 +128,10 @@ there is a real discipline on top of it:
   pin; holding a legacy pin on purpose is a valid decision, say so in the comment. The
   check runs in CI only when the PR changes a version line (other PRs that touch
   `pyproject.toml` note it and skip) and always under `make pre-release`, so a stale
-  registry surfaces at the cut, not as a red Dependabot PR.
+  registry surfaces at the cut, not as a red Dependabot PR. Between cuts,
+  `.github/workflows/model-registry-watch.yml` runs `--report` every Monday and
+  opens, updates, or closes a `model-registry-watch` issue to surface stale
+  stamps and provider drift between cuts.
 
 ## Coordinating parallel workspaces
 

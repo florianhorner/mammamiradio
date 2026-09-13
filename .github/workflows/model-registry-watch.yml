@@ -1,0 +1,152 @@
+name: Model registry watch
+
+# Weekly nag for model_registry.toml: is it still decided lately, and are its pins
+# still current at the providers? Runs scripts/check_model_registry.py --report,
+# which asks both questions against the public provider docs, no API keys needed.
+#
+# This is the weekly half of the watch. The other half runs at the release cut
+# (scripts/pre-release-check.sh section 11) and gates on age plus liveness only.
+# This job is deliberately NOT a PR check: a calendar assertion on unrelated PRs
+# gets bumped reflexively, which is the failure the review stamp exists to prevent.
+#
+# Issue posture is cloned from advertised-version.yml, with two deliberate changes
+# and one mechanical one.
+#
+# First: a broken watcher files an issue. In the parent, an unreachable registry
+# leaves the issue alone, because addon-release.yml is the loud primary detector
+# and a blip must not close a live drift issue. Here --report IS the only detector,
+# and its own contract says a broken scraper must never look green. So a run that
+# cannot read the provider docs opens or keeps the issue too, with a body and a
+# title that name the watcher rather than a pin. The cost is one comment per bad
+# Monday during a docs outage; it closes itself on the next clean run.
+#
+# Second: an already-open issue gets this week's report as a comment. The parent
+# only notes "already tracked". A nag that goes quiet after the first week is not
+# a nag, and the comment is how a two-month-old finding stays visible.
+#
+# Mechanical: the verdict is read from the exit code plus the report's own
+# headers, because the checker has no VERDICT line. A crash before the checker's
+# main() (an interpreter without tomllib, a syntax error) also exits 1, with a
+# traceback and no report; that is filed as the watcher being broken, never as a
+# pin finding with a traceback for evidence.
+#
+#   clean            -> close any open watch issue
+#   a finding        -> open the issue, or comment this week's report on it
+#   watcher broken   -> same, with a body and title that name the watcher
+
+on:
+  schedule:
+    # 09:20 UTC every Monday. Off the hour to avoid the scheduler's busiest minute.
+    - cron: "20 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-registry-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A fork running this by workflow_dispatch would file an issue on the fork about
+    # someone else's registry.
+    if: github.repository == 'florianhorner/mammamiradio'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # The checker is stdlib-only (tomllib needs 3.11+; ubuntu-latest ships newer),
+      # so there is no dependency install and no venv to keep in sync.
+      - name: Run the weekly report
+        id: report
+        run: |
+          set +e
+          OUTPUT="$(python3 scripts/check_model_registry.py --report 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUTPUT"
+          # Exit 1 is a finding only if a report was actually rendered. Every
+          # report carries at least one '== ' section header; a traceback has none.
+          case "$RC" in
+            0) VERDICT=pass ;;
+            1) if printf '%s\n' "$OUTPUT" | grep -q '^== '; then VERDICT=fail; else VERDICT=broken; fi ;;
+            *) VERDICT=broken ;;
+          esac
+          {
+            echo "output<<GHEOF"
+            echo "$OUTPUT"
+            echo "GHEOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open, comment on, or close the watch issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ steps.report.outputs.verdict }}
+          DETAIL: ${{ steps.report.outputs.output }}
+          LABEL: "model-registry-watch"
+        run: |
+          # The single-quoted printf args below are literal markdown; the backticks
+          # are code fences, not command substitution, so they are deliberately not
+          # expanded.
+          set -euo pipefail
+
+          # Strongly-consistent REST list, not --search: the search index lags. Match
+          # on the label, not the title, so an edited title does not orphan the issue.
+          EXISTING="$(gh issue list --state open --label "$LABEL" --limit 100 \
+            --json number --jq '[.[].number] | first // empty')"
+
+          if [ "$VERDICT" = "pass" ]; then
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" \
+                --comment "This week's report is clean: every pin is current and the review stamp is fresh. Closing automatically."
+            else
+              echo "Registry is decided and current; nothing to report."
+            fi
+            exit 0
+          fi
+
+          BODY="$RUNNER_TEMP/model-registry-watch.md"
+          if [ "$VERDICT" = "broken" ]; then
+            TITLE="Model registry watch could not complete"
+            {
+              printf '%s\n\n' 'The weekly model registry watch could not complete its checks, so it cannot verify the review stamp and pinned models.'
+              printf '%s\n' '```'
+              printf '%s\n' "$DETAIL"
+              printf '%s\n\n' '```'
+              printf '%s\n' '**Fix:** run `python3 scripts/check_model_registry.py --report` locally with Python 3.11 or newer and read the reported error. Check provider availability or page parsing for documentation errors, `model_registry.toml` for registry errors, and the Python environment or checker code for import, syntax, or other crashes. If the report passes locally, compare the failed run logs and environment before concluding the problem was temporary.'
+            } > "$BODY"
+          else
+            TITLE="Model registry needs a decision"
+            {
+              printf '%s\n\n' 'The weekly model registry watch found something to decide: a pinned model is no longer current at its provider, or `model_registry.toml` has not been reviewed in over 45 days.'
+              printf '%s\n' '```'
+              printf '%s\n' "$DETAIL"
+              printf '%s\n\n' '```'
+              printf '%s\n' '**Fix:** run `python scripts/check_model_registry.py --providers`, decide each flagged pin (bump it or deliberately hold it), then set `last_reviewed` in `model_registry.toml` to today and say which in the comment beside it. Holding is a valid decision; an undated one is not.'
+              printf '%s\n\n' 'The release cut runs the same check and refuses to cut on a stale stamp, so deciding now saves a red cut later.'
+            } > "$BODY"
+          fi
+          printf '%s\n' 'This issue closes itself once a weekly run comes back clean.' >> "$BODY"
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY"
+            echo "Updated #$EXISTING with this week's report."
+            exit 0
+          fi
+          # --force updates an existing label instead of erroring, which makes this
+          # idempotent without swallowing a real failure: if the token cannot manage
+          # labels, the run goes red here with gh's own message rather than one line
+          # later on a missing label.
+          gh label create "$LABEL" --force \
+            --description "model_registry.toml has a pin that is not current or a review stamp older than 45 days" \
+            --color B60205
+          gh issue create --title "$TITLE" --label "$LABEL" --body-file "$BODY"
