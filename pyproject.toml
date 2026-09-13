@@ -118,7 +118,7 @@ parallel = true
 sigterm = true
 
 [tool.coverage.report]
-fail_under = 92
+fail_under = 93
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
