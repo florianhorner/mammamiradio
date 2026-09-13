@@ -311,9 +311,9 @@ hostAudio.addEventListener("waiting", () => {
   gateLabel.textContent = "Tuning…";
 });
 hostAudio.addEventListener("playing", () => {
-  // A retry can begin from the revealed failure state. Once the browser is
-  // actually playing, retire the stale warning and restore the same revealed
-  // view a successful first attempt would have produced.
+  // Clear stale loading/failure feedback once playback is real. Unheard
+  // retries use tuneIn() and wait for the cue; already-heard replays keep
+  // their revealed view.
   body.dataset.audio = "";
   audioTrouble.hidden = true;
   if (body.dataset.phase === "onair") {
@@ -395,6 +395,8 @@ scenarioButtons.forEach((button) => {
 });
 speakButton.addEventListener("click", () => {
   if (isSpeaking) { stopSpeech(); return; }
+  // An unheard retry must reach the cue before it counts as a played moment.
+  if (!playedScenarios.has(activeScenario)) { tuneIn(); return; }
   playSegment(activeScenario);
 });
 initWaveforms();

@@ -53,18 +53,20 @@ the house has nothing to say.
 The four public demos are staged recordings made with invented data, so anyone
 can play them without sharing a home. With the default Home-context setting, a
 fresh installation starts off. After you inspect the filtered preview and opt
-in, its current authorization is limited to coarse daylight and weather. The
-arrival, coffee, and laundry moments show the wider Home Profile planned for a
-later update; existing home-aware stations may already have broader context.
+in, it can share a daylight state and one unambiguous weather source, with
+temperature rounded to five-degree Celsius bands. The arrival, coffee, and
+laundry moments show the wider Home Profile planned for a later update;
+existing home-aware stations may already have broader context.
 
-The station runs on your hardware, takes no commands, and controls nothing in
-your home. There is no Mamma Mi Radio account, subscription, or project-operated
-analytics upload. You add provider keys only when you want freshly written
-dialogue or premium voices.
+The station runs on your hardware. It is not a voice assistant and does not run
+household automations. If you explicitly choose a Home Assistant speaker, it
+asks that media player to play the stream. There is no Mamma Mi Radio account,
+subscription, or project-operated analytics upload. You add provider keys only
+when you want freshly written dialogue or premium voices.
 
-**Status:** stable, single maintainer, running daily in one household. [The full
-honest assessment](docs/status-quo.md) separates engineering maturity from the
-evidence that other people want this.
+**Status:** single maintainer, running daily in one household. Stable 2.18.0 is
+available; v3 is not released yet. The First Listen steps and screenshots below
+describe the current v3 development candidate.
 
 ## First listen
 
@@ -94,8 +96,9 @@ you can find First Listen under **Motore -> Setup**.
    With default settings, Home context stays off unless you open **See what the
    hosts would receive** and then select **Let Marco and Giulia use these details**.
    You can choose **Keep Home private** from that review instead. If the preview
-   contains only daylight and weather, the app labels it ambient-only and
-   recommends the private path.
+   contains only generic daylight and no usable weather, the app labels it
+   ambient-only. The button becomes **Let the hosts use daylight only**, with a
+   warning that this would not make the show more personal yet.
 4. Select **Listen to the station** to enter the `/listen` station page, or
    **Open station controls** to return to `/admin`. The handoff preserves the
    audio already playing. Install the [HACS
@@ -234,7 +237,7 @@ live home.
 
 [Interactive demo](https://florianhorner.github.io/mammamiradio/) |
 [Pilot feedback](https://github.com/florianhorner/mammamiradio/discussions/831) |
-[Product status](docs/status-quo.md) |
+[Earlier product assessment](docs/status-quo.md) |
 [Architecture](docs/architecture.md) |
 [Music sources and rights](docs/music-sources.md) |
 [Troubleshooting](docs/troubleshooting.md) |

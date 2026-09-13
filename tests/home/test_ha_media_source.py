@@ -283,6 +283,8 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     assert any(route in first_listen for route in ("Bluetooth", "AirPlay"))
     assert "**See what the hosts would receive**" in rendered_first_listen
     assert "**Let Marco and Giulia use these details**" in rendered_first_listen
+    assert "**Let the hosts use daylight only**" in rendered_first_listen
+    assert "only generic daylight and no usable weather" in rendered_first_listen
     assert "No HACS integration" in first_listen
 
     admin_default = first_listen.index("producer desk")
@@ -319,6 +321,8 @@ def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
     assert "spoken text also goes to the configured voice service or Edge" in rendered
     assert "no account system, central service, or project-operated analytics upload" in rendered
     assert "Edge is keyless but still online" in rendered
+    assert "If you explicitly choose a Home Assistant speaker" in rendered
+    assert "v3 is not released yet" in rendered
     assert "## Operator checks" in readme
 
 

@@ -156,12 +156,12 @@ const scenarios = {
     revealAtSec: 16.78,
   },
   quiet: {
-    // Narrowest grant after opt-in: sun and weather only.
+    // Staged daylight/weather example after opt-in, not a runtime projection.
     id: "quiet",
     time: "21:48 · Sunday",
     tag: "Sun and weather",
     heading: "Evening, officially.",
-    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. After you explicitly allow daylight and weather, this is the fresh-install ceiling. The guided default shares nothing from Home before that choice.",
+    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. This staged recording illustrates the daylight-and-weather categories a fresh install can authorize after explicit opt-in; its details are not a literal prompt preview.",
     host: "Giulia checks the sky",
     quote: "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
     reachability: "day-one",

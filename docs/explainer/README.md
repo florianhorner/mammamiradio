@@ -6,13 +6,13 @@ house could have told them. The sensor data arrives after the moment, as liner
 notes.
 
 The scenarios are invented. The clips in `public/audio/` use the station's own
-hosts and cast voices. One of the four moments ("Evening, officially") uses only
-the sun and weather. That is the fresh-install ceiling after explicit opt-in;
-with default settings, a fresh install shares no Home context before that
-choice. The other three are
-staged examples of the wider Home Profile planned for a later update and may
-reflect an existing home-aware station. The page reads no Home Assistant data
-and sends nothing anywhere.
+hosts and cast voices. "Evening, officially" illustrates the daylight-and-weather
+categories a fresh install may authorize after explicit opt-in, not a literal
+prompt preview. Runtime omits dawn and humidity and rounds temperature to
+five-degree Celsius bands. With default settings, a fresh install shares no
+Home context before that choice. The other three are staged examples of the
+wider Home Profile planned for a later update and may reflect an existing
+home-aware station. The page reads no Home Assistant data.
 
 ## How it is put together
 
@@ -50,7 +50,7 @@ npm run test:e2e  # drives the funnel in Chromium; run `npx playwright install c
 
 The build fails rather than shipping a broken page when a scenario in
 `index.html` and `scenarios.mjs` disagree, the explainer reachability labels
-drift from the H4 Home-moment pack, a clip is missing, a derived transcript is
+drift from the Home-moment pack, a clip is missing, a derived transcript is
 empty, no post-opt-in `day-one` scenario exists, or a produced clip has a
 `revealAtSec` that is absent or falls outside the clip.
 

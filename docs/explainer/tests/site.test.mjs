@@ -70,15 +70,17 @@ test("no scenario accent is green", () => {
   assert.doesNotMatch(css, /--sage/);
 });
 
-test("the day-one moment is the sun and weather ceiling after opt-in", () => {
+test("the day-one moment illustrates only daylight and weather after opt-in", () => {
   // Narrow ambient context projects only the sun and the weather
   // (home/authorization.py), and only after the operator opts in. This
-  // guard keeps that scenario from being silently traded away.
+  // guard preserves those categories without claiming exact prompt precision.
   const dayOneScenarios = Object.values(scenarios).filter((scenario) => scenario.reachability === "day-one");
   assert.equal(dayOneScenarios.length, 1);
   for (const [, name] of dayOneScenarios[0].sensors) {
     assert.match(name, /^(sun\.sun|weather\.home)/, `day-one scenario uses non-ambient entity: ${name}`);
   }
+  assert.match(dayOneScenarios[0].summary, /staged recording/);
+  assert.match(dayOneScenarios[0].summary, /not a literal prompt preview/);
 });
 
 test("explainer reachability stays aligned with the H4 Home-moment pack", () => {
@@ -96,6 +98,9 @@ test("the local concept makes its privacy boundary explicit", () => {
   assert.match(html, /No live data connected/);
   assert.match(html, /With default settings, a fresh install shares no Home context/i);
   assert.match(html, /planned for a later update/i);
+  assert.match(html, /five-degree Celsius bands/);
+  assert.match(html, /not a literal prompt preview/);
+  assert.match(html, /does not prove a person heard it/);
 });
 
 test("public demo identifiers are plainly fictional", () => {
@@ -138,7 +143,7 @@ test("the voice plays on the first click, not the second", () => {
   assert.match(js, /speakButton\.addEventListener\("click"/);
 });
 
-test("a successful retry clears the stale audio failure", () => {
+test("actual playback clears stale feedback and preserves an already-heard replay", () => {
   const playingHandler = js.match(/hostAudio\.addEventListener\("playing", \(\) => \{([\s\S]*?)\n\}\);/);
   assert.ok(playingHandler, "the audio playing handler exists");
   assert.match(playingHandler[1], /body\.dataset\.audio = ""/);
