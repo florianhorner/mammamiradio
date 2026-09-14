@@ -92,7 +92,6 @@ land_one() {
   refresh_landed_ref "$base"
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
-  # Cut admission reads the exact base and head trees; it does not need full history.
   if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
     git fetch -q --no-tags origin "$base" 2>/dev/null \
       || die "PR #$pr base $base could not be fetched. Check origin and retry."
