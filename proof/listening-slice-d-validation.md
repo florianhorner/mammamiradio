@@ -1,9 +1,10 @@
 # Listening Slice D: Scaletta presentation validation
 
-Status: `complete`
+Status: local validation completed on 2026-09-13.
 
-Path A feature work for `main`, owned by the `providence` workspace. No PR was
-opened, no branch was pushed, and no merge or deployment was performed.
+This record describes the Path A feature validation completed in the
+`providence` workspace before PR publication. Publication, merge, and release
+status are tracked separately in the pull request and release records.
 
 ## Scope and write-set
 
@@ -73,11 +74,12 @@ Before the implementation, the isolated browser probe showed the regression:
   consume all renderer metadata.
 
 The baseline focused invariants passed 75 tests. Baseline screenshots were
-captured from the isolated pre-change renderer:
+captured from the isolated pre-change renderer. These are local-only,
+gitignored captures; the paths identify files in the validation workspace:
 
-- [before 1280px](../tmp/listening-slice-d-qa/before-1280.png) — 1280×903
-- [before 900px](../tmp/listening-slice-d-qa/before-900.png) — 900×903
-- [before 390px](../tmp/listening-slice-d-qa/before-390.png) — 390×1262
+- `tmp/listening-slice-d-qa/before-1280.png` — 1280×903
+- `tmp/listening-slice-d-qa/before-900.png` — 900×903
+- `tmp/listening-slice-d-qa/before-390.png` — 390×1262
 
 The old probe used one long row; the after fixture deliberately uses three
 rows to exercise later-row subtitles and source/actionability states. They are
@@ -107,11 +109,11 @@ subtitles, and same-ID updates for title-only, artist, source, Spotify, title,
 category, and duration metadata without clearing `_lastProgrammeHash`.
 
 The browser smoke captured the after screenshots through the same isolated
-loopback server:
+loopback server. These are also local-only, gitignored captures:
 
-- [after 1280px](../tmp/listening-slice-d-qa/slice-d-after-1280.png) — 1280×903
-- [after 900px](../tmp/listening-slice-d-qa/slice-d-after-900.png) — 900×903
-- [after 390px](../tmp/listening-slice-d-qa/slice-d-after-390.png) — 390×1474
+- `tmp/listening-slice-d-qa/slice-d-after-1280.png` — 1280×903
+- `tmp/listening-slice-d-qa/slice-d-after-900.png` — 900×903
+- `tmp/listening-slice-d-qa/slice-d-after-390.png` — 390×1474
 
 Visual comparison confirms separated Quando/Tipo headings at desktop width,
 the intended tablet visibility, phone card overflow containment, artist-only
@@ -127,9 +129,9 @@ history was:
 
 - A classic-source mapping was corrected to the explicit Slice D generic
   `Music`/`Planned` fallback contract.
-- The screenshot fixture now creates `tmp/listening-slice-d-qa/` before capture
-  and returns those workspace-relative paths, keeping the proof portable across
-  checkouts.
+- The screenshot fixture creates `tmp/listening-slice-d-qa/` before capture
+  and returns workspace-relative paths so local captures can be regenerated in
+  each checkout.
 - The browser matrix now has an explicit `download` row and an effective-empty
   source-kind row, asserting `Download` and `Music` respectively.
 - A reviewer suggestion to create distinct demo/classic labels was not adopted:
@@ -171,7 +173,9 @@ The exact proposed entry is:
 
 > Scaletta's Fonte column identifies the music source, available artists appear below every song title, and the Quando heading fits without overlapping Tipo across the existing responsive layouts.
 
-### Local PR draft (not published)
+### Historical PR draft from local validation
+
+This draft records the pre-publication wording used during validation.
 
 ```markdown
 ## Summary
@@ -193,5 +197,6 @@ Do not edit release files in this feature lane. Insert the exact proposed
 sentence above under the current Unreleased sections at the recorded anchors.
 ```
 
-Next action: `/ship` only when separately authorized. No external PR or other
-publication action is pending from this workspace.
+At the end of this local validation, the implementation was ready for the
+separately authorized `/ship` workflow. This historical record does not track
+subsequent publication or landing actions.
