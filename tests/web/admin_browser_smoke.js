@@ -2253,6 +2253,16 @@ async (page) => {
   // of which are delivered a frame or more after setViewportSize resolves.
   // Sample it without waiting and the read races the write.
   await page.evaluate(() => window.scrollTo(0, 0));
+  // Returning to the top also queues the IntersectionObserver that disarms
+  // the backdrop; existing scroll padding does not prove that callback ran.
+  try {
+    await page.waitForFunction(() => {
+      const deck = document.querySelector('.mmr-deck');
+      return window.scrollY === 0 && deck && !deck.classList.contains('is-pinned');
+    }, null, { timeout: 5000 });
+  } catch (error) {
+    throw new Error('admin-browser-smoke: the deck armed its backdrop at scrollTop 0, where nothing is behind it');
+  }
   try {
     await page.waitForFunction(
       () => getComputedStyle(document.querySelector('.mmr-deck')).position !== 'sticky'
@@ -2264,7 +2274,6 @@ async (page) => {
     throw new Error('admin-browser-smoke: the sticky deck never reserved scroll padding, so keyboard focus lands underneath it');
   }
   const deckAtRest = await page.evaluate(() => {
-    window.scrollTo(0, 0);
     const deck = document.querySelector('.mmr-deck');
     const style = getComputedStyle(deck);
     return {
@@ -2317,7 +2326,10 @@ async (page) => {
 
   await page.evaluate(() => window.scrollTo(0, 0));
   try {
-    await page.waitForFunction(() => !document.querySelector('.mmr-deck')?.classList.contains('is-pinned'), null, { timeout: 5000 });
+    await page.waitForFunction(() => {
+      const deck = document.querySelector('.mmr-deck');
+      return window.scrollY === 0 && deck && !deck.classList.contains('is-pinned');
+    }, null, { timeout: 5000 });
   } catch (error) {
     throw new Error('admin-browser-smoke: returning to the top left the deck backdrop armed over the page atmosphere');
   }
