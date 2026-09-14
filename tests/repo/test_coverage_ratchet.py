@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,49 @@ def _snapshot(tmp_path, payload) -> Path:
     snap = tmp_path / "coverage-ratchet-current.json"
     snap.write_text(payload if isinstance(payload, str) else json.dumps(payload))
     return snap
+
+
+@pytest.mark.parametrize(("raw_total", "expected"), [(92.62, 92), (93.0, 93), (99.99, 99), (100, 100)])
+def test_run_coverage_ratchets_only_a_supported_aggregate_floor(tmp_path, monkeypatch, raw_total, expected):
+    module = _load_coverage_ratcheter()
+    snapshot = tmp_path / "snapshot.json"
+    monkeypatch.setattr(module, "COVERAGE_SNAPSHOT", snapshot)
+
+    def run(command, **kwargs):
+        for argument in command:
+            if argument.startswith("--cov-report=json:"):
+                Path(argument.removeprefix("--cov-report=json:")).write_text(
+                    json.dumps({"totals": {"percent_covered": raw_total}})
+                )
+        return subprocess.CompletedProcess(
+            command, 0, "mammamiradio/core/config.py 100 7 0 0 93%\nTOTAL 100 7 0 0 93%\n", ""
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    assert module.run_coverage() == ({"mammamiradio.core.config": 93}, expected)
+    assert json.loads(snapshot.read_text())["total_pct"] == expected
+    # The artifact consumer must promote the same safe floor as the fresh run.
+    monkeypatch.setattr(module, "COVERAGE_INPUT", snapshot)
+    monkeypatch.setattr(module, "FLOORS_FILE", tmp_path / "floors.json")
+    project = tmp_path / "pyproject.toml"
+    project.write_text("[tool.coverage.report]\nfail_under = 92\n")
+    monkeypatch.setattr(module, "PYPROJECT", project)
+    assert module.cmd_update() == 0
+    assert module.get_aggregate_threshold() == max(92, expected)
+
+
+def test_run_coverage_does_not_publish_a_failed_test_run(tmp_path, monkeypatch):
+    module = _load_coverage_ratcheter()
+    snapshot = tmp_path / "snapshot.json"
+    monkeypatch.setattr(module, "COVERAGE_SNAPSHOT", snapshot)
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "TOTAL 100 0 0 0 100%\n", "test failed"),
+    )
+    with pytest.raises(SystemExit, match="1"):
+        module.run_coverage()
+    assert not snapshot.exists()
 
 
 def test_coverage_ratchet_loads_snapshot_input(tmp_path, monkeypatch) -> None:

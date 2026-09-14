@@ -1918,6 +1918,28 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
 .mmr-tabpanel > .drawer-section:first-child { border-top: none; padding-top: 0; }
 .mmr-panel-head h2{font-family:var(--font-display);font-style:italic;font-weight:600;font-size:23px;color:var(--cream);margin:0;padding-top:2px;line-height:1.22;letter-spacing:0;overflow:visible}
 .mmr-panel-head .sub{color:var(--muted);font-size:12.5px}
+/* Motore utility copy shares one scale; technical readouts keep their mono face. */
+#drawer-diagnostics .card-label,
+#drawer-diagnostics .ttl-eyebrow {
+  font-family: var(--font-body);
+  letter-spacing: 0.18em;
+}
+.motore-setup-restart {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 24px;
+}
+.motore-setup-restart .btn { min-height: 44px; }
+.motore-setup-restart p {
+  flex: 1 1 240px;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--cream-dk);
+}
 @media (max-width:900px){
   .mmr-console-triggers{grid-template-columns:repeat(2,minmax(0,1fr))}
   .mmr-console-triggers .a-trigger{flex-direction:row;align-items:center;gap:10px;min-height:56px}
@@ -2391,8 +2413,10 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
     <!-- Motore zone -->
     <section class="a-panel producer-zone mmr-tabpanel" id="drawer-diagnostics" data-panel="motore" role="tabpanel" aria-labelledby="tab-motore" tabindex="0">
       <header class="mmr-panel-head"><h2>Motore</h2><div class="sub">Station health, runtime, costs, and settings. <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></div></header>
-      <button type="button" class="btn btn-util" id="firstListenRestartBtn" data-stopped-exempt onclick="restartFirstListen()">Restart First Listen</button>
-      <p class="sub">Walk through the welcome and three steps again. Your settings stay saved.</p>
+      <div class="motore-setup-restart">
+        <button type="button" class="btn btn-util" id="firstListenRestartBtn" aria-describedby="motoreRestartNote" data-stopped-exempt onclick="restartFirstListen()">Restart First Listen</button>
+        <p id="motoreRestartNote">Revisit the welcome and setup. Your settings stay saved.</p>
+      </div>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
 

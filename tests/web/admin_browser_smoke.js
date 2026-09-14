@@ -7,6 +7,58 @@ async (page) => {
     if (!condition) throw new Error(`admin-browser-smoke: ${message}`);
   }
 
+  async function exerciseMotoreSettingsTypography() {
+    const originalViewport = page.viewportSize();
+    for (const width of [320, 600, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      const metrics = await page.evaluate(() => {
+        const panel = document.getElementById('drawer-diagnostics');
+        const button = document.getElementById('firstListenRestartBtn');
+        const note = document.getElementById(button.getAttribute('aria-describedby'));
+        const group = button.parentElement;
+        const title = panel.querySelector('header h2');
+        const style = (element) => {
+          const css = getComputedStyle(element);
+          return {
+            font: css.fontFamily, size: parseFloat(css.fontSize), italic: css.fontStyle,
+            letterSpacing: parseFloat(css.letterSpacing),
+          };
+        };
+        const fits = (element) => {
+          const rect = element.getBoundingClientRect();
+          const bounds = panel.getBoundingClientRect();
+          return rect.width > 0 && rect.left >= bounds.left && rect.right <= bounds.right
+            && element.scrollWidth <= element.clientWidth + 1;
+        };
+        return {
+          button: style(button), note: note && style(note), title: style(title),
+          labels: [...panel.querySelectorAll('.card-label,.ttl-eyebrow')].map(style),
+          grouped: Boolean(note && group.contains(note)),
+          uniqueNote: Boolean(note && document.querySelectorAll(`[id="${note.id}"]`).length === 1),
+          noteText: note?.textContent,
+          fits: Boolean(note && [group, button, note].every(fits)),
+          touchHeight: button.getBoundingClientRect().height,
+          healthGap: panel.querySelector('.card-label').getBoundingClientRect().top
+            - group.getBoundingClientRect().bottom,
+        };
+      });
+      assert(metrics.grouped && metrics.uniqueNote && metrics.noteText.includes('Your settings stay saved.'),
+        'Motore restart lost its grouped, accessible settings reassurance');
+      assert(metrics.button.font.includes('Outfit') && metrics.note.font.includes('Outfit')
+        && metrics.button.size === 13 && metrics.note.size === 13,
+      `Motore restart copy escaped the utility type scale at ${width}: ${JSON.stringify(metrics)}`);
+      assert(metrics.labels.every(({ font }) => font.includes('Outfit')),
+        `Motore section labels reverted to diagnostic typography at ${width}`);
+      assert(metrics.labels.every(({ size, letterSpacing }) => Math.abs(letterSpacing - size * 0.18) < 0.01),
+        `Motore section labels lost 0.18em tracking at ${width}: ${JSON.stringify(metrics.labels)}`);
+      assert(metrics.title.font.includes('Playfair') && metrics.title.italic === 'italic',
+        'Motore lost its established display heading');
+      assert(metrics.fits && metrics.touchHeight >= 44 && metrics.healthGap >= 24,
+        `Motore restart lost responsive spacing or touch size at ${width}: ${JSON.stringify(metrics)}`);
+    }
+    if (originalViewport) await page.setViewportSize(originalViewport);
+  }
+
   async function exerciseListenerSongFailureRows() {
     const failureCases = [
       ['low_confidence', 'needs exact title + artist', 'Try exact title + artist'],
@@ -161,6 +213,8 @@ async (page) => {
   // console hidden until the operator picks a surface. This smoke exercises the
   // producer desk, so open it the way the operator does — through the page's
   // own tab navigation (render-free, exactly like initTabs' landing call).
+  await page.evaluate(() => showAdminTab('motore', { render: false, persist: false }));
+  await exerciseMotoreSettingsTypography();
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
   const stationCategoryRow = await page.evaluate(() => {
     document.body.removeAttribute('data-stopped');
