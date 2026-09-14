@@ -2,8 +2,8 @@
 # Self-test for scripts/land-pr.sh
 #
 # Drives the landing wrapper with a mocked `gh` (PATH shim) and a mocked
-# review-log reader (MMR_LAND_REVIEW_READER), asserting the squad code-state
-# freshness, v2 evidence, bot-thread gates, fail-closed paths, and pinned arming.
+# review-log reader (MMR_LAND_REVIEW_READER), asserting receipt/ledger independence,
+# bot-thread gates, fail-closed paths, and pinned arming.
 
 set -euo pipefail
 
@@ -20,6 +20,7 @@ pass() { PASS_COUNT=$((PASS_COUNT + 1)); echo "PASS: $1"; }
 
 TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
+export RETIRED_READER_CALLS="$TMPDIR_T/retired-reader-calls"
 
 HEAD_FULL="$(git rev-parse HEAD)"
 HEAD_SHORT="$(git rev-parse --short HEAD)"
@@ -108,7 +109,7 @@ chmod +x "$MOCK_BIN/gh"
 make_reader() {
   local f; f="$(mktemp "$TMPDIR_T/reader.XXXXXX")"
   {
-    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' '#!/usr/bin/env bash' 'echo invoked >> "$RETIRED_READER_CALLS"'
     printf 'cat <<'\''LINES'\''\n'
     printf '{"skill":"%s","commit":"%s","timestamp":"%s"}\n' "$1" "$2" "$3"
     printf '%s\n' '---CONFIG---'
@@ -120,12 +121,15 @@ make_reader() {
 
 empty_reader() {
   local f; f="$(mktemp "$TMPDIR_T/reader.XXXXXX")"
-  printf '%s\n' '#!/usr/bin/env bash' 'echo ---CONFIG---' > "$f"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo invoked >> "$RETIRED_READER_CALLS"' 'echo ---CONFIG---' > "$f"
   chmod +x "$f"
   echo "$f"
 }
 
-PASSING_EVIDENCE_CHECKER="$TMPDIR_T/evidence-pass"; printf 'exit 0\n' > "$PASSING_EVIDENCE_CHECKER"; FAILING_EVIDENCE_CHECKER="$TMPDIR_T/evidence-fail"; printf 'exit 1\n' > "$FAILING_EVIDENCE_CHECKER"
+PASSING_EVIDENCE_CHECKER="$TMPDIR_T/evidence-pass"
+FAILING_EVIDENCE_CHECKER="$TMPDIR_T/evidence-fail"
+printf '%s\n' 'echo invoked >> "$RETIRED_READER_CALLS"' 'exit 0' > "$PASSING_EVIDENCE_CHECKER"
+printf '%s\n' 'echo invoked >> "$RETIRED_READER_CALLS"' 'exit 1' > "$FAILING_EVIDENCE_CHECKER"
 
 # run_land <reader> [env overrides...] -> sets RUN_RC, RUN_OUT, leaves log at $GH_MOCK_LOG
 run_land() {
@@ -181,7 +185,7 @@ never_merged || fail "behind PR must never merge"
 ! grep -q "pr update-branch" "$GH_MOCK_LOG" || fail "landing seat must not update a behind branch"
 printf '%s' "$RUN_OUT" | grep -q "feature workspace" || fail "deny message should name the owning workspace"
 printf '%s' "$RUN_OUT" | grep -q "git merge origin/main" || fail "deny message should give the integrate command"
-printf '%s' "$RUN_OUT" | grep -q "no reattest needed" || fail "deny message should say a clean integrate keeps the receipt"
+! printf '%s' "$RUN_OUT" | grep -Eq "receipt|reattest" || fail "behind guidance must not demand receipt bookkeeping"
 ! printf '%s' "$RUN_OUT" | grep -q "committed v2 pre-ship evidence does not cover" || fail "behind handling must run before evidence verification"
 pass "real divergent BEHIND graph parks before evidence or mutation"
 
@@ -192,14 +196,14 @@ never_merged || fail "dirty PR must stop before merging"
 printf '%s' "$RUN_OUT" | grep -qi "conflict" || fail "dirty PR message should name the conflict"
 pass "conflict stops cleanly with way-out"
 
-# Case 6: no squad entry and no v2 evidence => deny, never merge
+# Case 6: no ledger and missing v2 evidence => arm without reading either
 run_land "$(empty_reader)" \
   MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
   MMR_LAND_EVIDENCE_CHECKER="$FAILING_EVIDENCE_CHECKER"
-[ "$RUN_RC" -ne 0 ] || fail "missing review proof must deny (exit code)"
-never_merged || fail "missing review proof must deny"
-printf '%s' "$RUN_OUT" | grep -q "v2 pre-ship evidence" || fail "deny message should name v2 evidence"
-pass "missing review proof denies"
+[ "$RUN_RC" -eq 0 ] || fail "missing review receipts must not block: $RUN_OUT"
+merged_with "$HEAD_FULL" || fail "missing receipts must not prevent pinned arming"
+! printf '%s' "$RUN_OUT" | grep -q "v2 pre-ship evidence" || fail "retired gate must not emit instructions"
+pass "missing receipts and ledger do not block"
 
 # Case 7: bogus ledger commit is ignored when v2 evidence covers the head
 run_land "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")" \
@@ -207,17 +211,17 @@ run_land "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")" \
   MMR_LAND_EVIDENCE_CHECKER="$PASSING_EVIDENCE_CHECKER"
 [ "$RUN_RC" -eq 0 ] || fail "valid v2 evidence should arm despite bogus ledger entry (exit code)"
 merged_with "$HEAD_FULL" || fail "valid v2 evidence should arm despite bogus ledger entry"
-pass "valid v2 evidence ignores bogus ledger entry"
+pass "bogus ledger entry does not gate landing"
 
-# Case 8: commits pushed AFTER the entry (beyond grace) => deny when v2 is absent.
+# Case 8: commits pushed AFTER the entry => allow even when v2 is absent.
 # Entry is 6h old; newest PR commit is 3h old.
 run_land "$(make_reader review "$ANC_SHORT" "$VERY_OLD_ISO")" \
   GH_MOCK_COMMIT_DATE="$OLD_ISO" \
   MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
   MMR_LAND_EVIDENCE_CHECKER="$FAILING_EVIDENCE_CHECKER"
-[ "$RUN_RC" -ne 0 ] || fail "stale ledger without v2 evidence must deny (exit code)"
-never_merged || fail "stale ledger without v2 evidence must deny"
-pass "stale ledger without v2 evidence denies"
+[ "$RUN_RC" -eq 0 ] || fail "stale ledger and absent receipts must not block: $RUN_OUT"
+merged_with "$HEAD_FULL" || fail "stale ledger and absent receipts must not prevent arming"
+pass "stale ledger without v2 evidence allows"
 
 # Case 9: OLD entry, no commits since (newest commit predates entry) => allow.
 # Wall-clock age alone must NOT deny — soak windows are days long by design.
@@ -241,7 +245,7 @@ run_land "$(make_reader qa "$HEAD_SHORT" "$NOW_ISO")" \
   MMR_LAND_EVIDENCE_CHECKER="$PASSING_EVIDENCE_CHECKER"
 [ "$RUN_RC" -eq 0 ] || fail "valid v2 evidence should arm despite wrong-skill ledger entry (exit code)"
 merged_with "$HEAD_FULL" || fail "valid v2 evidence should arm despite wrong-skill ledger entry"
-pass "valid v2 evidence ignores wrong-skill ledger entry"
+pass "wrong-skill ledger entry does not gate landing"
 
 # Case 13: missing ledger reader is OK when committed v2 evidence covers head
 run_land "$TMPDIR_T/nonexistent-reader" \
@@ -249,7 +253,7 @@ run_land "$TMPDIR_T/nonexistent-reader" \
   MMR_LAND_EVIDENCE_CHECKER="$PASSING_EVIDENCE_CHECKER"
 [ "$RUN_RC" -eq 0 ] || fail "missing ledger reader should arm when v2 evidence passes (exit code)"
 merged_with "$HEAD_FULL" || fail "missing ledger reader should arm when v2 evidence passes"
-pass "missing ledger reader is OK when v2 evidence covers head"
+pass "missing ledger reader does not gate landing"
 
 # Case 14: PR with an empty commits array => clean die, never merge
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_COMMITS_JSON='[]'
@@ -257,16 +261,15 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_COMMITS_JSON='
 never_merged || fail "empty commits array must never reach gh merge"
 pass "empty commits array dies cleanly"
 
-# Case 15: multi-commit PR — ledger freshness binds to the NEWEST commit.
-# Entry is 3h old; an older commit predates it but the newest commit is NOW =>
-# deny without v2 evidence.
+# Case 15: multi-commit PR — stale ledger and missing receipts do not gate.
+# Entry is 3h old; an older commit predates it but the newest commit is NOW.
 run_land "$(make_reader review "$ANC_SHORT" "$OLD_ISO")" \
   GH_MOCK_COMMITS_JSON='[{"committedDate":"'"$VERY_OLD_ISO"'"},{"committedDate":"'"$NOW_ISO"'"}]' \
   MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
   MMR_LAND_EVIDENCE_CHECKER="$FAILING_EVIDENCE_CHECKER"
-[ "$RUN_RC" -ne 0 ] || fail "stale ledger without v2 evidence must deny on newest commit (exit code)"
-never_merged || fail "stale ledger without v2 evidence must deny on newest commit"
-pass "ledger freshness without v2 evidence denies on newest commit"
+[ "$RUN_RC" -eq 0 ] || fail "stale ledger and absent receipts must not block: $RUN_OUT"
+merged_with "$HEAD_FULL" || fail "stale ledger and absent receipts must not prevent arming"
+pass "multi-commit PR ignores ledger freshness and missing evidence"
 
 # Case 16: non-numeric PR argument => usage error, never calls gh merge
 GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
@@ -322,17 +325,20 @@ run_land "$(empty_reader)" \
   MMR_LAND_EVIDENCE_CHECKER="$PASSING_EVIDENCE_CHECKER"
 [ "$RUN_RC" -eq 0 ] || fail "v2-only landing should arm when ledger is absent (exit code)"
 merged_with "$HEAD_FULL" || fail "v2-only landing should arm auto-merge"
-printf '%s' "$RUN_OUT" | grep -q "committed v2 evidence covers" \
-  || fail "v2-only landing should note v2 evidence satisfied the review gate"
-pass "v2 evidence satisfies landing without a local ledger"
+! printf '%s' "$RUN_OUT" | grep -q "committed v2 evidence covers" \
+  || fail "landing must not claim it checked retired evidence"
+pass "receipt presence does not re-enable admission checks"
 
-# Case 21: skipping v2 evidence still requires a qualifying local ledger
-run_land "$(empty_reader)" MMR_LAND_SKIP_EVIDENCE_CHECK=1
-[ "$RUN_RC" -ne 0 ] || fail "skipped v2 evidence without ledger must deny (exit code)"
-never_merged || fail "skipped v2 evidence without ledger must never merge"
-printf '%s' "$RUN_OUT" | grep -q "committed evidence was skipped" \
-  || fail "deny message should explain that skipped evidence requires a ledger"
-pass "evidence skip without local ledger denies"
+# Case 21: legacy environment switches cannot re-enable receipt/ledger admission.
+run_land "$(empty_reader)" MMR_LAND_SKIP_EVIDENCE_CHECK=1 MMR_LAND_REQUIRE_LEDGER_SQUAD=1
+[ "$RUN_RC" -eq 0 ] || fail "obsolete receipt/ledger switches must not block: $RUN_OUT"
+merged_with "$HEAD_FULL" || fail "obsolete switches must not prevent pinned arming"
+pass "legacy evidence skip and ledger requirement are ignored"
+
+run_land "$TMPDIR_T/nonexistent-reader" MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON='{}'
+[ "$RUN_RC" -ne 0 ] || fail "unavailable review data must still block"
+never_merged || fail "unavailable review data must never arm"
+pass "review data failure remains fail-closed without a ledger"
 
 # =============================================================================
 # The landed-ref refresh. The merge witness trusts a base only if it is landed in
@@ -367,10 +373,10 @@ pass "wrapper refreshes origin/main before verifying the base"
 
 : > "$GIT_SHIM_LOG"
 PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL" GIT_SHIM_FETCH_FAIL=1
-[ "$RUN_RC" -eq 0 ] || fail "a failed refresh must not itself fail the landing (the evidence gate decides): $RUN_OUT"
+[ "$RUN_RC" -eq 0 ] || fail "a failed refresh must not itself fail the landing (the remaining gates decide): $RUN_OUT"
 grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "refresh must still be attempted"
-merged_with "$HEAD_FULL" || fail "with valid evidence, a failed refresh must not block the arm"
-pass "a failed refresh is tolerated; the evidence gate remains the decider"
+merged_with "$HEAD_FULL" || fail "with remaining gates passing, a failed refresh must not block the arm"
+pass "a failed refresh is tolerated; the remaining gates decide"
 
 # Complete history: a base the local origin/main already covers must not fetch.
 # This mirrors the invariant tests/workflows/test_dependabot_automerge_gate.sh
@@ -383,6 +389,9 @@ if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
     || fail "a base already covered by local origin/main must not trigger a fetch"
   pass "complete history never fetches (base already covered by origin/main)"
 fi
+
+[ ! -e "$RETIRED_READER_CALLS" ] || fail "retired receipt/ledger reader was invoked"
+pass "landing never invokes retired receipt or ledger readers"
 
 echo
 echo "All $PASS_COUNT land-pr cases passed."

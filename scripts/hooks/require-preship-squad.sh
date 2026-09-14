@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash) guard — two rules:
+# PreToolUse(Bash) guard — raw merges must go through the landing wrapper.
 #
-#   1. `gh pr create` requires a pre-ship review squad entry for this code.
-#      /ship logs the squad as a review-log entry with skill="review" (Step 9)
-#      or "adversarial-review" (Step 11); this guard requires such an entry
-#      whose commit is in HEAD's recent (<=2h) history.
-#   2. Raw merge attempts are denied OUTRIGHT — landing goes through
+# Review remains mandatory through /ship, but local ledgers and committed
+# review receipts are not PR admission requirements.
+#
+# Raw merge attempts are denied OUTRIGHT — landing goes through
 #      scripts/land-pr.sh (the landing contract in CLAUDE.md "Quality gates").
 #      This blocks `gh pr merge` and mutating `gh api` merge calls (REST
 #      /pulls/<n>/merge PUT, plus GraphQL mergePullRequest/auto-merge
-#      mutations). The wrapper does its own squad check with code-state
-#      freshness (entry commit covers the PR head AND nothing was pushed after
-#      the entry), so soaked PRs land without ritual review re-runs. The
+#      mutations). The wrapper checks branch freshness, bot threads and cut
+#      admission before head-matched arming. The
 #      wrapper's internal gh calls run inside its own process and never hit this
 #      hook.
 #      Exception: `gh pr merge --disable-auto` (disarming a queued merge) is
 #      a cancel operation and passes.
 #
-# Why this exists: on the god-module refactor, PRs were opened with bare
+# History of the retired PR rule: on the god-module refactor, PRs were opened with bare
 # `gh pr create` (skipping /ship), so the mandatory pre-ship squad — including its
 # docs/config-consistency check — never ran, and a doc-sync hard-rule violation
 # reached a green, mergeable PR undetected. The merge rule was added 2026-06-12
@@ -32,7 +30,7 @@
 # accepted — reword the content or write it via the Write tool. A token-aware
 # parse belongs in permission-guard.py, not here.
 #
-# FAILS OPEN: any internal error (no jq, not a git repo, no gstack, parse failure)
+# FAILS OPEN: an internal input/parsing error
 # exits 0 (allow). A bug in this guard can never block a PR. The ONLY paths that
 # block are the explicit deny families below.
 
@@ -41,7 +39,7 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)" ||
 
 deny_raw_merge() {
   cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw GitHub merge commands are retired. Land via scripts/land-pr.sh <PR#> — it verifies the pre-ship squad against the PR head, updates the branch if behind (CI re-runs), and arms auto-merge pinned to the exact reviewed head (--match-head-commit). This hook denies gh pr merge and mutating gh api merge attempts. Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw GitHub merge commands are retired. Land via scripts/land-pr.sh <PR#> — it refuses behind/conflicted branches, checks blocking reviews and cut admission, and arms auto-merge with --match-head-commit. This hook denies gh pr merge and mutating gh api merge attempts. Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
 JSON
   exit 0
 }
@@ -129,9 +127,8 @@ if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+api([[:space
   fi
 fi
 
-# Rule 1: only guard `gh pr create` beyond this point. Everything else (incl.
-# `gh pr view`, `gh pr checks`, `gh pr list`) passes untouched.
-printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
+# Retired argument-reader helpers remain for their standalone regression
+# tests. Admission does not invoke them or read a ledger/receipt.
 
 # Reads the PR-opening command's argument vector, in one of two modes.
 #
@@ -338,174 +335,4 @@ origin_repo() {
   norm_repo "$url"
 }
 
-# Rule 1a: this guard only judges PRs against THIS repository.
-#
-# It is registered for every Bash call in the session, and everything it checks
-# is local to this checkout: the gstack ledger is keyed by this repo's slug and
-# branch, and check-preship-evidence.sh reads receipts under this working tree.
-# Opening a PR on a DIFFERENT repository from a session rooted here therefore
-# asked those questions about the wrong repository and denied a PR whose squad
-# had in fact run, logged in its own repo's ledger. Observed 2026-09-12 on a
-# florianhorner/gh-workflows PR, where permission-guard.py R19 (which resolves
-# the ledger per target) passed and this hook refused.
-#
-# permission-guard.py R19 already reasons exactly this way, in its own words:
-# "A --repo naming a different repository means the local branch and its entries
-# describe other work, so the question is unanswerable and R19 must not veto."
-# This is that rule, ported to the repo-local guard that lacked it.
-#
-# Standing aside requires EVERY opening command in the string to be explicitly
-# foreign. One that names this repo, one that names none, an unreadable origin,
-# and a command the tokenizer cannot read all keep the guard on: "cannot prove
-# this is somebody else's PR" has to mean "judge it", or the exemption becomes
-# the bypass. R12 denies the flagless form fleet-wide, so in practice every real
-# opening command carries an explicit target and this reads exactly one value.
-this_repo="$(origin_repo "$(git remote get-url origin 2>/dev/null)")"
-if [ -n "$this_repo" ]; then
-  scope_foreign=0
-  while IFS= read -r record; do
-    case "$record" in target:*) ;; *) continue ;; esac
-    target="${record#target:}"
-    scope_foreign=1
-    norm_target="$(norm_repo "$target")"
-    # An unreducible target (a shell variable the guard cannot expand, a bare
-    # word, a flag) is UNKNOWN, not foreign. Only an absent target used to reach
-    # the "keep the guard on" branch, so a present-but-unreadable one claimed to
-    # be somebody else's repo -- exactly the class the comment above says is
-    # closed.
-    if [ -z "$target" ] || [ -z "$norm_target" ] || [ "$norm_target" = "$this_repo" ]; then
-      scope_foreign=0
-      break
-    fi
-  done <<TARGETS
-$(gh_create_args targets)
-TARGETS
-  # scope_foreign stays 0 when the tokenizer produced nothing at all, so an
-  # unreadable command line is judged rather than waved through.
-  [ "$scope_foreign" = "1" ] && exit 0
-fi
-
-head="$(git rev-parse --short HEAD 2>/dev/null)" || exit 0
-[ -z "$head" ] && exit 0
-
-# Reader is overridable via env for testing only; defaults to the real gstack log.
-reader="${MMR_PRESHIP_REVIEW_READER:-$HOME/.claude/skills/gstack/bin/gstack-review-read}"
-[ -x "$reader" ] || exit 0   # no gstack review log here -> out of scope, allow
-
-now="$(date +%s)"
-ok=0
-while IFS= read -r line; do
-  case "$line" in ---CONFIG---*) break ;; esac
-  skill="$(printf '%s' "$line" | jq -r '.skill // ""' 2>/dev/null)" || continue
-  case "$skill" in review | adversarial-review) ;; *) continue ;; esac
-  rc="$(printf '%s' "$line" | jq -r '.commit // ""' 2>/dev/null)"
-  { [ -z "$rc" ] || [ "$rc" = "null" ]; } && continue
-  ts="$(printf '%s' "$line" | jq -r '.timestamp // ""' 2>/dev/null)"
-  # Parse the trailing-Z timestamp as UTC. macOS `date -j -f` ignores the Z and
-  # reads local time without -u, which offsets the 2h window by the local UTC
-  # offset (caught a non-UTC false-stale that blocked legit PRs). GNU `date -d`
-  # honors the Z; -u there is harmless.
-  es="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || date -u -d "$ts" +%s 2>/dev/null || echo 0)"
-  # The entry must fall inside a +/-2h window around now. Reject unverifiable
-  # (unparseable/zero/non-numeric), far-future (clock skew or a forged-ahead
-  # timestamp >2h out), and stale (>2h old). A guard fails toward "not authorized"
-  # on data whose freshness it cannot trust; a few seconds of benign skew stays valid.
-  if ! [ "$es" -gt 0 ] 2>/dev/null || [ "$((es - now))" -gt 7200 ] || [ "$((now - es))" -gt 7200 ]; then
-    continue # unverifiable, far-future, or stale — outside the 2h work-session window
-  fi
-  if [ "$rc" = "$head" ] || git merge-base --is-ancestor "$rc" HEAD 2>/dev/null; then
-    ok=1
-    break
-  fi
-done < <("$reader" 2>/dev/null)
-
-if [ "$ok" != "1" ]; then
-  cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"No pre-ship review squad logged for HEAD. Open the PR via /ship (it runs the mandatory squad, incl. the docs/config-consistency check) instead of a bare gh pr create. CLAUDE.md: 'Pre-ship review squad (mandatory in every worktree).'"}}
-JSON
-  exit 0
-fi
-
-# Rule 1b: a logged squad is not the gate — the committed v2 receipt is.
-#
-# The ledger entry above lives only on this machine, so it proves nothing about
-# what the PR carries. check-preship-evidence.sh is the runtime-independent half,
-# and it was already wired at land time (scripts/land-gates.sh) and into the queue
-# view (scripts/pr-queue-status.sh) — but not here. That let a PR open, go fully
-# green, and only fail at the landing attempt, which is the most expensive place
-# to learn the receipt was never emitted. Same checker, same verdict, moved to the
-# cheapest moment. Observed 2026-09-11 on #1126: a malformed ledger entry (findings
-# nested under specialists instead of top-level) made emit-review-evidence.sh refuse
-# to write a receipt, the emit step was skipped entirely, and the "pre-ship evidence"
-# CI check is report-only, so nothing objected until the lander did.
-#
-# FAILS OPEN, like the rest of this guard: deny ONLY when the verifier actually
-# rendered a verdict (its output carries the `landing-evidence:` prefix). A missing
-# checker, an unusable Python, or an unresolvable base leaves the PR alone.
-evidence_checker="${MMR_PRESHIP_EVIDENCE_CHECKER:-$(git rev-parse --show-toplevel 2>/dev/null)/scripts/check-preship-evidence.sh}"
-[ -r "$evidence_checker" ] || exit 0
-
-target="$(git rev-parse HEAD 2>/dev/null)" || exit 0
-[ -z "$target" ] && exit 0
-
-# Prefer an explicit --base on the command; fall back to the usual default branch.
-#
-# Word-splitting $cmd loses quoting, so `--body 'see --base foo'` hands us `foo`
-# as the base. That ref does not resolve, the block below exits 0, and the gate
-# is silently off — fail-open in the one direction that matters. This very PR's
-# body contains the token `--base`, which is how the hole was found. Tokenize the
-# way the shell would instead, isolate the matched command's argument vector,
-# and read --base only as an option, never as prose or a later command's option.
-base_ref="$(gh_create_args option --base)"
-[ -z "$base_ref" ] && base_ref="main"
-
-# A bare `main` is the stale LOCAL branch; the PR is cut against the remote, and
-# the two disagree often enough to render a different verdict on the same HEAD.
-#
-# An unresolvable ref falls back to the default branch rather than exiting: base
-# extraction must never be load-bearing for whether the gate runs at all. Letting
-# a ref that does not resolve skip the check turns any odd command line into a
-# silent bypass, which is the one fail-open direction that costs something. A
-# slightly-wrong base only widens the receipt window, so it cannot false-deny.
-base_sha=""
-for candidate in "origin/$base_ref" "$base_ref" "origin/main" "main"; do
-  base_sha="$(git rev-parse --verify --quiet "$candidate^{commit}" 2>/dev/null)" || base_sha=""
-  [ -n "$base_sha" ] && break
-done
-[ -z "$base_sha" ] && exit 0   # no base resolves at all: genuinely cannot judge
-
-# Verify against the FORK POINT, never the base tip. Being behind origin/main is
-# the normal state at PR-open, and the checker rejects a base that is not an
-# ancestor of the target with a `landing-evidence:` verdict — which would read as
-# "no receipt" and deny a PR whose only fault is needing an integrate, with a
-# remedy (emit a receipt) that cannot fix it. land-pr.sh treats behind-ness as
-# "integrate and come back"; this hook must not turn it into a block.
-base="$(git merge-base "$base_sha" HEAD 2>/dev/null)" || exit 0
-[ -z "$base" ] && exit 0
-
-evidence_out="$(bash "$evidence_checker" --v2 --target "$target" --base "$base" --mode pr 2>&1)"
-evidence_rc=$?
-[ "$evidence_rc" -eq 0 ] && exit 0
-
-# Non-zero without a verdict means the checker could not run. Stay out of the way.
-printf '%s' "$evidence_out" | grep -q 'landing-evidence:' || exit 0
-
-# Escape backslashes before quotes, and drop control characters: an unparseable
-# deny payload is silently discarded, which would retire this rule without a trace.
-reason="$(printf '%s' "$evidence_out" | tr '\n' ' ' | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g')"
-
-# Only a missing receipt is fixed by emitting one. The checker uses the same
-# prefix for evidence it considers present but wrong (a modified base receipt, a
-# receipt-count violation), and telling someone to re-emit for those sends them
-# round a loop that cannot terminate. Name the remedy only when it is the remedy.
-case "$evidence_out" in
-  *"no new v2 review receipt"* | *"no review ledger record"* | *"does not cover"*)
-    remedy="Run scripts/emit-review-evidence.sh, commit the receipt it writes under proof/preship-reviews/v2/, then open the PR." ;;
-  *)
-    remedy="Resolve what the checker reports below before opening the PR; re-emitting a receipt does not fix this class of failure." ;;
-esac
-
-cat <<JSON
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pre-ship evidence does not cover HEAD, so this PR would be refused at landing. ${remedy} Checker said: ${reason}"}}
-JSON
-exit 0
+# PR creation has no repository-local receipt/ledger admission gate.

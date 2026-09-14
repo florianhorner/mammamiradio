@@ -19,7 +19,7 @@ while [ $# -gt 0 ]; do
     --json) EMIT_JSON=1; shift ;;
     -h|--help)
       say "Usage: $0 [--json]"
-      say "  (no args)  human dashboard: per-PR merge state, evidence, thread debt, worktree"
+      say "  (no args)  human dashboard: per-PR merge state, thread debt, worktree"
       say "  --json     the land queue's machine-readable states, enriched with local worktrees"
       exit 0
       ;;
@@ -127,24 +127,10 @@ local_base_summary() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-EVIDENCE_CHECKER="${MMR_QUEUE_EVIDENCE_CHECKER:-$SCRIPT_DIR/check-preship-evidence.sh}"
 REVIEW_THREADS_LIB="$SCRIPT_DIR/review-threads.sh"
 [ -r "$REVIEW_THREADS_LIB" ] || die "review-thread reader not found at $REVIEW_THREADS_LIB."
 # shellcheck source=scripts/review-threads.sh
 . "$REVIEW_THREADS_LIB"
-
-evidence_summary() {
-  local head="$1" base="$2"
-  if [ "${MMR_QUEUE_SKIP_EVIDENCE:-0}" = "1" ]; then
-    printf 'skipped\n'
-    return 0
-  fi
-  if bash "$EVIDENCE_CHECKER" --v2 --target "$head" --base "$base" --mode pr >/dev/null 2>&1; then
-    printf 'ok\n'
-  else
-    printf 'missing/invalid\n'
-  fi
-}
 
 thread_debt_count() {
   local pr="$1" slug owner repo response
@@ -171,7 +157,7 @@ thread_debt_count() {
 }
 
 recommendation() {
-  local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4" evidence="$5" thread_debt="$6"
+  local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4" thread_debt="$5"
   if [ "$is_draft" = "true" ]; then
     say "draft"
   elif [ "$merge_state" = "DIRTY" ]; then
@@ -186,8 +172,6 @@ recommendation() {
     say "inspect/thread check unavailable"
   elif [ "$thread_debt" != "0" ] && [ "$thread_debt" != "skipped" ]; then
     say "resolve bot threads"
-  elif [ "$evidence" != "ok" ] && [ "$evidence" != "skipped" ]; then
-    say "emit/review evidence"
   elif [ "$merge_state" = "CLEAN" ]; then
     say "land now"
   elif [ "$merge_state" = "BLOCKED" ] || [ "$merge_state" = "UNSTABLE" ]; then
@@ -255,16 +239,14 @@ printf '%s' "$prs" | jq -c 'sort_by(.number)[]' | while IFS= read -r pr; do
     IFS=$'\t' read -r dirty_status dirty <<<"$(dirty_summary "$wt")"
     local_base="$(local_base_summary "$wt")"
   fi
-  evidence="$(evidence_summary "$head" "$base")"
   thread_debt="$(thread_debt_count "$number")"
-  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty_status" "$evidence" "$thread_debt")"
+  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty_status" "$thread_debt")"
 
   say ""
   say "PR #$number: $title"
   say "  branch: $branch"
   say "  head: $short_head"
   say "  merge: $merge_state"
-  say "  evidence: $evidence"
   say "  bot-thread debt: $thread_debt"
   say "  draft: $is_draft"
   say "  updated: $updated_at"

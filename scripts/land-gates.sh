@@ -197,19 +197,8 @@ thread_check() {
 }
 
 verify_head() {
-  local pr="$1" head="$2" base="$3" last_push_epoch="$4"
-  evidence_check "$head" "$base" || return 1
-  if squad_check "$head" "$last_push_epoch"; then
-    :
-  elif [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
-    _gate_say "committed evidence was skipped and no qualifying local ledger entry covers ${head:0:12}."
-    _gate_cont "Re-run without MMR_LAND_SKIP_EVIDENCE_CHECK=1 or provide current ledger evidence."
-    return 1
-  elif [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
-    return 1
-  else
-    _gate_say "no local ledger squad entry; committed v2 evidence covers PR head ${head:0:12}."
-  fi
+  local pr="$1"
+  # Receipt/ledger helpers remain historical utilities, never admission gates.
   thread_check "$pr" || return 1
 }
 
