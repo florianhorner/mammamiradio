@@ -473,7 +473,7 @@ done
 (cd "$FIXTURE" && GH_REPO=florianhorner/mammamiradio bash "$HOLD" check-cut missing "$CUT_COMMIT" >/dev/null 2>&1) && fail "missing base object must refuse"
 pass "real landing path gates pinned version changes without receipts; ordinary PRs retain existing behavior"
 
-# A base-object fetch alone does not repair ancestry across a shallow boundary.
+# Cut admission needs only the exact base/head objects across a shallow boundary.
 # These clones use a local file transport; no GitHub or network access.
 FULL_FIXTURE="$FIXTURE"
 git -C "$FULL_FIXTURE" update-ref refs/heads/ordinary "$ORDINARY_COMMIT"
@@ -497,7 +497,7 @@ WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; succeeded
 shallow_fixture unavailable-origin cut
 git -C "$FIXTURE" remote set-url origin "$TMP/missing-origin"
 WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; failed; no_merge
-grep -q 'could not fetch head' <<< "$OUT" || fail "history fetch failure must explain recovery"
-! grep -q '^evidence\|/actions/' <<< "$LOG" || fail "history fetch failure must precede freeze checks; evidence stays retired"
-pass "landing hydrates shallow history before cut admission and refuses unavailable history"
+grep -q 'base .* could not be fetched' <<< "$OUT" || fail "missing base object must explain recovery"
+! grep -q '^evidence\|/actions/' <<< "$LOG" || fail "object fetch failure must precede freeze checks; evidence stays retired"
+pass "landing hydrates exact objects for shallow cut admission and refuses unavailable objects"
 echo "All dependabot automerge gate cases passed."

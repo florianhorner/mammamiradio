@@ -52,7 +52,7 @@ EMPTY_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"en
 #   GH_MOCK_MERGE_STATE   mergeStateStatus (default CLEAN)
 #   GH_MOCK_HEAD          headRefOid (default real repo HEAD)
 #   GH_MOCK_BASE          baseRefOid (default real repo HEAD~1)
-#   GH_MOCK_COMMIT_DATE   committedDate of the newest PR commit (default NOW)
+#   GH_MOCK_COMMIT_DATE   committedDate returned as irrelevant legacy metadata
 #   GH_MOCK_HELP_LINES    emit a large help stream for the capability probe
 # Every invocation is appended to $GH_MOCK_LOG for assertions.
 MOCK_BIN="$TMPDIR_T/bin"
@@ -72,6 +72,7 @@ fi
 echo "$*" >> "$GH_MOCK_LOG"
 case "$1 $2" in
   "pr view")
+    [[ "$*" != *"commits"* ]] || exit 64
     head="${GH_MOCK_HEAD:?}"
     merge_state="${GH_MOCK_MERGE_STATE:-CLEAN}"
     commits="${GH_MOCK_COMMITS_JSON:-}"
@@ -162,14 +163,13 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
 merged_with "$HEAD_FULL" || fail "clean PR should arm auto-merge pinned to head"
 pass "clean PR arms --squash --auto --match-head-commit <head>"
 
-# Case 1b: accept millisecond timestamps for the squad entry and newest PR
-# commit.
+# Case 1b: irrelevant fractional commit metadata cannot block landing.
 FRACTIONAL_ISO="${NOW_ISO%Z}.300Z"
 run_land "$(make_reader review "$HEAD_SHORT" "$FRACTIONAL_ISO")" \
   GH_MOCK_COMMIT_DATE="$FRACTIONAL_ISO"
 [ "$RUN_RC" -eq 0 ] || fail "fractional timestamps should arm auto-merge (exit code)"
 merged_with "$HEAD_FULL" || fail "fractional timestamps should arm auto-merge"
-pass "millisecond timestamps are accepted"
+pass "fractional commit metadata does not affect admission"
 
 # Case 2: entry commit is an ANCESTOR of head, push within grace => allow
 run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")"
@@ -255,11 +255,11 @@ run_land "$TMPDIR_T/nonexistent-reader" \
 merged_with "$HEAD_FULL" || fail "missing ledger reader should arm when v2 evidence passes"
 pass "missing ledger reader does not gate landing"
 
-# Case 14: PR with an empty commits array => clean die, never merge
+# Case 14: empty commit metadata is irrelevant to receipt-free admission.
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_COMMITS_JSON='[]'
-[ "$RUN_RC" -ne 0 ] || fail "empty commits array must die cleanly (exit code)"
-never_merged || fail "empty commits array must never reach gh merge"
-pass "empty commits array dies cleanly"
+[ "$RUN_RC" -eq 0 ] || fail "empty commit metadata must not block landing (exit code)"
+merged_with "$HEAD_FULL" || fail "empty commit metadata must not prevent pinned arming"
+pass "empty commit metadata is ignored"
 
 # Case 15: multi-commit PR — stale ledger and missing receipts do not gate.
 # Entry is 3h old; an older commit predates it but the newest commit is NOW.
@@ -377,6 +377,9 @@ PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_B
 grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "refresh must still be attempted"
 merged_with "$HEAD_FULL" || fail "with remaining gates passing, a failed refresh must not block the arm"
 pass "a failed refresh is tolerated; the remaining gates decide"
+
+! grep -q -- '--unshallow' "$LAND" || fail "landing must not fetch full history"
+pass "landing does not request a full-history fetch"
 
 # Complete history: a base the local origin/main already covers must not fetch.
 # This mirrors the invariant tests/workflows/test_dependabot_automerge_gate.sh

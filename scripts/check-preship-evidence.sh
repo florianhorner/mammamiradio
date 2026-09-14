@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# check-preship-evidence.sh — verify the committed pre-ship review evidence.
+# check-preship-evidence.sh — standalone verifier for historical v2 review receipts.
+# RETIRED ADMISSION: no active hook, landing gate, queue, or workflow invokes this.
+# The notes below document its legacy/manual verification semantics.
 #
 # Shared checker for the runtime-independent half of the pre-ship squad gate: the local
 # Claude hook (require-preship-squad.sh) cannot fire in Codex (no hook layer exists

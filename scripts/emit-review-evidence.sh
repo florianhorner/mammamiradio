@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# emit-review-evidence.sh — emit or reattest the immutable v2 pre-ship review receipt.
+# emit-review-evidence.sh — emit or reattest a historical v2 review receipt.
+# RETIRED ADMISSION: this manual/legacy utility no longer affects PR readiness.
+# The notes below document the retired workflow's receipt semantics.
 #
 # Runtime-independent half of the pre-ship evidence gate. The Claude PreToolUse hook
 # (scripts/hooks/require-preship-squad.sh) cannot fire in Codex — ~/.codex/config.toml has

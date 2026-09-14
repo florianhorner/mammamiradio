@@ -55,17 +55,16 @@ gh pr merge --help 2>/dev/null | grep -- '--match-head-commit' >/dev/null \
 [ "$#" -ge 1 ] || die "usage: scripts/land-pr.sh <pr-number> [<pr-number>...]"
 
 land_one() {
-  local pr="$1" view state head base merge_state last_push
+  local pr="$1" view state head base merge_state
 
   case "$pr" in (*[!0-9]*|'') die "PR number must be numeric, got: $pr" ;; esac
 
-  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,mergeStateStatus,commits 2>/dev/null)" \
+  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,mergeStateStatus 2>/dev/null)" \
     || die "could not read PR #$pr. Check the number and your gh auth, then re-run."
   state="$(printf '%s' "$view" | jq -r '.state')"
   head="$(printf '%s' "$view" | jq -r '.headRefOid')"
   base="$(printf '%s' "$view" | jq -r '.baseRefOid')"
   merge_state="$(printf '%s' "$view" | jq -r '.mergeStateStatus')"
-  last_push="$(printf '%s' "$view" | jq -r '[.commits[].committedDate] | max // empty')"
 
   if [ "$state" != "OPEN" ]; then
     say "land-pr: PR #$pr is $state, not open — nothing to land."
@@ -74,11 +73,6 @@ land_one() {
 
   [ -n "$base" ] && [ "$base" != "null" ] \
     || die "PR #$pr reports no base commit — refusing to land; check the PR on GitHub."
-  [ -n "$last_push" ] || die "PR #$pr reports no commits — refusing to land; check the PR on GitHub."
-  local last_push_epoch
-  last_push_epoch="$(iso_to_epoch "$last_push")"
-  [ -n "$last_push_epoch" ] || die "could not parse the PR #$pr head commit date ($last_push)."
-
   if [ "$merge_state" = "DIRTY" ]; then
     say "land-pr: PR #$pr has a merge conflict with its base."
     say "         Resolve the conflict on the branch (merge origin/main into it), push, re-review, then land again."
@@ -98,18 +92,14 @@ land_one() {
   refresh_landed_ref "$base"
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
-  # Cut admission needs the verified base and its ancestry.
-  if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-    git fetch -q --no-tags --unshallow origin "$head" "$base" 2>/dev/null \
-      || die "PR #$pr needs full history; could not fetch head $head and base $base. Check origin and retry."
-  fi
+  # Cut admission reads the exact base and head trees; it does not need full history.
   if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
     git fetch -q --no-tags origin "$base" 2>/dev/null \
       || die "PR #$pr base $base could not be fetched. Check origin and retry."
   fi
   git cat-file -e "${base}^{commit}" 2>/dev/null \
     || die "PR #$pr base $base is unavailable locally; cannot verify landing gates."
-  verify_head "$pr" "$head" "$base" "$last_push_epoch" || return 1
+  verify_head "$pr" || return 1
 
   # A stable-version change must not race an earlier Dependabot arming run.
   # This is read-only admission; freeze/thaw remain explicit release actions.
