@@ -32,8 +32,8 @@ if (audioIds.length === 0) throw new Error("No scenario ids found in index.html"
 
 // scenarios.mjs is the single source of truth; the picker buttons in
 // index.html must agree with it in both directions, and at least one moment
-// must be reachable by a fresh install (narrow ambient context: sun and
-// weather only). A page whose every demo needs a home grant oversells.
+// must be the fresh-install ceiling after opt-in (sun and weather only). A page
+// whose every demo needs a wider home grant oversells.
 const truthIds = Object.keys(scenarios);
 for (const id of audioIds) {
   if (!truthIds.includes(id)) throw new Error(`index.html offers "${id}" but scenarios.mjs does not define it`);
@@ -42,7 +42,24 @@ for (const id of truthIds) {
   if (!audioIds.includes(id)) throw new Error(`scenarios.mjs defines "${id}" but index.html never offers it`);
 }
 if (!truthIds.some((id) => scenarios[id].reachability === "day-one")) {
-  throw new Error("No scenario is fresh-install reachable (reachability: \"day-one\") — the page would demonstrate only gated capability");
+  throw new Error("No scenario is day-one (fresh-install ceiling after opt-in) — the page would demonstrate only gated capability");
+}
+
+// H4 ships the same recordings inside First Listen. Keep its reachability
+// vocabulary and the public explainer in lockstep; matching audio hashes alone
+// cannot catch a semantic relabel.
+const h4Manifest = JSON.parse(
+  await readFile("../../mammamiradio/web/static/audio/home_moments/spoken_assets.json", "utf8"),
+);
+const h4Reachability = Object.fromEntries(
+  h4Manifest.assets.map((asset) => [asset.path.replace(/\.mp3$/, ""), asset.reachability]),
+);
+for (const id of truthIds) {
+  if (scenarios[id].reachability !== h4Reachability[id]) {
+    throw new Error(
+      `Scenario "${id}" reachability (${scenarios[id].reachability}) disagrees with the H4 Home-moment pack (${h4Reachability[id] ?? "missing"})`,
+    );
+  }
 }
 // Every scenario must carry what a visitor who cannot hear the clip needs,
 // and a cue point may only exist alongside the produced manifest that

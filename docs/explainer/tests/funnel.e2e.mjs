@@ -131,6 +131,42 @@ test("start over returns the page to an honest idle", async () => {
   assert.equal(waiting, "Tune in to hear what they notice.");
 });
 
+test("retrying blocked audio earns the reveal only after the cue", async () => {
+  const retryPage = await browser.newPage();
+  try {
+    await retryPage.emulateMedia({ reducedMotion: "reduce" });
+    await retryPage.goto(BASE);
+    await retryPage.evaluate(() => {
+      globalThis.__mmrTest.audio.play = () => Promise.reject(new DOMException("Blocked", "NotAllowedError"));
+    });
+    await retryPage.click("#translate-button");
+    await retryPage.waitForFunction(() => document.body.dataset.audio === "failed");
+    await retryPage.locator("#audio-trouble").waitFor({ state: "visible" });
+    assert.equal(await retryPage.evaluate(() => globalThis.__mmrTest.played.size), 0);
+
+    await retryPage.evaluate(() => { delete globalThis.__mmrTest.audio.play; });
+    await retryPage.click("#speak-button");
+    await retryPage.waitForFunction(() => globalThis.__mmrTest.audio.currentTime > 0);
+    assert.equal(await retryPage.getAttribute("body", "data-phase"), "onair");
+    assert.equal(await retryPage.textContent("#gate-label"), "On air");
+    assert.equal(await retryPage.isHidden("#audio-trouble"), true);
+    assert.equal(await retryPage.isHidden("#host-quote"), true);
+    assert.equal(await retryPage.getAttribute("#reveal-content", "aria-hidden"), "true");
+    assert.equal(await retryPage.evaluate(() => globalThis.__mmrTest.played.size), 0);
+
+    await retryPage.evaluate(async () => {
+      const { default: scenarios } = await import("./scenarios.mjs");
+      globalThis.__mmrTest.audio.currentTime = scenarios.arrival.revealAtSec + 0.2;
+    });
+    await retryPage.waitForFunction(() => document.body.dataset.phase === "revealed");
+    assert.equal(await retryPage.textContent("#gate-label"), "That was your house");
+    assert.equal(await retryPage.isHidden("#host-quote"), false);
+    assert.deepEqual(await retryPage.evaluate(() => [...globalThis.__mmrTest.played]), ["arrival"]);
+  } finally {
+    await retryPage.close();
+  }
+});
+
 test("the local preview serves every Studio B trailing-slash route", async () => {
   for (const route of ["shorts/", "shorts/archive-receipt/", "shorts/jealous-microphone/", "shorts/third-chair/"]) {
     const response = await fetch(new URL(route, BASE));

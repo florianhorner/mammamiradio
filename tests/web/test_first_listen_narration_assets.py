@@ -1436,13 +1436,24 @@ def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
     assert any("quote does not match its manifest quote" in error for error in errors), errors
 
 
-def test_home_moment_quotes_are_the_explainer_quotes() -> None:
-    """One source of truth for the quote, as for the bytes and the transcript."""
+def test_home_moment_quotes_and_reachability_match_each_explainer_scenario() -> None:
+    """Keep both surfaces aligned even when only the app's pack changes."""
 
     manifest = json.loads((HOME_MOMENT_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
     scenarios = (ROOT / "docs" / "explainer" / "scenarios.mjs").read_text(encoding="utf-8")
+    scenario_keys = {
+        line[2:-3]
+        for line in scenarios.splitlines()
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(": {")
+    }
+    assert scenario_keys == {Path(entry["path"]).stem for entry in manifest["assets"]}
     for entry in manifest["assets"]:
-        assert f'quote: "{entry["quote"]}"' in scenarios, entry["path"]
+        key = Path(entry["path"]).stem
+        start = scenarios.index(f"  {key}: {{")
+        end = scenarios.index("\n  },", start)
+        scenario = scenarios[start:end]
+        assert f'quote: "{entry["quote"]}"' in scenario, entry["path"]
+        assert f'reachability: "{entry["reachability"]}"' in scenario, entry["path"]
 
 
 def test_admin_home_moment_metadata_rejects_an_empty_spoken_noun() -> None:
