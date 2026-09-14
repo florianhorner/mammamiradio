@@ -456,8 +456,16 @@ async (page) => {
         const firstRow = document.querySelector('#programmeList tbody tr:not(.prog-more)');
         const heads = [...document.querySelectorAll('#programmeList thead th')].map((element) => {
           const rect = element.getBoundingClientRect();
-          return { text: element.textContent.trim(), visible: visible(element), left: rect.left, right: rect.right };
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const textRect = range.getBoundingClientRect();
+          return { text: element.textContent.trim(), visible: visible(element), left: rect.left, right: rect.right, textLeft: textRect.left, textRight: textRect.right };
         });
+        const visibleHeads = heads.filter(({ visible: isVisible }) => isVisible);
+        const headingTextFits = visibleHeads.length === 0 || (visibleHeads.length >= 2
+          && visibleHeads[0].textLeft >= visibleHeads[0].left - 1
+          && visibleHeads[0].textRight <= visibleHeads[0].right + 1
+          && visibleHeads[0].textRight <= visibleHeads[1].textLeft + 1);
         const source = firstRow?.querySelector('td.ho');
         const duration = firstRow?.querySelector('td.du');
         const subtitle = firstRow?.querySelector('.prog-subtitle');
@@ -472,7 +480,8 @@ async (page) => {
           tableScrollWidth: table?.scrollWidth || 0,
           rowScrollWidth: firstRow?.scrollWidth || 0,
           rowWidth: firstRow?.clientWidth || 0,
-          headersVisible: heads.filter(({ visible: isVisible }) => isVisible),
+          headersVisible: visibleHeads,
+          headingTextFits,
           sourceVisible: visible(source),
           durationVisible: visible(duration),
           subtitleVisible: visible(subtitle),
@@ -489,6 +498,7 @@ async (page) => {
           && metrics.tableScrollWidth <= metrics.tableWidth + 1
           && metrics.rowScrollWidth <= metrics.rowWidth + 1
           && metrics.firstRowInsideViewport
+          && metrics.headingTextFits
           && metrics.subtitleVisible
           && metrics.subtitleText === 'An exceptionally long artist name for responsive proof'
           && metrics.actionGeometry.every(({ visible: isVisible, width: controlWidth, height }) => !isVisible || (controlWidth >= 44 && height >= 44)),

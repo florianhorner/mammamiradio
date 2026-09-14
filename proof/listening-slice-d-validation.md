@@ -39,6 +39,12 @@ integrator-only file changed. The changelogs remain untouched.
   final checkout head is the receipt commit after that content head; the
   implementation content remains unchanged.
 
+Verify the committed receipt against the current base with:
+
+```bash
+scripts/check-preship-evidence.sh --v2 --target HEAD --base origin/main --mode pr
+```
+
 ## Implementation
 
 - Widened `.a-programme .col-time` from `54px` to `72px`, retaining the existing
