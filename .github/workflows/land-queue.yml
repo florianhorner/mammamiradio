@@ -8,7 +8,8 @@ name: land-queue
 # of this phase is to compare its choices against the human landing seat's
 # actual scripts/land-pr.sh choices for a week before anything is automated.
 #
-# Observe the real behaviour before this queue blocks or acts.
+# Observe the real
+# behaviour before it blocks or acts.
 #
 # What flipping this to LIVE requires (not a default, an explicit decision):
 #   1. A GitHub App installed on this repo with contents:write +
