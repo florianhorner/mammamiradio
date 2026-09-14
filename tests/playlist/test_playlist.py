@@ -195,3 +195,29 @@ def test_classic_source_post_restart(config, tmp_path, monkeypatch, external_med
     assert resolved.kind == "classic"
     assert tracks
     assert all(t.year == 1975 for t in tracks)
+
+
+def test_recovery_evidence_requires_approved_speech(tmp_path, monkeypatch):
+    import shutil
+
+    from mammamiradio.core.models import SourceReadinessEvidence
+    from mammamiradio.core.spoken_assets import DEMO_ASSETS_DIR, MANIFEST_FILENAME
+    from mammamiradio.playlist import playlist
+
+    evidence = SourceReadinessEvidence()
+    playlist.record_recovery_availability(evidence)
+    assert evidence.entries["recovery"].bundled is True
+    shutil.copytree(DEMO_ASSETS_DIR / "recovery", tmp_path / "recovery")
+    shutil.copy(DEMO_ASSETS_DIR / MANIFEST_FILENAME, tmp_path / MANIFEST_FILENAME)
+    monkeypatch.setattr(playlist, "_DEMO_ASSETS_RECOVERY_DIR", tmp_path / "recovery")
+    for audio in (tmp_path / "recovery").glob("*.mp3"):
+        if audio.name != "emergency_tone.mp3":
+            audio.write_bytes(b"unapproved or corrupt audio")
+    playlist.record_recovery_availability(evidence)
+    assert evidence.entries["recovery"].bundled is True
+    (tmp_path / "recovery" / "emergency_tone.mp3").write_bytes(b"unapproved tone")
+    playlist.record_recovery_availability(evidence)
+    assert evidence.entries["recovery"].bundled is False
+    shutil.rmtree(tmp_path / "recovery")
+    playlist.record_recovery_availability(evidence)
+    assert evidence.entries["recovery"].bundled is False

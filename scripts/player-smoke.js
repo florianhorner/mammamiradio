@@ -30,6 +30,7 @@ async (page) => {
   let casaScenario = 'recent';
   let adExperimentScenario = 'empty';
   let nowStreamingScenario = 'music';
+  let musicAttribution = null;
   let tracksPlayed = 5;
   let rotationTrackCount = 84;
   let conditionalStatusResponses = false;
@@ -199,7 +200,7 @@ async (page) => {
           }
         : nowStreamingScenario === 'ad-generic'
           ? { type: 'ad', label: 'Ad break', metadata: {}, started: serverStartedAtSec }
-          : { type: 'music', label: 'Mina — Città vuota', metadata: {}, started: serverStartedAtSec };
+          : { type: 'music', label: 'Mina — Città vuota', metadata: { music_attribution: musicAttribution }, started: serverStartedAtSec };
     const payload = {
       identity: { station_name: authoritativeName, source: 'player-smoke' },
       brand: { station_name: authoritativeName },
@@ -1054,6 +1055,25 @@ async (page) => {
     await page.waitForFunction(predicate, argument, { timeout: 5000, polling: 50 })
       .catch(() => assert(false, message));
   }
+
+  musicAttribution = { provider: 'incompetech', title: 'Fixture song', artist: 'Fixture artist',
+    license_id: 'CC BY 4.0', license_url: 'https://creativecommons.org/licenses/by/4.0/',
+    source_url: 'https://incompetech.com/music/royalty-free/index.html' };
+  await waitForStatusRender(() => !document.getElementById('music-credits-inline').hidden, null,
+    'attributed music lost its inline credits');
+  await page.locator('#music-credits-inline').click();
+  await page.waitForFunction(() => document.getElementById('music-credits-dialog').open, null, { timeout: 5000 });
+  musicAttribution = null;
+  await waitForStatusRender(() => document.getElementById('music-credits-inline').hidden, null,
+    'unattributed music kept an inline credits link');
+  assert(!await page.locator('#music-credits-current').textContent().then((text) => text.includes('CC BY 4.0')),
+    'current credits retained the previous track attribution');
+  await page.locator('#music-credits-close').click();
+  await page.waitForFunction(() => document.activeElement === document.getElementById('music-credits-footer'), null, { timeout: 5000 });
+  musicAttribution = {};
+  await waitForStatusRender(() => document.getElementById('music-credits-inline').hidden, null,
+    'empty attribution displayed inline credits');
+  musicAttribution = null;
 
   const emptyAdReceipt = await page.evaluate(() => {
     const details = document.getElementById('ad-session-receipt');

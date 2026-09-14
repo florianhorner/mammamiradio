@@ -22,6 +22,13 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
     runner = RUNNER.read_text(encoding="utf-8")
     for needle in (
         "page.setDefaultTimeout(5000)",
+        "leaving replay did not restore saved completion",
+        "Jamendo setup escaped Rotazione",
+        "repeated Undo sent deletion requests",
+        "missing Undo helper deleted a segment",
+        "toast overflow committed a cancelled removal",
+        "expired removal did not commit exactly one stable ID",
+        "Mac admin flow lost its responsive hierarchy",
         "building ahead · station paused",
         "building ahead · waiting for listeners",
         "healthy Resume sent anything other than one normal /api/resume request",

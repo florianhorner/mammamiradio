@@ -75,6 +75,8 @@ def _readiness_status(kind: str, entry: SourceReadinessEntry) -> str:
     if entry.on_air:
         return "on_air"
     if kind == "recovery":
+        if entry.bundled is None and not entry.configured:
+            return "configured_unchecked"
         return "cover_only" if entry.bundled or entry.configured else "not_bundled"
     if kind == "demo" and entry.bundled is False:
         return "not_bundled"
@@ -103,6 +105,10 @@ def _readiness_detail(kind: str, status: str, entry: SourceReadinessEntry) -> st
         "cover_only": "Available only to keep the stream audible while music recovers.",
     }
     detail = details[status]
+    if kind == "recovery" and status == "configured_unchecked":
+        return "Backup audio has not been checked yet."
+    if kind == "recovery" and status == "not_bundled":
+        return "No verified backup audio is available in this installation."
     if kind == "recovery" and status == "on_air":
         return "Recovery cover is on air; this proves transport, not a healthy music source."
     if status == "unavailable" and entry.failure:

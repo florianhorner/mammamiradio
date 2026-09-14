@@ -52,16 +52,23 @@ seconds. Real process-start and first-byte delivery remain owned by
 
 ## Language policy
 
-The Italian/English mix is intentional. Super Italian Mode is a personality
-dial, not a blanket translation switch.
+The Italian/English mix is intentional. Super Italian Mode also controls the
+language of the listener's explanations and utility copy.
 
-- Headlines, section names, and brand idioms remain Italian in both modes.
+- Section names and short brand idioms retain Italian atmosphere in both modes.
+- Hero and About explanations are English by default, Italian with Super Italian
+  enabled. Optional `[brand]` `tagline_en` and `about_en` provide English versions;
+  existing custom copy remains the fallback when these are absent.
 - Buttons, placeholders, validation, and dynamic utility labels come from
   `mammamiradio.web.ui_copy` and follow the active mode.
 - Under the default English page language, persistent Italian phrases carry
   `lang="it"` on the nearest useful element so assistive technology can switch
   pronunciation without changing the visual copy.
 - The admin remains English-first and is outside this listener contract.
+
+Dedication receipts acknowledge receipt without promising a broadcast time.
+The current-track credits link appears only with attribution data; the footer
+keeps the included collection accessible when the current song has none.
 
 Every new `ui_copy` key must exist in both `en` and `it`.
 
