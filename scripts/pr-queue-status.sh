@@ -224,7 +224,6 @@ printf '%s' "$prs" | jq -c 'sort_by(.number)[]' | while IFS= read -r pr; do
   title="$(printf '%s' "$pr" | jq -r '.title')"
   branch="$(printf '%s' "$pr" | jq -r '.headRefName')"
   head="$(printf '%s' "$pr" | jq -r '.headRefOid')"
-  base="$(printf '%s' "$pr" | jq -r '.baseRefOid')"
   merge_state="$(printf '%s' "$pr" | jq -r '.mergeStateStatus')"
   is_draft="$(printf '%s' "$pr" | jq -r '.isDraft')"
   url="$(printf '%s' "$pr" | jq -r '.url')"

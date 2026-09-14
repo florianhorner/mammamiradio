@@ -96,7 +96,7 @@ EDGE_SELECT_LIB="$SCRIPT_DIR/edge-select.sh"
 # threads, here is the first") with "waiting on something".
 classify_pr() {
   local pr="$1" head="$2" base="$3" merge_state="$4" is_draft="$5" held="$6" skipped="$7"
-  local gate_out last_push last_push_epoch
+  local gate_out last_push
 
   if [ "$is_draft" = "true" ]; then
     printf 'OPEN\tdraft — not a landing candidate\n'; return
