@@ -8,7 +8,7 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -180,6 +180,30 @@ def test_scan_keeps_file_when_ffprobe_is_unavailable(tmp_path):
     assert result.complete is True
     assert result.tracks[0].artist == ""
     assert result.tracks[0].title == "No Tags Here"
+
+
+def test_scan_reaps_failed_probe_and_retries_metadata_on_next_scan(tmp_path):
+    path = tmp_path / "Filename Title.mp3"
+    path.write_bytes(b"audio")
+    process = MagicMock()
+    process.__enter__.return_value = process
+    process.stdout.read.side_effect = OSError("probe pipe failed")
+    with patch.object(local_library_module.subprocess, "Popen", return_value=process):
+        failed_probe = scan_local_library(_config(tmp_path))
+
+    assert failed_probe.complete
+    assert failed_probe.tracks[0].title == "Filename Title"
+    process.kill.assert_called_once()
+    process.wait.assert_called_once()
+
+    with patch.object(
+        local_library_module.subprocess,
+        "Popen",
+        side_effect=_probe_popen({"format": {"tags": {"title": "Recovered Title"}}}),
+    ) as retry:
+        recovered = scan_local_library(_config(tmp_path))
+    retry.assert_called_once()
+    assert recovered.tracks[0].title == "Recovered Title"
 
 
 @pytest.mark.parametrize(

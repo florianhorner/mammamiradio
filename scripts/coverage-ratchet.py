@@ -9,18 +9,20 @@ Three modes:
 The aggregate floor lives in pyproject.toml [tool.coverage.report] fail_under.
 Per-module floors live in .coverage-floors.json.
 
-This script reads coverage JSON output, so run pytest with:
-  pytest --cov=mammamiradio --cov-report=json
+This script runs pytest and reads its terminal module percentages and raw JSON
+aggregate. Saved ratchet snapshots can also be consumed with COVERAGE_RATCHET_INPUT.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 FLOORS_FILE = Path(".coverage-floors.json")
 PYPROJECT = Path("pyproject.toml")
@@ -65,33 +67,39 @@ def xdist_args() -> list[str]:
 
 
 def run_coverage() -> tuple[dict[str, int], int]:
-    """Run pytest with coverage and parse the term output for per-module percentages.
+    """Keep rounded module floors, but never round up the aggregate threshold.
 
-    Returns (module_coverages, total_pct). Uses the term-missing output which
-    matches what `fail_under` checks — the JSON report computes branch coverage
-    differently for small files and causes false regressions.
+    pytest-cov enforces fail_under against the raw total, not the rounded TOTAL
+    display. Floor the raw JSON total so a 92.62% run cannot promote a 93% gate.
     """
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/",
-            "--cov=mammamiradio",
-            "--cov-report=term-missing",
-            "-q",
-            *xdist_args(),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    with TemporaryDirectory(prefix="coverage-ratchet-") as directory:
+        report = Path(directory) / "coverage.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/",
+                "--cov=mammamiradio",
+                "--cov-report=term-missing",
+                f"--cov-report=json:{report}",
+                "-q",
+                *xdist_args(),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            raw_total = json.loads(report.read_text())["totals"]["percent_covered"]
+            if type(raw_total) not in (int, float) or not math.isfinite(raw_total) or not 0 <= raw_total <= 100:
+                raise ValueError(f"Invalid raw coverage total: {raw_total!r}")
+            total_pct = math.floor(raw_total)
     # Print output so CI shows it
     print(result.stdout)
     if result.stderr:
         print(result.stderr, file=sys.stderr)
 
     modules: dict[str, int] = {}
-    total_pct = 0
 
     for line in result.stdout.splitlines():
         # Match lines like: mammamiradio/core/config.py   224  25  72  13   87%   ...
@@ -103,11 +111,6 @@ def run_coverage() -> tuple[dict[str, int], int]:
             module = filepath.replace("/", ".").removesuffix(".py")
             modules[module] = pct
             continue
-
-        # Match TOTAL line
-        total_match = re.match(r"^TOTAL\s+.*\s+(\d+)%", line)
-        if total_match:
-            total_pct = int(total_match.group(1))
 
     if result.returncode != 0:
         print(
