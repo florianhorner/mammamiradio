@@ -311,8 +311,17 @@ hostAudio.addEventListener("waiting", () => {
   gateLabel.textContent = "Tuning…";
 });
 hostAudio.addEventListener("playing", () => {
-  if (body.dataset.audio === "loading") body.dataset.audio = "";
-  if (body.dataset.phase === "onair") gateLabel.textContent = "On air";
+  // Clear stale loading/failure feedback once playback is real. Unheard
+  // retries use tuneIn() and wait for the cue; already-heard replays keep
+  // their revealed view.
+  body.dataset.audio = "";
+  audioTrouble.hidden = true;
+  if (body.dataset.phase === "onair") {
+    gateLabel.textContent = "On air";
+  } else if (body.dataset.phase === "revealed") {
+    gateLabel.textContent = "That was your house";
+    hostQuote.hidden = false;
+  }
 });
 
 // Where the mobile experience lives or dies: on a narrow viewport the panels
@@ -386,6 +395,8 @@ scenarioButtons.forEach((button) => {
 });
 speakButton.addEventListener("click", () => {
   if (isSpeaking) { stopSpeech(); return; }
+  // An unheard retry must reach the cue before it counts as a played moment.
+  if (!playedScenarios.has(activeScenario)) { tuneIn(); return; }
   playSegment(activeScenario);
 });
 initWaveforms();

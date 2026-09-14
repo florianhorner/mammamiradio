@@ -268,22 +268,33 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     rendered_first_listen = " ".join(first_listen.split())
     lowered_first_listen = rendered_first_listen.lower()
 
-    stream_proof = first_listen.index("`/stream`")
+    stream_proof = first_listen.index("`/stream?first_listen=1`")
     human_confirmation = first_listen.index("**I hear you**")
     privacy_choice = first_listen.index("**Keep Home private**")
     assert stream_proof < human_confirmation < privacy_choice
+    assert "**Play my station**" in first_listen
+    assert "**No sound yet**" in first_listen
+    assert "**Finish with Home private**" in first_listen
+    assert "**Add live host writing**" in first_listen
+    assert "about 15 seconds" in first_listen
+    assert "Start sound check" not in first_listen
+    assert "Yes, I hear it" not in first_listen
     assert "current device" in lowered_first_listen or "device in front of you" in lowered_first_listen
     assert any(route in first_listen for route in ("Bluetooth", "AirPlay"))
-    assert "**See what the hosts would receive**" in first_listen
-    assert "**Let Marco and Giulia use these details**" in first_listen
+    assert "**See what the hosts would receive**" in rendered_first_listen
+    assert "**Let Marco and Giulia use these details**" in rendered_first_listen
+    assert "**Let the hosts use daylight only**" in rendered_first_listen
+    assert "only generic daylight and no usable weather" in rendered_first_listen
     assert "No HACS integration" in first_listen
 
     admin_default = first_listen.index("producer desk")
     admin_route = first_listen.index("`/admin`", admin_default)
     listener_seam = first_listen.index("`/listen` station page")
     assert admin_default < admin_route < listener_seam
-    assert "**Open full listener**" in first_listen
-    assert "**Listen** action" in first_listen
+    assert "**Listen to the station**" in first_listen
+    assert "**Open station controls**" in first_listen
+    assert "Open full listener" not in first_listen
+    assert "preserves the audio already playing" in rendered_first_listen
 
     assert "This integration is optional" in doc
     assert "First Listen flow, `/listen` page, and `/stream` work without HACS" in rendered_doc
@@ -305,8 +316,39 @@ def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
     assert "offline, attributed twelve-track starter collection" in rendered
     assert "no provider account or network music source is required" in rendered
     assert "**Host home context** choice is omitted and remains off" in rendered
+    assert "MAMMAMIRADIO_HA_CONTEXT_ENABLED=true" in readme
     assert "Previewing does not publish the snapshot into host scripts or send it to an AI provider" in rendered
-    assert "### Check the app (operators)" in readme
+    assert "spoken text also goes to the configured voice service or Edge" in rendered
+    assert "no account system, central service, or project-operated analytics upload" in rendered
+    assert "Edge is keyless but still online" in rendered
+    assert "If you explicitly choose a Home Assistant speaker" in rendered
+    assert "v3 is not released yet" in rendered
+    assert "## Operator checks" in readme
+
+
+def test_readme_separates_italian_hosts_from_the_default_broadcast_language() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    opening = " ".join(readme.split("## ▶", 1)[0].split())
+
+    assert "two Italian hosts" in opening
+    assert "mostly in English" in opening
+    assert "Italian radio show" not in opening
+
+
+def test_readme_preserves_existing_home_use_alongside_fresh_install_privacy() -> None:
+    """Keep the author's reported use, demo fixtures, and new-install grants distinct."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Why it feels like radio", 1)[1].split("\n## ", 1)[0]
+    rendered = " ".join(section.split())
+
+    assert "I chose to share those details with the station" in rendered
+    assert "public demos use invented data" in rendered
+    assert "Existing home-aware stations already use broader household context" in rendered
+    assert "Home context off under the default settings" in rendered
+    assert "one unambiguous weather source" in rendered
+    assert "temperature rounded to five-degree Celsius bands" in rendered
+    assert "Home Profile update will add per-category controls" in rendered
+    assert "Household-aware banter on existing home-aware stations" in readme
 
 
 def test_optional_ha_playback_docs_keep_the_frozen_media_source_way_out() -> None:
