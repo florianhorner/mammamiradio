@@ -8,14 +8,13 @@ name: land-queue
 # of this phase is to compare its choices against the human landing seat's
 # actual scripts/land-pr.sh choices for a week before anything is automated.
 #
-# Same staging, and the same reason, as preship-evidence.yml: observe the real
-# behaviour before it blocks or acts.
+# Observe the real behaviour before this queue blocks or acts.
 #
 # What flipping this to LIVE requires (not a default, an explicit decision):
 #   1. A GitHub App installed on this repo with contents:write +
 #      pull-requests:write, and its credentials in Actions secrets. GITHUB_TOKEN
 #      is NOT sufficient: commits it pushes do not trigger `push`/`pull_request`
-#      workflows, so a reattest commit pushed with it would land with no CI and
+#      workflows, so an integration commit pushed with it would land with no CI and
 #      the queue would arm a head no check ever ran against.
 #   2. A `v*` tag-protection ruleset, so the App cannot cut a stable release.
 #   3. Settling whether `UNSTABLE` is landable here — that reads "required checks
@@ -55,10 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # The evidence gate hashes the recursive git tree of the PR head and
-          # compares it against receipts pinned to older commits; a shallow
-          # clone cannot resolve those objects. This also fetches origin/main,
-          # so the edge lane needs no separate fetch.
+          # Resolve PR/base ancestry and give the edge lane current origin/main.
           fetch-depth: 0
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
