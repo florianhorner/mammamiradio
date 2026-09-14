@@ -20,25 +20,14 @@ This file supplements the global instructions for the `mammamiradio` repository.
   or attach its household/cloud/MQTT devices without explicit authorization in
   the current message. Keep lab state and credentials under gitignored
   `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
-- Before opening any PR (ANY runtime — Claude, Codex, Cursor): commit and
-  review the implementation, run `scripts/emit-review-evidence.sh`, and commit
-  the immutable receipt it writes under `proof/preship-reviews/v2/`. Integrating
-  the base locally (`git merge origin/main`) does not burn that receipt:
-  verification accepts it when HEAD is exactly the reviewed content cleanly
-  merged with a landed base, so integrate, push, and land. Any other change —
-  a conflict, a hand-edited merge, new work after the review — needs a fresh
-  review and a fresh receipt. `scripts/emit-review-evidence.sh --reattest`
-  applies the same rule and is optional; run it when you want the branch's
-  evidence to name the integrated content, and commit what it changed (the
-  derived receipt plus the superseded branch receipts it removes).
-  Receipts are content-addressed additions, so parallel PRs never conflict on
-  evidence (the legacy fixed-name `proof/preship-review.json` is retired). CI
-  checks the receipt from trusted base code and remains report-only during
-  migration. V2 is process evidence for trusted repository writers, not a
-  signed attestation: CI cannot retrieve the local ledger behind its source
-  hash. The report-only `pull_request` workflow is also PR-controlled; move
-  orchestration to a base-owned exact-head control plane before making the
-  result required.
+- Open PRs through `/ship` and review the implementation (adversarial,
+  test-coverage, and docs/config-consistency) before opening. Review changed
+  code again after fixes or conflict resolution. Local review-ledger entries
+  and committed v2 review receipts are no longer PR or landing admission gates.
+  Historical receipts under `proof/preship-reviews/v2/` and their standalone
+  verifier remain readable; do not emit or refresh them for ordinary PRs.
+  This retires automatic content-binding of the local review record, not code
+  review, required CI, branch freshness, bot-thread or release/HA gates.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, present real alternatives and their trade-offs, then

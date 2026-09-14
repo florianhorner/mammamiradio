@@ -272,8 +272,8 @@ add-on builds went green. It holds no write permission at all.
 
 It exists to be compared. Before any of this is automated, its choices need to
 sit next to the landing seat's actual `scripts/land-pr.sh` choices for long
-enough to trust them — the same staging `preship-evidence.yml` used before the
-pre-ship evidence check was allowed to matter.
+enough to trust them. Review receipts are retired from admission; this queue
+remains report-only and does not gain merge authority.
 
 Read it yourself any time:
 
@@ -318,7 +318,6 @@ hands entirely and stalls the head, for when you mean to land that one by seat.
 | `READY_BEHIND` | Gates pass but the base moved; needs integrate + push |
 | `CI_PENDING` | A merge state GitHub has not settled: required checks, thread resolution, or mergeability not yet computed |
 | `BLOCKED_BOT` | Unresolved Major/Critical/P0/P1 bot thread |
-| `BLOCKED_EVIDENCE` | No committed v2 receipt covers this head |
 | `BLOCKED_CONFLICT` | Merge conflict — the owning workspace resolves it |
 | `BLOCKED_YOU` | `hold` or `manual-land` label |
 | `BLOCKED_HEAD` | Head object could not be fetched; gates cannot be evaluated |
@@ -349,8 +348,8 @@ set of preconditions.
 ## Conflict ownership
 
 - Path A: the source workspace resolves conflicts with `main`, reruns its
-  checks, and refreshes its review evidence — a conflicted resolution needs a
-  fresh squad run, not a reattestation.
+  checks, and re-reviews changed code after conflict resolution. The owning
+  agent handles waits and feedback; ordinary PRs need no review-receipt refresh.
 - Path B: the train owner stops the intake and returns semantic conflicts to
   the source workspace with the current train SHA. The worker resolves against
   that SHA, records it as the new base, reruns checks, and submits a new

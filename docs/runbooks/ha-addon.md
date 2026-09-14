@@ -32,7 +32,7 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **The cut window.** Between the cut merge and the second `promote` job, `main` advertises a version whose image is not published yet. A fresh install of the stable add-on fails and rolls back, and an update fails to download. A station already playing keeps playing, because the Supervisor pulls the new image before it stops the old container.
 
-The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). For recovery, prepare `git revert --no-commit <cut-sha>`, restore the cut's review receipt directory, then commit and land the complete revert before debugging. See "Cutting a stable release" below for the commands.
+The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). For recovery, prepare `git revert --no-commit <cut-sha>`, then commit and land the complete revert before debugging. See "Cutting a stable release" below for the commands.
 
 To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily. `dependabot-automerge.yml` reads current `main` on Dependabot PR events, config.yaml pushes to main, hourly, and on demand. A missing image disables auto-merge on eligible Dependabot PRs and adds `cut-window-hold`; a failed label write fails the run. An unreachable registry leaves auto-merge unchanged. Arming requires verified patch/minor metadata, a matching PR head, a current `main` check, and an active workflow. The sweep only disarms. After publication, request `@dependabot rebase` from a maintainer account to trigger a fresh PR event, or use the landing workflow. Major updates need manual landing. Label events can re-arm a PR you disarmed by hand.
 
@@ -331,17 +331,13 @@ had to be reverted the same night.
 
 **If the release fails, revert first, debug second.** Any failure in `addon-release.yml`
 leaves the window open indefinitely. Prepare the complete revert with
-`git revert --no-commit <cut-sha>`, restore its review receipt as described below,
-then commit and land it before investigating. A stuck window breaks new installs.
+`git revert --no-commit <cut-sha>`, then commit and land it before investigating. A stuck window breaks new installs.
 
 Revert the whole cut commit, not just the version files. The cut also folded both
 changelogs, so a version-only revert leaves the ha-addon CHANGELOG head at the unreleased
 number: `check-changelog-sync.sh` then refuses the commit locally, and `pre-release-check.sh`
-fails the PR in CI. The cut's receipt directory must survive the revert: the cut committed a review receipt
-under `proof/preship-reviews/v2/<hash>/`, and the evidence checker refuses a PR that deletes
-a base receipt. After `git revert --no-commit <cut-sha>`, run
-`git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit. The 3.0.0 revert
-(#1088) is the worked example.
+fails the PR in CI. Review-receipt admission is retired; receipt restoration is no longer required.
+The 3.0.0 revert (#1088) records the former receipt-preserving process.
 
 **Never tag the `chore(edge)` metadata commit** — `addon-build.yml` skips those, so it has
 no `:sha` image and pre-flight will reject the tag.
@@ -745,15 +741,11 @@ gates" (single source of truth). The short version:
 
 - `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
   review time) until Florian gives the merge signal.
-- On the signal, run `scripts/land-pr.sh <PR#>`. It verifies committed v2
-  pre-ship evidence on the PR head (portable — works from cloud agents once
-  the receipt is on the branch); a current local gstack ledger supplements that
-  proof and is required if the evidence check is explicitly skipped. It blocks
+- On the signal, run `scripts/land-pr.sh <PR#>`. No review receipt or local review ledger is required. It blocks
   unresolved current Major/Critical/P0/P1 bot threads and fails closed when
   thread data cannot be read. A behind branch is not changed from the landing
   seat: return to its feature workspace, merge `origin/main` and push, then
-  retry after CI. A clean integrate keeps the existing receipt valid, so no
-  reattest or receipt-swap commit is needed. For an up-to-date head it arms
+  retry after CI and re-review of changed code. For an up-to-date head it arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified. Stable-version changes also require the
   read-only Dependabot freeze admission described in "The cut window".
@@ -793,7 +785,7 @@ Before merging ANY change that touches addon files:
 - [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —
       `scripts/check-merge-gate.sh` passes if anything about merging looks off
 
-**After merging a cut commit**, follow "Cutting a stable release" above. Tag the cut commit itself. If the release workflow fails, prepare `git revert --no-commit <cut-sha>`, restore its review receipt directory, then commit and land the whole revert using the commands above.
+**After merging a cut commit**, follow "Cutting a stable release" above. Tag the cut commit itself. If the release workflow fails, prepare `git revert --no-commit <cut-sha>`, then commit and land the whole revert using the commands above.
 
 ## Release invariants gate (2026-04-27 onward)
 
@@ -946,13 +938,10 @@ rolls back; an update fails to download but leaves a playing station alone.
 - Or by hand: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:VERSION`
 - **Release mid-flight?** Wait for `addon-release.yml` to finish promoting *both*
   architectures, then re-check.
-- **Release failed or abandoned?** Prepare `git revert --no-commit <cut-sha>`, restore
-  its review receipt, then commit and land the revert before debugging.
+- **Release failed or abandoned?** Prepare `git revert --no-commit <cut-sha>`, then commit and land the revert before debugging.
   Revert the commit rather than the version files alone: the cut folded both changelogs
   too, and a partial revert is refused by `check-changelog-sync.sh` and `pre-release-check.sh`.
-  Keep the cut's review receipt directory in the revert (`git revert --no-commit <cut-sha>`,
-  then `git checkout <cut-sha> -- proof/preship-reviews/v2/<hash>/`, then commit; see
-  "If the release fails" above); the evidence checker refuses a PR that deletes a base receipt.
+  No review-receipt restore step is required; see "If the release fails" above.
 - `advertised-version.yml` raises a flag daily if this state persists.
 
 ## Hardcoded values that must stay in sync
