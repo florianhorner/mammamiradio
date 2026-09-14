@@ -212,9 +212,336 @@ async (page) => {
     };
   });
   assert(
-    localQueueRow.title === 'Salvatore On Everything' && localQueueRow.source === 'local',
+    localQueueRow.title === 'Salvatore On Everything' && localQueueRow.source === 'Local music',
     `local queue metadata was not rendered title-only: ${JSON.stringify(localQueueRow)}`,
   );
+
+  // Scaletta source mapping matrix: display labels are deliberately independent
+  // from the rendered_queue action contract.
+  async function exerciseScalettaPresentation() {
+    const scalettaState = {
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    };
+    const renderRows = async (upcoming) => page.evaluate((state) => {
+      renderProgramme(state);
+      return [...document.querySelectorAll('#programmeList tbody tr')].map((row) => {
+        const titleCell = row.cells[2];
+        return {
+          title: titleCell?.childNodes[0]?.textContent.trim() || '',
+          subtitle: titleCell?.querySelector('.prog-subtitle')?.textContent.trim() || '',
+          source: row.cells[3]?.textContent.trim() || '',
+          actionId: row.querySelector('[data-queue-remove-id]')?.getAttribute('data-queue-remove-id') || null,
+          playlistLink: row.getAttribute('data-playlist-link'),
+          playlistIndex: row.getAttribute('data-playlist-index'),
+          spotifyId: row.getAttribute('data-spotify-id'),
+          className: row.className,
+          text: row.textContent.trim(),
+        };
+      });
+    }, { ...scalettaState, upcoming });
+
+    const sourceRows = await renderRows([
+      { id: 'source-local', type: 'music', label: 'Local Artist – Local Title', source_kind: ' LOCAL ', source: 'rendered_queue', playlist_index: 4, duration_ms: 240000 },
+      { id: 'source-jamendo', type: 'music', label: 'Jamendo Artist – Jamendo Title', source_kind: 'local', metadata: { source_kind: '  JAmEnDo  ' }, source: 'rendered_queue', spotify_id: 'spotify-jamendo', duration_ms: 240000 },
+      { id: 'source-starter', type: 'music', label: 'Starter Artist – Starter Title', source_kind: ' starter ', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-youtube', type: 'music', label: 'Download Artist – Download Title', source_kind: ' YOUTUBE ', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-external', type: 'music', label: 'External Artist – External Title', metadata: { source_kind: 'external' }, source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-empty-metadata', type: 'music', label: 'Fallback Artist – Fallback Title', source_kind: 'local', metadata: { source_kind: '' }, source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-fallback-music', type: 'music', label: 'Fallback Music Artist – Fallback Music Title', source_kind: 'mystery', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-planned', type: 'music', label: 'Planned Artist – Planned Title', source_kind: 'mystery', source: 'forecast', predicted: true, duration_ms: 240000 },
+    ]);
+    assert(
+      sourceRows.length === 8
+        && sourceRows.map(({ source }) => source).join('|') === 'Local music|Jamendo|Starter crate|Download|Download|Local music|Music|Planned',
+      `Scaletta source mapping matrix drifted: ${JSON.stringify(sourceRows)}`,
+    );
+    assert(
+      sourceRows.slice(0, 7).every(({ actionId }) => actionId)
+        && !sourceRows[7].actionId && sourceRows[7].className.includes('predicted')
+        && sourceRows[0].actionId === 'source-local'
+        && sourceRows[0].playlistLink === 'true' && sourceRows[0].playlistIndex === '4'
+        && sourceRows[1].playlistLink === 'true' && sourceRows[1].spotifyId === 'spotify-jamendo',
+      `Scaletta actionability or stable playlist links drifted: ${JSON.stringify(sourceRows)}`,
+    );
+
+    const sourceCompatibilityRows = await renderRows([
+      { id: 'source-download', type: 'music', label: 'Download Artist – Download Title', source_kind: ' DOWNLOAD ', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-empty-kind', type: 'music', label: 'Empty Artist – Empty Title', source_kind: '', source: 'rendered_queue', duration_ms: 240000 },
+    ]);
+    assert(
+      sourceCompatibilityRows.length === 2
+        && sourceCompatibilityRows.map(({ source }) => source).join('|') === 'Download|Music',
+      `Scaletta compatibility source mapping drifted: ${JSON.stringify(sourceCompatibilityRows)}`,
+    );
+
+    const sourceFallbackRows = await renderRows([
+      { id: 'source-studio', type: 'banter', label: 'Host break', source_kind: 'mystery', source: 'rendered_queue' },
+      { id: 'source-planned-studio', type: 'banter', label: 'Forecast break', source_kind: 'mystery', source: 'forecast', predicted: true },
+      { id: 'source-unsafe-kind', type: 'music', label: 'Unsafe Artist – Unsafe Title', source_kind: '<img src=x>', source: 'rendered_queue' },
+      { id: 'source-constructor-kind', type: 'music', label: 'Constructor Artist – Constructor Title', source_kind: 'constructor', source: 'rendered_queue' },
+      { id: 'source-known-nonmusic', type: 'ad', label: 'Sponsor break', metadata: { source_kind: ' JAMENDO ' }, source: 'forecast', predicted: true },
+      { id: 'source-unsafe-action', type: 'music', label: 'No action Artist – No action Title', source_kind: 'mystery', source: '<img src=x>', predicted: true },
+      { id: 'source-demo-fallback', type: 'music', label: 'Demo Artist – Demo Title', source_kind: 'demo', source: 'rendered_queue' },
+      { id: 'source-classic-fallback', type: 'music', label: 'Classic Artist – Classic Title', source_kind: 'classic', source: 'forecast', predicted: true },
+    ]);
+    const sourceMarkup = await page.evaluate(() => document.querySelector('#programmeList')?.innerHTML || '');
+    const sourceImageCount = await page.evaluate(() => document.querySelectorAll('#programmeList img').length);
+    assert(
+      sourceFallbackRows.map(({ source }) => source).join('|') === 'Studio|Planned|Music|Music|Planned|Planned|Music|Planned'
+        && !sourceMarkup.includes('<img') && sourceImageCount === 0,
+      `unknown or unsafe source values escaped their safe fallback: ${JSON.stringify({ sourceFallbackRows, sourceMarkup })}`,
+    );
+
+    const artistRows = await renderRows([
+      { id: 'artist-em-dash', type: 'music', label: 'Em Artist — Em Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-en-dash', type: 'music', label: 'En Artist – En Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-hyphen', type: 'music', label: 'Hyphen Artist - Hyphen Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-metadata', type: 'music', label: 'Ignored label', metadata: { title_only: 'Metadata Title', artist: 'Metadata Artist' }, source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-unknown', type: 'music', label: 'Unknown – Local Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-html', type: 'music', label: '<img src=x> – <b>Unsafe Title</b>', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-later', type: 'music', label: 'Later Artist – Later Title', source_kind: 'local', source: 'rendered_queue' },
+    ]);
+    assert(
+      artistRows.length === 7
+        && artistRows[0].title === 'Em Title' && artistRows[0].subtitle === 'Em Artist'
+        && artistRows[1].title === 'En Title' && artistRows[1].subtitle === 'En Artist'
+        && artistRows[2].title === 'Hyphen Title' && artistRows[2].subtitle === 'Hyphen Artist'
+        && artistRows[3].title === 'Metadata Title' && artistRows[3].subtitle === 'Metadata Artist'
+        && artistRows[4].title === 'Local Title' && artistRows[4].subtitle === ''
+        && artistRows[5].title === '<b>Unsafe Title</b>' && artistRows[5].subtitle === '<img src=x>'
+        && artistRows[6].subtitle === 'Later Artist'
+        && artistRows.every(({ source }) => source === 'Local music'),
+      `artist subtitles stayed visible on later music rows or parsing changed: ${JSON.stringify(artistRows)}`,
+    );
+    const artistMarkup = await page.evaluate(() => document.querySelector('#programmeList')?.innerHTML || '');
+    assert(
+      artistMarkup.includes('&lt;img src=x&gt;') && artistMarkup.includes('&lt;b&gt;Unsafe Title&lt;/b&gt;')
+        && !artistMarkup.includes('<img') && !artistMarkup.includes('<b>'),
+      `music title or artist content was not safely escaped: ${artistMarkup}`,
+    );
+
+    const nonMusicRows = await renderRows([
+      { id: 'nonmusic-banter-next', type: 'banter', label: 'Banter: behind the scenes', metadata: { title: 'Host context' }, source_kind: 'mystery', source: 'rendered_queue' },
+      { id: 'nonmusic-ad-later', type: 'ad', label: 'Ad: Partner +30s', metadata: {}, source_kind: 'mystery', source: 'forecast', predicted: true },
+      { id: 'nonmusic-news-later', type: 'news_flash', label: 'News brief', metadata: { category: 'world' }, source_kind: 'mystery', source: 'forecast', predicted: true },
+      { id: 'nonmusic-station-id', type: 'station_id', label: 'Station ID', metadata: {}, source_kind: 'mystery', source: 'forecast', predicted: true },
+    ]);
+    const stationCount = (nonMusicRows[3].text.match(/station id/gi) || []).length;
+    assert(
+      nonMusicRows[0].subtitle === 'Host context'
+        && nonMusicRows[1].subtitle === '' && nonMusicRows[2].subtitle === ''
+        && nonMusicRows[3].title === '' && nonMusicRows[3].subtitle === '' && stationCount === 1,
+      `non-music subtitles or Station ID suppression changed: ${JSON.stringify(nonMusicRows)}`,
+    );
+    const nextNewsRows = await renderRows([
+      { id: 'nonmusic-news-next', type: 'news_flash', label: 'News brief', metadata: { category: 'weather' }, source_kind: 'mystery', source: 'rendered_queue' },
+    ]);
+    assert(nextNewsRows[0].subtitle === 'weather', `NEXT news category subtitle changed: ${JSON.stringify(nextNewsRows)}`);
+
+    const cacheResults = await page.evaluate((state) => {
+      const read = () => {
+        const row = document.querySelector('#programmeList tbody tr');
+        return {
+          title: row?.cells[2]?.childNodes[0]?.textContent.trim() || '',
+          subtitle: row?.cells[2]?.querySelector('.prog-subtitle')?.textContent.trim() || '',
+          source: row?.cells[3]?.textContent.trim() || '',
+          duration: row?.cells[4]?.textContent.trim() || '',
+          playlistLink: row?.getAttribute('data-playlist-link') || null,
+          spotifyId: row?.getAttribute('data-spotify-id') || null,
+        };
+      };
+      const pair = (item, update) => {
+        const next = { ...state, upcoming: [item] };
+        renderProgramme(next);
+        update(item);
+        renderProgramme(next);
+        return read();
+      };
+      const titleItem = { id: 'cache-title', type: 'music', label: 'Old Artist – Old Title', metadata: { title_only: 'Old Title', artist: 'Old Artist', source_kind: 'local' }, source_kind: 'local', source: 'rendered_queue' };
+      const artistItem = { id: 'cache-artist', type: 'music', label: 'Old Artist – Old Title', metadata: { title_only: 'Old Title', artist: 'Old Artist', source_kind: 'local' }, source_kind: 'local', source: 'rendered_queue' };
+      const sourceItem = { id: 'cache-source', type: 'music', label: 'Source Artist – Source Title', metadata: { source_kind: 'local', artist: 'Source Artist' }, source_kind: 'local', source: 'rendered_queue' };
+      const linkItem = { id: 'cache-link', type: 'music', label: 'Link Artist – Link Title', source_kind: 'local', source: 'rendered_queue', spotify_id: 'old-spotify' };
+      const durationItem = { id: 'cache-duration', type: 'music', label: 'Duration Artist – Duration Title', source_kind: 'local', source: 'rendered_queue', duration_sec: 60 };
+      const titleNonMusicItem = { id: 'cache-nonmusic-title', type: 'banter', label: 'Banter: context', metadata: { title: 'Old context' }, source: 'rendered_queue' };
+      const categoryItem = { id: 'cache-category', type: 'news_flash', label: 'News brief', metadata: { category: 'old category' }, source: 'rendered_queue' };
+      return {
+        title: pair(titleItem, (item) => { item.metadata.title_only = 'Updated title'; }),
+        artist: pair(artistItem, (item) => { item.metadata.artist = 'Updated artist'; }),
+        source: pair(sourceItem, (item) => { item.metadata.source_kind = 'jamendo'; }),
+        link: pair(linkItem, (item) => { item.spotify_id = 'new-spotify'; }),
+        duration: pair(durationItem, (item) => { item.duration_sec = 120; }),
+        nonMusicTitle: pair(titleNonMusicItem, (item) => { item.metadata.title = 'Updated context'; }),
+        category: pair(categoryItem, (item) => { item.metadata.category = 'updated category'; }),
+      };
+    }, scalettaState);
+    assert(
+      cacheResults.title.title === 'Updated title'
+        && cacheResults.artist.subtitle === 'Updated artist'
+        && cacheResults.source.source === 'Jamendo'
+        && cacheResults.link.playlistLink === 'true' && cacheResults.link.spotifyId === 'new-spotify'
+        && cacheResults.duration.duration === '2:00'
+        && cacheResults.nonMusicTitle.subtitle === 'Updated context'
+        && cacheResults.category.subtitle === 'updated category',
+      `same-ID metadata update did not invalidate the render cache: ${JSON.stringify(cacheResults)}`,
+    );
+
+    const truncationAndFilter = await page.evaluate((state) => {
+      const rowIds = () => [...document.querySelectorAll('#programmeList tbody tr:not(.prog-more)')]
+        .map((row) => row.querySelector('[data-queue-remove-id]')?.getAttribute('data-queue-remove-id') || row.cells[2]?.textContent.trim() || '');
+      _programmeFilter = 'all';
+      const ten = Array.from({ length: 10 }, (_, index) => ({
+        id: `truncation-${index}`,
+        type: 'music',
+        label: `Artist ${index} – Title ${index}`,
+        source_kind: 'local',
+        source: 'rendered_queue',
+      }));
+      renderProgramme({ ...state, upcoming: ten });
+      const truncation = {
+        count: document.querySelectorAll('#programmeList tbody tr:not(.prog-more)').length,
+        ids: rowIds(),
+        more: document.querySelector('#programmeList .prog-more')?.textContent.trim() || '',
+      };
+      const mixed = [
+        { id: 'filter-banter', type: 'banter', label: 'Banter: opener', source: 'rendered_queue' },
+        { id: 'filter-music-1', type: 'music', label: 'Artist one – Title one', source_kind: 'local', source: 'rendered_queue' },
+        { id: 'filter-ad', type: 'ad', label: 'Ad: partner +30s', source: 'forecast', predicted: true },
+        { id: 'filter-music-2', type: 'music', label: 'Artist two – Title two', source_kind: 'local', source: 'rendered_queue' },
+        { id: 'filter-music-3', type: 'music', label: 'Artist three – Title three', source_kind: 'local', source: 'rendered_queue' },
+      ];
+      _programmeFilter = 'music';
+      renderProgramme({ ...state, upcoming: mixed });
+      const filteredRows = [...document.querySelectorAll('#programmeList tbody tr:not(.prog-more)')];
+      const filtered = {
+        count: filteredRows.length,
+        ids: rowIds(),
+        firstRelativeLabel: filteredRows[0]?.cells[0]?.textContent.trim() || '',
+        more: document.querySelector('#programmeList .prog-more')?.textContent.trim() || '',
+      };
+      _programmeFilter = 'all';
+      renderProgramme({ ...state, upcoming: [] });
+      return { truncation, filtered };
+    }, scalettaState);
+    assert(
+      truncationAndFilter.truncation.count === 8
+        && truncationAndFilter.truncation.ids.join('|') === 'truncation-0|truncation-1|truncation-2|truncation-3|truncation-4|truncation-5|truncation-6|truncation-7'
+        && truncationAndFilter.truncation.more === '+ 2 more segments'
+        && truncationAndFilter.filtered.count === 3
+        && truncationAndFilter.filtered.ids.join('|') === 'filter-music-1|filter-music-2|filter-music-3'
+        && truncationAndFilter.filtered.firstRelativeLabel === 'after'
+        && truncationAndFilter.filtered.more === '',
+      `Scaletta filtering or <=8 truncation changed: ${JSON.stringify(truncationAndFilter)}`,
+    );
+
+    const geometryFixture = [
+      { id: 'geometry-long', type: 'music', label: 'An exceptionally long artist name for responsive proof – A deliberately long title that must remain readable without pushing the table wider', source_kind: 'local', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'geometry-second', type: 'music', label: 'Second Artist – Second Title', source_kind: 'jamendo', source: 'rendered_queue', duration_ms: 180000 },
+      { id: 'geometry-planned', type: 'music', label: 'Planned Artist – Planned Title', source_kind: 'mystery', source: 'forecast', predicted: true, duration_ms: 120000 },
+    ];
+    const geometry = [];
+    for (const width of [1280, 1024, 1023, 900, 880, 769, 768, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const metrics = await page.evaluate((state) => {
+        _programmeFilter = 'all';
+        renderProgramme(state);
+        const visible = (element) => {
+          if (!element) return false;
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const table = document.querySelector('#programmeList table');
+        const firstRow = document.querySelector('#programmeList tbody tr:not(.prog-more)');
+        const heads = [...document.querySelectorAll('#programmeList thead th')].map((element) => {
+          const rect = element.getBoundingClientRect();
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const textRect = range.getBoundingClientRect();
+          return { text: element.textContent.trim(), visible: visible(element), left: rect.left, right: rect.right, textLeft: textRect.left, textRight: textRect.right };
+        });
+        const visibleHeads = heads.filter(({ visible: isVisible }) => isVisible);
+        const headingTextFits = visibleHeads.length === 0 || (visibleHeads.length >= 2
+          && visibleHeads[0].textLeft >= visibleHeads[0].left - 1
+          && visibleHeads[0].textRight <= visibleHeads[0].right + 1
+          && visibleHeads[0].textRight <= visibleHeads[1].textLeft + 1);
+        const source = firstRow?.querySelector('td.ho');
+        const duration = firstRow?.querySelector('td.du');
+        const subtitle = firstRow?.querySelector('.prog-subtitle');
+        const actions = [...document.querySelectorAll('#programmeList [data-queue-remove-id]')].map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { visible: visible(element), width: rect.width, height: rect.height };
+        });
+        const firstRowRect = firstRow?.getBoundingClientRect();
+        return {
+          tableDisplay: table ? getComputedStyle(table).display : '',
+          tableWidth: table?.clientWidth || 0,
+          tableScrollWidth: table?.scrollWidth || 0,
+          rowScrollWidth: firstRow?.scrollWidth || 0,
+          rowWidth: firstRow?.clientWidth || 0,
+          headersVisible: visibleHeads,
+          headingTextFits,
+          sourceVisible: visible(source),
+          durationVisible: visible(duration),
+          subtitleVisible: visible(subtitle),
+          subtitleText: subtitle?.textContent.trim() || '',
+          actionGeometry: actions,
+          firstRowInsideViewport: !firstRowRect || (firstRowRect.left >= -0.5 && firstRowRect.right <= innerWidth + 0.5),
+          documentClientWidth: document.documentElement.clientWidth,
+          documentScrollWidth: document.documentElement.scrollWidth,
+        };
+      }, { ...scalettaState, upcoming: geometryFixture });
+      geometry.push({ width, ...metrics });
+      assert(
+        metrics.documentScrollWidth <= metrics.documentClientWidth
+          && metrics.tableScrollWidth <= metrics.tableWidth + 1
+          && metrics.rowScrollWidth <= metrics.rowWidth + 1
+          && metrics.firstRowInsideViewport
+          && metrics.headingTextFits
+          && metrics.subtitleVisible
+          && metrics.subtitleText === 'An exceptionally long artist name for responsive proof'
+          && metrics.actionGeometry.every(({ visible: isVisible, width: controlWidth, height }) => !isVisible || (controlWidth >= 44 && height >= 44)),
+        `${width}px Scaletta geometry or artist visibility regressed: ${JSON.stringify(metrics)}`,
+      );
+      if (width >= 1024) {
+        assert(
+          metrics.headersVisible.length === 6
+            && metrics.sourceVisible && metrics.durationVisible
+            && metrics.headersVisible[0].right <= metrics.headersVisible[1].left + 1,
+          `${width}px Quando overlapped Tipo or a desktop column disappeared: ${JSON.stringify(metrics)}`,
+        );
+      } else if (width >= 881) {
+        assert(
+          metrics.headersVisible.length === 5 && !metrics.sourceVisible && metrics.durationVisible,
+          `${width}px tablet source/duration visibility changed: ${JSON.stringify(metrics)}`,
+        );
+      } else if (width >= 769) {
+        assert(
+          metrics.headersVisible.length === 4 && !metrics.sourceVisible && !metrics.durationVisible,
+          `${width}px narrow-tablet source/duration visibility changed: ${JSON.stringify(metrics)}`,
+        );
+      } else {
+        assert(
+          metrics.tableDisplay === 'block' && metrics.headersVisible.length === 0
+            && metrics.sourceVisible && metrics.durationVisible,
+          `${width}px phone Scaletta card layout changed: ${JSON.stringify(metrics)}`,
+        );
+      }
+    }
+    const screenshotDir = 'tmp/listening-slice-d-qa';
+    // run-code executes in Playwright's VM context, so use its file-writing
+    // API to create the parent directory without relying on Node globals.
+    await page.context().storageState({ path: `${screenshotDir}/.browser-state.json` });
+    for (const width of [1280, 900, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate((state) => renderProgramme(state), { ...scalettaState, upcoming: geometryFixture });
+      await page.screenshot({ path: `${screenshotDir}/slice-d-after-${width}.png`, fullPage: true });
+    }
+    await page.setViewportSize({ width: 1024, height: 900 });
+    return { sourceRows, sourceCompatibilityRows, sourceFallbackRows, artistRows, nonMusicRows, cacheResults, truncationAndFilter, geometry };
+  }
+  const scalettaPresentation = await exerciseScalettaPresentation();
   await exerciseListenerSongFailureRows();
   const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Music','ready','Ready'],['Sources','checking','Checking'],['Hosts','waiting_ai','Waiting for AI'],['Setup','blocked','Blocked'],['AI','not_configured','Optional']].map(([label,status,display_status])=>({label,status,display_status,shape:'BAD'}))}}};
   const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent,name:el.getAttribute('aria-label')}))},setupStatusFixture);
@@ -1926,6 +2253,16 @@ async (page) => {
   // of which are delivered a frame or more after setViewportSize resolves.
   // Sample it without waiting and the read races the write.
   await page.evaluate(() => window.scrollTo(0, 0));
+  // Returning to the top also queues the IntersectionObserver that disarms
+  // the backdrop; existing scroll padding does not prove that callback ran.
+  try {
+    await page.waitForFunction(() => {
+      const deck = document.querySelector('.mmr-deck');
+      return window.scrollY === 0 && deck && !deck.classList.contains('is-pinned');
+    }, null, { timeout: 5000 });
+  } catch (error) {
+    throw new Error('admin-browser-smoke: the deck armed its backdrop at scrollTop 0, where nothing is behind it');
+  }
   try {
     await page.waitForFunction(
       () => getComputedStyle(document.querySelector('.mmr-deck')).position !== 'sticky'
@@ -1937,7 +2274,6 @@ async (page) => {
     throw new Error('admin-browser-smoke: the sticky deck never reserved scroll padding, so keyboard focus lands underneath it');
   }
   const deckAtRest = await page.evaluate(() => {
-    window.scrollTo(0, 0);
     const deck = document.querySelector('.mmr-deck');
     const style = getComputedStyle(deck);
     return {
@@ -1990,7 +2326,10 @@ async (page) => {
 
   await page.evaluate(() => window.scrollTo(0, 0));
   try {
-    await page.waitForFunction(() => !document.querySelector('.mmr-deck')?.classList.contains('is-pinned'), null, { timeout: 5000 });
+    await page.waitForFunction(() => {
+      const deck = document.querySelector('.mmr-deck');
+      return window.scrollY === 0 && deck && !deck.classList.contains('is-pinned');
+    }, null, { timeout: 5000 });
   } catch (error) {
     throw new Error('admin-browser-smoke: returning to the top left the deck backdrop armed over the page atmosphere');
   }
@@ -2089,8 +2428,17 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 61,
+    checks: 87,
     viewports: [320, 375, 414, 600, 768],
+    scaletta: {
+      checks: 26,
+      source_rows: scalettaPresentation.sourceRows.length,
+      compatibility_rows: scalettaPresentation.sourceCompatibilityRows.length,
+      fallback_rows: scalettaPresentation.sourceFallbackRows.length,
+      artist_rows: scalettaPresentation.artistRows.length,
+      geometry_viewports: scalettaPresentation.geometry.map(({ width }) => width),
+      screenshots: [1280, 900, 390].map((width) => `tmp/listening-slice-d-qa/slice-d-after-${width}.png`),
+    },
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,
     blocked_off_origin_requests: [...new Set(blockedOffOriginRequests)],
