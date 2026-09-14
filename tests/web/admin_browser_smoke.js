@@ -19,7 +19,10 @@ async (page) => {
         const title = panel.querySelector('header h2');
         const style = (element) => {
           const css = getComputedStyle(element);
-          return { font: css.fontFamily, size: parseFloat(css.fontSize), italic: css.fontStyle };
+          return {
+            font: css.fontFamily, size: parseFloat(css.fontSize), italic: css.fontStyle,
+            letterSpacing: parseFloat(css.letterSpacing),
+          };
         };
         const fits = (element) => {
           const rect = element.getBoundingClientRect();
@@ -46,6 +49,8 @@ async (page) => {
       `Motore restart copy escaped the utility type scale at ${width}: ${JSON.stringify(metrics)}`);
       assert(metrics.labels.every(({ font }) => font.includes('Outfit')),
         `Motore section labels reverted to diagnostic typography at ${width}`);
+      assert(metrics.labels.every(({ size, letterSpacing }) => Math.abs(letterSpacing - size * 0.18) < 0.01),
+        `Motore section labels lost 0.18em tracking at ${width}: ${JSON.stringify(metrics.labels)}`);
       assert(metrics.title.font.includes('Playfair') && metrics.title.italic === 'italic',
         'Motore lost its established display heading');
       assert(metrics.fits && metrics.touchHeight >= 44 && metrics.healthGap >= 24,

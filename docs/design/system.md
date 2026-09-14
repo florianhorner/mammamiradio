@@ -552,8 +552,9 @@ panel → Sistemi / Runtime / Capacità / Configurazione). Each subsection gets
 one label.
 
 **Motore utility labels:** inside `#drawer-diagnostics`, `.card-label` and
-`.ttl-eyebrow` use Outfit (`--font-body`) with `0.18em` tracking. They retain
-the quiet size, weight, color, and divider treatment above. The restart action
+`.ttl-eyebrow` use Outfit (`--font-body`) with `0.18em` tracking, retaining each
+selector's existing size, weight, and color. Only `.card-label` has the divider
+treatment above; `.ttl-eyebrow` remains unlined. The restart action
 and its settings reassurance share a wrapping row with 13px Outfit copy and
 24px separation before Pipeline. Technical readouts keep JetBrains Mono;
 the Motore heading keeps Playfair italic.
