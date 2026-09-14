@@ -3,11 +3,9 @@
 # RETIRED ADMISSION: no active hook, landing gate, queue, or workflow invokes this.
 # The notes below document its legacy/manual verification semantics.
 #
-# Shared checker for the runtime-independent half of the pre-ship squad gate: the local
-# Claude hook (require-preship-squad.sh) cannot fire in Codex (no hook layer exists
-# there), so CI verifies the content-addressed v2 receipt committed under
-# proof/preship-reviews/v2/ — written by scripts/emit-review-evidence.sh after the squad
-# runs. PR mode binds the new receipt to its reviewed commit and to the PR head's content:
+# Standalone verifier for historical/manual receipt checks. It is intentionally detached
+# from active PR admission. PR mode binds a receipt to its reviewed commit and to PR-head
+# content:
 # by exact digest equality, or, after a clean base integration, by git's own three-way
 # merge proving merge(reviewed, base) is exactly the head content, so integrating main
 # does not burn a still-valid receipt. That second path reads the base as content, so it
@@ -15,7 +13,7 @@
 # fail closed. Main mode finds a surviving receipt matching the landed content by exact
 # digest only. A receipt accepted through the merge witness binds the pre-merge digest,
 # so after the squash main mode finds nothing for it; no workflow or script invokes main
-# mode today, and wiring it up needs a target-bound receipt at landing first.
+# mode today.
 #
 # Honest scope, same words as land-pr.sh: this is a guard for tired humans and parallel
 # agents, not a security boundary. The agent that would skip the squad also writes the
