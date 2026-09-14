@@ -911,6 +911,8 @@ class BrandSection:
     founded: int = 0
     tagline: str = ""
     about: str = ""
+    tagline_en: str = ""
+    about_en: str = ""
     opengraph_subtitle: str = ""
     # Absolute http(s) URL to the station logo, surfaced as the HA media_player
     # entity_picture fallback when a segment has no real cover (voice/ad/idle).
@@ -1566,6 +1568,8 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
         founded=int(brand_raw.get("founded", 0)),
         tagline=brand_raw.get("tagline", ""),
         about=brand_raw.get("about", ""),
+        tagline_en=brand_raw.get("tagline_en", ""),
+        about_en=brand_raw.get("about_en", ""),
         opengraph_subtitle=brand_raw.get("opengraph_subtitle", ""),
         artwork_url=artwork_url,
         hosts=brand_hosts,

@@ -2,6 +2,15 @@
 
 This repo supports three deployment models: Docker container, Home Assistant add-on, and local Python dev.
 
+For local Python, startup settings come from `.env` and `radio.toml`; changes
+take effect after a restart. Host personality controls in Admin are session-only.
+Under `[brand]`, optional `tagline_en` and `about_en` provide the English Player
+hero copy. Super Italian uses `tagline` and `about`; without English variants,
+existing custom copy remains the fallback. Short Italian atmosphere is retained.
+Motore shows the running package version and startup build when available.
+Application output remains in the terminal or Run panel that started the local
+process, container logs for Docker, or the app's Log tab in Home Assistant.
+
 ## What a real deployment needs
 
 - Python 3.11+

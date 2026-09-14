@@ -752,7 +752,8 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
         "statusInline('ready',r.song_track||'ready')",  # no ▶ prefix — ::before adds ✓
         "statusInline('blocked',listenerSongErrorLabel(r.song_error_reason))",
         "statusInline('working','searching…')",
-        "statusInline('working','shoutout')",  # shoutout is pending, not idle
+        "statusInline('working','Waiting for hosts')",
+        "Prepared — airtime unconfirmed",
         "r.status==='source_changed'",
         "Music changed — submit again",
         "Dismissed — resubmit if still wanted",

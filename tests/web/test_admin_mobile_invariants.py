@@ -1411,13 +1411,12 @@ def test_pending_request_strip_keeps_full_border() -> None:
     )
 
 
-def test_scaletta_header_controls_stack_below_title() -> None:
-    css = _admin_css()
-    stacked = _declarations_for_selector(css, ".a-panel header.mmr-panel-head-stacked")
-
-    assert stacked.get("display") == "grid"
-    assert stacked.get("grid-template-columns") == "1fr"
-    assert 'class="mmr-panel-head mmr-panel-head-stacked"' in _read_admin_html()
+def test_scaletta_uses_shared_header_with_controls_in_a_separate_row() -> None:
+    panel = _read_admin_html().split('id="live-queue"', 1)[1].split('id="rotation-pool"', 1)[0]
+    header = panel.split("</header>", 1)[0]
+    assert '<header class="mmr-panel-head">' in header
+    assert "programme-toolbar" not in header
+    assert panel.index("</header>") < panel.index('class="programme-toolbar"')
 
 
 def test_live_console_accent_sits_inside_rounded_border() -> None:

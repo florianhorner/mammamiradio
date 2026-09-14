@@ -104,20 +104,23 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
 
 0. **First Listen** (gated — visible only while required or showing its one-time success)
    — full onboarding takeover. After the success exit, the tab leaves the chrome; repair
-   and replay live in **Motore → Setup** and the setup strip.
-1. **Diretta** — `Modalità live` (Chaos/Festival/Super Italian toggles),
-   `Azioni rapide` (fewer banter / fewer ads / reload / flag, plus a Lancia-red
-   `Purge queue`), `Cadenza` (pacing sliders). The `Azioni immediate` triggers
-   moved up into the console.
-2. **Scaletta** (default tab after onboarding) — forward-only rundown of up to ~8 upcoming items,
+   and replay live in **Motore → Setup** and the setup strip. Leaving a replay
+   restores saved completion without stopping audio.
+1. **Scaletta** (default tab after onboarding) — forward-only rundown of up to ~8 upcoming items,
    each with a compact relative label (`next` / `after` / `later`) + rough duration.
    Pending listener requests sit in a strip at the top and collapse when empty. No
    played history.
+2. **Diretta** — `Modalità live` (Chaos/Festival/Super Italian toggles),
+   `Azioni rapide` (fewer banter / fewer ads / reload / flag, plus a Lancia-red
+   `Purge queue`), `Cadenza` (pacing sliders). The `Azioni immediate` triggers
+   moved up into the console.
 3. **Rotazione** — Hunt-first music library. Record Hunt is the sole primary
    steering control: it takes a plain-language direction, keeps the full rotation
    visible, highlights its favored picks, and leaves every row's `Next` action
-   available. Exact-record search is secondary. Source imports, shuffle, bans,
-   and Clear pool sit in a collapsed **Library tools** disclosure; an empty pool
+   available. The current direction sits above the hunt input. Jamendo settings
+   stay in Rotazione’s **Music source settings**, including when already working.
+   Exact-record search is secondary. Source imports, shuffle, bans,
+   and Clear pool sit in compact rows within **Library tools**; an empty pool
    offers only recovery sources that the current capabilities expose. Row
    checkboxes select songs to ban; the selection is keyed by artist/title and
    survives the 3s status poll (it used to be wiped on every rebuild).

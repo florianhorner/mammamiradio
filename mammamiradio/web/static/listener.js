@@ -286,7 +286,8 @@
   function currentAttribution(np) {
     if (!np || np.type !== 'music') return null;
     const candidate = np.music_attribution || (np.metadata && np.metadata.music_attribution);
-    return candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : null;
+    return candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+      && Object.keys(candidate).length ? candidate : null;
   }
 
   function renderCurrentCredit(np, announce) {
@@ -295,10 +296,9 @@
     container.replaceChildren();
     const inlineTrigger = $('music-credits-inline');
     const isMusic = Boolean(np && np.type === 'music');
-    if (inlineTrigger) inlineTrigger.hidden = !isMusic;
-
     const identity = nowPlayingIdentity(np);
     const attribution = currentAttribution(np);
+    if (inlineTrigger) inlineTrigger.hidden = !attribution;
     const metadata = (np && np.metadata) || {};
     const sourceKind = String(metadata.source_kind || metadata.audio_source || '').toLowerCase();
     const key = JSON.stringify([isMusic, identity.title, identity.artist, attribution]);
@@ -1825,7 +1825,7 @@
         immediateSongTerminal = isSongRequest && _isTerminalSongResolution(d.song_resolution);
         text = isSongRequest
           ? (immediateSongTerminal ? _songTerminalText(d, '') : _songSearchingText())
-          : _t('form_success_shoutout', 'Dedication received! The hosts will read it soon.');
+          : _t('form_success_shoutout', 'Dedication received. It’s waiting for the hosts; airtime isn’t confirmed.');
         if (isSongRequest && typeof d.public_token === 'string' && d.public_token.trim()) {
           songReceipt = {
             public_token: d.public_token,
@@ -2004,7 +2004,8 @@
     if (creditsDialog) {
       creditsDialog.addEventListener('keydown', trapCreditsFocus);
       creditsDialog.addEventListener('close', () => {
-        if (creditsInvoker && document.contains(creditsInvoker)) creditsInvoker.focus();
+        if (creditsInvoker && !creditsInvoker.hidden && document.contains(creditsInvoker)) creditsInvoker.focus();
+        else $('music-credits-footer')?.focus();
         creditsInvoker = null;
       });
     }

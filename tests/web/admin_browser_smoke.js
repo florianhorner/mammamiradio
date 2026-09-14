@@ -7,6 +7,126 @@ async (page) => {
     if (!condition) throw new Error(`admin-browser-smoke: ${message}`);
   }
 
+  async function exerciseMacFlow() {
+    const result = await page.evaluate(async () => {
+      const saved = { st: _st, ui: { ..._firstListenUi }, entry: document.body.dataset.firstListenEntry,
+        api, refreshFast, filter: _programmeFilter, purge: _pendingPurge,
+        timeout: window.setTimeout, clear: window.clearTimeout, undo: window.undoableToast };
+      const calls = [], timers = [];
+      let refreshes = 0;
+      const check = (condition, message) => { if (!condition) throw new Error(message); };
+      try {
+        check(document.getElementById('runtimeVersion')?.textContent.startsWith('Version '),
+          'Admin lost its runtime version and build identity');
+        const setup = { ...saved.ui.projection, guided_setup: { ...saved.ui.projection?.guided_setup,
+          first_listen: { bootstrap_ready: true, install_origin: 'fresh', fresh_install: true,
+            audio_complete: true, privacy_complete: true, continuity_available: true },
+          privacy: { reviewed: true, enabled: false } } };
+        _lastSetupJson = ''; renderSetup(setup); showAdminTab('motore');
+        restartFirstListen();
+        check(_firstListenUi.restarting && !document.getElementById('tab-setup').hidden, 'replay did not open First Listen');
+        openFirstListenStation();
+        check(!_firstListenUi.restarting && document.getElementById('tab-setup').hidden
+          && document.body.dataset.firstListenEntry === 'complete', 'leaving replay did not restore saved completion');
+        check(_firstListenUi.projection.guided_setup.first_listen.audio_complete, 'leaving replay discarded the saved audio receipt');
+        check([...document.querySelectorAll('#adminTabs button')].filter((tab) => !tab.hidden)
+          .map((tab) => tab.dataset.tab).join(',') === 'scaletta,diretta,rotazione,conduttori,archivio,motore',
+        'completed setup left the wrong tab order');
+        setup.guided_setup.first_listen.audio_complete = false;
+        _lastSetupJson = ''; renderSetup(setup); showAdminTab('setup');
+        openSetupPanel('music-sources');
+        check(_activeTab === 'rotazione' && document.getElementById('musicSourceSettings').open
+          && document.querySelector('#rotation-pool #jamendoSettings')
+          && document.querySelectorAll('#jamendoSettings').length === 1, 'Jamendo setup escaped Rotazione');
+        renderJamendoStatus({ state: 'ready', enabled: true, noncommercial_acknowledged: true });
+        check([...document.querySelectorAll('#jamendoSourceActions button')].some((button) => button.textContent === 'Settings'),
+          'working Jamendo lost its settings action');
+        check(firstListenSourceStatus('recovery', 'configured_unchecked').state === 'idle'
+          && firstListenSourceStatus('recovery', 'configured_unchecked').label === 'Backup audio not checked',
+          'unknown backup evidence claimed active checking');
+        updateListenerRequests([{ type: 'shoutout', name: 'Listener', message: 'Hello', age_s: 0 }],
+          [{ type: 'shoutout', name: 'Listener', message: 'Prepared', status: 'sent_to_hosts', age_s: 1 }]);
+        check(document.getElementById('lrBody').textContent.includes('Waiting for hosts')
+          && document.getElementById('lrBody').textContent.includes('airtime unconfirmed'), 'dedication acknowledgment promised airtime');
+        showAdminTab('scaletta');
+        _programmeFilter = 'all'; _pendingPurge = false;
+        _st = { ...saved.st, upcoming: [{ id: 'mac-undo', type: 'music', label: 'Artist — Song',
+          source: 'rendered_queue', duration_ms: 180000 }] };
+        api = async (...args) => { calls.push(args); return { ok: true }; };
+        refreshFast = async () => { refreshes++; };
+        window.setTimeout = (callback, delay, ...args) => {
+          if (delay !== 5000) return saved.timeout.call(window, callback, delay, ...args);
+          timers.push(callback); return -timers.length;
+        };
+        window.clearTimeout = (id) => { if (id >= 0) saved.clear.call(window, id); };
+        const row = () => document.querySelector('[data-queue-remove-id="mac-undo"]');
+        _lastProgrammeHash = ''; renderProgramme(_st);
+        for (let cycle = 0; cycle < 10; cycle++) {
+          const button = row();
+          check(button, 'Undo fixture did not expose a removable queue item');
+          await removeQueueItem('mac-undo', button);
+          await removeQueueItem('mac-undo', button);
+          _lastProgrammeHash = ''; renderProgramme({ ..._st });
+          check(!row(), 'poll restored a pending removal before Undo');
+          const undoButton = document.querySelector('#undoStack .undo-toast:last-child .undo-toast-btn');
+          undoButton.click();
+          timers[timers.length - 1](); // Also simulate an already-dispatched timer after cancellation.
+          check(row() && _pendingRemovals.size === 0, 'Undo did not restore the same stable queue item');
+        }
+        check(calls.length === 0 && refreshes === 0, 'repeated Undo sent deletion requests');
+        await removeQueueItem('mac-undo', row());
+        const expiredUndo = document.querySelector('#undoStack .undo-toast:last-child .undo-toast-btn');
+        timers[timers.length - 1]();
+        await Promise.resolve(); await Promise.resolve();
+        expiredUndo.click(); timers[timers.length - 1]();
+        check(calls.length === 1 && calls[0][0] === 'POST' && calls[0][1] === '/api/queue/remove'
+          && calls[0][2].id === 'mac-undo' && refreshes === 1, 'expired removal did not commit exactly one stable ID');
+        window.undoableToast = undefined;
+        _lastProgrammeHash = ''; renderProgramme(_st);
+        await removeQueueItem('mac-undo', row());
+        check(calls.length === 1 && _pendingRemovals.size === 0, 'missing Undo helper deleted a segment');
+        window.undoableToast = saved.undo;
+        _st.upcoming = Array.from({ length: 6 }, (_, index) => ({ id: `overflow-${index}`,
+          type: 'music', label: `Song ${index}`, source: 'rendered_queue', duration_ms: 180000 }));
+        _lastProgrammeHash = ''; renderProgramme(_st);
+        const overflowStart = timers.length;
+        for (const item of _st.upcoming) {
+          await removeQueueItem(item.id, document.querySelector(`[data-queue-remove-id="${item.id}"]`));
+        }
+        await Promise.resolve(); await Promise.resolve();
+        document.querySelectorAll('#undoStack .undo-toast-btn').forEach(button => button.click());
+        timers.slice(overflowStart).forEach(callback => callback());
+        check(calls.length === 2 && calls[1][2].id === 'overflow-0' && _pendingRemovals.size === 0,
+          'toast overflow committed a cancelled removal');
+        return { cancelledCycles: 10, overflowCancellations: 5, committedRemovals: calls.length };
+      } finally {
+        api = saved.api; refreshFast = saved.refreshFast;
+        window.setTimeout = saved.timeout; window.clearTimeout = saved.clear; window.undoableToast = saved.undo;
+        _st = saved.st; Object.assign(_firstListenUi, saved.ui);
+        _programmeFilter = saved.filter; _pendingPurge = saved.purge;
+        document.body.dataset.firstListenEntry = saved.entry;
+        syncFirstListenSetupMount(); _lastSetupJson = ''; _lastProgrammeHash = '';
+        showAdminTab('scaletta');
+      }
+    });
+    for (const width of [375, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(() => { showAdminTab('rotazione'); document.getElementById('libraryTools').open = true; });
+      const geometry = await page.evaluate(() => {
+        const status = document.querySelector('.record-hunt-status').getBoundingClientRect();
+        const form = document.getElementById('directionControls').getBoundingClientRect();
+        return { statusBeforeForm: status.bottom <= form.top,
+          fits: document.documentElement.scrollWidth <= window.innerWidth,
+          toolsColumns: getComputedStyle(document.querySelector('.library-tools-body')).gridTemplateColumns };
+      });
+      assert(geometry.statusBeforeForm && geometry.fits && !geometry.toolsColumns.includes(' '),
+        `Mac admin flow lost its responsive hierarchy at ${width}: ${JSON.stringify(geometry)}`);
+    }
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.evaluate(() => showAdminTab('scaletta'));
+    return result;
+  }
+
   async function exerciseMotoreSettingsTypography() {
     const originalViewport = page.viewportSize();
     for (const width of [320, 600, 1280]) {
@@ -1898,9 +2018,11 @@ async (page) => {
     text: emptyPoolRecoveryText.textContent,
     libraryHidden: emptyPoolLibraryBtn.hidden,
     setupHidden: emptyPoolSetupBtn.hidden,
+    sourceGroupDisplay: getComputedStyle(sourceImportGroup).display,
   }));
   assert(noSourceRecovery.text.includes('Set a music source from setup.'), 'no-source recovery lost actionable golden-path guidance');
   assert(noSourceRecovery.libraryHidden && !noSourceRecovery.setupHidden, 'no-source recovery exposed the wrong action');
+  assert(noSourceRecovery.sourceGroupDisplay === 'none', 'unavailable source tools left an empty labelled row');
 
   recoveryCapabilities = 'failure';
   await page.evaluate((status) => {
@@ -2005,6 +2127,8 @@ async (page) => {
   });
   assert(escapedShell.deckVisible && escapedShell.rotationTabVisible,
     'the Station controls escape did not restore the producer desk tab bar');
+
+  const macFlow = await exerciseMacFlow();
 
   const stoppedControls = await page.evaluate(() => {
     updateStopState(true);
@@ -2481,6 +2605,7 @@ async (page) => {
   assert(pageErrors.length === 0, `uncaught page errors: ${pageErrors.join(' | ')}`);
 
   return {
+    mac_flow: macFlow,
     ok: true,
     checks: 87,
     viewports: [320, 375, 414, 600, 768],

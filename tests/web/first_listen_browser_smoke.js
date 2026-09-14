@@ -1062,9 +1062,9 @@ async (page) => {
     await page.locator('.first-listen-station-controls').click();await page.locator('#tab-rotazione').click();
     await page.evaluate(()=>{_st.jamendo={enabled:false,state:'needs_config',client_id_configured:true,client_id_source:'bundled',shared_access_available:true,noncommercial_acknowledged:false};renderJamendoStatus(_st.jamendo)});
     await page.locator('#jamendoSourceActions button').click();
-    await page.waitForFunction(() => document.body.dataset.firstListenSetupView === 'music-sources' && document.activeElement?.id === 'jamendoSetupHeading');assert(await page.locator('#setupMusicSources').isVisible() && await page.locator('#journeySurface').isHidden(), 'Jamendo setup did not replace the required journey');
+    await page.waitForFunction(() => _activeTab === 'rotazione' && document.getElementById('musicSourceSettings').open && document.activeElement?.id === 'jamendoSetupHeading');assert(await page.locator('#setupMusicSources').isVisible() && await page.locator('#journeySurface').isHidden(), 'Jamendo setup did not open inside Rotazione');
     const jamendoClear=page.locator('#jamendoClearClientId');assert(await jamendoClear.count()===1&&await jamendoClear.isHidden(), 'Clear remained visible for bundled access');
-    await page.locator('.first-listen-station-controls').click();await page.locator('#tab-setup').click();
+    await page.locator('#tab-setup').click();
     assert(await page.locator('#journeySurface').isVisible() && await page.locator('#setupMusicSources').isHidden(), 'Setup tab did not restore First Listen');
 
     const welcomeGuide = page.locator('.guide-audio[data-guide="welcome"]');
@@ -1301,14 +1301,13 @@ async (page) => {
     );
     await page.locator('#firstListenRepairMusicBtn').click();
     await page.waitForFunction(() => (
-      document.body.dataset.firstListenSetupView === 'music-sources'
+      _activeTab === 'rotazione' && document.getElementById('musicSourceSettings').open
         && document.activeElement?.id === 'jamendoSetupHeading'
     ));
     assert(
       await page.locator('#setupMusicSources').isVisible() && await page.locator('#journeySurface').isHidden(),
       'add-on repair action did not open an available music-source setup path',
     );
-    await page.locator('.first-listen-station-controls').click();
     await page.locator('#tab-setup').click();
     assert(
       await page.locator('#journeySurface').isVisible() && await page.locator('#setupMusicSources').isHidden(),
