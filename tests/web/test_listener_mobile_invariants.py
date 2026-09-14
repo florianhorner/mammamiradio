@@ -491,8 +491,6 @@ def test_listener_decorative_italian_declares_element_language() -> None:
         '<a href="#stasera" class="active" lang="it">Stasera</a>',
         '<a href="#palinsesto" lang="it">Palinsesto</a>',
         '<span lang="it">In Onda</span>',
-        '<h1 class="mmr-h1" lang="it">',
-        '<p class="mmr-lede" lang="it">',
         '<h2 lang="it">Stasera in <em>onda</em></h2>',
         '<h2 lang="it">Dediche &amp; <em>Saluti</em></h2>',
         '<div class="eyebrow" lang="it">Manda al DJ',
@@ -504,6 +502,8 @@ def test_listener_decorative_italian_declares_element_language() -> None:
     )
     missing = [fragment for fragment in required_fragments if fragment not in html]
     assert not missing, "decorative Italian needs per-element lang=it markers:\n" + "\n".join(missing)
+    # Hero explanations now follow the active language; test_ui_copy exercises
+    # rendered English, Super Italian and legacy custom-copy language markers.
 
     js = LISTENER_JS.read_text(encoding="utf-8")
     assert '<div class="sig" lang="it">${sig}</div>' in js
@@ -513,8 +513,9 @@ def test_listener_mixed_language_blocks_use_narrow_overrides() -> None:
     html = LISTENER_HTML.read_text(encoding="utf-8")
     assert '<div class="track" lang="it">' not in html
     assert '<div class="mmr-about-card" lang="it"><div class="eyebrow">Codice</div>' not in html
-    assert '<span lang="en">Open source</span> <span lang="it">su</span> GitHub.' in html
-    assert '<span data-cap="llm" lang="en" hidden>AI scriptwriter.</span>' in html
+    assert '<div class="eyebrow" lang="it">Codice</div><p>{{ copy.about_code }}' in html
+    assert '<span data-cap="llm" hidden>{{ copy.about_ai }}</span>' in html
+    assert '<span lang="en">Stream MP3</span>' in html
     assert '<span lang="en">Made with espresso.</span>' in html
     assert '<p class="fine" lang="it">' not in html
 

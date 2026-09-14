@@ -8,7 +8,6 @@ import random
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from itertools import islice
 from pathlib import Path
 from typing import Literal
 from urllib.error import URLError
@@ -59,6 +58,17 @@ def _copy_tracks_with_source(
     return [replace(track, source=source) for track in tracks]
 
 
+def record_recovery_availability(evidence: SourceReadinessEvidence) -> None:
+    """Record approved backup audio independently of music-source success."""
+    from mammamiradio.core.spoken_assets import approved_spoken_assets, is_approved_packaged_audio_asset
+
+    assets_root = _DEMO_ASSETS_RECOVERY_DIR.parent
+    bundled = bool(approved_spoken_assets("recovery", assets_root=assets_root)) or is_approved_packaged_audio_asset(
+        _DEMO_ASSETS_RECOVERY_DIR / "emergency_tone.mp3", assets_root=assets_root
+    )
+    evidence.configure("recovery", bundled, bundled=bundled)
+
+
 def _source_evidence_for_config(config: StationConfig) -> SourceReadinessEvidence:
     """Create bounded configuration evidence before source attempts begin."""
     evidence = SourceReadinessEvidence()
@@ -66,8 +76,7 @@ def _source_evidence_for_config(config: StationConfig) -> SourceReadinessEvidenc
     evidence.configure("jamendo", jamendo_source_configured(config))
     evidence.configure("local", config.music_dir.exists())
     evidence.configure("demo", True)
-    recovery_bundled = _DEMO_ASSETS_RECOVERY_DIR.exists() and any(islice(_DEMO_ASSETS_RECOVERY_DIR.glob("*.mp3"), 1))
-    evidence.configure("recovery", recovery_bundled, bundled=recovery_bundled)
+    record_recovery_availability(evidence)
     return evidence
 
 

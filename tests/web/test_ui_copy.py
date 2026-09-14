@@ -311,6 +311,7 @@ def test_request_outcome_copy_is_complete_in_both_modes():
     assert not any(receipt in text for receipt in hardcoded_italian_receipts)
 
     premature_promises = (
+        "The hosts will read it soon",
         "The hosts will cue it soon",
         "metteranno presto la canzone in scaletta",
         "queued behind the audio",
@@ -320,6 +321,8 @@ def test_request_outcome_copy_is_complete_in_both_modes():
     assert not any(promise in text or promise in listener_copy for promise in premature_promises)
     assert "hosts to introduce" in COPY["en"]["form_song_matched"]
     assert "conduttori" in COPY["it"]["form_song_matched"]
+    assert "airtime isn’t confirmed" in COPY["en"]["form_success_shoutout"]
+    assert "non è confermata" in COPY["it"]["form_success_shoutout"]
 
     infrastructure_claims = (
         "catalogue isn’t reachable",
@@ -656,3 +659,24 @@ def test_listener_never_shows_raw_server_error():
         "listener.js clip_error fallback is the dead-end 'Errore clip' again — "
         "use way-out copy that tells the listener what to do next."
     )
+
+
+def test_listener_explanation_and_brand_copy_follow_mode():
+    from mammamiradio.core.config import load_config
+    from mammamiradio.web.streamer import _TEMPLATES
+
+    brand = load_config().brand
+    template = _TEMPLATES.env.get_template("listener.html")
+    for language in ("en", "it"):
+        html = template.render(brand=brand, copy=COPY[language], page_lang=language)
+        assert COPY[language]["about_programme"] in html
+        assert COPY[language]["about_voices"] in html
+        assert COPY[language]["form_airtime_hint"] in html
+        assert "Letta stasera da" not in html
+        headline = html.split('class="mmr-h1"', 1)[1].split("</h1>", 1)[0]
+        assert (brand.tagline_en if language == "en" else brand.tagline) in headline
+        assert f'lang="{language}"' in headline
+    brand.tagline = "La mia radio personalizzata"
+    brand.tagline_en = ""
+    html = template.render(brand=brand, copy=COPY["en"], page_lang="en")
+    assert 'lang="it">La mia radio personalizzata</h1>' in html

@@ -736,3 +736,18 @@ def test_public_status_not_modified_honors_if_none_match(header, etag, expected)
 def test_public_status_not_modified_combines_repeated_header_lines():
     headers = SimpleNamespace(get=lambda _name: None, getlist=lambda _name: ['W/"stale"', '"abc123"'])
     assert status_payload.public_status_not_modified(headers, 'W/"abc123"')
+
+
+def test_unknown_recovery_evidence_is_not_reported_missing():
+    state = StationState()
+
+    def project():
+        return status_payload._source_readiness_status(_source_config(), state)["sources"]["recovery"]
+
+    assert project()["status"] == "configured_unchecked"
+    assert "not been checked" in project()["detail"]
+    state.source_readiness.configure("recovery", False, bundled=False)
+    assert project()["status"] == "not_bundled"
+    assert "No verified backup audio" in project()["detail"]
+    state.source_readiness.configure("recovery", True, bundled=True)
+    assert project()["status"] == "cover_only"

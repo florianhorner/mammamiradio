@@ -6662,11 +6662,15 @@ async def _audio_generator(request: Request, *, first_listen: bool = False, prel
 
 
 async def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
+    from html import escape
+
     # CSP: 'unsafe-inline' is required because admin.html has inline event handlers
     # (onclick, oninput, onchange) on ~40 elements that cannot carry a nonce attribute.
     # esc() on all HA fields in admin.html is the load-bearing XSS defense.
     await _wait_for_first_listen_bootstrap(request.app.state)
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
+    identity = str(getattr(request.app.state, "runtime_identity", "Version and build unavailable"))
+    html = html.replace("<!-- runtime-identity -->", escape(identity))
     state = getattr(request.app.state, "station_state", None)
     stopped = "true" if bool(getattr(state, "session_stopped", False)) else "false"
     first_listen_entry = _first_listen_entry_state(request.app.state)

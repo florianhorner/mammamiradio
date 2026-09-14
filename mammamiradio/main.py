@@ -11,6 +11,7 @@ import os
 import secrets
 import shutil
 import sqlite3
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -38,7 +39,7 @@ from mammamiradio.core.first_listen import (
     capture_first_listen_install_origin,
     migrate_first_listen_install_origin,
 )
-from mammamiradio.core.models import GenerationWasteReason, PlaylistSource, StationState
+from mammamiradio.core.models import GenerationWasteReason, PlaylistSource, SourceReadinessEvidence, StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.atomic_json import prune_stale_atomic_json_tmp_files
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
@@ -78,6 +79,7 @@ from mammamiradio.playlist.playlist import (
     normalized_track_key,
     read_persisted_heading,
     read_persisted_source,
+    record_recovery_availability,
     write_persisted_heading,
 )
 from mammamiradio.playlist.preferences import load_preferences
@@ -354,6 +356,25 @@ app.include_router(media_sources_router)
 app.include_router(integrations_router)
 
 
+def _runtime_build_label() -> str:
+    """Capture source provenance once at boot; installed wheels may have no Git."""
+    root = Path(__file__).resolve().parent.parent
+    if not (root / ".git").exists():
+        return "build unavailable"
+    try:
+        revision = subprocess.run(
+            ["git", "describe", "--always", "--dirty", "--exclude=*", "--abbrev=12"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=0.5,
+            check=True,
+        ).stdout.strip()
+        return revision.replace("-dirty", " · development changes") if revision else "build unavailable"
+    except (OSError, subprocess.SubprocessError):
+        return "build unavailable"
+
+
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
     global _producer_task, _playback_task, _prewarm_task
@@ -553,6 +574,7 @@ async def startup():
         bridge_app_version = importlib.metadata.version("mammamiradio")
     except importlib.metadata.PackageNotFoundError:  # pragma: no cover - editable installs provide metadata
         bridge_app_version = "0+unknown"
+    app.state.runtime_identity = f"Version {bridge_app_version} · {_runtime_build_label()}"
     provenance_announced = False
     provenance_task: asyncio.Task | None = None
 
@@ -675,6 +697,8 @@ async def startup():
         logger.error("Playlist fetch crashed: %s — no unverified music will be loaded", e)
         tracks = []
         playlist_source = starter_source(0)
+        playlist_source.readiness_evidence = SourceReadinessEvidence()
+        record_recovery_availability(playlist_source.readiness_evidence)
         startup_source_error = str(e)
 
     # Persistent operator blocklist: a song the operator banned must never re-enter

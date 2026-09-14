@@ -2630,6 +2630,8 @@ async def test_startup_fails_closed_on_playlist_fetch_exception(tmp_path: Path):
     # The compatibility list is deliberately empty while starter approval is pending.
     assert app.state.station_state.playlist == list(DEMO_TRACKS)
     assert app.state.station_state.startup_source_error == "network down"
+    assert app.state.station_state.source_readiness.entries["recovery"].bundled is True
+    assert app.state.runtime_identity.startswith("Version ")
     assert app.state.station_state.playlist_source.kind == "starter"
 
 
@@ -4068,3 +4070,22 @@ async def test_startup_trim_leaves_a_norm_cache_rescue_candidate(tmp_path, caplo
     # deep rung where a recently-heard song still beats the emergency tone. The
     # policy itself is unit-tested both ways in tests/audio/test_norm_cache.py.
     assert select_norm_cache_rescue(cache_dir, state, allow_recent_repeat=True) is not None
+
+
+@pytest.mark.parametrize("revision", ["abc123456789", "abc123456789-dirty", ""])
+def test_runtime_build_label(revision):
+    from mammamiradio.main import _runtime_build_label
+
+    with patch(f"{MODULE}.subprocess.run", return_value=SimpleNamespace(stdout=revision)) as run:
+        label = _runtime_build_label()
+    assert label == (revision.replace("-dirty", " · development changes") or "build unavailable")
+    assert run.call_args.kwargs["timeout"] == 0.5
+
+
+def test_runtime_build_label_without_git():
+    from mammamiradio.main import _runtime_build_label
+
+    with patch(f"{MODULE}.subprocess.run", side_effect=OSError("git unavailable")):
+        assert _runtime_build_label() == "build unavailable"
+    with patch(f"{MODULE}.Path.exists", return_value=False):
+        assert _runtime_build_label() == "build unavailable"

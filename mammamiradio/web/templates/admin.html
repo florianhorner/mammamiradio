@@ -217,7 +217,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .record-hunt-status {
   display: grid; grid-template-columns: minmax(0,1fr) auto;
   gap: 10px; align-items: center;
-  margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line);
+  margin: 0 0 14px; padding: 8px 0;
   min-width: 0;
 }
 .record-hunt-status-copy {
@@ -233,7 +233,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .record-hunt-status-shape.working { color: var(--sun); }
 .record-hunt-status-shape.idle { color: var(--muted); }
 .record-hunt-status-shape.working { animation: record-hunt-pulse 1.4s ease-in-out infinite; }
-.record-hunt-truth { min-width: 0; color: var(--cream-dk); font-size: 13px; line-height: 1.35; overflow-wrap: break-word; }
+.record-hunt-truth { min-width: 0; color: var(--cream); font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: break-word; }
 .record-hunt-truth b { color: var(--sun); font-weight: 700; }
 .record-hunt-stage {
   grid-column: 2; min-width: 0; color: var(--muted);
@@ -1618,13 +1618,18 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 }
 .library-tools-banned[hidden] { display: none; }
 .library-tools-body {
-  display: grid; grid-template-columns: repeat(2,minmax(0,1fr));
-  gap: 16px; padding: 0 0 17px;
+  display: grid; grid-template-columns: 1fr;
+  gap: 0; padding: 0 0 17px;
 }
-.library-tools-group { min-width: 0; }
+.library-tools-group { min-width: 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
 .library-tools-group .quick-actions { align-items: center; }
-.library-tools-group .rotation-library-label { margin-bottom: 8px; }
-.library-tools-danger { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.library-tools-group .rotation-library-label { margin: 0; }
+.library-tools-danger { width: 100%; padding-top: 12px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.library-tools-danger .sub { max-width: 42ch; }
+.source-settings { margin: 0 0 20px; }
+.source-settings-body { padding: 0 0 12px; }
+.source-settings [hidden] { display: none; }
+.library-tools-group[hidden] { display: none; }
 .empty-pool-recovery {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin-top: 12px; padding: 12px;
@@ -1904,8 +1909,7 @@ body[data-first-listen-entry="pending"] #first-listen-panel,
 body[data-first-listen-entry="complete"] #first-listen-panel{display:none!important}
 /* One header per panel */
 .mmr-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
-.a-panel header.mmr-panel-head-stacked{display:grid;grid-template-columns:1fr;gap:10px}
-.mmr-panel-head-stacked .programme-toolbar{width:100%;justify-content:space-between}
+.programme-toolbar{margin-bottom:16px}
 /* The panel head keeps its own divider (from the generic `.a-panel header`
    rule) on every tab. Only list-era drawer sections directly below a head drop
    their redundant top rule; bordered standalone strips, such as pending listener
@@ -2157,9 +2161,10 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
 
     <!-- Scaletta zone -->
     <section class="a-panel producer-zone mmr-tabpanel is-active" id="live-queue" data-panel="scaletta" role="tabpanel" aria-labelledby="tab-scaletta" tabindex="0">
-      <header class="mmr-panel-head mmr-panel-head-stacked">
+      <header class="mmr-panel-head">
         <h2>Scaletta</h2>
         <div class="sub">What is prepared to air next.</div>
+      </header>
         <div class="programme-toolbar">
           <div class="programme-runway" id="programmeRunway" role="status" aria-live="polite" hidden>
             <span class="programme-runway-primary" id="programmeAhead"></span>
@@ -2172,7 +2177,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
             <button type="button" class="filter-pill" aria-pressed="false" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
           </div>
         </div>
-      </header>
       <div class="queue-requests" id="queue-requests" style="display:none">
         <div class="card-label">Pending requests <span id="lrMeta" style="float:right;font-weight:400;color:var(--muted)"></span></div>
         <div id="lrBody"><div class="empty">No requests</div></div>
@@ -2214,14 +2218,50 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
           </div>
         </div>
       </div>
+      <details class="library-tools source-settings" id="musicSourceSettings">
+        <summary>Music source settings</summary>
+            <section class="source-settings-body" id="setupMusicSources" aria-labelledby="jamendoSetupHeading">
+              <div class="setup-subhead" id="jamendoSetupHeading" tabindex="-1">Music sources</div>
+              <div class="music-sources">
+                <div class="music-source-row" id="starterSetupRow" data-state="blocked">
+                  <div class="music-source-copy">
+                    <div class="music-source-title" id="starterSetupLabel">Starter collection unavailable</div>
+                    <div class="music-source-detail" id="starterSetupDetail">The verified twelve-track package is not available.</div>
+                  </div>
+                  <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked">blocked</span></span>
+                </div>
+              </div>
+              <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
+                <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
+                  <span class="jamendo-secret-saved" id="jamendoSecretLabel">Checking Jamendo access…</span>
+                  <div class="jamendo-secret-actions">
+                    <button type="button" class="btn btn-util" id="jamendoOwnClientIdAction" data-stopped-exempt onclick="replaceJamendoClientId()">Use my Jamendo ID</button>
+                    <button type="button" class="btn btn-util" id="jamendoClearClientId" data-stopped-exempt onclick="clearJamendoClientId(this)" hidden>Remove my Jamendo ID</button>
+                  </div>
+                </div>
+                <div id="jamendoClientField" hidden>
+                  <label class="setup-title" for="jamendoClientId">Your own Jamendo client ID (optional)</label>
+                  <input class="input" id="jamendoClientId" type="password" autocomplete="off" spellcheck="false" aria-describedby="jamendoHelp" placeholder="Enter your own client ID">
+                </div>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoEnabled">
+                  <span><strong>Enable Jamendo live rotation</strong></span>
+                </label>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoNoncommercialAck">
+                  <span>I confirm this station's Jamendo API use is non-commercial and understand that Mamma Mi Radio does not certify broadcast rights.</span>
+                </label>
+                <p class="jamendo-help" id="jamendoHelp"><span id="jamendoAccessHelp">Enable both options to add credited Jamendo songs to rotation. Mamma Mi Radio supplies the access automatically — no Jamendo account or client ID needed.</span> Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
+                <div class="jamendo-form-message" id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"></div>
+                <div class="setup-actions">
+                  <button type="button" class="btn btn-trigger" id="jamendoSaveBtn" data-stopped-exempt onclick="saveJamendoSettings(this)">Save and check</button>
+                </div>
+              </div>
+            </section>
+      </details>
       <section class="record-hunt" aria-labelledby="recordHuntHeading">
         <p class="record-hunt-label">Record Hunt</p>
         <p class="record-hunt-copy" id="recordHuntHeading">Steer what the station <strong>becomes next.</strong></p>
-        <div class="record-hunt-form" id="directionControls">
-          <label class="sr-only" for="directionInput">Describe the records to hunt</label>
-          <input type="text" class="search-input" id="directionInput" placeholder="Italian '90s electronica" autocomplete="off" aria-label="Direction" aria-describedby="recordHuntHeading" onkeydown="handleDirectionKey(event)">
-          <button type="button" class="btn btn-trigger record-hunt-button btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt records</button>
-        </div>
         <div class="record-hunt-status">
           <div class="record-hunt-status-copy" id="courseBanner" data-active="false" role="status" aria-live="polite">
             <span class="record-hunt-status-shape idle" id="recordHuntStatusShape" aria-label="status: idle">&#9675;</span>
@@ -2229,6 +2269,11 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
             <span class="record-hunt-stage" id="recordHuntStage" aria-hidden="true"></span>
           </div>
           <button type="button" class="btn btn-util record-hunt-reset" id="clearHeadingBtn" onclick="clearHeading(this)" hidden>Back to auto</button>
+        </div>
+        <div class="record-hunt-form" id="directionControls">
+          <label class="sr-only" for="directionInput">Describe the records to hunt</label>
+          <input type="text" class="search-input" id="directionInput" placeholder="Italian '90s electronica" autocomplete="off" aria-label="Direction" aria-describedby="recordHuntHeading" onkeydown="handleDirectionKey(event)">
+          <button type="button" class="btn btn-trigger record-hunt-button btn-direction" id="directionBtn" onclick="setDirectionText(this)">Hunt records</button>
         </div>
       </section>
       <section class="rotation-library" aria-label="Rotation library">
@@ -2269,6 +2314,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
             </div>
             <div class="library-tools-danger">
+              <span class="sub">Empty the rotation pool. Your music files stay on disk.</span>
               <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation. Your own music files stay where they are and come back on their own — delete them from the music folder to stop that.">Clear pool</button>
             </div>
           </section>
@@ -2377,6 +2423,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
           <h2>Conduttori</h2>
           <div class="sub" id="hostsMeta">Loading...</div>
         </header>
+        <p class="sub">Host personality adjustments apply to this session and reset when the station restarts.</p>
         <div id="hostsBody"><div class="empty" style="padding:10px 0;font-size:12px;font-style:italic;color:var(--muted)">Loading hosts...</div></div>
       </section>
     </section>
@@ -2427,6 +2474,8 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
         <!-- Group 1: Status -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-status-h">
           <h3 class="ttl-eyebrow" id="eg-status-h">Status</h3>
+          <p class="sub" id="runtimeVersion"><!-- runtime-identity --></p>
+          <details class="library-tools"><summary>Application logs</summary><p class="sub">On Mac, logs appear in the terminal or Run panel that started the station. With Docker, use the container logs. In Home Assistant, open the app’s Log tab. This page does not retain a separate log history.</p></details>
 
           <div class="card-label">Systems</div>
           <div class="status-stack" id="systemsBody" style="margin-bottom:14px"><div class="empty">Checking AI and music systems...</div></div>
@@ -2465,6 +2514,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
         <!-- Station configuration (below runtime diagnosis, above collapsible Setup) -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-config-h">
           <h3 class="ttl-eyebrow" id="eg-config-h">Configuration</h3>
+          <p class="sub">Standalone startup settings live in <code>.env</code> and <code>radio.toml</code>, including station name, guest host and cache size. File changes take effect after a restart. In Home Assistant, use the app’s Configuration tab for these options.</p>
 
           <div class="card-label">AI Quality</div>
           <div style="margin-bottom:14px">
@@ -2856,44 +2906,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
             </section>
             <div class="sr-only" id="firstListenLiveRegion" role="status" aria-live="polite" aria-atomic="true"></div>
 
-            <section class="first-listen-surface setup-music-sources" id="setupMusicSources" aria-labelledby="jamendoSetupHeading">
-              <div class="setup-subhead" id="jamendoSetupHeading" tabindex="-1">Music sources</div>
-              <div class="music-sources">
-                <div class="music-source-row" id="starterSetupRow" data-state="blocked">
-                  <div class="music-source-copy">
-                    <div class="music-source-title" id="starterSetupLabel">Starter collection unavailable</div>
-                    <div class="music-source-detail" id="starterSetupDetail">The verified twelve-track package is not available.</div>
-                  </div>
-                  <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked">blocked</span></span>
-                </div>
-              </div>
-              <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
-                <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
-                  <span class="jamendo-secret-saved" id="jamendoSecretLabel">Checking Jamendo access…</span>
-                  <div class="jamendo-secret-actions">
-                    <button type="button" class="btn btn-util" id="jamendoOwnClientIdAction" data-stopped-exempt onclick="replaceJamendoClientId()">Use my Jamendo ID</button>
-                    <button type="button" class="btn btn-util" id="jamendoClearClientId" data-stopped-exempt onclick="clearJamendoClientId(this)" hidden>Remove my Jamendo ID</button>
-                  </div>
-                </div>
-                <div id="jamendoClientField" hidden>
-                  <label class="setup-title" for="jamendoClientId">Your own Jamendo client ID (optional)</label>
-                  <input class="input" id="jamendoClientId" type="password" autocomplete="off" spellcheck="false" aria-describedby="jamendoHelp" placeholder="Enter your own client ID">
-                </div>
-                <label class="jamendo-checkbox">
-                  <input type="checkbox" id="jamendoEnabled">
-                  <span><strong>Enable Jamendo live rotation</strong></span>
-                </label>
-                <label class="jamendo-checkbox">
-                  <input type="checkbox" id="jamendoNoncommercialAck">
-                  <span>I confirm this station's Jamendo API use is non-commercial and understand that Mamma Mi Radio does not certify broadcast rights.</span>
-                </label>
-                <p class="jamendo-help" id="jamendoHelp"><span id="jamendoAccessHelp">Enable both options to add credited Jamendo songs to rotation. Mamma Mi Radio supplies the access automatically — no Jamendo account or client ID needed.</span> Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
-                <div class="jamendo-form-message" id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"></div>
-                <div class="setup-actions">
-                  <button type="button" class="btn btn-trigger" id="jamendoSaveBtn" data-stopped-exempt onclick="saveJamendoSettings(this)">Save and check</button>
-                </div>
-              </div>
-            </section>
+
           </div>
         </details>
         </div>
@@ -3559,6 +3572,13 @@ function showAdminTab(name,{render=true,persist=true}={}){
   const restoreFocus=name!=='setup'&&_activeTab==='setup'&&(setupContext?.contains(document.activeElement)||document.activeElement===setupTab||document.activeElement===setupPanel);
   delete document.body.dataset.firstListenSetupView;
   setFirstListenSetupView();
+  if(name!=='setup'&&_firstListenUi.restarting){
+    Object.assign(_firstListenUi,{restarting:false,selectionDirty:false,retestPending:false,selectedEntityId:'',selectedName:'',attemptId:'',dispatch:'ready',verification:'awaiting',privacyChoice:null,privacyReceiptChoice:null,privacyPreview:'untouched',privacyPreviewValid:false,privacyPreviewUseful:false,repairOpen:false,reviewStep:'',optionalStep:'',reviewTrigger:null,showSuccess:false});
+    document.body.dataset.firstListenEntry='pending';
+    _lastSetupJson='';
+    syncFirstListenSetupMount();
+    renderSetup(_firstListenUi.projection);
+  }
   if(name!=='setup')finalizeFirstListenCompletion();
   if(name==='setup'&&!['required','completing'].includes(document.body.dataset.firstListenEntry))name='motore';
   if(!_adminPanels.some(p=>p.dataset.panel===name))name='scaletta';
@@ -4556,7 +4576,7 @@ function renderProgramme(st){
   }
 
   if(rows.length){
-    el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>Quando</th><th>Tipo</th><th>Titolo</th><th>Fonte</th><th>Durata</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    el.innerHTML=`<table class="a-programme"><colgroup><col class="col-time"><col class="col-type"><col class="col-title"><col class="col-host"><col class="col-duration"><col class="col-action"></colgroup><thead><tr><th>When</th><th>Type</th><th>Title</th><th>Source</th><th>Duration</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }else if(upcoming.length>0&&_programmeFilter!=='all'){
     el.innerHTML=emptyState('No '+segmentText(_programmeFilter)+' ready in this rundown.');
   }else if(document.body.getAttribute('data-stopped')==='true'){
@@ -4571,14 +4591,11 @@ function renderProgramme(st){
 }
 
 // Delayed-commit undo: remove the row optimistically, defer the backend call by
-// 5s, and let the user cancel with Undo. Falls back to immediate removal if
-// admin.js (undoableToast) failed to load.
+// 5s, and let the user cancel with Undo. Require the Undo helper before removal.
 async function removeQueueItem(id,el){
   flash(el);
   if(typeof window.undoableToast!=='function'){
-    const r=await api('POST','/api/queue/remove',{id});
-    if(r.ok){toast('Removed: '+(r.removed||'segment'));_lastProgrammeHash='';await refreshFast();}
-    else toast(wayOut('remove that'));
+    toast('Remove is unavailable. Reload the page and try again; the queue has not changed.');
     return;
   }
   if(_pendingRemovals.has(id))return;
@@ -5226,6 +5243,7 @@ function renderJamendoStatus(status){
     else if(action==='retry')actions.appendChild(jamendoAction('Check again',retryJamendo));
     else if(action==='off')actions.appendChild(jamendoAction('Turn off',turnOffJamendo));
   });
+  if(!presentation.actions.includes('setup'))actions.appendChild(jamendoAction('Settings',openJamendoSetup));
   // The reason belongs in the key. State and label are both constant across the
   // whole working branch, so keying on them alone meant a provider that started
   // failing mid-attempt never re-announced, and a degraded row kept speaking the
@@ -5239,9 +5257,16 @@ function renderJamendoStatus(status){
   renderJamendoSettings(status,false);
 }
 function openJamendoSetup(){
-  openSetupPanel('music-sources');
+  _adminTabUserInteracted=true;
+  showAdminTab('rotazione',{render:true,persist:true});
+  const details=document.getElementById('musicSourceSettings');
+  details.open=true;
+  setTimeout(()=>{
+    details.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+    document.getElementById('jamendoSetupHeading')?.focus({preventScroll:true});
+  },50);
 }
-function setFirstListenSetupView(view=''){for(const [id,display] of [['journeySurface',view==='music-sources'?'none':''],['setupMusicSources',view==='music-sources'?'block':'']]){const el=document.getElementById(id);if(el)el.style.display=display;}}
+function setFirstListenSetupView(){document.getElementById('journeySurface').style.display='';}
 function setJamendoFormMessage(message,state='idle'){
   const el=document.getElementById('jamendoFormMessage');
   if(!el)return;
@@ -5356,9 +5381,8 @@ async function turnOffJamendo(){
     applyJamendoResponse(result,'Jamendo turned off. Starter and local music continue.');
   }catch(_){setJamendoFormMessage(offlineMsg()+' The saved setting was not changed.','degraded');}
 }
-function openSetupPanel(focus='',{preserveFocus=false}={}){
-  const focused=preserveFocus&&document.getElementById('setupMusicSources')?.contains(document.activeElement)?document.activeElement:null;
-  if(preserveFocus)syncFirstListenSetupMount();
+function openSetupPanel(focus=''){
+  if(focus==='music-sources'){openJamendoSetup();return;}
   _adminTabUserInteracted=true;
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
@@ -5366,20 +5390,14 @@ function openSetupPanel(focus='',{preserveFocus=false}={}){
     document.body.dataset.firstListenFocus='source';
   }
   const firstListenRequired=document.body.dataset.firstListenEntry==='required';
-  // Music-source setup replaces the required journey without changing tabs.
-  // Treat that same-tab route as an explicit exit before hiding its player.
-  if(focus==='music-sources'&&firstListenRequired)exitFirstListenFlow();
   showAdminTab(firstListenRequired?'setup':'motore',{render:true,persist:true});
-  if(focus==='music-sources')document.body.dataset.firstListenSetupView='music-sources';else delete document.body.dataset.firstListenSetupView;
   setFirstListenSetupView(focus);
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
-  if(focused?.isConnected){focused.focus();return;}
   const summary=details?.querySelector('summary');
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
     if(focus==='source')focusFirstListenStep('source');
-    else if(focus==='music-sources')document.getElementById('jamendoSetupHeading')?.focus({preventScroll:true});
     else if(focus==='choices')document.querySelector('#firstListenPrivacyStep[data-state="complete"] .first-listen-review')?.focus({preventScroll:true});
     else if(firstListenRequired)focusCurrentFirstListenStep();
     else summary?.focus({preventScroll:true});
@@ -5435,8 +5453,7 @@ function resolveFirstListenLanding(setup){
   if(first.bootstrap_ready!==true)return;
   const required=firstListenEntryRequired(setup);
   const previous=document.body.dataset.firstListenEntry;
-  const musicSources=document.body.dataset.firstListenSetupView==='music-sources';
-  const preserveSuccess=!required&&!musicSources&&(
+  const preserveSuccess=!required&&(
     previous==='completing'||(previous==='required'&&_activeTab==='setup')
   );
   if(required&&previous==='completing'){
@@ -5446,12 +5463,8 @@ function resolveFirstListenLanding(setup){
     setTimeout(()=>focusCurrentFirstListenStep(),0);
   }
   document.body.dataset.firstListenEntry=preserveSuccess?'completing':required?'required':'complete';
-  if(previous==='required'&&!required&&_activeTab==='setup'&&musicSources){
-    openSetupPanel('music-sources',{preserveFocus:true});
-  }else{
-    syncFirstListenSetupMount();
-    if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess)showAdminTab('scaletta',{render:true,persist:true});
-  }
+  syncFirstListenSetupMount();
+  if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess)showAdminTab('scaletta',{render:true,persist:true});
   if(_firstListenLandingResolved)return;
   _firstListenLandingResolved=true;
   if(required&&!_adminTabUserInteracted){
@@ -5950,6 +5963,8 @@ function firstListenSourceStatus(kind,status){
   if(kind==='recovery'){
     if(value==='on_air')return{state:'degraded',label:'Backup audio playing'};
     if(value==='playable'||value==='cover_only')return{state:'degraded',label:'Backup audio available'};
+    if(value==='configured_unchecked')return{state:'idle',label:'Backup audio not checked'};
+    if(value==='not_bundled')return{state:'blocked',label:'Needs repair'};
   }
   const values={
     on_air:{state:'ready',label:'On air'},
@@ -5990,7 +6005,8 @@ const FIRST_LISTEN_PLAIN_SOURCE_DETAIL_BY_KIND={
     not_bundled:'No demo songs are included here. Use Jamendo or add local music instead.',
   },
   recovery:{
-    not_bundled:'No backup audio is included here. Use Jamendo or add local music instead.',
+    configured_unchecked:'Backup audio has not been checked yet.',
+    not_bundled:'Backup audio could not be verified. Check the installation, then restart.',
   },
 };
 const FIRST_LISTEN_PLAIN_SOURCE_LABEL={
@@ -6952,11 +6968,11 @@ async function chooseFirstListenPrivacy(enabled,el){
     _firstListenUi.reviewStep='';
     _firstListenUi.optionalStep='';
     _firstListenUi.reviewTrigger=null;
-    const current=firstListenProjection(),musicSources=document.body.dataset.firstListenSetupView==='music-sources';
+    const current=firstListenProjection();
     const canComplete=celebrate&&current.heard&&!current.proofPending&&firstListenSourceState(current).continuityAvailable;
-    const showCelebration=canComplete&&_activeTab==='setup'&&!musicSources;
+    const showCelebration=canComplete&&_activeTab==='setup';
     _firstListenUi.restarting=false;
-    if(canComplete){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';if(musicSources&&_activeTab==='setup')openSetupPanel('music-sources',{preserveFocus:true});syncFirstListenSetupMount();}
+    if(canComplete){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';syncFirstListenSetupMount();}
     _firstListenUi.showSuccess=showCelebration;
     firstListenSetStatus('firstListenPrivacyStatus',requestedEnabled?'Marco and Giulia may use the Home details you approved.':'Home stays private.','ready');
     renderFirstListenProgress();
@@ -8504,7 +8520,7 @@ function updateListenerRequests(reqs,consumed){
         status=statusInline('working','searching…');
       }
     } else {
-      status=statusInline('working','shoutout');
+      status=statusInline('working','Waiting for hosts');
     }
     actions+=`<button class="lr-btn lr-btn-dismiss" onclick="lrDismiss('${esc(r.id||'')}')">&#10005; Dismiss</button>`;
     return `<div class="lr-item" id="lr-item-${esc(r.id||i)}">
@@ -8523,7 +8539,7 @@ function updateListenerRequests(reqs,consumed){
         ?'<span class="lr-badge lr-badge-warn">&#10005; Dismissed — resubmit if still wanted</span>'
         :r.status==='song_not_found'
         ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
-        :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
+        :'<span class="lr-badge lr-badge-ok">&#10003; Prepared — airtime unconfirmed</span>';
       const track=r.song_track?`<span class="lr-track">${esc(r.song_track)}</span>`:'';
       return `<div class="lr-item lr-item-consumed">
         <div class="lr-head"><span class="lr-name">${esc(r.name||'Listener')}</span>${badge}<span class="lr-age">${age}</span></div>
