@@ -475,6 +475,7 @@ def test_metadata_probe_is_single_flight_across_concurrent_scans(tmp_path, monke
 
     started = threading.Event()
     release = threading.Event()
+    waiting = threading.Event()
     probes = []
 
     def _slow_probe(_path: Path):
@@ -492,11 +493,22 @@ def test_metadata_probe_is_single_flight_across_concurrent_scans(tmp_path, monke
         first = threading.Thread(target=_worker)
         first.start()
         assert started.wait(timeout=5)
+        inflight = local_library_module._local_metadata_inflight[local_library_module._path_key(path)]
+        original_wait = inflight.wait
+
+        def _observe_wait(timeout: float | None = None) -> bool:
+            waiting.set()
+            return original_wait(timeout)
+
+        monkeypatch.setattr(inflight, "wait", _observe_wait)
         second = threading.Thread(target=_worker)
         second.start()
-        release.set()
-        first.join(timeout=5)
-        second.join(timeout=5)
+        try:
+            assert waiting.wait(timeout=5), "the second scan must wait for the in-flight probe"
+        finally:
+            release.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
 
     assert probes == ["shared.mp3"], "the second scan must reuse the in-flight probe"
     assert results == [("Tagged Artist", "Tagged Title")] * 2
