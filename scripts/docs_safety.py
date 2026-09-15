@@ -139,7 +139,8 @@ _RECEIPT_CLAUSE_BOUNDARY = re.compile(
 )
 _RECEIPT_ACTION = re.compile(
     r"\b(?:must(?!\s+not)|requires?|required|comes?\s+before|finalize|create|"
-    r"mandatory|needed|needs?|run|emit|generate|refresh|restore|reattest|"
+    r"mandatory|needed|needs?|necessary|obligatory|compulsory|essential|"
+    r"run|emit|generate|refresh|restore|reattest|"
     r"commit(?=\s+(?:the|a|an|v2|preship|review)\b))\b",
     re.IGNORECASE,
 )
@@ -471,7 +472,17 @@ def retired_review_receipt_issues(path: Path, text: str) -> list[Issue]:
             actions = []
             for action in _RECEIPT_ACTION.finditer(plain):
                 action_word = action.group().lower()
-                if action_word in {"required", "mandatory", "needed", "need", "needs"} and (
+                if action_word in {
+                    "required",
+                    "mandatory",
+                    "needed",
+                    "need",
+                    "needs",
+                    "necessary",
+                    "obligatory",
+                    "compulsory",
+                    "essential",
+                } and (
                     re.search(
                         r"\b(?:(?:not|no longer)(?:\s+be)?|was|were|had been)\s+$",
                         plain[: action.start()],
