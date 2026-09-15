@@ -410,6 +410,36 @@ def test_pre_lint_propagates_the_first_failure(tmp_path: Path) -> None:
     assert "Ruff format" not in result.stdout
 
 
+def test_pre_lint_uses_pinned_docker_when_installed_shellcheck_is_stale(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    _write(bin_dir / "shellcheck", "#!/usr/bin/env bash\nprintf 'version: 0.9.0\\n'\n")
+    _write(
+        bin_dir / "docker",
+        f"#!/usr/bin/env bash\nprintf 'docker %s\\n' \"$*\" >> {log!s}\n",
+    )
+    _write(
+        bin_dir / "ruff",
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = --version ]; then printf 'ruff 0.16.7\\n'; exit 0; fi\nexit 7\n",
+    )
+    for executable in ("shellcheck", "docker", "ruff"):
+        os.chmod(bin_dir / executable, 0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    isolated = tmp_path / "repo"
+    shutil.copytree(ROOT / "scripts", isolated / "scripts")
+    shutil.copy2(ROOT / "requirements-dev.txt", isolated / "requirements-dev.txt")
+    result = _run(["bash", str(isolated / "scripts/pre-lint.sh")], cwd=isolated, env=env)
+
+    assert result.returncode == 7
+    assert "ShellCheck 0.9.0 is stale; using pinned Docker image." in result.stdout
+    docker_command = log.read_text()
+    assert "koalaman/shellcheck@sha256:" in docker_command
+    assert "scripts/pre-lint.sh" in docker_command
+
+
 def _init_changelog_sync_repo(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')

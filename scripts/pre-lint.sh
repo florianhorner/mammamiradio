@@ -34,9 +34,14 @@ fi
 step "ShellCheck scripts"
 if command -v shellcheck >/dev/null 2>&1; then
     shellcheck_version="$(shellcheck --version | awk -F': ' '/^version:/ {print $2}')"
-    [ "$shellcheck_version" = "0.11.0" ] \
-        || fail_tool "ShellCheck $shellcheck_version does not match CI 0.11.0."
-    shellcheck scripts/*.sh
+    if [ "$shellcheck_version" = "0.11.0" ]; then
+        shellcheck scripts/*.sh
+    elif command -v docker >/dev/null 2>&1; then
+        echo "pre-lint: ShellCheck $shellcheck_version is stale; using pinned Docker image."
+        docker run --rm -v "$REPO_ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" scripts/*.sh
+    else
+        fail_tool "ShellCheck $shellcheck_version does not match CI 0.11.0 and Docker is unavailable."
+    fi
 elif command -v docker >/dev/null 2>&1; then
     docker run --rm -v "$REPO_ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" scripts/*.sh
 else
