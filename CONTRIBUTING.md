@@ -303,10 +303,8 @@ artifacts should say which convention they follow.
 Content-addressing makes a v2 receipt deterministic and binds it to the reviewed
 tree; it does not authenticate who created it. `source_record_sha256` identifies
 the exact local review-ledger line used by the emitter, but CI has no copy of that
-ledger to authenticate. During the report-only phase this is an explicit process
-guard for trusted repository writers. Before it becomes required, the workflow
-orchestration must also move off the PR-editable `pull_request` definition and
-report from a base-owned control plane against the exact head.
+ledger to authenticate. Mandatory review-receipt admission and its report-only
+workflow are retired; the standalone verifier and historical receipts remain.
 
 The redacted tracked proof stores the candidate ID and name, selected profile,
 text and audio hashes, provider result, duration, approval status, and human

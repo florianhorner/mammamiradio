@@ -375,7 +375,7 @@ def test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending
     assert "recommendation: wait/checks" in result.stdout
 
 
-def test_pr_queue_status_does_not_recommend_land_now_without_evidence(tmp_path: Path) -> None:
+def test_pr_queue_status_recommends_land_without_review_receipts(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _run(["git", "checkout", "-qb", "feature-no-evidence"], cwd=tmp_path)
     pr = {
@@ -390,16 +390,21 @@ def test_pr_queue_status_does_not_recommend_land_now_without_evidence(tmp_path: 
         "url": "https://example.test/pr/30",
     }
     env = _env_with_fake_gh(tmp_path, [pr], skip_evidence=False)
+    calls = tmp_path.parent / f"{tmp_path.name}-evidence-calls"
+    checker = tmp_path.parent / f"{tmp_path.name}-evidence-checker"
+    _write(checker, '#!/usr/bin/env bash\necho invoked >> "$RETIRED_READER_CALLS"\nexit 1\n')
+    env.update(MMR_QUEUE_EVIDENCE_CHECKER=str(checker), RETIRED_READER_CALLS=str(calls))
+    env["MMR_QUEUE_SKIP_EVIDENCE"] = "0"
     result = _run(["bash", str(PR_QUEUE_STATUS)], cwd=tmp_path, env=env)
     assert result.returncode == 0
-    assert "evidence: missing/invalid" in result.stdout
-    assert "recommendation: emit/review evidence" in result.stdout
-    assert "recommendation: land now" not in result.stdout
+    assert "evidence:" not in result.stdout
+    assert "recommendation: land now" in result.stdout
     pr["mergeStateStatus"] = "BEHIND"
     _fake_gh(tmp_path.parent / f"{tmp_path.name}-bin", [pr])
     result = _run(["bash", str(PR_QUEUE_STATUS)], cwd=tmp_path, env=env)
     assert "recommendation: integrate + push" in result.stdout
     assert "recommendation: emit/review evidence" not in result.stdout
+    assert not calls.exists()
 
 
 def test_pr_queue_status_fails_closed_when_thread_debt_is_unknown(tmp_path: Path) -> None:

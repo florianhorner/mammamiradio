@@ -31,6 +31,7 @@ pass() { PASS_COUNT=$((PASS_COUNT + 1)); echo "PASS: $1"; }
 
 TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
+export RETIRED_READER_CALLS="$TMPDIR_T/retired-reader-calls"
 BIN="$TMPDIR_T/bin"
 mkdir -p "$BIN"
 
@@ -160,10 +161,12 @@ chmod +x "$BIN/git"
 # ---- mock evidence checker --------------------------------------------------
 cat > "$TMPDIR_T/evidence-ok.sh" <<'EOF'
 #!/usr/bin/env bash
+echo invoked >> "$RETIRED_READER_CALLS"
 exit 0
 EOF
 cat > "$TMPDIR_T/evidence-missing.sh" <<'EOF'
 #!/usr/bin/env bash
+echo invoked >> "$RETIRED_READER_CALLS"
 echo "no v2 receipt binds this content"
 exit 1
 EOF
@@ -205,7 +208,7 @@ run_plan() { # prs-json [extra env assignments handled by caller]
   GIT_MOCK_EDGE_REPO="${EDGE_REPO:-}" \
   GH_MOCK_PR_LIST_FAIL="${PR_LIST_FAIL:-0}" \
   MMR_LAND_EVIDENCE_CHECKER="${EVIDENCE:-$TMPDIR_T/evidence-ok.sh}" \
-  MMR_LAND_REVIEW_READER="/nonexistent" \
+  MMR_LAND_REVIEW_READER="$TMPDIR_T/evidence-missing.sh" \
   GH_REPO="florianhorner/mammamiradio" \
   PATH="$BIN:$PATH" \
     bash "$PLAN" --json
@@ -305,13 +308,13 @@ OUT="$(THREADS="$ONE_THREAD" COMMENTS="$MINOR_COMMENTS" run_plan "$PRS")"
 pass "low-severity bot debt does not block"
 
 # =============================================================================
-# Case 9: missing v2 evidence blocks — never READY (invariant I7).
+# Case 9: missing receipts/ledger never block an otherwise-ready PR.
 # =============================================================================
 PRS="[$(pr_row 70 "fix: no receipt" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
 OUT="$(EVIDENCE="$TMPDIR_T/evidence-missing.sh" run_plan "$PRS")"
-[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "BLOCKED_EVIDENCE" ] || fail "missing evidence must block"
-[ "$(jq -r '.decision.action' <<<"$OUT")" = "none" ] || fail "must not arm without evidence"
-pass "missing v2 evidence blocks and never reaches READY"
+[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "READY" ] || fail "missing receipts must not block"
+[ "$(jq -r '.decision.action' <<<"$OUT")" = "arm" ] || fail "ready PR should have an advisory arm proposal"
+pass "missing receipts and ledger do not block READY"
 
 # =============================================================================
 # Case 10: bot lanes are exempt. A dependabot PR at the FIFO head must not stall
@@ -552,12 +555,12 @@ QUEUE_GATES="$(gates_in "$PLAN" classify_pr)"
 # prints PASS forever while asserting nothing.
 [ -n "$VERIFY_GATES" ] || fail "gate extraction found no gates in verify_head — the parity check would pass vacuously"
 [ -n "$QUEUE_GATES" ] || fail "gate extraction found no gates in classify_pr — the parity check would pass vacuously"
-# squad_check is deliberately absent from the queue: it reads a local gstack
-# ledger that no runner has, and v2 evidence already covers the review gate.
+! printf '%s\n' "$VERIFY_GATES" "$QUEUE_GATES" | grep -Eq 'evidence_check|squad_check' \
+  || fail "receipt/ledger admission must stay retired in both paths"
 MISSING="$(comm -23 <(printf '%s\n' "$VERIFY_GATES" | sed '/^$/d' | sort) \
-                    <(printf '%s\nsquad_check\n' "$QUEUE_GATES" | sed '/^$/d' | sort))"
+                    <(printf '%s\n' "$QUEUE_GATES" | sed '/^$/d' | sort))"
 [ -z "$MISSING" ] || fail "verify_head gates the queue does not evaluate: $MISSING"
-pass "queue evaluates every gate land-pr arms on (squad_check exempted by design)"
+pass "queue evaluates every verify_head gate, with no receipt/ledger exception"
 
 # =============================================================================
 # Case 23: a PR whose author account was deleted (.author == null) must not
@@ -624,7 +627,7 @@ OUTFILE="$TMPDIR_T/decision.json"
 rm -f "$OUTFILE"
 HUMAN="$(GH_MOCK_LOG="$TMPDIR_T/gh.log" GH_MOCK_PRS="$PRS" GH_MOCK_THREADS="$EMPTY_THREADS" \
   GH_MOCK_COMMENTS="$EMPTY_COMMENTS" GH_MOCK_RUN_SHAS="" \
-  MMR_LAND_EVIDENCE_CHECKER="$TMPDIR_T/evidence-ok.sh" MMR_LAND_REVIEW_READER="/nonexistent" \
+  MMR_LAND_EVIDENCE_CHECKER="$TMPDIR_T/evidence-ok.sh" MMR_LAND_REVIEW_READER="$TMPDIR_T/evidence-missing.sh" \
   GH_REPO="florianhorner/mammamiradio" PATH="$BIN:$PATH" \
   bash "$PLAN" --json-out "$OUTFILE")"
 [ -s "$OUTFILE" ] || fail "--json-out must write the decision file"
@@ -725,21 +728,15 @@ OUT="$(THREADS="$ONE_THREAD" COMMENTS="$COMMENTS_JSON" run_plan "$PRS")"
 pass "blocking filter matches both bot login spellings, and only bots"
 
 # =============================================================================
-# Case 33: the ledger age check uses the head's own last push, not wall clock.
-# Passing `date +%s` made every entry look stale once it aged past the grace
-# window, so the shadow blocked where land-pr.sh accepts.
+# Case 33: an old commit date and legacy ledger switch cannot restore admission.
 # =============================================================================
-# shellcheck disable=SC2016  # assert the literal shell source
-grep -q 'squad_check "$head" "$(date' "$PLAN" \
-  && fail "the ledger age check must use the head commit date, not wall clock"
-# shellcheck disable=SC2016  # assert the literal shell source
-grep -q 'gh pr view "$pr" --json commits' "$PLAN" \
-  || fail "the ledger age check must read the head commit date from the PR"
+! sed -n '/^classify_pr() {/,/^}/p' "$PLAN" | grep -Eq 'evidence_check|squad_check|gh pr view.*commits' \
+  || fail "queue classification must not consult retired receipt/ledger inputs"
 PRS="[$(pr_row 190 "fix: aged" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false "feature/pr-190" "2026-01-01T00:00:00Z")]"
-OUT="$(run_plan "$PRS")"
+OUT="$(MMR_LAND_REQUIRE_LEDGER_SQUAD=1 EVIDENCE="$TMPDIR_T/evidence-missing.sh" run_plan "$PRS")"
 [ "$(jq -r '.prs[0].state' <<<"$OUT")" = "READY" ] \
-  || fail "an old head commit date must not block when evidence is present"
-pass "ledger age check reads the head commit date, not the wall clock"
+  || fail "an old head commit date must not block without receipts"
+pass "ledger age and obsolete switches do not affect queue readiness"
 
 # =============================================================================
 # The landed-ref refresh is need-driven: a base the local origin/main already
@@ -769,6 +766,9 @@ else
     || fail "a base not covered by local origin/main must trigger the refresh"
 fi
 pass "landed ref is refreshed only when the local ref does not cover the base"
+
+[ ! -e "$RETIRED_READER_CALLS" ] || fail "queue invoked a retired receipt/ledger reader"
+pass "queue never invokes retired receipt or ledger readers"
 
 echo
 echo "All $PASS_COUNT land-queue cases passed."

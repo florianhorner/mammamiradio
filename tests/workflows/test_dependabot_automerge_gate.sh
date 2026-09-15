@@ -452,12 +452,14 @@ WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; succeeded
 "$PY" - "$TMP/gh.log" "$CUT_COMMIT" <<'PYEOF'
 import pathlib, sys
 calls = pathlib.Path(sys.argv[1]).read_text().splitlines()
-evidence = next(i for i, s in enumerate(calls) if s.startswith('evidence '))
+assert not any(s.startswith('evidence ') for s in calls)
 admission = next(i for i, s in enumerate(calls) if '/actions/workflows/dependabot-automerge.yml' in s)
 merge = calls.index(f'pr merge 7 --squash --auto --match-head-commit {sys.argv[2]}')
-assert evidence < admission < merge
+assert admission < merge
 PYEOF
-for invalid in EVIDENCE_RC=1 MERGE_STATE=BEHIND; do
+EVIDENCE_RC=1 WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; succeeded
+! grep -q '^evidence ' <<< "$LOG" || fail "retired evidence checker must not run"
+for invalid in MERGE_STATE=BEHIND MERGE_STATE=DIRTY; do
   export "${invalid?}"
   WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; failed; no_merge
   ! grep -q '/actions/' <<< "$LOG" || fail "existing gate failure must precede freeze admission"
@@ -469,9 +471,9 @@ done
 # Failed object reads are tested directly: ensure_head_local would try to fetch
 # an unavailable PR head in the wrapper, which is intentionally not simulated.
 (cd "$FIXTURE" && GH_REPO=florianhorner/mammamiradio bash "$HOLD" check-cut missing "$CUT_COMMIT" >/dev/null 2>&1) && fail "missing base object must refuse"
-pass "real landing path gates pinned version changes after evidence; ordinary PRs retain existing behavior"
+pass "real landing path gates pinned version changes without receipts; ordinary PRs retain existing behavior"
 
-# A base-object fetch alone does not repair ancestry across a shallow boundary.
+# Cut admission needs only the exact base/head objects across a shallow boundary.
 # These clones use a local file transport; no GitHub or network access.
 FULL_FIXTURE="$FIXTURE"
 git -C "$FULL_FIXTURE" update-ref refs/heads/ordinary "$ORDINARY_COMMIT"
@@ -495,7 +497,7 @@ WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; succeeded
 shallow_fixture unavailable-origin cut
 git -C "$FIXTURE" remote set-url origin "$TMP/missing-origin"
 WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; failed; no_merge
-grep -q 'could not fetch head' <<< "$OUT" || fail "history fetch failure must explain recovery"
-! grep -q '^evidence\|/actions/' <<< "$LOG" || fail "history fetch failure must precede evidence and freeze checks"
-pass "landing hydrates shallow history before evidence and refuses unavailable history"
+grep -q 'base .* could not be fetched' <<< "$OUT" || fail "missing base object must explain recovery"
+! grep -q '^evidence\|/actions/' <<< "$LOG" || fail "object fetch failure must precede freeze checks; evidence stays retired"
+pass "landing hydrates exact objects for shallow cut admission and refuses unavailable objects"
 echo "All dependabot automerge gate cases passed."

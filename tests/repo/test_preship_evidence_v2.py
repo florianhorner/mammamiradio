@@ -2590,39 +2590,14 @@ def test_cli_converts_landing_errors_to_exit_one(
     assert "landing-evidence: FAIL — synthetic failure" in capsys.readouterr().err
 
 
-def test_workflow_verifies_v2_only_from_trusted_base() -> None:
-    text = WORKFLOW.read_text()
-    assert "name: pre-ship evidence (report-only)" in text
-    assert "ref: ${{ github.event.pull_request.base.sha }}" in text
-    assert text.count('git fetch --no-tags origin "$HEAD_SHA"') == 1
-    assert 'actual_base="$(git rev-parse HEAD)"' in text
-    assert 'if [ "$actual_base" != "$BASE_SHA" ]' in text
-    assert "name: Check v2 pre-ship review evidence" in text
-    assert "python3 -S -P -m scripts.landing evidence verify" in text
-    assert '--target "$HEAD_SHA" --base "$BASE_SHA" --mode pr' in text
-    assert "base predates the v2 verifier" in text
-    assert "workflow definition itself is still PR-controlled" in text
-    assert "base-owned control plane" in text
-    assert "reopened" in text
-    assert "github.event.pull_request.user.login != 'dependabot[bot]'" in text
-    assert "git checkout" not in text
-    assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
-    # The fixed-name v1 artifact is retired; the workflow neither reads nor
-    # mentions a v1 checking step anymore, and says why the file is gone.
-    assert "Check v1 pre-ship review evidence" not in text
-    assert "proof/preship-review.json" not in text
-    assert "legacy fixed-name v1 file is retired" in text
-    # Report-only, not blocking: the v2 check annotates and never fails the job.
-    # These guard the report-only -> blocking flip, which is a separate approval.
-    assert "(report-only)" in text
-    assert "::warning::" in text
-    v2_step = text[text.index("name: Check v2 pre-ship review evidence") :]
-    assert "::error::" not in v2_step
-    assert "exit 1" not in v2_step
-
+def test_receipt_workflow_is_retired_but_verifier_coverage_remains() -> None:
+    assert not WORKFLOW.exists()
     quality = QUALITY_WORKFLOW.read_text()
-    assert "Landing policy full branch coverage" in quality
+    assert "Legacy review evidence full branch coverage" in quality
     assert "--cov=scripts.landing --cov-branch --cov-fail-under=100" in quality
+    assert "bash tests/workflows/test_preship_evidence.sh" in quality
+    hooks = json.loads((ROOT / ".claude/settings.json").read_text())["hooks"]["PreToolUse"]
+    assert any("require-preship-squad.sh" in hook.get("command", "") for group in hooks for hook in group["hooks"])
 
 
 def _set_origin_main(repo: GitRepository, commit: str) -> None:

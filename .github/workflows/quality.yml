@@ -183,7 +183,7 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_validate_addon_owner.sh
 
-      - name: Pre-ship squad gate self-test
+      - name: Raw-merge guard self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_squad_gate.sh
 
@@ -191,11 +191,11 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_dependabot_automerge_gate.sh
 
-      - name: Pre-ship evidence self-test
+      - name: Legacy review evidence adapter self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_evidence.sh
 
-      - name: Landing policy full branch coverage
+      - name: Legacy review evidence full branch coverage
         if: needs.changes.outputs.workflows == 'true'
         run: >-
           python -m pytest -q tests/repo/test_preship_evidence_v2.py

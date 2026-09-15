@@ -8,16 +8,9 @@
 # merge signal, this wrapper:
 #
 #   1. refuses a behind branch without mutating it, directing the feature
-#      workspace to integrate main and push (a clean integrate keeps the
-#      existing v2 receipt valid; no reattest is needed);
-#   2. verifies committed v2 pre-ship evidence on the PR head (portable proof —
-#      works from cloud agents and CI once the receipt is on the branch);
-#   3. when a local gstack ledger is present, also accepts a squad entry that
-#      is still about THIS code (code-state freshness: the entry's commit must
-#      be the PR head or an ancestor, and nothing was pushed after the entry);
-#      without a ledger, v2 evidence alone satisfies the review gate;
-#   4. blocks unresolved Major/Critical bot review threads on the PR head;
-#   5. arms GitHub auto-merge pinned to the exact head it verified:
+#      workspace to integrate main, re-review changed code, and push;
+#   2. blocks unresolved Major/Critical bot review threads on the PR head;
+#   3. checks release-cut admission and arms GitHub auto-merge pinned to the exact head it verified:
 #      gh pr merge --squash --auto --match-head-commit <sha>.
 #
 # GitHub then merges only when required checks pass on the integrated state
@@ -42,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'land-pr: %s\n' "$*" >&2; exit 1; }
 
-# The landing gate predicates (evidence, squad freshness, bot threads) live in
+# The bot-thread predicate and shared Git helpers live in
 # scripts/land-gates.sh so this wrapper and the shadow land queue
 # (scripts/land-queue-plan.sh) reach the same verdict from one implementation.
 LAND_GATES_LIB="$SCRIPT_DIR/land-gates.sh"
@@ -62,17 +55,16 @@ gh pr merge --help 2>/dev/null | grep -- '--match-head-commit' >/dev/null \
 [ "$#" -ge 1 ] || die "usage: scripts/land-pr.sh <pr-number> [<pr-number>...]"
 
 land_one() {
-  local pr="$1" view state head base merge_state last_push
+  local pr="$1" view state head base merge_state
 
   case "$pr" in (*[!0-9]*|'') die "PR number must be numeric, got: $pr" ;; esac
 
-  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,mergeStateStatus,commits 2>/dev/null)" \
+  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,mergeStateStatus 2>/dev/null)" \
     || die "could not read PR #$pr. Check the number and your gh auth, then re-run."
   state="$(printf '%s' "$view" | jq -r '.state')"
   head="$(printf '%s' "$view" | jq -r '.headRefOid')"
   base="$(printf '%s' "$view" | jq -r '.baseRefOid')"
   merge_state="$(printf '%s' "$view" | jq -r '.mergeStateStatus')"
-  last_push="$(printf '%s' "$view" | jq -r '[.commits[].committedDate] | max // empty')"
 
   if [ "$state" != "OPEN" ]; then
     say "land-pr: PR #$pr is $state, not open — nothing to land."
@@ -81,11 +73,6 @@ land_one() {
 
   [ -n "$base" ] && [ "$base" != "null" ] \
     || die "PR #$pr reports no base commit — refusing to land; check the PR on GitHub."
-  [ -n "$last_push" ] || die "PR #$pr reports no commits — refusing to land; check the PR on GitHub."
-  local last_push_epoch
-  last_push_epoch="$(iso_to_epoch "$last_push")"
-  [ -n "$last_push_epoch" ] || die "could not parse the PR #$pr head commit date ($last_push)."
-
   if [ "$merge_state" = "DIRTY" ]; then
     say "land-pr: PR #$pr has a merge conflict with its base."
     say "         Resolve the conflict on the branch (merge origin/main into it), push, re-review, then land again."
@@ -95,9 +82,7 @@ land_one() {
   if [ "$merge_state" = "BEHIND" ]; then
     say "land-pr: PR #$pr is behind its base — refusing to change the branch from the landing seat."
     say "         In the feature workspace: git merge origin/main && git push."
-    say "         A clean integrate keeps the existing v2 receipt valid — no reattest needed."
-    say "         Wait for CI, then land again. A conflicted or hand-edited merge fails the"
-    say "         evidence closed and needs a fresh squad run."
+    say "         Wait for CI, then land again. Re-review conflicted or hand-edited changes."
     return 1
   fi
 
@@ -107,18 +92,13 @@ land_one() {
   refresh_landed_ref "$base"
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
-  # Evidence and cut admission both need the verified base and its ancestry.
-  if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-    git fetch -q --no-tags --unshallow origin "$head" "$base" 2>/dev/null \
-      || die "PR #$pr needs full history; could not fetch head $head and base $base. Check origin and retry."
-  fi
   if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
     git fetch -q --no-tags origin "$base" 2>/dev/null \
       || die "PR #$pr base $base could not be fetched. Check origin and retry."
   fi
   git cat-file -e "${base}^{commit}" 2>/dev/null \
     || die "PR #$pr base $base is unavailable locally; cannot verify landing gates."
-  verify_head "$pr" "$head" "$base" "$last_push_epoch" || return 1
+  verify_head "$pr" || return 1
 
   # A stable-version change must not race an earlier Dependabot arming run.
   # This is read-only admission; freeze/thaw remain explicit release actions.

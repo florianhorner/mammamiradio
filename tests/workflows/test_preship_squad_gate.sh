@@ -5,9 +5,10 @@
 # review-log reader (via MMR_PRESHIP_REVIEW_READER), asserting it blocks/allows
 # as expected. No network, no gh CLI, no gstack. Exits non-zero on any mismatch.
 #
-# The guard outputs a deny JSON on stdout (exit 0) ONLY when a gh-pr-create/merge
-# command lacks a qualifying squad entry for HEAD; every other path is fail-open
-# (no output). So "blocked" == stdout contains permissionDecision:deny.
+# The guard denies raw merges, never PR creation for receipt/ledger reasons.
+# Historical creation input vectors and their parser-regression narratives below
+# are retained, but now assert receipt-free admission (not parser behavior).
+# The extracted option-reader test remains a standalone legacy regression.
 
 set -euo pipefail
 
@@ -39,6 +40,7 @@ fi
 
 TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
+export RETIRED_READER_CALLS="$TMPDIR_T/retired-reader-calls"
 
 MERGE_GRAPHQL_FILE="$TMPDIR_T/merge.graphql"
 READ_GRAPHQL_FILE="$TMPDIR_T/read.graphql"
@@ -72,7 +74,7 @@ JSON
 make_reader() {
   local f; f="$(mktemp "$TMPDIR_T/reader.XXXXXX")"
   {
-    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' '#!/usr/bin/env bash' 'echo invoked >> "$RETIRED_READER_CALLS"'
     printf 'cat <<'\''LINES'\''\n'
     printf '{"skill":"%s","commit":"%s","timestamp":"%s"}\n' "$1" "$2" "$3"
     printf '%s\n' '---CONFIG---'
@@ -85,7 +87,7 @@ make_reader() {
 # empty_reader -> executable reader with no entries (just the sentinel)
 empty_reader() {
   local f; f="$(mktemp "$TMPDIR_T/reader.XXXXXX")"
-  printf '%s\n' '#!/usr/bin/env bash' 'echo ---CONFIG---' > "$f"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo invoked >> "$RETIRED_READER_CALLS"' 'echo ---CONFIG---' > "$f"
   chmod +x "$f"
   echo "$f"
 }
@@ -96,7 +98,7 @@ empty_reader() {
 make_evidence() {
   local f; f="$(mktemp "$TMPDIR_T/evidence.XXXXXX")"
   {
-    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' '#!/usr/bin/env bash' 'echo invoked >> "$RETIRED_READER_CALLS"'
     printf 'echo %q\n' "$2"
     printf 'exit %s\n' "$1"
   } > "$f"
@@ -107,8 +109,7 @@ make_evidence() {
 EVIDENCE_OK="$(make_evidence 0 'landing-evidence: OK — pr content has 1 matching v2 receipt(s)')"
 
 # verdict <json-stdin> <reader-path> [evidence-checker-path] -> "deny" or "allow".
-# The evidence checker defaults to a passing stub so existing ledger cases assert
-# the ledger rule alone; receipt cases pass their own stub.
+# Stubs retain every legacy outcome; the zero-call sentinel proves none is read.
 verdict() {
   local out evidence="${3:-$EVIDENCE_OK}"
   out="$(printf '%s' "$1" \
@@ -160,7 +161,7 @@ pass "ancestor-commit entry allowed"
 
 # Case 8: gh pr merge => DENY even with a fresh matching entry. Landing goes
 # through scripts/land-pr.sh (landing contract, 2026-06-12); the wrapper does
-# its own code-state squad check and the hook never sees its internal gh calls.
+# its own landing gates and the hook never sees its internal gh calls.
 [ "$(verdict '{"tool_input":{"command":"gh pr merge 5 --squash"}}' "$(make_reader review "$HEAD_SHA" "$NOW_ISO")")" = deny ] \
   || fail "raw gh pr merge must deny even with a fresh squad entry"
 pass "raw gh pr merge denies (use land-pr.sh)"
@@ -187,7 +188,7 @@ pass "gh pr merge --disable-auto allowed"
 pass "--disable-auto past a shell operator still denies"
 
 # Case 8d: scripts/land-pr.sh invocation => ALLOW (hook does not match it; the
-# wrapper enforces the squad itself with code-state freshness)
+# wrapper enforces the remaining landing gates itself)
 [ "$(verdict '{"tool_input":{"command":"scripts/land-pr.sh 5"}}' "$DUMMY")" = allow ] \
   || fail "land-pr.sh invocation should pass the hook"
 pass "land-pr.sh invocation allowed"
@@ -267,38 +268,38 @@ pass "read-only gh api graphql -F query=@file allowed"
   || fail "read-only gh api graphql --input should be allowed"
 pass "read-only gh api graphql --input allowed"
 
-# Case 9: gh pr create, no entries => DENY
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(empty_reader)")" = deny ] \
-  || fail "gh pr create with no squad entry should deny"
-pass "no entry denies"
+# Case 9: gh pr create, no entries => allow
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(empty_reader)")" = allow ] \
+  || fail "gh pr create with no squad entry should allow"
+pass "no entry allows"
 
-# Case 10: gh pr create, entry is STALE (>2h) => DENY
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "$STALE_ISO")")" = deny ] \
-  || fail "stale (>2h) entry should deny"
-pass "stale entry denies"
+# Case 10: gh pr create, entry is STALE (>2h) => allow
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "$STALE_ISO")")" = allow ] \
+  || fail "stale (>2h) entry should allow"
+pass "stale entry allows"
 
-# Case 11: gh pr create, entry has wrong skill (qa) => DENY
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader qa "$HEAD_SHA" "$NOW_ISO")")" = deny ] \
+# Case 11: gh pr create, entry has wrong skill (qa) => allow
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader qa "$HEAD_SHA" "$NOW_ISO")")" = allow ] \
   || fail "non-review skill should not satisfy the gate"
-pass "wrong-skill entry denies"
+pass "wrong-skill entry allows"
 
-# Case 12: gh pr create, entry for an unrelated/bogus commit => DENY
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")")" = deny ] \
-  || fail "bogus non-ancestor commit should deny"
-pass "bogus-commit entry denies"
+# Case 12: gh pr create, entry for an unrelated/bogus commit => allow
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")")" = allow ] \
+  || fail "bogus non-ancestor commit should allow"
+pass "bogus-commit entry allows"
 
-# Case 13: gh pr create, entry for HEAD but UNPARSEABLE timestamp => DENY
+# Case 13: gh pr create, entry for HEAD but UNPARSEABLE timestamp => allow
 # A timestamp the guard cannot verify must fail toward "not authorized", never
 # be blessed as fresh (regression guard for the es=0 fail-open-wrong-direction).
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "not-a-timestamp")")" = deny ] \
-  || fail "unparseable timestamp should deny (not be treated as fresh)"
-pass "unparseable timestamp denies"
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "not-a-timestamp")")" = allow ] \
+  || fail "unparseable timestamp should allow (not be treated as fresh)"
+pass "unparseable timestamp allows"
 
-# Case 14: gh pr create, entry timestamped >2h in the FUTURE => DENY
+# Case 14: gh pr create, entry timestamped >2h in the FUTURE => allow
 # A far-future timestamp is outside the +/-2h window and must not read as fresh.
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "$FUTURE_ISO")")" = deny ] \
-  || fail "far-future timestamp should deny (not be treated as fresh)"
-pass "far-future timestamp denies"
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$(make_reader review "$HEAD_SHA" "$FUTURE_ISO")")" = allow ] \
+  || fail "far-future timestamp should allow (not be treated as fresh)"
+pass "far-future timestamp allows"
 
 # --- Rule 1b: the committed v2 receipt, not just the local ledger entry --------
 # The ledger lives only on this machine, so every case below holds the ledger
@@ -311,19 +312,19 @@ FRESH_READER="$(make_reader review "$HEAD_SHA" "$NOW_ISO")"
   || fail "logged squad with a covering receipt should allow"
 pass "logged squad + covering receipt allowed"
 
-# Case 16: squad logged but NO receipt covers HEAD => DENY.
+# Case 16: squad logged but NO receipt covers HEAD => allow.
 # This is the #1126 shape: the ledger entry existed, the receipt never did, and
 # nothing objected until the landing attempt.
 EVIDENCE_MISSING="$(make_evidence 1 'landing-evidence: FAIL — PR adds no new v2 review receipt')"
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
-  || fail "logged squad without a covering receipt should deny"
-pass "missing receipt denies"
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
+  || fail "logged squad without a covering receipt should allow"
+pass "missing receipt allows"
 
-# Case 17: receipt exists but pins content outside base..target => DENY
+# Case 17: receipt exists but pins content outside base..target => allow
 EVIDENCE_STALE="$(make_evidence 1 'landing-evidence: FAIL — new v2 receipt pins a reviewed commit outside base-to-target history')"
-[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_STALE")" = deny ] \
-  || fail "receipt not covering the head content should deny"
-pass "non-covering receipt denies"
+[ "$(verdict '{"tool_input":{"command":"gh pr create"}}' "$FRESH_READER" "$EVIDENCE_STALE")" = allow ] \
+  || fail "receipt not covering the head content should allow"
+pass "non-covering receipt allows"
 
 # Case 18: checker cannot run (no verdict rendered) => fail-open allow.
 # Non-zero alone must not block: an unusable Python or a missing dependency is a
@@ -347,11 +348,8 @@ pass "gh pr view unaffected by receipt rule"
 DENY_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create"}}' \
   | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_MISSING" \
     bash "$HOOK" 2>/dev/null || true)"
-printf '%s' "$DENY_OUT" | grep -q 'emit-review-evidence.sh' \
-  || fail "deny message must name scripts/emit-review-evidence.sh as the fix"
-printf '%s' "$DENY_OUT" | jq -e . >/dev/null 2>&1 \
-  || fail "deny payload must stay valid JSON once the checker output is embedded"
-pass "deny message names the remedy and stays valid JSON"
+[ -z "$DENY_OUT" ] || fail "missing receipts must not emit any denial or remedy"
+pass "missing receipts produce no admission output"
 
 # Case 22: the hook must hand the checker the FORK POINT, not the base tip.
 # Asserting "no ancestry complaint against the ambient checkout" proves nothing:
@@ -362,6 +360,7 @@ BASE_CAPTURE="$TMPDIR_T/captured-base"
 EVIDENCE_CAPTURE="$(mktemp "$TMPDIR_T/evidence.XXXXXX")"
 cat > "$EVIDENCE_CAPTURE" <<CAPTURE
 #!/usr/bin/env bash
+echo invoked >> "$RETIRED_READER_CALLS"
 while [ \$# -gt 0 ]; do
   [ "\$1" = "--base" ] && { printf '%s' "\$2" > "$BASE_CAPTURE"; break; }
   shift
@@ -372,63 +371,59 @@ CAPTURE
 chmod +x "$EVIDENCE_CAPTURE"
 
 verdict '{"tool_input":{"command":"gh pr create --base main"}}' "$FRESH_READER" "$EVIDENCE_CAPTURE" >/dev/null
-EXPECTED_BASE="$(git merge-base origin/main HEAD 2>/dev/null || git rev-parse origin/main)"
-[ "$(cat "$BASE_CAPTURE" 2>/dev/null)" = "$EXPECTED_BASE" ] \
-  || fail "hook must pass the fork point as --base (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
-pass "fork point passed as --base, not the base tip"
+[ ! -s "$BASE_CAPTURE" ] || fail "retired checker must not receive a base"
+pass "creation does not invoke the retired base checker"
 
 # Case 22b: a comment is not part of the gh pr create argument vector. The
 # apparent --base HEAD must be ignored, leaving the default fork point in use.
 : > "$BASE_CAPTURE"
 verdict '{"tool_input":{"command":"gh pr create # --base HEAD"}}' "$FRESH_READER" "$EVIDENCE_CAPTURE" >/dev/null
-[ "$(cat "$BASE_CAPTURE" 2>/dev/null)" = "$EXPECTED_BASE" ] \
-  || fail "comment text must not change the default fork-point base (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
-pass "comment text is excluded from --base extraction"
+[ ! -s "$BASE_CAPTURE" ] || fail "retired checker must not receive a base"
+pass "creation does not invoke the retired base checker"
 
 # Case 22c: the other half of the same rule. Only the FIRST gh pr create owns the
 # argument vector; a --base belonging to a later command segment must not be read
 # as this one's. Both halves are covered because either can regress alone.
 : > "$BASE_CAPTURE"
 verdict '{"tool_input":{"command":"gh pr create --base main && gh pr create --base HEAD"}}' "$FRESH_READER" "$EVIDENCE_CAPTURE" >/dev/null
-[ "$(cat "$BASE_CAPTURE" 2>/dev/null)" = "$EXPECTED_BASE" ] \
-  || fail "a later command segment's --base must not be used (got '$(cat "$BASE_CAPTURE" 2>/dev/null)', want '$EXPECTED_BASE')"
-pass "later command segment's --base is ignored"
+[ ! -s "$BASE_CAPTURE" ] || fail "retired checker must not receive a base"
+pass "creation does not invoke the retired base checker"
 
 # Case 23: --base=VALUE form is parsed
-[ "$(verdict '{"tool_input":{"command":"gh pr create --base=main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+[ "$(verdict '{"tool_input":{"command":"gh pr create --base=main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
   || fail "--base=VALUE form should still reach the receipt rule"
-pass "--base=VALUE parsed"
+pass "create with --base=VALUE is allowed"
 
 # Case 24: --base inside --body prose must not be read as the option, in EITHER
 # order. Prose first is the dangerous one: word-splitting picked up the prose ref,
 # it failed to resolve, and the hook fell open — the gate silently off on a PR with
 # no evidence. This PR's own body contains the token `--base`, which is how it
 # surfaced. Both orderings must still reach the receipt rule and deny.
-[ "$(verdict '{"tool_input":{"command":"gh pr create --base main --body \"see --base nonexistent-ref\""}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+[ "$(verdict '{"tool_input":{"command":"gh pr create --base main --body \"see --base nonexistent-ref\""}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
   || fail "a --base inside body prose (after the real option) must not derail the base"
-pass "body-prose --base after the option does not derail the base"
+pass "create with base-like body prose after the option is allowed"
 
-[ "$(verdict '{"tool_input":{"command":"gh pr create --body \"see --base nonexistent-ref\" --base main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+[ "$(verdict '{"tool_input":{"command":"gh pr create --body \"see --base nonexistent-ref\" --base main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
   || fail "a --base inside body prose BEFORE the real option must not disable the gate"
-pass "body-prose --base before the option does not disable the gate"
+pass "create with base-like body prose before the option is allowed"
 
 # Case 24c: an unbalanced quote must not become an accidental bypass either.
-[ "$(verdict '{"tool_input":{"command":"gh pr create --body \"unterminated --base nope"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+[ "$(verdict '{"tool_input":{"command":"gh pr create --body \"unterminated --base nope"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
   || fail "unparseable quoting must fall back to the default base, not skip the gate"
-pass "unbalanced quoting still reaches the receipt rule"
+pass "unbalanced create quoting does not enable receipt admission"
 
 # Case 24d: an unresolvable base must never skip the gate. Base extraction is a
 # convenience, not a security boundary: any command line that yields a ref git
 # cannot resolve falls back to the default branch instead of exiting allow. The
 # unquoted form below passes two --base options, so the "real" one is ambiguous
 # even to gh; ambiguity must not read as permission.
-[ "$(verdict '{"tool_input":{"command":"gh pr create --base totally-nonexistent-ref"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+[ "$(verdict '{"tool_input":{"command":"gh pr create --base totally-nonexistent-ref"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
   || fail "an unresolvable --base must fall back to the default, not skip the receipt rule"
-pass "unresolvable base falls back instead of bypassing"
+pass "unresolvable base does not enable receipt admission"
 
-[ "$(verdict '{"tool_input":{"command":"gh pr create --body see --base nonexistent-ref --base main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = deny ] \
+[ "$(verdict '{"tool_input":{"command":"gh pr create --body see --base nonexistent-ref --base main"}}' "$FRESH_READER" "$EVIDENCE_MISSING")" = allow ] \
   || fail "an ambiguous multi---base command line must not bypass the receipt rule"
-pass "ambiguous multi---base command line still denies"
+pass "ambiguous multi---base command line now allows"
 
 # Case 25: checker output containing a backslash must still yield valid JSON.
 # An unparseable deny is silently dropped, which retires the rule without a trace.
@@ -436,11 +431,8 @@ EVIDENCE_BACKSLASH="$(make_evidence 1 'landing-evidence: FAIL — receipt proof\
 BS_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create"}}' \
   | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_BACKSLASH" \
     bash "$HOOK" 2>/dev/null || true)"
-printf '%s' "$BS_OUT" | jq -e . >/dev/null 2>&1 \
-  || fail "deny payload must stay valid JSON when checker output contains backslashes or quotes"
-printf '%s' "$BS_OUT" | grep -q '"permissionDecision":"deny"' \
-  || fail "backslash-bearing checker output must still deny"
-pass "backslash/quote checker output stays valid JSON"
+[ -z "$BS_OUT" ] || fail "checker error text must not affect admission"
+pass "backslash/quote checker output is never consumed"
 
 # Case 26: the remedy is conditional. Re-emitting fixes a missing receipt; it does
 # nothing for evidence the checker considers present but wrong, and saying so anyway
@@ -449,11 +441,8 @@ EVIDENCE_WRONG="$(make_evidence 1 'landing-evidence: FAIL — v2 receipt modifie
 WRONG_OUT="$(printf '%s' '{"tool_input":{"command":"gh pr create"}}' \
   | MMR_PRESHIP_REVIEW_READER="$FRESH_READER" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_WRONG" \
     bash "$HOOK" 2>/dev/null || true)"
-printf '%s' "$WRONG_OUT" | grep -q '"permissionDecision":"deny"' \
-  || fail "a non-emitter-fixable evidence failure must still deny"
-printf '%s' "$WRONG_OUT" | grep -q 'emit-review-evidence.sh' \
-  && fail "must not prescribe re-emitting for a failure re-emitting cannot fix"
-pass "remedy is conditional on the failure class"
+[ -z "$WRONG_OUT" ] || fail "invalid receipts must not emit a denial or remedy"
+pass "invalid receipts do not affect admission"
 
 # ---------------------------------------------------------------------------
 # Rule 1a: the guard only judges PRs against THIS repository.
@@ -465,9 +454,9 @@ pass "remedy is conditional on the failure class"
 # wrong repository and denied a PR whose squad had run and was logged in its own
 # repo's ledger.
 #
-# The reader is EMPTY in every case below, so anything that reaches the ledger
-# rule denies. An allow verdict therefore proves the scope check ran; it does
-# not mean a review was found.
+# The reader is EMPTY in every case below. All create-only forms now allow;
+# their historical scope narratives record the old bugs, not active policy.
+# Mixed create/merge commands must still hit the unchanged raw-merge guard.
 # ---------------------------------------------------------------------------
 
 THIS_REPO="$(git remote get-url origin 2>/dev/null \
@@ -492,35 +481,35 @@ pass "foreign --repo URL is out of scope"
 # The direction that matters. A scope check that let its own repo through would
 # retire the whole guard, so the allow/deny pair is what makes it a check rather
 # than an off switch.
-[ "$(verdict "$(payload "gh pr create --repo $THIS_REPO --fill")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "gh pr create --repo $THIS_REPO --fill")" "$DUMMY")" = allow ] \
   || fail "--repo naming this repository must still be judged"
-pass "--repo naming this repo is still judged"
+pass "create targeting this repo is allowed"
 
 # GitHub treats these names case-insensitively. Comparing raw would switch the
 # guard off for its own repo on nothing but capitalisation.
 UPPER_REPO="$(printf '%s' "$THIS_REPO" | tr '[:lower:]' '[:upper:]')"
-[ "$(verdict "$(payload "gh pr create --repo $UPPER_REPO --fill")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "gh pr create --repo $UPPER_REPO --fill")" "$DUMMY")" = allow ] \
   || fail "a case-different spelling of this repo must still be judged"
-pass "--repo is compared case-insensitively"
+pass "case-different create target is allowed"
 
 # The flagless form resolves to this checkout, so it is unchanged.
-[ "$(verdict "$(payload 'gh pr create --fill')" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload 'gh pr create --fill')" "$DUMMY")" = allow ] \
   || fail "a flagless create must still be judged"
-pass "flagless create is still judged"
+pass "flagless create is allowed"
 
 # Same class as the --base-in-the-body hole: the option reader must see the
 # argument vector, not the body text.
 PROSE_CREATE='gh pr create --fill --body "ports the rule from --repo florianhorner/gh-workflows"'
-[ "$(verdict "$(payload "$PROSE_CREATE")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$PROSE_CREATE")" "$DUMMY")" = allow ] \
   || fail "a repo named inside --body must not be read as the target"
-pass "--repo inside prose is not a target"
+pass "create with repo-like body prose is allowed"
 
 # A later chained command's --repo must not exempt this one. The same shape was
 # fixed for --base; one shared reader means it cannot regress in only one.
 CHAINED_CREATE='gh pr create --fill && gh pr create --repo florianhorner/gh-workflows --fill'
-[ "$(verdict "$(payload "$CHAINED_CREATE")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$CHAINED_CREATE")" "$DUMMY")" = allow ] \
   || fail "a later segment's --repo must not exempt the first create"
-pass "a later segment's --repo does not exempt this one"
+pass "chained creates are allowed"
 
 # --- Regressions for the three bypasses an adversarial pass found in the first
 # --- draft of Rule 1a. Each one allowed a PR that really lands in THIS repo.
@@ -528,14 +517,14 @@ pass "a later segment's --repo does not exempt this one"
 # The CLI is last-wins on a repeated flag; a first-match read called this foreign
 # and stood aside while the PR landed here. Verified against the real CLI.
 REPEATED_REPO="gh pr create --repo florianhorner/gh-workflows --repo $THIS_REPO --fill"
-[ "$(verdict "$(payload "$REPEATED_REPO")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$REPEATED_REPO")" "$DUMMY")" = allow ] \
   || fail "a repeated --repo must be read last-wins, as the CLI does"
-pass "repeated --repo is read last-wins"
+pass "create with repeated --repo is allowed"
 
 REPEATED_MIXED="gh pr create --repo florianhorner/gh-workflows -R $THIS_REPO --fill"
-[ "$(verdict "$(payload "$REPEATED_MIXED")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$REPEATED_MIXED")" "$DUMMY")" = allow ] \
   || fail "-R after --repo must win, as the CLI does"
-pass "-R overriding --repo is read last-wins"
+pass "create mixing -R and --repo is allowed"
 
 # Spellings the CLI resolves to this repo that a naive https-only normalizer
 # read as foreign. Each was a silent bypass.
@@ -546,23 +535,23 @@ for form in \
   "https://github.com/$THIS_REPO.git" \
   "git@github.com:$THIS_REPO.git"
 do
-  [ "$(verdict "$(payload "gh pr create --repo $form --fill")" "$DUMMY")" = deny ] \
+  [ "$(verdict "$(payload "gh pr create --repo $form --fill")" "$DUMMY")" = allow ] \
     || fail "the --repo spelling '$form' resolves to this repo and must be judged"
 done
-pass "every CLI-accepted spelling of this repo is still judged"
+pass "create with every retained repo spelling is allowed"
 
 # An opening command is exempt only if EVERY opening command in the string is
 # foreign. Putting a foreign one first exempted the local one behind it, which
 # the mirror ordering (already covered above) did not catch.
 FOREIGN_FIRST="gh pr create --repo florianhorner/gh-workflows --fill && gh pr create --fill"
-[ "$(verdict "$(payload "$FOREIGN_FIRST")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$FOREIGN_FIRST")" "$DUMMY")" = allow ] \
   || fail "a foreign first command must not exempt a local one behind it"
-pass "a foreign first command does not exempt a local one"
+pass "foreign-then-local creates are allowed"
 
 FOREIGN_FIRST_SEMI="gh pr create --repo florianhorner/gh-workflows --fill ; gh pr create --fill"
-[ "$(verdict "$(payload "$FOREIGN_FIRST_SEMI")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$FOREIGN_FIRST_SEMI")" "$DUMMY")" = allow ] \
   || fail "a foreign first command must not exempt a local one after a semicolon"
-pass "semicolon chaining does not exempt either"
+pass "semicolon-chained creates are allowed"
 
 # Two genuinely foreign commands together are still out of scope: the rule is
 # "all foreign", not "more than one means judge".
@@ -579,9 +568,9 @@ pass "-Rowner/repo attached shorthand is read"
 # Unbalanced quotes make the tokenizer give up. That must mean "judge it", not
 # "wave it through" — the exemption is the only new way out of this guard.
 UNREADABLE="gh pr create --repo florianhorner/gh-workflows --title \"unterminated --fill"
-[ "$(verdict "$(payload "$UNREADABLE")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$UNREADABLE")" "$DUMMY")" = allow ] \
   || fail "a command line the tokenizer cannot read must still be judged"
-pass "an unreadable command line is still judged"
+pass "unreadable create command is allowed"
 
 # Rule ORDERING is load-bearing. The merge deny must run before the scope skip;
 # with the order swapped, appending a foreign-repo opening command to a merge
@@ -595,7 +584,7 @@ pass "the scope skip does not retire the merge deny"
 # shared reader and needs one too, or the fix silently misses the equals form.
 [ "$(verdict "$(payload 'gh pr create --repo=florianhorner/gh-workflows --fill')" "$DUMMY")" = allow ] \
   || fail "--repo=VALUE must be read as the target"
-pass "--repo=VALUE form is parsed"
+pass "create with --repo=VALUE is allowed"
 
 # An unreadable origin cannot prove a mismatch, so the guard stays ON. This is
 # the one branch of Rule 1a that deliberately fails toward checking rather than
@@ -609,16 +598,16 @@ NO_ORIGIN_OUT="$( (cd "$NO_ORIGIN" \
   && payload 'gh pr create --repo florianhorner/gh-workflows --fill' \
   | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
     bash "$HOOK") 2>/dev/null || true)"
-printf '%s' "$NO_ORIGIN_OUT" | grep -q '"permissionDecision":"deny"' \
-  || fail "an unreadable origin must leave the guard on, not switch it off"
-pass "unreadable origin keeps the guard on"
+[ -z "$NO_ORIGIN_OUT" ] \
+  || fail "repository spelling must not re-enable receipt admission"
+pass "unreadable origin does not gate creation"
 
 # The option-value skip list is what stops prose being scanned. Only --body was
 # ever exercised; an unquoted --title value goes through the same list.
 TITLE_PROSE='gh pr create --fill --title --repo florianhorner/gh-workflows'
-[ "$(verdict "$(payload "$TITLE_PROSE")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$TITLE_PROSE")" "$DUMMY")" = allow ] \
   || fail "a value consumed by --title must not be read as the target"
-pass "--title consumes its value like --body"
+pass "create with repo-like title value is allowed"
 
 # KNOWN GAP, pinned so it stays a decision rather than drift: a flagless command
 # run after cd-ing into ANOTHER repository is still judged against this checkout,
@@ -627,9 +616,9 @@ pass "--title consumes its value like --body"
 # denies the flagless form fleet-wide so it is largely unreachable. Closing it
 # needs the cwd resolution permission-guard.py R13/R19 already had to build.
 CD_OTHER_REPO='cd /Users/florianhorner/repos/gh-workflows && gh pr create --fill'
-[ "$(verdict "$(payload "$CD_OTHER_REPO")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$CD_OTHER_REPO")" "$DUMMY")" = allow ] \
   || fail "known gap changed: a cd-ed flagless create is no longer judged here"
-pass "known gap: a cd-ed flagless create is still judged against this checkout"
+pass "create after changing directories is allowed"
 
 # --- Regressions for three bypasses three review bots found independently.
 # --- Each let the guard stand aside for a PR that really lands in THIS repo.
@@ -639,16 +628,16 @@ pass "known gap: a cd-ed flagless create is still judged against this checkout"
 # NEXT command's foreign target and the whole call read as out of scope.
 NEWLINE_BYPASS='gh pr create --fill
 gh pr create --repo florianhorner/gh-workflows --fill'
-[ "$(verdict "$(payload "$NEWLINE_BYPASS")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$NEWLINE_BYPASS")" "$DUMMY")" = allow ] \
   || fail "a newline must separate commands; a local create must not absorb the next target"
-pass "a newline separates commands"
+pass "newline-separated creates are allowed"
 
 # Reversed order, same shape.
 NEWLINE_BYPASS_REV='gh pr create --repo florianhorner/gh-workflows --fill
 gh pr create --fill'
-[ "$(verdict "$(payload "$NEWLINE_BYPASS_REV")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$NEWLINE_BYPASS_REV")" "$DUMMY")" = allow ] \
   || fail "a local create on a later line must still be judged"
-pass "a local create on a later line is judged"
+pass "later-line local create is allowed"
 
 # A backslash continues the line, as the shell does, so this really is ONE
 # foreign command and stays out of scope.
@@ -673,10 +662,10 @@ for consuming in --assignee -a --label -l --milestone -m --project -p \
                  --reviewer -r --template -T --head -H --recover --base -B
 do
   CONSUMED="gh pr create --fill $consuming --repo=florianhorner/gh-workflows"
-  [ "$(verdict "$(payload "$CONSUMED")" "$DUMMY")" = deny ] \
+  [ "$(verdict "$(payload "$CONSUMED")" "$DUMMY")" = allow ] \
     || fail "$consuming must consume its value, not leak it as the target"
 done
-pass "every value-taking flag consumes its value"
+pass "create with repo-like option values is allowed"
 
 # Boolean flags must NOT consume the next token, or a real target goes unread.
 for boolean in --draft -d --fill-first --fill-verbose --web -w --dry-run --editor -e
@@ -685,7 +674,7 @@ do
   [ "$(verdict "$(payload "$BOOLEAN_THEN_REPO")" "$DUMMY")" = allow ] \
     || fail "$boolean must not swallow the following --repo"
 done
-pass "boolean flags do not swallow the target"
+pass "create with boolean flags before the target is allowed"
 
 # A local clone names no owner/repo, so the origin is UNKNOWN and the guard must
 # stay on. Reducing it to its last two path segments made it mismatch its own
@@ -703,10 +692,10 @@ do
     && payload 'gh pr create --repo florianhorner/mammamiradio --fill' \
     | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
       bash "$HOOK") 2>/dev/null || true)"
-  printf '%s' "$LOCAL_OUT" | grep -q '"permissionDecision":"deny"' \
-    || fail "a local origin ($local_url) names no owner/repo and must keep the guard on"
+  [ -z "$LOCAL_OUT" ] \
+    || fail "repository spelling must not re-enable receipt admission"
 done
-pass "a local or file:// origin keeps the guard on"
+pass "local and file:// origins do not gate creation"
 
 # --- Round 3. One bypass, one regression this branch introduced, three narrow
 # --- unsafe-direction gaps. All verified against the real CLI where relevant.
@@ -721,9 +710,9 @@ extract_arg_reader() {
 
 # pflag strips one "=" from an attached shorthand, so -R=owner/repo names that
 # repo. Keeping the "=" made the value never match this checkout.
-[ "$(verdict "$(payload "gh pr create -R=$THIS_REPO --fill")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "gh pr create -R=$THIS_REPO --fill")" "$DUMMY")" = allow ] \
   || fail "-R=<this repo> must still be judged"
-pass "-R=VALUE attached shorthand is read"
+pass "create with -R=VALUE is allowed"
 
 [ "$(verdict "$(payload 'gh pr create -R=florianhorner/gh-workflows --fill')" "$DUMMY")" = allow ] \
   || fail "-R=<foreign> must be read as a foreign target"
@@ -747,10 +736,10 @@ pass "--base extraction survives the skip list in all three spellings"
 # somebody else's repo.
 for unreadable in '"$REPO"' '"-n"' 'notarepo'
 do
-  [ "$(verdict "$(payload "gh pr create --repo $unreadable --fill")" "$DUMMY")" = deny ] \
+  [ "$(verdict "$(payload "gh pr create --repo $unreadable --fill")" "$DUMMY")" = allow ] \
     || fail "an unreducible target ($unreadable) is unknown and must keep the guard on"
 done
-pass "an unreducible target keeps the guard on"
+pass "unreducible create target is allowed"
 
 # A subshell defeated all three command greps, including the landing-contract
 # hard stop. Pre-existing, and the one that mattered most.
@@ -762,9 +751,9 @@ pass "a subshell does not defeat the merge deny"
   || fail "a REST merge inside a subshell must still be denied"
 pass "a subshell does not defeat the REST merge deny"
 
-[ "$(verdict "$(payload 'X=$(gh pr create --fill)')" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload 'X=$(gh pr create --fill)')" "$DUMMY")" = allow ] \
   || fail "a create inside a command substitution must still be judged"
-pass "a command substitution does not hide a create"
+pass "create in command substitution is allowed"
 
 # --disable-auto must still disarm, and must not be smuggled in from a subshell.
 [ "$(verdict "$(payload 'gh pr merge 5 --disable-auto')" "$DUMMY")" = allow ] \
@@ -775,9 +764,9 @@ pass "disarming a queued merge is still allowed"
 # token split across lines rejoins into one target.
 SPLIT_TOKEN="gh pr create --repo florianhorner/mammamira\\
 dio --fill"
-[ "$(verdict "$(payload "$SPLIT_TOKEN")" "$DUMMY")" = deny ] \
+[ "$(verdict "$(payload "$SPLIT_TOKEN")" "$DUMMY")" = allow ] \
   || fail "a target split across a backslash-newline must rejoin to this repo"
-pass "a backslash-newline rejoins a split token"
+pass "create with a backslash-split target is allowed"
 
 # An origin URL with a trailing slash after .git, or an uppercase .GIT, must
 # still reduce to this repo -- the strip order used to leave one of them behind
@@ -791,10 +780,10 @@ do
     && payload "gh pr create --repo $THIS_REPO --fill" \
     | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
       bash "$HOOK") 2>/dev/null || true)"
-  printf '%s' "$ODD_OUT" | grep -q '"permissionDecision":"deny"' \
-    || fail "origin '$odd_origin' names this repo and must keep the guard on"
+  [ -z "$ODD_OUT" ] \
+    || fail "repository spelling must not re-enable receipt admission"
 done
-pass "odd but hosted origin spellings still name this repo"
+pass "odd hosted origin spellings do not gate creation"
 
 # A bare relative path names no host, so it is not a repository identity.
 git -C "$LOCAL_ORIGIN" remote remove origin 2>/dev/null || true
@@ -803,12 +792,15 @@ REL_OUT="$( (cd "$LOCAL_ORIGIN" \
   && payload "gh pr create --repo $THIS_REPO --fill" \
   | MMR_PRESHIP_REVIEW_READER="$DUMMY" MMR_PRESHIP_EVIDENCE_CHECKER="$EVIDENCE_OK" \
     bash "$HOOK") 2>/dev/null || true)"
-printf '%s' "$REL_OUT" | grep -q '"permissionDecision":"deny"' \
-  || fail "a bare relative origin path names no repository and must keep the guard on"
-pass "a bare relative origin keeps the guard on"
+[ -z "$REL_OUT" ] \
+  || fail "repository spelling must not re-enable receipt admission"
+pass "relative origin does not gate creation"
+
+[ ! -e "$RETIRED_READER_CALLS" ] || fail "retired receipt/ledger reader was invoked"
+pass "all receipt and ledger readers remain uncalled"
 
 # The total is computed, not typed: a hand-maintained count drifted to 47 against
 # 44 real cases on the first pass, and a summary nobody can verify is decoration.
 CASE_COUNT="$(grep -c '^pass ' "$0")"
 echo
-echo "All $CASE_COUNT pre-ship squad gate cases passed."
+echo "All $CASE_COUNT raw-merge / receipt-retirement cases passed."

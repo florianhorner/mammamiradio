@@ -9,8 +9,7 @@
 #
 # This is phase 1 of .context/plans/2026-08-28-auto-land-edge-queue-plan.md: run
 # the decision alongside the human landing seat long enough to trust it, then
-# flip it live. The same staging the pre-ship evidence gate used
-# (.github/workflows/preship-evidence.yml is report-only for the same reason).
+# flip it live. This queue stays advisory until separately authorized.
 #
 # It reaches its verdict through the SAME predicates scripts/land-pr.sh arms on
 # (scripts/land-gates.sh) and the SAME selection scripts/cut-edge-release.sh cuts
@@ -97,7 +96,7 @@ EDGE_SELECT_LIB="$SCRIPT_DIR/edge-select.sh"
 # threads, here is the first") with "waiting on something".
 classify_pr() {
   local pr="$1" head="$2" base="$3" merge_state="$4" is_draft="$5" held="$6" skipped="$7"
-  local gate_out last_push last_push_epoch
+  local gate_out last_push
 
   if [ "$is_draft" = "true" ]; then
     printf 'OPEN\tdraft — not a landing candidate\n'; return
@@ -111,10 +110,7 @@ classify_pr() {
   if [ "$merge_state" = "DIRTY" ]; then
     printf 'BLOCKED_CONFLICT\tmerge conflict with base — the owning workspace resolves it\n'; return
   fi
-  # The evidence gate trusts a base only if it is landed in origin/main. A stale
-  # local ref would report BLOCKED_EVIDENCE for every integrated PR; the refresh
-  # fetches only when the local ref does not already cover this PR's base, so a
-  # fresh CI checkout never touches the network.
+  # Keep landed-base/head availability checks aligned with the landing wrapper.
   refresh_landed_ref "$base"
   if ! ensure_head_local "$pr" "$head"; then
     printf 'BLOCKED_HEAD\thead object could not be fetched — gates cannot be evaluated against it\n'; return
@@ -122,30 +118,6 @@ classify_pr() {
   if ! gate_out="$(thread_check "$pr" 2>&1)"; then
     printf 'BLOCKED_BOT\t%s\n' "$(printf '%s' "$gate_out" | head -1)"; return
   fi
-  if ! evidence_check "$head" "$base" >/dev/null 2>&1; then
-    printf 'BLOCKED_EVIDENCE\tno committed v2 receipt covers this head\n'; return
-  fi
-  # verify_head refuses when the evidence check was skipped AND no local ledger
-  # entry covers the head. Without this the shadow reports "would arm" for a PR
-  # land-pr.sh would refuse — divergence exactly where the escape hatch is in use.
-  # squad_check compares the entry against the head's own last push, not against
-  # now. Passing wall clock made every ledger entry look stale once it aged past
-  # the grace window, so the shadow blocked where land-pr.sh accepts — the same
-  # divergence this check exists to close, pointed the other way.
-  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
-    # Fetched per PR, and only here: `commits` on a 50-PR list query exceeds
-    # GitHub's 500k node budget, and the normal path never needs it. This is the
-    # hotfix escape hatch, so one extra call on it costs nothing in production.
-    last_push="$(gh pr view "$pr" --json commits -q '[.commits[].committedDate] | max // empty' 2>/dev/null)" || last_push=""
-    last_push_epoch="$(iso_to_epoch "$last_push")"
-    if [ -z "$last_push_epoch" ]; then
-      printf 'BLOCKED_EVIDENCE\tcould not read the head commit date to age-check the review\n'; return
-    fi
-    if ! squad_check "$head" "$last_push_epoch" >/dev/null 2>&1; then
-      printf 'BLOCKED_EVIDENCE\tevidence check skipped and no ledger entry covers this head\n'; return
-    fi
-  fi
-
   # Plan Q7: UNSTABLE means only non-required checks are failing and is landable.
   case "$merge_state" in
     BEHIND)    printf 'READY_BEHIND\tgates pass; base moved — needs integrate + push\n' ;;
