@@ -84,7 +84,7 @@ LINT_PATTERNS=(
   # tracker: post-mortem material about local machine state and review runs)
   'stash@\{'                      # git stash refs (stash@{0})
   'conductor-workspace-link'      # app-added private workspace footer
-  'app\.conductor\.build/workspace([/?#]|$)'
+  '[Aa][Pp][Pp]\.[Cc][Oo][Nn][Dd][Uu][Cc][Tt][Oo][Rr]\.[Bb][Uu][Ii][Ll][Dd]/workspace([/?#]|$)'
   '[Cc][Oo][Nn][Dd][Uu][Cc][Tt][Oo][Rr]://'  # deep links embed prompts and local paths
   '\blocal-only\b'
   "\\bFlorian['’]?s( local)? machine\\b"

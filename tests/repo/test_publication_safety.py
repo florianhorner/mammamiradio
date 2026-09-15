@@ -111,6 +111,7 @@ def test_public_examples_require_synthetic_identity(tmp_path: Path, domain: str)
     [
         "<!-- conductor-workspace-link -->",
         "See [workspace](https://app.conductor.build/workspace/private-canary-123).",
+        "See [workspace](https://APP.CONDUCTOR.BUILD/workspace/private-canary-123).",
         "Release notes.\n\n[proof]: https://app.conductor.build/workspace/private-canary-123",
         "https://app.conductor.build/workspace?name=private-canary-123",
         "conductor://prompt=private-canary-123&path=/Users/example/private-canary-123",
