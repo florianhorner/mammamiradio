@@ -108,9 +108,13 @@ def test_quality_workflow_passes_coverage_snapshot_by_artifact() -> None:
 
     assert "COVERAGE_RATCHET_SNAPSHOT: coverage-ratchet-current.json" in tests_block
     assert "COVERAGE_RATCHET_XDIST: auto" in tests_block
+    assert "COVERAGE_RATCHET_JUNIT: pytest-results.xml" in tests_block
     assert "python scripts/coverage-ratchet.py check" in tests_block
     assert re.search(r"actions/upload-artifact@", tests_block) is not None
     assert "name: coverage-ratchet-current" in tests_block
+    assert "name: Upload pytest results" in tests_block
+    assert "if: always()" in tests_block
+    assert "path: pytest-results.xml" in tests_block
     assert re.search(r"actions/download-artifact@", ratchet_block) is not None
     assert "name: coverage-ratchet-current" in ratchet_block
     assert "COVERAGE_RATCHET_INPUT: coverage-ratchet-current.json" in ratchet_block

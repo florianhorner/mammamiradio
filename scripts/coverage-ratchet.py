@@ -18,9 +18,12 @@ from __future__ import annotations
 import json
 import math
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -32,6 +35,7 @@ COVERAGE_SNAPSHOT = (
 COVERAGE_INPUT = Path(os.environ["COVERAGE_RATCHET_INPUT"]) if os.environ.get("COVERAGE_RATCHET_INPUT") else None
 # Repo root for mapping a module key back to its source file. scripts/ -> repo root.
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
+HEARTBEAT_SECONDS = 30.0
 
 
 def _module_source_exists(module: str) -> bool:
@@ -66,6 +70,60 @@ def xdist_args() -> list[str]:
     return []
 
 
+def junit_args() -> list[str]:
+    """Optional JUnit output path for CI artifact upload."""
+    path = os.environ.get("COVERAGE_RATCHET_JUNIT", "").strip()
+    return [f"--junitxml={path}"] if path else []
+
+
+def _run_streaming(command: list[str], *, heartbeat_seconds: float = HEARTBEAT_SECONDS) -> subprocess.CompletedProcess:
+    """Stream merged pytest output while retaining it for coverage parsing."""
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    if process.stdout is None:  # pragma: no cover - guaranteed by stdout=PIPE
+        raise RuntimeError("pytest output pipe was not created")
+
+    output: list[str] = []
+    lines: queue.Queue[str | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            for line in process.stdout:
+                lines.put(line)
+        finally:
+            lines.put(None)
+
+    threading.Thread(target=read_output, daemon=True).start()
+    started = time.monotonic()
+    next_heartbeat = started + heartbeat_seconds
+
+    while True:
+        timeout = max(0.01, next_heartbeat - time.monotonic())
+        try:
+            line = lines.get(timeout=timeout)
+        except queue.Empty:
+            line = ""
+
+        if line is None:
+            break
+        if line:
+            output.append(line)
+            print(line, end="", flush=True)
+
+        now = time.monotonic()
+        if now >= next_heartbeat:
+            print(f"[coverage] pytest still running ({int(now - started)}s elapsed)", flush=True)
+            while next_heartbeat <= now:
+                next_heartbeat += heartbeat_seconds
+
+    return subprocess.CompletedProcess(command, process.wait(), "".join(output), "")
+
+
 def run_coverage() -> tuple[dict[str, int], int]:
     """Keep rounded module floors, but never round up the aggregate threshold.
 
@@ -74,7 +132,7 @@ def run_coverage() -> tuple[dict[str, int], int]:
     """
     with TemporaryDirectory(prefix="coverage-ratchet-") as directory:
         report = Path(directory) / "coverage.json"
-        result = subprocess.run(
+        result = _run_streaming(
             [
                 sys.executable,
                 "-m",
@@ -83,22 +141,18 @@ def run_coverage() -> tuple[dict[str, int], int]:
                 "--cov=mammamiradio",
                 "--cov-report=term-missing",
                 f"--cov-report=json:{report}",
+                "--durations=20",
+                "--durations-min=1.0",
                 "-q",
+                *junit_args(),
                 *xdist_args(),
-            ],
-            capture_output=True,
-            text=True,
+            ]
         )
         if result.returncode == 0:
             raw_total = json.loads(report.read_text())["totals"]["percent_covered"]
             if type(raw_total) not in (int, float) or not math.isfinite(raw_total) or not 0 <= raw_total <= 100:
                 raise ValueError(f"Invalid raw coverage total: {raw_total!r}")
             total_pct = math.floor(raw_total)
-    # Print output so CI shows it
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr, file=sys.stderr)
-
     modules: dict[str, int] = {}
 
     for line in result.stdout.splitlines():
@@ -118,7 +172,7 @@ def run_coverage() -> tuple[dict[str, int], int]:
             "Coverage parsing is not a pass signal — fix tests before re-running.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        raise SystemExit(result.returncode)
 
     if COVERAGE_SNAPSHOT:
         COVERAGE_SNAPSHOT.write_text(
