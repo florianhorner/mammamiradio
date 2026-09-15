@@ -396,7 +396,9 @@ def test_url_and_selector_constants_are_not_mistaken_for_copy(lint) -> None:
 def test_gate_runs_in_the_quality_workflow() -> None:
     """A guard nobody runs is not a guard; keep it in the lint job with its siblings."""
     workflow = (ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
-    assert "bash scripts/check-ui-copy-lint.sh" in workflow
+    pre_lint = (ROOT / "scripts/pre-lint.sh").read_text(encoding="utf-8")
+    assert "bash scripts/pre-lint.sh" in workflow
+    assert "bash scripts/check-ui-copy-lint.sh" in pre_lint
 
 
 def _main_exit(lint, monkeypatch, tmp_path, refs) -> int:
