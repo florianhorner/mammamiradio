@@ -67,9 +67,9 @@ class TestSanitizePromptData:
 class TestSaveDotenv:
     def test_newlines_in_values_stripped(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        _save_dotenv({"KEY": "val\nEVIL=pwned"})
+        _save_dotenv({"SETTING": "val\nEVIL=pwned"})
         content = (tmp_path / ".env").read_text()
-        assert 'KEY="valEVIL=pwned"' in content
+        assert 'SETTING="valEVIL=pwned"' in content
         assert "EVIL" not in content.split("=", 1)[0]  # no separate EVIL key
 
     def test_carriage_returns_stripped(self, tmp_path, monkeypatch):

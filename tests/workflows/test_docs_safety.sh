@@ -106,7 +106,15 @@ expect_default_install_guard() {
     docs/troubleshooting.md \
     docs/operations.md \
     docs/runbooks/parallel-workspaces.md \
-    docs/runbooks/ha-addon.md; do
+    docs/runbooks/ha-addon.md \
+    docs/release-process.md \
+    docs/music-sources.md \
+    docs/2026-05-30-ha-context-ingestion-pipeline.md \
+    scripts/showreel/README.md \
+    scripts/showreel_out/door-bentornato-fable-v2-notes.md \
+    scripts/showreel_out/ma-pr-3836-notes.md \
+    proof/h4-journey-validation.md; do
+    mkdir -p "$(dirname "$fixture_root/$file")"
     printf '# Safe\n' > "$fixture_root/$file"
   done
 
@@ -162,7 +170,15 @@ expect_default_persistence_guard() {
     docs/troubleshooting.md \
     docs/operations.md \
     docs/runbooks/parallel-workspaces.md \
-    docs/runbooks/ha-addon.md; do
+    docs/runbooks/ha-addon.md \
+    docs/release-process.md \
+    docs/music-sources.md \
+    docs/2026-05-30-ha-context-ingestion-pipeline.md \
+    scripts/showreel/README.md \
+    scripts/showreel_out/door-bentornato-fable-v2-notes.md \
+    scripts/showreel_out/ma-pr-3836-notes.md \
+    proof/h4-journey-validation.md; do
+    mkdir -p "$(dirname "$fixture_root/$file")"
     printf '# Safe\n' > "$fixture_root/$file"
   done
 

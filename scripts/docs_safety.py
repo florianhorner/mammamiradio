@@ -125,6 +125,28 @@ _DIRECT_OPTIONS_WRITE = re.compile(
     r"\b(?:in|to|inside|under|through|via)\b.{0,80}(?:/data/)?options\.json",
     re.IGNORECASE,
 )
+_REVIEW_RECEIPT = re.compile(
+    r"\b(?:v2[ -]+(?:(?:preship|pre[- ]ship|review)[ -]+)?receipts?|"
+    r"(?:preship|pre[- ]ship)[ -]+(?:v2|receipts?))\b|emit-review-evidence\.sh",
+    re.IGNORECASE,
+)
+_RECEIPT_CLAUSE_BOUNDARY = re.compile(
+    r"\b(?:and|or)\s+(?=(?:(?:you|we|it|they)\s+)?(?:must|should)\b|"
+    rf"(?:(?:a|an|the|new|fresh|another)\s+)*(?:{_REVIEW_RECEIPT.pattern}|it|they)"
+    r"\s+(?:is|are|must|should)\b)",
+    re.IGNORECASE,
+)
+_RECEIPT_ACTION = re.compile(
+    r"\b(?:must(?!\s+not)|requires?|required|comes?\s+before|finalize|create|"
+    r"run|emit|generate|refresh|restore|reattest|commit(?=\s+(?:the|a|an|v2|preship|review)\b))\b",
+    re.IGNORECASE,
+)
+_HISTORICAL_REQUIREMENT = re.compile(
+    r"^(?:The\s+)?(?:old|former|previous)\s+(?:release|policy|process)\s+(?:required|used to)\b",
+    re.IGNORECASE,
+)
+_EMIT_COMMAND = re.compile(r"^\s*(?:\$\s+)?(?:(?:bash|sh)\s+)?(?:\./)?scripts/emit-review-evidence\.sh(?:\s|$)")
+_HOUSEHOLD_IDENTIFIER = re.compile(r"\b(?:person|device_tracker|lock)\.([a-z0-9_]+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -425,6 +447,58 @@ def options_json_durability_issues(path: Path, text: str) -> list[Issue]:
     return issues
 
 
+def retired_review_receipt_issues(path: Path, text: str) -> list[Issue]:
+    """Keep maintained cut instructions consistent with retired admission."""
+    issues: list[Issue] = []
+    for unit in markdown_prose_units(text):
+        for _, clause in _clauses(unit.text):
+            plain = re.sub(r"[*`]", "", clause).strip(" -#>")
+            if not _REVIEW_RECEIPT.search(plain) or _HISTORICAL_REQUIREMENT.match(plain):
+                continue
+            # Normalize receipt prohibitions locally; live-recovery negation
+            # keeps its own, deliberately narrower command-safety grammar.
+            plain = re.sub(r"\b(is|are|was|were|must|should|do)n['’]t\b", r"\1 not", plain, flags=re.IGNORECASE)
+            plain = re.sub(r"\b(must|should)\s+no\s+longer\b", r"\1 not", plain, flags=re.IGNORECASE)
+            actions = []
+            for action in _RECEIPT_ACTION.finditer(plain):
+                action_word = action.group().lower()
+                if action_word == "required" and (
+                    re.search(
+                        r"\b(?:(?:not|no longer)(?:\s+be)?|was|were|had been)\s+$",
+                        plain[: action.start()],
+                        re.IGNORECASE,
+                    )
+                    or re.match(r"No\b", plain, re.IGNORECASE)
+                ):
+                    continue
+                actions.append(action.start())
+            # A new coordinated obligation has its own negation scope. Keep
+            # nested warnings such as "or claim they are required" together.
+            starts = [0, *(match.end() for match in _RECEIPT_CLAUSE_BOUNDARY.finditer(plain))]
+            if any(
+                _uncovered_positions(plain[start:], [position - start for position in actions if position >= start])
+                for start in starts
+            ):
+                issues.append(Issue(path, unit.line, "retired review-receipt requirement", ""))
+                break
+    # A fenced executable instruction must not bypass the prose check. Historical
+    # appendices are outside this maintained-guide scope; standalone readers stay valid.
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if _EMIT_COMMAND.match(line):
+            issues.append(Issue(path, line_number, "retired review-receipt requirement", ""))
+    return issues
+
+
+def public_example_identity_issues(path: Path, text: str) -> list[Issue]:
+    """Selected public examples use synthetic IDs, including inside code fences."""
+    issues: list[Issue] = []
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if any(not match.group(1).lower().startswith("example_") for match in _HOUSEHOLD_IDENTIFIER.finditer(line)):
+            # Never reproduce the identifying value in a public CI log.
+            issues.append(Issue(path, line_number, "non-synthetic household identifier", "use an example_ object ID"))
+    return issues
+
+
 def _find_closing(text: str, start: int, opener: str, closer: str) -> int | None:
     depth = 1
     cursor = start + 1
@@ -635,6 +709,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--copy", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--links", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--persistence", nargs="*", default=[], metavar="FILE")
+    parser.add_argument("--release-policy", nargs="*", default=[], metavar="FILE")
+    parser.add_argument("--public-examples", nargs="*", default=[], metavar="FILE")
     return parser.parse_args()
 
 
@@ -643,7 +719,9 @@ def main() -> int:
     issues: list[Issue] = []
     cache: dict[Path, str] = {}
 
-    for raw_path in dict.fromkeys([*args.copy, *args.links, *args.persistence]):
+    for raw_path in dict.fromkeys(
+        [*args.copy, *args.links, *args.persistence, *args.release_policy, *args.public_examples]
+    ):
         path = Path(raw_path)
         try:
             cache[path] = _read(path)
@@ -662,6 +740,14 @@ def main() -> int:
         path = Path(raw_path)
         if path in cache:
             issues.extend(options_json_durability_issues(path, cache[path]))
+    for raw_path in args.release_policy:
+        path = Path(raw_path)
+        if path in cache:
+            issues.extend(retired_review_receipt_issues(path, cache[path]))
+    for raw_path in args.public_examples:
+        path = Path(raw_path)
+        if path in cache:
+            issues.extend(public_example_identity_issues(path, cache[path]))
 
     for issue in issues:
         print(issue.render())
