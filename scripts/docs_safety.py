@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import html
 import re
+import shlex
 import sys
 import unicodedata
 from bisect import bisect_right
@@ -126,7 +127,7 @@ _DIRECT_OPTIONS_WRITE = re.compile(
     re.IGNORECASE,
 )
 _REVIEW_RECEIPT = re.compile(
-    r"\b(?:v2[ -]+(?:(?:preship|pre[- ]ship|review)[ -]+)?receipts?|"
+    r"\b(?:v2[ -]+(?:(?:preship|pre[- ]ship|review)[ -]+)*receipts?|"
     r"(?:preship|pre[- ]ship)[ -]+(?:v2|receipts?))\b|emit-review-evidence\.sh",
     re.IGNORECASE,
 )
@@ -138,14 +139,14 @@ _RECEIPT_CLAUSE_BOUNDARY = re.compile(
 )
 _RECEIPT_ACTION = re.compile(
     r"\b(?:must(?!\s+not)|requires?|required|comes?\s+before|finalize|create|"
-    r"run|emit|generate|refresh|restore|reattest|commit(?=\s+(?:the|a|an|v2|preship|review)\b))\b",
+    r"mandatory|needed|needs?|run|emit|generate|refresh|restore|reattest|"
+    r"commit(?=\s+(?:the|a|an|v2|preship|review)\b))\b",
     re.IGNORECASE,
 )
 _HISTORICAL_REQUIREMENT = re.compile(
     r"^(?:The\s+)?(?:old|former|previous)\s+(?:release|policy|process)\s+(?:required|used to)\b",
     re.IGNORECASE,
 )
-_EMIT_COMMAND = re.compile(r"^\s*(?:\$\s+)?(?:(?:bash|sh)\s+)?(?:\./)?scripts/emit-review-evidence\.sh(?:\s|$)")
 _HOUSEHOLD_IDENTIFIER = re.compile(r"\b(?:person|device_tracker|lock)\.([a-z0-9_]+)\b", re.IGNORECASE)
 
 
@@ -453,8 +454,16 @@ def retired_review_receipt_issues(path: Path, text: str) -> list[Issue]:
     for unit in markdown_prose_units(text):
         for _, clause in _clauses(unit.text):
             plain = re.sub(r"[*`]", "", clause).strip(" -#>")
-            if not _REVIEW_RECEIPT.search(plain) or _HISTORICAL_REQUIREMENT.match(plain):
+            if not _REVIEW_RECEIPT.search(plain):
                 continue
+            historical = _HISTORICAL_REQUIREMENT.match(plain)
+            if historical:
+                transition = re.search(r",\s*(?:and|so|then)\s+", plain[historical.end() :], re.IGNORECASE)
+                if not transition:
+                    continue
+                plain = plain[historical.end() + transition.end() :]
+                if not _REVIEW_RECEIPT.search(plain):
+                    continue
             # Normalize receipt prohibitions locally; live-recovery negation
             # keeps its own, deliberately narrower command-safety grammar.
             plain = re.sub(r"\b(is|are|was|were|must|should|do)n['’]t\b", r"\1 not", plain, flags=re.IGNORECASE)
@@ -462,7 +471,7 @@ def retired_review_receipt_issues(path: Path, text: str) -> list[Issue]:
             actions = []
             for action in _RECEIPT_ACTION.finditer(plain):
                 action_word = action.group().lower()
-                if action_word == "required" and (
+                if action_word in {"required", "mandatory", "needed", "need", "needs"} and (
                     re.search(
                         r"\b(?:(?:not|no longer)(?:\s+be)?|was|were|had been)\s+$",
                         plain[: action.start()],
@@ -484,9 +493,37 @@ def retired_review_receipt_issues(path: Path, text: str) -> list[Issue]:
     # A fenced executable instruction must not bypass the prose check. Historical
     # appendices are outside this maintained-guide scope; standalone readers stay valid.
     for line_number, line in enumerate(text.splitlines(), 1):
-        if _EMIT_COMMAND.match(line):
+        if _is_emit_command(line):
             issues.append(Issue(path, line_number, "retired review-receipt requirement", ""))
     return issues
+
+
+def _is_emit_command(line: str) -> bool:
+    """Return whether one shell command directly invokes the retired generator."""
+    command = line.strip()
+    if command.startswith("$"):
+        command = command[1:].lstrip()
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+
+    def is_script(token: str) -> bool:
+        return token.removeprefix("./") == "scripts/emit-review-evidence.sh"
+
+    if is_script(tokens[0]):
+        return True
+
+    index = 0
+    if Path(tokens[index]).name == "env":
+        index += 1
+        while index < len(tokens) and (tokens[index].startswith("-") or "=" in tokens[index]):
+            index += 1
+    if index >= len(tokens) or Path(tokens[index]).name not in {"bash", "sh"}:
+        return False
+    return any(is_script(token) for token in tokens[index + 1 :])
 
 
 def public_example_identity_issues(path: Path, text: str) -> list[Issue]:
