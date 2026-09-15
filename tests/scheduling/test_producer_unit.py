@@ -7071,7 +7071,7 @@ def test_attempt_owner_uses_ephemeral_contract_under_tmp_root(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_failed_news_attempt_is_discarded_before_resume_bridge_transfer(tmp_path):
+async def test_failed_news_attempt_is_discarded_before_forced_resume_bridge_transfer(tmp_path):
     """A later bridge cannot inherit and silently release a failed attempt."""
 
     state = _make_state()
@@ -7134,6 +7134,7 @@ async def test_failed_news_attempt_is_discarded_before_resume_bridge_transfer(tm
             # Let the producer enter its stopped-state wait so the next live
             # iteration deterministically takes the resume-bridge path.
             await asyncio.sleep(0.05)
+            state.force_recovery_active = True
             state.session_stopped = False
             state.resume_event.set()
             await asyncio.wait_for(bridge_queued.wait(), timeout=2.0)
@@ -8885,62 +8886,167 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
 
 
 @pytest.mark.asyncio
-async def test_producer_no_resume_bridge_after_session_resume(tmp_path):
-    """While session_stopped=True, the producer sleeps for 1 s per loop iteration
-    and queues nothing.  This test cancels the task well within that 1 s window
-    (0.05 s stopped + 0.2 s resumed), so the _was_stopped → resume-bridge path
-    never fires and the queue stays empty throughout.
-
-    The resume bridge code itself still exists in the producer.  This test only
-    verifies that nothing is queued during the stopped sleep window before the
-    producer observes the resumed state.
-    """
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("observed_stop", [False, True])
+async def test_producer_resume_bridge_belongs_only_to_forced_recovery(tmp_path, force, observed_stop):
+    """Wake the producer fully: ordinary Resume already owns its first audio."""
     state = _make_state()
-    state.session_stopped = True
+    state.session_stopped = observed_stop
+    state.force_recovery_active = force
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    canned_clip = tmp_path / "canned.mp3"
-    canned_clip.write_bytes(b"fake audio")
+    parked = asyncio.Event()
+
+    class ObservedResume(asyncio.Event):
+        async def wait(self):
+            parked.set()
+            return await super().wait()
+
+    state.resume_event = ObservedResume()
 
     with (
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "src.mp3"),
-        patch(f"{PRODUCER_MODULE}.normalize"),
-        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
-        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}._queue_continuity_bridge", new=AsyncMock(return_value=True)) as bridge,
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=asyncio.CancelledError) as production,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            # Wait for the producer to begin its stopped loop
-            await asyncio.sleep(0.05)
-            # Resume the session
-            state.session_stopped = False
-            # Give the producer a few iterations to run
-            await asyncio.sleep(0.2)
+            if observed_stop:
+                await asyncio.wait_for(parked.wait(), timeout=2)
+                state.session_stopped = False
+                state.resume_event.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
         finally:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            await asyncio.gather(task, return_exceptions=True)
 
-    # The task was cancelled before the stopped-state wait woke up, so the resume
-    # bridge should not have had a chance to seed anything.
-    segments_with_resume_bridge = []
-    while not queue.empty():
-        seg = queue.get_nowait()
-        if seg.metadata.get("resume_bridge") is True:
-            segments_with_resume_bridge.append(seg)
+    production.assert_called_once()
+    assert bridge.await_count == int(force)
 
-    assert not segments_with_resume_bridge, (
-        f"Found {len(segments_with_resume_bridge)} segment(s) with resume_bridge=True; "
-        "the resume bridge should not fire before the stopped-state wait wakes."
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["queue", "slot", "active", "aired", "none"])
+async def test_producer_bridge_rechecks_ownership_after_preparation(tmp_path, owner):
+    from mammamiradio.scheduling import producer
+    from mammamiradio.web.streamer import _recovery_runway_owned
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    path = tmp_path / "recovery.mp3"
+    path.write_bytes(b"recovery")
+    started = threading.Event()
+    release = threading.Event()
+    before_air = state.audible_playback_epoch
+    reserved = Segment(
+        type=SegmentType.BANTER,
+        path=path,
+        duration_sec=4,
+        metadata={"continuity_reservation": True, "continuity_admission_epoch": state.continuity_epoch},
+        ephemeral=False,
     )
+
+    def _probe(*_args, **_kwargs):
+        started.set()
+        assert release.wait(timeout=3)
+        return 4
+
+    async def _admit(segment, **kwargs):
+        return await producer._enqueue_with_egress(queue, state, config, segment, **kwargs)
+
+    def _needed(admitting):
+        return not _recovery_runway_owned(queue, state, since_audible_epoch=before_air, exclude_segment=admitting)
+
+    with (
+        patch.object(producer, "_pick_recovery_clip", return_value=path),
+        patch.object(producer, "_probe_segment_duration", side_effect=_probe),
+    ):
+        task = asyncio.create_task(
+            producer._queue_continuity_bridge(
+                _admit,
+                state,
+                config,
+                bridge_type="idle",
+                bridge_flag="idle_bridge",
+                canned_title="Station warm-up",
+                recovery_needed=_needed,
+            )
+        )
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            if owner == "queue":
+                queue.put_nowait(reserved)
+            elif owner == "slot":
+                state.continuity_slot = reserved
+            elif owner == "active":
+                state.active_playback_segment = reserved
+            elif owner == "aired":
+                state.on_stream_segment(reserved)
+                state.current_stream_audible = False  # playback finished during preparation
+            release.set()
+            assert await asyncio.wait_for(task, timeout=2) is (owner == "none")
+        finally:
+            release.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert state.bridge_fires_total == int(owner == "none")
+    assert queue.qsize() == int(owner in {"queue", "none"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize("timeline", ["current", "stale", "before_idle"])
+async def test_idle_wake_acknowledges_only_new_accepted_recovery(tmp_path, accepted, timeline):
+    state = _make_state()
+    state.listeners_active = 0
+    config = _make_config()
+    config.cache_dir = config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    idle = asyncio.Event()
+    wake = asyncio.Event()
+    reserved = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "already-finished.mp3",
+        metadata={
+            "continuity_reservation": True,
+            "continuity_admission_epoch": state.continuity_epoch - int(timeline == "stale"),
+        },
+    )
+    if timeline == "before_idle":
+        state.on_stream_segment(reserved)
+        state.current_stream_audible = False
+
+    async def _idle_wait(_seconds):
+        idle.set()
+        await wake.wait()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.asyncio.sleep", side_effect=_idle_wait),
+        patch(f"{PRODUCER_MODULE}._queue_continuity_bridge", new=AsyncMock(return_value=True)) as bridge,
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=asyncio.CancelledError),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(idle.wait(), timeout=2)
+            if timeline != "before_idle":
+                state.on_stream_segment_selected(reserved)
+                if accepted:
+                    state.on_stream_segment_audible(reserved)
+            state.current_stream_audible = False
+            state.listeners_active = 1
+            wake.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert bridge.await_count == int(not (accepted and timeline == "current"))
 
 
 @pytest.mark.asyncio
@@ -10185,10 +10291,11 @@ def test_write_banter_resolves_via_module_after_reload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_queues_cache_music_without_a_canned_preamble(tmp_path):
+async def test_forced_resume_bridge_queues_cache_music_without_a_canned_preamble(tmp_path):
     """Resuming a stopped session goes straight into cached music when one is warm."""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True  # only explicit forced start delegates recovery
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -10237,11 +10344,12 @@ async def test_resume_bridge_queues_cache_music_without_a_canned_preamble(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_path):
+async def test_forced_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_path):
     """When no canned clips exist, the bridge seeds the first pre-normalized track
     from cache_dir so the queue isn't empty after resume."""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True  # only explicit forced start delegates recovery
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -10287,10 +10395,11 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
+async def test_forced_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
     """Resume bridge should restore title and artist from the norm-cache sidecar."""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True  # only explicit forced start delegates recovery
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -10326,11 +10435,12 @@ async def test_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_norm_cache(tmp_path):
+async def test_forced_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_norm_cache(tmp_path):
     """When neither canned clips nor pre-normalized files exist, the bridge is a
     generated rescue tone so the resumed session does not wait on real content."""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True  # only explicit forced start delegates recovery
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -10368,7 +10478,7 @@ async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(tmp_path):
+async def test_forced_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(tmp_path):
     """Audio-delivery Scenario 3 (post-restart): a banned song must not re-air even
     through the norm-cache resume bridge. The only cached file on disk is banned, so
     the rescue selector returns None and the bridge falls through to emergency tone
@@ -10376,6 +10486,7 @@ async def test_resume_bridge_never_airs_a_banned_norm_cache_song_after_restart(t
     this proves the blocklist filter composes with the producer's bridge guard end to end.)"""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True  # only explicit forced start delegates recovery
     state.blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
     config = _make_config()
     config.cache_dir = tmp_path
@@ -10571,11 +10682,12 @@ async def test_idle_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_no
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_skipped_when_queue_already_has_items(tmp_path):
+async def test_forced_resume_bridge_skipped_when_queue_already_has_items(tmp_path):
     """The resume bridge must NOT queue an additional segment when the queue is
     already non-empty. Seeding into a non-empty queue would cause duplicate audio."""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True  # only explicit forced start delegates recovery
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -10612,11 +10724,12 @@ async def test_resume_bridge_skipped_when_queue_already_has_items(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_skips_first_sorted_norm_file_when_current_or_recent(tmp_path):
+async def test_forced_resume_bridge_skips_first_sorted_norm_file_when_current_or_recent(tmp_path):
     """When multiple pre-normalized files exist, resume avoids the current/recent
     song instead of blindly seeding the first sorted cache file."""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True  # only explicit forced start delegates recovery
     state.now_streaming = {
         "type": "music",
         "label": "Alex Warren - Ordinary",
@@ -10670,14 +10783,11 @@ async def test_resume_bridge_skips_first_sorted_norm_file_when_current_or_recent
 
 
 @pytest.mark.asyncio
-async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_path):
-    """_was_stopped is initialised from state.session_stopped at producer startup.
-
-    If the producer starts with session_stopped=True (e.g. after an HA watchdog
-    restart where the flag file was re-read), _was_stopped must already be True so
-    that the resume bridge fires immediately on the first transition to not-stopped."""
+async def test_post_restart_forced_resume_still_seeds_recovery(tmp_path):
+    """A restored stopped session still supports explicit forced recovery."""
     state = _make_state()
     state.session_stopped = True
+    state.force_recovery_active = True
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -10695,9 +10805,7 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
             deadline = asyncio.get_event_loop().time() + 3.0
             while queue.empty():
                 if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError(
-                        "_was_stopped not initialised from session_stopped — bridge did not fire on first resume"
-                    )
+                    raise TimeoutError("Forced recovery did not queue audio after restart")
                 await asyncio.sleep(0.05)
         finally:
             task.cancel()

@@ -41,13 +41,12 @@ boundary is [Music sources and rights boundaries](music-sources.md).
 In a standalone installation that deliberately enables the optional
 `external-media` extra, live Italian charts may supplement the base through
 yt-dlp. A missing or failed extractor falls back to local or starter music. On a
-genuine empty-queue gap, the playback loop rescues from the packaged
-`continuity_1.mp3` clip, the norm cache, then eligible bundled starter assets;
-only when no eligible music exists does it repeat packaged recovery, with
-`emergency_tone.mp3` as the neutral two-second cold-cache last rung. After 60
-seconds without any bridge asset it requests forced banter, so the queue recovers
-without crashing or stalling on silence. Quality-rejected and operator-banned
-cache files remain ineligible.
+genuine empty-queue gap, the playback loop starts with packaged
+`continuity_1.mp3`, then tries eligible norm-cache music before repeating packaged
+recovery. If neither is available for 60 seconds, it requests forced banter from
+the producer. Starter-song and emergency-tone recovery belong to the producer
+and control paths described below. Quality-rejected and operator-banned cache
+files remain ineligible.
 
 The `/healthz`–`/readyz` silence gate keys on nothing airing at all, not on an
 empty queue: a station bridging on packaged recovery is on air, so the add-on
@@ -55,7 +54,10 @@ watchdog is not invited to restart it mid-recovery. The required recovery files
 under `mammamiradio/assets/demo/recovery/` are durable package resources, not temp
 renders, and cleanup paths guard them before unlinking anything marked ephemeral.
 On an empty queue the rescue ladder opens after `FIRST_BYTE_GRACE_SECONDS` (1s).
-Resume and idle bridges prefer a cached song, then the short branded continuity
+Normal admin and Home Assistant Resume own their immediate audio reservation;
+the producer starts ordinary programming without adding a second resume clip.
+Only explicit forced start delegates that first bridge to the producer. Forced
+start and idle bridges prefer a cached song, then the short branded continuity
 clip, with a permissive cache retry before the emergency tone when the clip is
 unavailable. An active-playback drain adds one rung after the strict cache miss:
 when the packaged starter catalog is the active source, it admits a verified
@@ -300,6 +302,17 @@ Resume remains paused while it prepares the handoff:
    keep the marker.
 3. Remove the marker. If removal fails, return `503` and stay paused.
 4. Clear the runtime stop state and wake producer/playback.
+
+Recovery ownership follows the existing continuity epoch, queue, protected slot
+and active playback segment. At a control or idle wake boundary, the producer
+also acknowledges a reservation that already reached a listener and finished
+before it woke. Selection without listener delivery is not completed evidence.
+This acknowledgement suppresses another idle/drain bridge until ordinary audio
+is admitted; it never disables recovery for a later drain. Both producer bridge
+admission and playback fallback preparation recheck ownership after awaited work.
+New playable runway takes precedence over a prepared fallback. Deliberate Resume
+airplay remains in the informational `continuity` counter, excluded from the
+producer bridge-frequency warning.
 
 The assetless path represents a corrupt installation and never starts
 automatically. After the normal `503`, the admin requires explicit operator

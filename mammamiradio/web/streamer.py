@@ -1599,7 +1599,9 @@ def _claim_continuity_slot(state: StationState) -> Segment | None:
     return slot
 
 
-def _playable_runway_available(q, state: StationState, *, self_heal: bool = True) -> bool:
+def _playable_runway_available(
+    q, state: StationState, *, self_heal: bool = True, exclude_segment: Segment | None = None
+) -> bool:
     """Return whether cutting the current segment has ready audio behind it.
 
     ``self_heal`` is forwarded to :func:`_continuity_slot_seconds`; read-only
@@ -1610,7 +1612,7 @@ def _playable_runway_available(q, state: StationState, *, self_heal: bool = True
     # once the real queue is empty. A non-empty queue means the next audio the
     # loop pulls is ``queued[0]`` — never the slot — so gate strictly on the
     # head there instead of letting a ready slot mask an unplayable head.
-    queued = list(getattr(q, "_queue", ()))
+    queued = [segment for segment in getattr(q, "_queue", ()) if segment is not exclude_segment]
     if queued:
         return _segment_is_immediately_playable(state, queued[0])
     slot = state.continuity_slot
@@ -1630,6 +1632,37 @@ def _playable_runway_source(q, state: StationState) -> str:
     metadata = candidate.metadata if isinstance(candidate.metadata, dict) else {}
     source = str(metadata.get("audio_source") or candidate.path.name or "reserved_audio")
     return "norm_cache" if source == "fallback_norm_cache" else source
+
+
+def _recovery_runway_owned(
+    q, state: StationState, *, since_audible_epoch: int | None = None, exclude_segment: Segment | None = None
+) -> bool:
+    """Check existing recovery ownership without inventing a second receipt.
+
+    Completed audio only covers the producer boundary that observed it. Callers
+    supply that boundary's audible epoch; historical airplay must never disable
+    the recovery ladder for a later, unrelated drain.
+    """
+    # The enqueue funnel rechecks after queue.put(). Its own candidate is not a
+    # competing owner; rescue fills retain object identity through egress.
+    if _playable_runway_available(q, state, exclude_segment=exclude_segment):
+        return True
+
+    def _reserved_here(metadata: dict) -> bool:
+        return bool(metadata.get(_CONTINUITY_RESERVATION_FLAG)) and (
+            metadata.get(_CONTINUITY_ADMISSION_EPOCH) == state.continuity_epoch
+        )
+
+    active = state.active_playback_segment
+    if active is not None and _reserved_here(active.metadata) and _segment_is_immediately_playable(state, active):
+        return True
+    aired = state._last_audible_stream
+    return bool(
+        since_audible_epoch is not None
+        and state.audible_playback_epoch > since_audible_epoch
+        and aired.get("epoch") == state.audible_playback_epoch
+        and _reserved_here(aired.get("metadata", {}))
+    )
 
 
 def _stamp_continuity_runway_epoch(q, state: StationState) -> None:
@@ -5430,7 +5463,6 @@ async def run_playback_loop(app) -> None:
                 if gap_clips_served == 0 and (fallback := _pick_recovery_clip(state)):
                     logger.info("Queue empty — serving packaged recovery clip: %s", fallback.name)
                     segment = await _packaged_recovery_segment(fallback)
-                    gap_clips_served += 1
                     segment_ready = True
 
                 if not segment_ready:
@@ -5534,7 +5566,6 @@ async def run_playback_loop(app) -> None:
                                 fallback.name,
                             )
                             segment = await _packaged_recovery_segment(fallback)
-                            gap_clips_served += 1
                             segment_ready = True
 
                     if (
@@ -5560,15 +5591,19 @@ async def run_playback_loop(app) -> None:
                         pacer.reset_timeline("queue_gap_fallback")
                         continue
 
+                # A producer or live control may have filled this gap while
+                # the packaged probe awaited. Its playable audio owns the next
+                # selection; this unqueued fill has no receipts to settle.
+                if _playable_runway_available(segment_queue, state):
+                    _unlink_ephemeral_best_effort(segment)
+                    continue
+                if segment_ready:
+                    gap_clips_served += 1
+
                 # Building a packaged fill can await a bounded probe while a
                 # Stop/Resume or another control advances continuity_epoch.
                 # These source-neutral rescue bytes are admitted only after
                 # that await, so bind them to the timeline that now owns them.
-                # Known trade-off: the stamp makes the staleness gate below
-                # unreachable for gap fills, so a control that queued fresh
-                # runway mid-probe has its cut deferred until the fill ends.
-                # Airing rescue audio is the safer default; teaching the fill
-                # to yield needs the full three-scenario test set first.
                 segment = _stamp_playback_gap_fill(segment, state)
 
         segment_metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
