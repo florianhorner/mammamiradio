@@ -28,6 +28,9 @@ This file supplements the global instructions for the `mammamiradio` repository.
   verifier remain readable; do not emit or refresh them for ordinary PRs.
   This retires automatic content-binding of the local review record, not code
   review, required CI, branch freshness, bot-thread or release/HA gates.
+- Run `scripts/pre-lint.sh` before pushing. It is the shared, non-mutating
+  deterministic lint surface used by the pre-push hook and Quality CI; it does
+  not replace the full pytest/coverage, browser, ARM, or release gates.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, present real alternatives and their trade-offs, then

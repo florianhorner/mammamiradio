@@ -133,13 +133,15 @@ def test_browser_smoke_caches_playwright_browsers() -> None:
     assert 'cache-playwright: "true"' in browser_block
 
 
-def test_quality_workflow_runs_shellcheck_on_scripts() -> None:
+def test_quality_workflow_uses_shared_deterministic_pre_lint() -> None:
     lint_block = _job_block(_workflow_text(), "lint")
+    script = (REPO_ROOT / "scripts" / "pre-lint.sh").read_text()
 
-    assert "ShellCheck scripts" in lint_block
-    assert "koalaman/shellcheck@sha256:" in lint_block
-    assert "v0.11.0" in lint_block
-    assert "scripts/*.sh" in lint_block
+    assert "Deterministic pre-lint" in lint_block
+    assert "bash scripts/pre-lint.sh" in lint_block
+    assert "koalaman/shellcheck@sha256:" in script
+    assert "0.11.0" in script
+    assert "scripts/*.sh" in script
 
 
 def test_quality_workflow_emits_strict_media_proof_on_prs_and_main() -> None:

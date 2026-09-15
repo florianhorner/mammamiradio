@@ -17,6 +17,7 @@ CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
 CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
 CHECK_UI_COPY_LINT = ROOT / "scripts" / "check-ui-copy-lint.sh"
+PRE_LINT = ROOT / "scripts" / "pre-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
 MODEL_REGISTRY_GATE_SELF_TEST = ROOT / "tests" / "workflows" / "test_model_registry_gate.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
@@ -344,6 +345,69 @@ def test_pre_commit_registers_version_sync_hook() -> None:
     assert "id: version-sync" in config
     assert "entry: scripts/check-version-sync.sh" in config
     assert "stages: [pre-commit]" in config
+
+
+def test_pre_lint_is_registered_for_pre_push_and_matches_ci_ruff() -> None:
+    config = (ROOT / ".pre-commit-config.yaml").read_text()
+    requirements = (ROOT / "requirements-dev.txt").read_text()
+
+    ruff_version = next(line.removeprefix("ruff==") for line in requirements.splitlines() if line.startswith("ruff=="))
+    assert f"rev: v{ruff_version}" in config
+    assert "id: pre-lint" in config
+    assert "entry: scripts/pre-lint.sh" in config
+    assert "stages: [pre-push]" in config
+
+
+def test_pre_lint_is_non_mutating_and_keeps_expensive_tests_out() -> None:
+    script = PRE_LINT.read_text()
+
+    for command in (
+        '"$RUFF_BIN" check .',
+        '"$RUFF_BIN" format --check .',
+        "shellcheck scripts/*.sh",
+        "bash scripts/check-changelog-lint.sh",
+        "bash scripts/check-docs-safety.sh",
+        "bash scripts/check-ui-copy-lint.sh",
+        "bash scripts/check-no-backlog-files.sh",
+    ):
+        assert command in script
+    assert "pytest" not in script
+    assert "--fix" not in script
+    assert "--write-baseline" not in script
+
+
+def test_pre_lint_propagates_the_first_failure(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    _write(
+        bin_dir / "shellcheck",
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = --version ]; then printf 'version: 0.11.0\\n'; exit 0; fi\n"
+        f"printf 'shellcheck\\n' >> {log!s}\n",
+    )
+    _write(
+        bin_dir / "ruff",
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = --version ]; then printf 'ruff 0.16.7\\n'; exit 0; fi\n"
+        f"printf 'ruff %s\\n' \"$*\" >> {log!s}\n"
+        "exit 7\n",
+    )
+    os.chmod(bin_dir / "shellcheck", 0o755)
+    os.chmod(bin_dir / "ruff", 0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    # Hide the repository venv so PATH controls the test without a production
+    # test-only override in pre-lint.sh.
+    isolated = tmp_path / "repo"
+    shutil.copytree(ROOT / "scripts", isolated / "scripts")
+    shutil.copy2(ROOT / "requirements-dev.txt", isolated / "requirements-dev.txt")
+    result = _run(["bash", str(isolated / "scripts/pre-lint.sh")], cwd=isolated, env=env)
+
+    assert result.returncode == 7
+    assert log.read_text().splitlines() == ["shellcheck", "ruff check ."]
+    assert "Ruff format" not in result.stdout
 
 
 def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:
