@@ -630,8 +630,9 @@ half-running session. Startup restores the stopped state from the same marker.
 
 Resume is the inverse, with audio readiness before state publication. While the
 session is still stopped it reserves immediately playable runway: eligible
-norm-cache music first, the manifested `continuity_1.mp3` clip on a cold cache,
-then the manifested two-second `emergency_tone.mp3` last rung. If no readable
+norm-cache music first, a verified starter catalog song when that is the active
+source, the manifested `continuity_1.mp3` clip on a cold cache, then the
+manifested two-second `emergency_tone.mp3` last rung. If no readable
 runway exists, normal Resume returns `503` with `force_available: true` and
 keeps the marker. The admin may then explicitly confirm Force Start, which
 removes the marker before touching live state, clears `session_stopped`, sets

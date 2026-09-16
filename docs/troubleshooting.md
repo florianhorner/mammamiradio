@@ -124,7 +124,7 @@ clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, an active drain backed by the packaged starter catalog queues a `verified starter-catalog runway` directly; starter songs do not need normalization-cache copies. The packaged clip appears only when no eligible runway is admitted. The active-drain miss then reads `no music runway queued behind the canned clip`; Resume and idle retain the narrower `no cache music queued behind the canned clip` message. Either way you should not see the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, Resume, idle wake-up, and an active drain backed by the packaged starter catalog queue a `verified starter-catalog runway` directly; starter songs do not need normalization-cache copies. The packaged clip appears only when no eligible runway is admitted. Those misses then read `no music runway queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
 If the clip still repeats after an active drain, look for a starter
 manifest/admission failure first.
@@ -198,7 +198,8 @@ permissions or free disk space and try Stop again. Do not assume the station
 paused merely because the button was pressed.
 
 Resume first reserves readable immediate audio, preferring a warm norm-cache
-song, then `continuity_1.mp3`, then `emergency_tone.mp3`. It stays paused if no
+song, then a verified starter catalog song when that is the active source, then
+`continuity_1.mp3`, then `emergency_tone.mp3`. It stays paused if no
 runway is readable or if the persisted marker cannot be removed. When every
 recovery asset is missing, the response offers **Force Start**. Confirming it is
 an explicit corrupt-install escape: it removes the stop marker, requests host
