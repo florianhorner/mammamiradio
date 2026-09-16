@@ -317,6 +317,10 @@ New playable runway takes precedence over a prepared fallback. Deliberate Resume
 airplay remains in the informational `continuity` counter, excluded from the
 producer bridge-frequency warning.
 
+A Resume that a Stop overtakes is not the assetless path and must not offer Force
+Start: it answers `409` with "The station was paused again while it was starting"
+and leaves the marker in place.
+
 The assetless path represents a corrupt installation and never starts
 automatically. After the normal `503`, the admin requires explicit operator
 confirmation before sending `POST /api/resume?force=true`. That request removes

@@ -1335,6 +1335,12 @@ class StationState:
     ad_experiment_completed_breaks: int = 0
     ad_experiment_brand_airings: dict[str, int] = field(default_factory=dict)
     session_stopped: bool = False
+    # Advanced by the operator Stop route, and by nothing else. A Resume that
+    # awaits (starter-catalog verification does) needs to tell "a Stop landed
+    # under me, stay paused" apart from "some other live control ran"; it cannot
+    # read that from ``session_stopped``, which is already True for the whole
+    # resume, nor from ``continuity_epoch``, which every reservation advances.
+    session_stop_revision: int = 0
     # True only after an explicit assetless force-resume, until a listener
     # accepts the first rebuilt segment. Readiness stays "starting" meanwhile.
     force_recovery_active: bool = False

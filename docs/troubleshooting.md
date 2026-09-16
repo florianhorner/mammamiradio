@@ -124,7 +124,7 @@ clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, Resume, idle wake-up, and an active drain backed by the packaged starter catalog queue a `verified starter-catalog runway` directly; starter songs do not need normalization-cache copies. The packaged clip appears only when no eligible runway is admitted. Those misses then read `no music runway queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, Resume, idle wake-up, and an active drain backed by the packaged starter catalog queue a verified starter song directly; starter songs do not need normalization-cache copies. Idle wake-up and drain log this as `inserting verified starter-catalog runway`; the Resume routes log `Resume runway: inserting verified starter-catalog runway` and report `runway_source=starter` on the `Session resumed` line. The packaged clip appears only when no eligible runway is admitted. Those misses then read `no music runway queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
 If the clip still repeats after an active drain, look for a starter
 manifest/admission failure first.
@@ -217,7 +217,11 @@ For the add-on, inspect the equivalent paths read-only in the installed image;
 do not patch or restart the live container as a test. A healthy Resume log names
 `runway_source` and the current `continuity_epoch`. Stop advances that epoch
 before it purges, so a later `stale_continuity` discard is expected proof that
-pre-Stop work was fenced, not a new audio failure.
+pre-Stop work was fenced, not a new audio failure. Many other controls advance
+the same epoch, so it is not a Stop marker: a Resume interrupted by a real Stop
+answers `409` and logs `session_resume_superseded`, while a Resume interrupted by
+any other control logs `a live control superseded the starter candidate` and still
+reserves the packaged ladder.
 
 Setup can remain **Ready** while playback is paused. That is intentional:
 `/api/setup/status` reports configuration/source readiness, while `/readyz` and

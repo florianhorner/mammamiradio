@@ -7935,6 +7935,12 @@ async def test_resume_cold_cache_reserves_starter_music_without_probe(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_keeps_stopped_when_stop_lands_during_starter_prepare(tmp_path):
+    """A real Stop under the prepare await keeps the station paused, and says so.
+
+    The stimulus must be an actual Stop, not a bare ``continuity_epoch`` bump:
+    two dozen paths advance that counter, so a test that bumps it directly proves
+    nothing about Stop and pins every one of those paths to the same refusal.
+    """
     from mammamiradio.scheduling import producer as producer_mod
 
     app = _make_test_app()
@@ -7945,11 +7951,13 @@ async def test_resume_keeps_stopped_when_stop_lands_during_starter_prepare(tmp_p
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
     marker = tmp_path / "session_stopped.flag"
     marker.touch()
-    epoch = state.continuity_epoch
     real_prepare = producer_mod._prepare_starter_catalog_runway
 
     async def prepare_then_stop(*args, **kwargs):
         prepared = await real_prepare(*args, **kwargs)
+        # Exactly what POST /api/stop does to the fields Resume reads.
+        state.session_stopped = True
+        state.session_stop_revision += 1
         state.continuity_epoch += 1
         return prepared
 
@@ -7958,13 +7966,183 @@ async def test_resume_keeps_stopped_when_stop_lands_during_starter_prepare(tmp_p
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post("/api/resume")
 
-    assert response.status_code == 503
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["ok"] is False
+    # The refusal must name the control conflict, not missing assets, and must
+    # not offer Force Start -- that remedy would undo the operator's own Stop.
+    assert "paused again" in payload["error"]
+    assert "force_available" not in payload
+    assert "recovery audio" not in payload["error"]
     assert state.session_stopped is True
     assert marker.exists()
-    assert app.state.queue.empty()
     assert not state.resume_event.is_set()
-    assert state.continuity_epoch == epoch + 1
     assert state.music_admission_reservations == {}
+
+
+@pytest.mark.asyncio
+async def test_resume_still_reserves_ladder_when_another_control_moves_the_epoch(tmp_path):
+    """A non-Stop control under the await costs the starter song, never the audio.
+
+    Pool purge, per-row ban, and bulk ban all reserve continuity runway with no
+    ``session_stopped`` guard, so they advance ``continuity_epoch`` while the
+    station is paused. Resume must drop the now-stale starter candidate and still
+    come back with the packaged ladder.
+    """
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+    real_prepare = producer_mod._prepare_starter_catalog_runway
+
+    async def prepare_then_unrelated_control(*args, **kwargs):
+        prepared = await real_prepare(*args, **kwargs)
+        state.continuity_epoch += 1  # a ban or purge, NOT a stop
+        return prepared
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=prepare_then_unrelated_control):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    assert state.session_stopped is False
+    runway = list(app.state.queue._queue)
+    assert runway, "a non-Stop epoch move must not leave Resume with an empty queue"
+    assert runway[0].path == _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    # The stale candidate released its cycle reservation, so rotation can still
+    # pick that song later.
+    assert state.music_admission_reservations == {}
+    assert not state.starter_cycle_reserved
+
+
+@pytest.mark.asyncio
+async def test_resume_falls_back_to_ladder_when_starter_preparation_raises(tmp_path):
+    """Scenario 2: starter verification explodes and the packaged rung still airs.
+
+    The starter rung is an improvement on the clip, never a precondition for it.
+    """
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    async def explode(*_args, **_kwargs):
+        raise TypeError("rationale generator blew up on a malformed starter row")
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=explode):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert runway, "a starter failure must not cost Resume its packaged recovery audio"
+    assert runway[0].path == _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert state.session_stopped is False
+    assert state.music_admission_reservations == {}
+
+
+@pytest.mark.asyncio
+async def test_resume_starter_accounting_waits_for_playback_admission(tmp_path):
+    """Pacing, rotation, and heading accounting belong to airing, not reserving."""
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+    songs_since_banter = state.songs_since_banter
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert runway[0].metadata["audio_source"] == "starter"
+    reserved = state.music_admission_reservations[runway[0].metadata["queue_id"]]
+    # Reserved, not aired: nothing has advanced yet.
+    assert list(state.played_tracks) == []
+    assert state.current_track is None
+    assert state.songs_since_banter == songs_since_banter
+
+    assert runway[0].mark_playback_started() is True
+    assert [track.cache_key for track in state.played_tracks] == [reserved.cache_key]
+    assert state.current_track is reserved
+    assert state.songs_since_banter == songs_since_banter + 1
+
+
+@pytest.mark.asyncio
+async def test_starter_runway_accounting_marks_the_source_playable_on_admission(tmp_path):
+    """The resume rung reports success to readiness, not only failure.
+
+    ``_prepare_starter_catalog_runway`` calls ``mark_failure`` on both its failure
+    paths, so the success path has to call ``mark_playable`` or the evidence is
+    one-directional. Asserted through a spy rather than through
+    ``source_readiness.entries``, because ``"starter"`` has no canonical entry in
+    ``_SOURCE_READINESS_ALIASES`` and the effect lands on the advanced-source slot
+    only when starter is the current rotation kind.
+    """
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    segment = next(iter(app.state.queue._queue))
+    assert segment.metadata["audio_source"] == "starter"
+
+    with patch.object(state.source_readiness, "mark_playable") as mark_playable:
+        assert segment.mark_playback_started() is True
+    mark_playable.assert_called_once_with("starter")
+
+
+@pytest.mark.asyncio
+async def test_resume_starter_accounting_never_runs_for_a_discarded_reservation(tmp_path):
+    """A prepared song that never airs must not count toward pacing or rotation."""
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+    songs_since_banter = state.songs_since_banter
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    reserved_segment = next(iter(app.state.queue._queue))
+
+    reserved_segment.release()
+
+    assert reserved_segment.mark_playback_started() is False
+    assert list(state.played_tracks) == []
+    assert state.current_track is None
+    assert state.songs_since_banter == songs_since_banter
+    assert state.music_admission_reservations == {}
+    assert not state.starter_cycle_reserved
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@ import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -1902,64 +1902,159 @@ def _continuity_chose_cache_music(segments: Sequence[Segment]) -> bool:
     )
 
 
+class ResumeRunwayOutcome(NamedTuple):
+    """What a Resume reservation did, and whether a Stop overtook it."""
+
+    dropped: int
+    superseded_by_stop: bool
+
+
+def _chain_starter_runway_accounting(state: StationState, segment: Segment, track: Track) -> None:
+    """Defer rotation, pacing, and heading accounting to real playback admission.
+
+    ``after_music`` advances five pacing counters and spends a heading step, and
+    ``_arm_accepted_heading_announcement`` arms a host line about that course. A
+    reservation is not an airing: the capacity-exempt continuity slot is
+    routinely discarded once the producer refills first, and Resume can still
+    fail its persistence commit afterwards. Running either at reservation time
+    counts a song nobody heard and narrates a course change that never aired.
+
+    Chain both onto the admission callback the reservation already installed, so
+    they run exactly when playback admits the segment. That is the contract
+    ``after_music`` documents for the starter-cycle half of the same bookkeeping,
+    and ``release()`` clears the callback, so a discarded preparation accounts
+    for nothing. Accounting can never fail admission -- returning anything but
+    ``True`` here would make ``mark_playback_started`` drop the segment, which is
+    dead air in exchange for a bookkeeping error.
+    """
+    from mammamiradio.scheduling.producer import _arm_accepted_heading_announcement
+
+    chained = segment.playback_start_callback
+
+    def _admit_and_account() -> bool:
+        if chained is not None and chained() is not True:
+            return False
+        try:
+            state.source_readiness.mark_playable(track.source)
+            _arm_accepted_heading_announcement(state, track)
+            state.after_music(track)
+        except Exception:  # pragma: no cover - accounting must never affect what airs
+            logger.debug("Starter runway accounting failed after admission", exc_info=True)
+        return True
+
+    segment.playback_start_callback = _admit_and_account
+
+
 async def _reserve_resume_runway(
     app_state,
     state: StationState,
     config,
     *,
     discard_reason: str,
-) -> int:
+) -> ResumeRunwayOutcome:
     """Reserve Resume audio, preferring verified starter music on a cold cache.
 
     The live-control ladder cannot await. Verification therefore happens here,
     off the event loop, and is rechecked before the prepared song is offered as
     the rung below cache music. Unused preparations release their cycle
     reservation so later rotation can still select that track.
+
+    Two guarantees the starter rung must not weaken, both of which it did:
+
+    * **The packaged ladder is reserved unconditionally.** Every starter failure
+      degrades into ``_reserve_continuity_runway`` rather than returning with
+      nothing reserved. Before this, a raise anywhere in selection, verification,
+      or segment construction skipped the ladder entirely and left Resume with an
+      empty queue -- on the fresh installs this rung exists to serve.
+    * **A Stop is distinguished from any other control.** ``continuity_epoch``
+      advances on roughly two dozen paths, including admin routes that run while
+      the station is paused (pool purge, per-row ban, bulk ban). Treating a move
+      as a Stop refused legitimate Resumes and blamed missing recovery assets.
+      Staleness and supersession are now separate questions:
+      ``continuity_epoch`` answers "is this candidate still fresh", and
+      ``session_stop_revision`` answers "must the station stay paused".
     """
-    from mammamiradio.scheduling.producer import (
-        _arm_accepted_heading_announcement,
-        _prepare_starter_catalog_runway,
-        _reserve_music_segment,
-    )
+    from mammamiradio.scheduling.producer import _prepare_starter_catalog_runway, _reserve_music_segment
 
     preferred: list[Segment] = []
-    prepared_track: Track | None = None
     source = state.playlist_source
     resume_epoch = state.continuity_epoch
+    resume_stop_revision = state.session_stop_revision
+
+    def _release_preferred() -> None:
+        for segment in preferred:
+            segment.release()
+        preferred.clear()
+
+    def _preferred_admitted() -> bool:
+        """Whether the reservation actually took the prepared segment.
+
+        Read before any release: releasing a segment that IS queued leaves a head
+        whose ``mark_playback_started`` refuses, which playback skips.
+        """
+        if not preferred:
+            return False
+        head = preferred[0]
+        return state.continuity_slot is head or any(item is head for item in getattr(app_state.queue, "_queue", ()))
+
     try:
-        if (
-            source is not None
-            and source.kind == "starter"
-            and state.listener_request_handoff is None
-            and not _continuity_chose_cache_music(
-                _continuity_reservation_segments(
-                    state,
-                    config,
-                    ANY_PLAYABLE_RUNWAY_SECONDS,
-                    max_segments=1,
+        try:
+            if (
+                source is not None
+                and source.kind == "starter"
+                and state.listener_request_handoff is None
+                and not _continuity_chose_cache_music(
+                    _continuity_reservation_segments(
+                        state,
+                        config,
+                        ANY_PLAYABLE_RUNWAY_SECONDS,
+                        max_segments=1,
+                    )
                 )
-            )
-        ):
-            prepared = await _prepare_starter_catalog_runway(state, config, context="resume runway")
-            # The prepare await is interruptible. A newer epoch (Stop) must win.
-            if state.continuity_epoch != resume_epoch:
-                if prepared is not None:
+            ):
+                prepared = await _prepare_starter_catalog_runway(state, config, context="resume runway")
+                if prepared is None:
+                    pass
+                elif state.continuity_epoch != resume_epoch:
+                    # The prepare await is interruptible and its eligibility
+                    # recheck was made against the old epoch, so this candidate
+                    # is stale. Drop it and keep going: the ladder below is what
+                    # guarantees Resume ends up with audio.
                     prepared.segment.release()
-                return 0
-            if prepared is not None:
-                segment = prepared.segment
-                segment.metadata[_CONTINUITY_RESERVATION_FLAG] = True
-                segment.metadata["rescue"] = True
-                segment.metadata["continuity_reservation_id"] = uuid4().hex
-                segment.metadata["queue_reason"] = "Protected continuity audio."
-                segment.metadata.setdefault("queue_id", uuid4().hex)
-                try:
-                    _reserve_music_segment(state, prepared.track, segment)
-                except RuntimeError:
-                    segment.release()
+                    logger.info("Resume runway: a live control superseded the starter candidate")
+                elif prepared.segment.duration_sec <= 0:
+                    # A zero-length segment still counts as selected downstream
+                    # and would suppress both packaged fallbacks, so refusing it
+                    # is what keeps the ladder reachable.
+                    prepared.segment.release()
+                    logger.warning(
+                        "Resume runway: starter candidate %s reported no duration; using the packaged ladder",
+                        prepared.track.display,
+                    )
                 else:
-                    preferred.append(segment)
-                    prepared_track = prepared.track
+                    segment = prepared.segment
+                    segment.metadata[_CONTINUITY_RESERVATION_FLAG] = True
+                    segment.metadata["rescue"] = True
+                    segment.metadata["continuity_reservation_id"] = uuid4().hex
+                    segment.metadata["queue_reason"] = "Protected continuity audio."
+                    segment.metadata.setdefault("queue_id", uuid4().hex)
+                    try:
+                        _reserve_music_segment(state, prepared.track, segment)
+                    except RuntimeError:
+                        segment.release()
+                    else:
+                        _chain_starter_runway_accounting(state, segment, prepared.track)
+                        preferred.append(segment)
+        except Exception:
+            # The starter rung is an improvement on the packaged clip, never a
+            # precondition for it. Selection, rationale, crate classification,
+            # and manifest resolution are all reachable from here and none of
+            # them may cost the station its recovery audio.
+            logger.warning(
+                "Resume runway: starter-catalog preparation failed; using the packaged ladder",
+                exc_info=True,
+            )
+            _release_preferred()
         dropped = _reserve_continuity_runway(
             app_state,
             state,
@@ -1968,22 +2063,20 @@ async def _reserve_resume_runway(
             minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
             preferred_ready_segments=preferred,
         )
-        admitted = bool(
-            preferred
-            and (
-                state.continuity_slot is preferred[0]
-                or any(item is preferred[0] for item in getattr(app_state.queue, "_queue", ()))
+        if not _preferred_admitted():
+            _release_preferred()
+        elif preferred:
+            logger.info(
+                "Resume runway: inserting verified starter-catalog runway: %s",
+                preferred[0].metadata.get("title") or preferred[0].path.name,
             )
+        return ResumeRunwayOutcome(
+            dropped=dropped,
+            superseded_by_stop=state.session_stop_revision != resume_stop_revision,
         )
-        if preferred and not admitted:
-            preferred[0].release()
-        elif admitted and prepared_track is not None:
-            _arm_accepted_heading_announcement(state, prepared_track)
-            state.after_music(prepared_track)
-        return dropped
     except BaseException:
-        if preferred:
-            preferred[0].release()
+        if not _preferred_admitted():
+            _release_preferred()
         raise
 
 
@@ -2925,12 +3018,17 @@ async def _resume_station(app_state: Any) -> None:
     config = app_state.config
     was_stopped = state.session_stopped
     if was_stopped:
-        await _reserve_resume_runway(
+        runway = await _reserve_resume_runway(
             app_state,
             state,
             config,
             discard_reason=GenerationWasteReason.OPERATOR_STOP,
         )
+        # Starter verification awaits, so a Stop can now land inside this
+        # callback. Report it as the control conflict it is, before the marker
+        # write below has a chance to undo it.
+        if runway.superseded_by_stop:
+            raise RuntimeError("station control changed while resuming")
         _discard_unplayable_queue_prefix(
             app_state.queue,
             state,
@@ -8432,6 +8530,10 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
         )
 
     state.session_stopped = True
+    # The one writer. An in-flight Resume compares this to decide whether it was
+    # superseded by a Stop (stay paused, say so) or merely by another control
+    # (reserve the packaged ladder and carry on).
+    state.session_stop_revision += 1
     state.force_recovery_active = False
     state.current_stream_audible = False
     state.last_air_monotonic = None
@@ -8573,12 +8675,30 @@ async def resume_session(
     # replenishes once it wakes. Starter catalog verification runs off the
     # event loop before this reservation so a cold cache can still start on a
     # real song.
-    await _reserve_resume_runway(
+    runway = await _reserve_resume_runway(
         app_state,
         state,
         config,
         discard_reason=GenerationWasteReason.OPERATOR_STOP,
     )
+    # That verification awaits, so this route now has an interruption point it
+    # never had. A Stop accepted inside it owns the session: answer with the
+    # conflict rather than falling through to the assetless gate below, whose
+    # copy would blame missing recovery assets and offer Force Start -- a remedy
+    # that would undo the operator's own Stop.
+    if runway.superseded_by_stop:
+        logger.info(
+            "Resume superseded by an operator stop epoch=%d",
+            state.continuity_epoch,
+            extra={"event": "session_resume_superseded", "continuity_epoch": state.continuity_epoch},
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": "The station was paused again while it was starting. Press Start to try again.",
+            },
+        )
     # The reservation counts ready seconds across every protected segment, but
     # the gate below reads only the queue head — the loop's next pull. A dead
     # head in front of a ready tail would satisfy the reservation and fail the
