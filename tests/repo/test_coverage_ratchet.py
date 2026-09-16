@@ -109,6 +109,40 @@ def test_streaming_runner_preserves_child_exit_status() -> None:
     assert result.returncode == 7
 
 
+def test_streaming_runner_kills_child_and_propagates_reader_failure(monkeypatch, capsys) -> None:
+    module = _load_coverage_ratcheter()
+
+    class BrokenOutput:
+        def __iter__(self):
+            yield "partial output\n"
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    class Process:
+        stdout = BrokenOutput()
+        killed = False
+        waited = False
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            self.waited = True
+            return -9
+
+    process = Process()
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(UnicodeDecodeError, match="invalid start byte"):
+        module._run_streaming(["pytest"])
+
+    assert process.killed is True
+    assert process.waited is True
+    assert capsys.readouterr().out == "partial output\n"
+
+
 def test_junit_args_are_opt_in(monkeypatch) -> None:
     module = _load_coverage_ratcheter()
     monkeypatch.delenv("COVERAGE_RATCHET_JUNIT", raising=False)

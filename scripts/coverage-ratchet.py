@@ -89,12 +89,14 @@ def _run_streaming(command: list[str], *, heartbeat_seconds: float = HEARTBEAT_S
         raise RuntimeError("pytest output pipe was not created")
 
     output: list[str] = []
-    lines: queue.Queue[str | None] = queue.Queue()
+    lines: queue.Queue[str | BaseException | None] = queue.Queue()
 
     def read_output() -> None:
         try:
             for line in process.stdout:
                 lines.put(line)
+        except BaseException as exc:
+            lines.put(exc)
         finally:
             lines.put(None)
 
@@ -111,6 +113,11 @@ def _run_streaming(command: list[str], *, heartbeat_seconds: float = HEARTBEAT_S
 
         if line is None:
             break
+        if isinstance(line, BaseException):
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            raise line
         if line:
             output.append(line)
             print(line, end="", flush=True)

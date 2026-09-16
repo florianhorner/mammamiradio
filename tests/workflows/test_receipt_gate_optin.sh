@@ -94,6 +94,31 @@ grep -Fq "$validator_wiring" "$SCRIPT" \
   || fail "pre-release check does not pass the canonical validator"
 pass "pre-release check wires the sourced helper to the canonical validator"
 
+# One whole release-check case keeps the helper wired to the production
+# PASS/FAIL counters and final exit status. The PATH shim delegates every other
+# Python invocation and rejects only the canonical HA evidence validator.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/python3" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == */validate-ha-green-release-evidence.py ]]; then
+  echo "forced invalid HA Green evidence"
+  exit 1
+fi
+exec "$MMR_TEST_REAL_PYTHON" "$@"
+SH
+chmod +x "$TMP/bin/python3"
+set +e
+whole_out="$(PATH="$TMP/bin:$PATH" MMR_TEST_REAL_PYTHON="$PYTHON" \
+  MMR_REQUIRE_HA_RECEIPTS=1 bash "$SCRIPT" 2>&1)"
+whole_rc=$?
+set -e
+[[ "$whole_rc" -ne 0 ]] || fail "whole release check passed rejected HA evidence"
+grep -q "\[FAIL\] HA Green release evidence" <<<"$whole_out" \
+  || fail "whole release check did not report the HA evidence failure"
+grep -qE "Failed: [1-9][0-9]*( |$)" <<<"$whole_out" \
+  || fail "whole release summary did not count the HA evidence failure"
+pass "whole release check counts rejected HA evidence and exits nonzero"
+
 # Case 5: both tag-path workflows must accept only 0 and 1, gate receipt
 # validation on 1, gate the explicit waiver on 0, and define the variable at
 # workflow scope. Two of the four enforcement sites sit on `push: tags`, so
