@@ -3048,6 +3048,69 @@ async def test_playback_built_rescue_rearms_after_epoch_changes_during_probe(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("destination", ["queue", "slot"])
+@pytest.mark.parametrize("playable", [True, False])
+async def test_playback_yields_prepared_recovery_to_new_playable_runway(tmp_path, destination, playable):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    fallback_path = tmp_path / "fallback.mp3"
+    fallback_path.write_bytes(b"fallback" * 4096)
+    fresh_path = tmp_path / "fresh.mp3"
+    if playable:
+        fresh_path.write_bytes(b"fresh" * 4096)
+    fresh = Segment(type=SegmentType.MUSIC, path=fresh_path, duration_sec=10, ephemeral=False)
+    probing = asyncio.Event()
+    release = asyncio.Event()
+    delivered = asyncio.Event()
+    heard = []
+    real_wait_for = asyncio.wait_for
+    waits = 0
+
+    async def _first_timeout(awaitable, *args, **kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            awaitable.close()
+            raise TimeoutError
+        return await real_wait_for(awaitable, *args, **kwargs)
+
+    async def _prepare(_path):
+        probing.set()
+        await release.wait()
+        return Segment(type=SegmentType.BANTER, path=fallback_path, duration_sec=4, ephemeral=False)
+
+    async def _hear(chunk):
+        heard.append(chunk)
+        delivered.set()
+        return 1
+
+    app.state.stream_hub.broadcast = _hear
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", side_effect=_first_timeout),
+        patch("mammamiradio.scheduling.producer._pick_recovery_clip", return_value=fallback_path),
+        patch("mammamiradio.web.streamer._packaged_recovery_segment", side_effect=_prepare),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            async with asyncio.timeout(2):
+                await probing.wait()
+                if destination == "queue":
+                    app.state.queue.put_nowait(fresh)
+                else:
+                    state.continuity_slot = fresh
+                release.set()
+                await delivered.wait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert heard[0].startswith(b"fresh" if playable else b"fallback")
+    assert not state.discard_by_reason
+
+
+@pytest.mark.asyncio
 async def test_rejected_playback_rescue_preserves_gap_clock(tmp_path):
     from mammamiradio.web.streamer import _stamp_playback_gap_fill
 
@@ -3653,16 +3716,7 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
     real_song = tmp_path / "real_song.mp3"
     real_song.write_bytes(b"music-bytes" * 512)
 
-    app.state.queue.put_nowait(
-        Segment(
-            type=SegmentType.MUSIC,
-            path=real_song,
-            metadata={"type": "music", "title": "Real Song"},
-            ephemeral=False,
-        )
-    )
-
-    # Call 1 forces the first gap (clip serves); call 2 lets the real queued
+    # Call 1 forces the first genuinely empty gap; call 2 admits the real
     # segment through (resetting the gap counter); later calls force a second
     # gap that must open with the instant clip again.
     calls = {"n": 0}
@@ -3670,6 +3724,14 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
     async def _scripted_wait(awaitable, *_args, **_kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
+            app.state.queue.put_nowait(
+                Segment(
+                    type=SegmentType.MUSIC,
+                    path=real_song,
+                    metadata={"type": "music", "title": "Real Song"},
+                    ephemeral=False,
+                )
+            )
             return await awaitable
         awaitable.close()
         await asyncio.sleep(0)
@@ -7623,6 +7685,160 @@ async def test_stop_never_treats_transport_sentinel_as_real_media(tmp_path, sent
 
     assert response.status_code == 200
     assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume_via", ["admin", "ha"])
+@pytest.mark.parametrize("busy", [False, True])
+async def test_resume_audio_finishes_before_producer_wake_without_duplicate_recovery(tmp_path, resume_via, busy):
+    from mammamiradio.scheduling import producer
+    from mammamiradio.web.streamer import _bridge_health_snapshot, _resume_station
+
+    app = _make_test_app()
+    config = app.state.config
+    config.cache_dir = config.tmp_dir = tmp_path
+    config.homeassistant.enabled = False
+    config.pacing.lookahead_segments = 2 if busy else 1
+    config.audio.bitrate = 3200
+    state = app.state.station_state
+    state.session_stopped = not busy
+    if not busy:
+        (tmp_path / "session_stopped.flag").touch()
+    app.state.stream_hub.subscribe()
+    parked = asyncio.Event()
+    release_wake = asyncio.Event()
+    rendering = asyncio.Event()
+    release_render = asyncio.Event()
+    later_drain = asyncio.Event()
+
+    class DelayedResume(asyncio.Event):
+        async def wait(self):
+            assert not busy, "the busy producer must miss the stopped boolean entirely"
+            parked.set()
+            await super().wait()
+            await release_wake.wait()
+            return True
+
+    state.resume_event = DelayedResume()
+    music_path = tmp_path / "ordinary.mp3"
+    track = state.playlist[0]
+    render_calls = 0
+
+    async def _render(*_args, **_kwargs):
+        nonlocal render_calls
+        render_calls += 1
+        if busy and render_calls == 2:
+            parked.set()  # one admitted segment; the next render spans Stop/Resume
+            await release_wake.wait()
+        elif not busy or render_calls > 2:
+            rendering.set()
+            await release_render.wait()
+        music_path.write_bytes(b"ordinary" * 512)
+        return producer.RenderedMusicTrack(track=track, path=music_path, cache_path=music_path, cache_hit=True)
+
+    async def _later_drain(*_args, **_kwargs):
+        later_drain.set()
+        raise asyncio.CancelledError
+
+    async def _passthrough(segment, *_args, **_kwargs):
+        return segment
+
+    playback_task = None
+    with (
+        patch.object(producer, "next_segment_type", return_value=SegmentType.MUSIC),
+        patch.object(producer, "_select_accepted_music_track", return_value=track),
+        patch.object(producer, "_render_music_track", side_effect=_render),
+        patch.object(producer, "_apply_egress", side_effect=_passthrough),
+        patch.object(producer, "validate_segment_audio"),
+        patch.object(producer, "fetch_home_context", new_callable=AsyncMock),
+        patch.object(producer, "_queue_continuity_bridge", new=AsyncMock(return_value=False)) as wake_bridge,
+        patch.object(producer, "_queue_drain_recovery_bridge", side_effect=_later_drain) as drain,
+    ):
+        task = asyncio.create_task(producer.run_producer(app.state.queue, state, config))
+        try:
+            async with asyncio.timeout(5):
+                await parked.wait()
+                transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                    if busy:
+                        assert (await client.post("/api/stop")).status_code == 200
+                    if resume_via == "admin":
+                        assert (await client.post("/api/resume")).status_code == 200
+                    else:
+                        await _resume_station(app.state)
+                playback_task = asyncio.create_task(run_playback_loop(app))
+                await app.state.queue.join()  # EOF, not just selection or first byte
+                assert state._last_audible_stream["metadata"]["continuity_reservation"]
+                assert not state.current_stream_audible
+                assert state.active_playback_segment is None
+                config.pacing.lookahead_segments = 1
+                release_wake.set()
+                await rendering.wait()
+                wake_bridge.assert_not_awaited()
+                drain.assert_not_awaited()
+                assert state.bridge_fires_by_type["continuity"] == 1
+                assert _bridge_health_snapshot(state)["window_count"] == 0
+                release_render.set()
+                await later_drain.wait()  # ordinary admission re-arms genuine recovery
+        finally:
+            task.cancel()
+            if playback_task is not None:
+                playback_task.cancel()
+            await asyncio.gather(task, *([playback_task] if playback_task else []), return_exceptions=True)
+
+    assert not (tmp_path / "session_stopped.flag").exists()
+    drain.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_force_resume_recovers_when_busy_producer_never_observed_stop(tmp_path):
+    from mammamiradio.scheduling import producer
+
+    app = _make_test_app()
+    config = app.state.config
+    config.cache_dir = config.tmp_dir = tmp_path
+    config.homeassistant.enabled = False
+    state = app.state.station_state
+    app.state.stream_hub.subscribe()
+    rendering = asyncio.Event()
+    release = asyncio.Event()
+    path = tmp_path / "old-render.mp3"
+    track = state.playlist[0]
+
+    async def _render(*_args, **_kwargs):
+        rendering.set()
+        await release.wait()
+        path.write_bytes(b"old timeline")
+        return producer.RenderedMusicTrack(track=track, path=path, cache_path=path, cache_hit=True)
+
+    with (
+        patch.object(producer, "next_segment_type", return_value=SegmentType.MUSIC),
+        patch.object(producer, "_select_accepted_music_track", return_value=track),
+        patch.object(producer, "_render_music_track", side_effect=_render),
+        patch.object(producer, "validate_segment_audio"),
+        patch.object(producer, "fetch_home_context", new_callable=AsyncMock),
+        patch.object(producer, "_queue_continuity_bridge", side_effect=asyncio.CancelledError) as bridge,
+    ):
+        task = asyncio.create_task(producer.run_producer(app.state.queue, state, config))
+        try:
+            await asyncio.wait_for(rendering.wait(), timeout=2)
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                assert (await client.post("/api/stop")).status_code == 200
+                response = await client.post("/api/resume?force=true")
+            assert response.status_code == 200
+            assert response.json()["recovering"] is True
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    bridge.assert_awaited_once()
+    assert bridge.call_args.kwargs["bridge_type"] == "resume"
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    assert app.state.queue.empty()
 
 
 @pytest.mark.asyncio
