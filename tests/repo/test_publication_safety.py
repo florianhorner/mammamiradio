@@ -53,6 +53,8 @@ def _docs_check(path: Path) -> subprocess.CompletedProcess[str]:
         "```bash\nbash -e scripts/emit-review-evidence.sh --reattest\n```",
         "```bash\n/usr/bin/env bash -e ./scripts/emit-review-evidence.sh --reattest\n```",
         "The old release required V2 preship receipts, so finalize a new V2 preship receipt before recording.",
+        "The old release required V2 preship receipts, so generate them before recording.",
+        "The old release required V2 preship receipts, so commit them before recording.",
     ],
 )
 def test_release_docs_reject_retired_receipt_requirements(tmp_path: Path, body: str) -> None:
@@ -96,6 +98,7 @@ def test_release_docs_reject_retired_receipt_requirements(tmp_path: Path, body: 
         "Do not run `scripts/emit-review-evidence.sh` before HA runs.",
         "The old release required V2 preship receipts. That admission is retired.",
         "The old release required V2 preship receipts, and those receipts remain readable.",
+        "The old release required V2 preship receipts, so run the current release check instead.",
         "HA Green receipts are required when the physical evidence gate is armed.",
         "Save the First Listen privacy-review receipt before completing setup.",
         "Run scripts/check-preship-evidence.sh to read historical receipts.",

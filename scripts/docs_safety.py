@@ -141,7 +141,12 @@ _RECEIPT_ACTION = re.compile(
     r"\b(?:must(?!\s+not)|requires?|required|comes?\s+before|finalize|create|"
     r"mandatory|needed|needs?|necessary|obligatory|compulsory|essential|"
     r"run|emit|generate|refresh|restore|reattest|"
-    r"commit(?=\s+(?:the|a|an|v2|preship|review)\b))\b",
+    r"commit(?=\s+(?:the|a|an|v2|preship|review|it|them|those)\b))\b",
+    re.IGNORECASE,
+)
+_RECEIPT_PRONOUN_REFERENCE = re.compile(
+    r"\b(?:finalize|create|run|emit|generate|refresh|restore|reattest|commit)\s+(?:it|them|those)\b|"
+    r"\b(?:it|they)\s+(?:is|are|must|should|needs?)\b",
     re.IGNORECASE,
 )
 _HISTORICAL_REQUIREMENT = re.compile(
@@ -463,7 +468,7 @@ def retired_review_receipt_issues(path: Path, text: str) -> list[Issue]:
                 if not transition:
                     continue
                 plain = plain[historical.end() + transition.end() :]
-                if not _REVIEW_RECEIPT.search(plain):
+                if not _REVIEW_RECEIPT.search(plain) and not _RECEIPT_PRONOUN_REFERENCE.search(plain):
                     continue
             # Normalize receipt prohibitions locally; live-recovery negation
             # keeps its own, deliberately narrower command-safety grammar.
