@@ -4,13 +4,20 @@
 **Author:** Florian + Claude (Opus 4.7)
 **Supersedes:** the hardcoded allowlist in `mammamiradio/home/ha_context.py`
 
+Historical design record. Proposed settings and earlier privacy defaults below
+are not the current configuration contract; see [architecture.md](architecture.md)
+and [the agent guide](../CLAUDE.md).
+
 ## 1. Problem
 
-`ha_context.py` works beautifully — *in one apartment*. The four hand-curated dicts (`GOLD/SILVER/BRONZE_ENTITIES`, `ENTITY_LABELS[_EN]`, `STATE_TRANSLATIONS[_EN]`, `REACTIVE_TRIGGERS`) hardcode Florian's specific Zigbee/Z-Wave/Shelly inventory in Italian and English. The mood classifier is a 40-line `if`-ladder over those same entity IDs.
+The curated lists, labels, triggers, and mood rules were written for one
+development installation. Adding an entity can require changes in several places.
 
 Consequences:
 
-- **Customer ceiling.** Any HA install that isn't Florian's PentFLOuse gets *zero* radio personality from HA — the addon ships looking dead. The Aqara FP300 question made this concrete: even *Florian's own new sensor* needs four dict edits before the host can mention it.
+- **Portability.** A different installation cannot rely on the same entity IDs.
+  A newly paired presence sensor illustrates the maintenance cost of extending
+  several curated mappings.
 - **Maintenance ceiling.** Every new device = touch four dicts + maybe a mood rule + maybe a trigger. This is hostile to experimentation.
 - **Intelligence in the wrong layer.** Brittle `if`-statements do work an LLM does better.
 
@@ -174,7 +181,7 @@ The producer must continue copying `summary` / `events_summary` / `mood` / `weat
 
 - L1 registries + L2 denylist + L3 scoring + L4 budgeting.
 - Hand-tuned dicts remain authoritative; catalog not built yet.
-- On Florian's home: output is byte-for-byte close to today's (same entities top the score because of the override boost).
+- On the original development installation: output is byte-for-byte close to today's (same entities top the score because of the override boost).
 - On any other home: HA goes from silent to "interesting things in your home, identified by domain + area."
 - **Visible deliverable:** Engine Room panel showing scored set + denylist hits.
 
@@ -182,7 +189,7 @@ The producer must continue copying `summary` / `events_summary` / `mood` / `weat
 
 - Background catalog generator + disk cache + invalidation.
 - New homes now get *narrated* (Italian + English), not just enumerated.
-- Hand-tuned dicts still authoritative on Florian's signature entities.
+- Hand-tuned dicts still authoritative on the curated entities.
 - **Visible deliverable:** "catalog hit rate" observability + manual "regenerate catalog" button in Engine Room.
 
 ### Phase C — Mood + scenes by LLM (1 PR, decision point)
@@ -207,7 +214,7 @@ Adapt the repo review discipline to this subsystem: every phase covers normal, e
 
 Plus phase-specific tests:
 
-- **Privacy invariant** (Phase A): seed snapshot includes `device_tracker.foo` with GPS attrs → asserts entity never appears in any output field.
+- **Privacy invariant** (Phase A): seed snapshot includes `device_tracker.example_phone` with GPS attrs → asserts entity never appears in any output field.
 - **Override precedence** (Phase A/B): same entity in dicts and catalog → dict wins.
 - **Catalog cache invalidation** (Phase B): `friendly_name` change → catalog entry regenerates.
 
@@ -218,9 +225,9 @@ Plus phase-specific tests:
 | Token budget for catalog generation drifts up | Cache to disk, regenerate on schedule only, hard ceiling on entity count per generation call |
 | LLM-generated labels are *worse* than entity_id passthrough | Quality gate: catalog gen rejects responses that look like JSON garbage or echo the entity_id verbatim. Fallback to "friendly_name + state" if rejection |
 | Privacy leak via attributes (not just state) | L2 strips known sensitive attribute keys (`latitude`, `longitude`, `gps_accuracy`, `source_type`) globally before L3 sees them |
-| Score function tuned for Florian's home only | Score weights live in config (`radio.toml` or addon options), not constants. Document the tuning knob |
+| Score function tuned for the original development installation only | Score weights live in config (`radio.toml` or addon options), not constants. Document the tuning knob |
 | Customer addon starts narrating sensitive household state by surprise | Engine Room "What HA sends to the LLM" panel is the canary. First-run experience surfaces it |
-| Hardcoded mood classifier and LLM scene-namer disagree on Florian's home | Phase C decision: data-driven. Because the LLM path is off by default, keep the ladder unless the generated names are consistently better |
+| Hardcoded mood classifier and LLM scene-namer disagree on the original development installation | Phase C decision: data-driven. Because the LLM path is off by default, keep the ladder unless the generated names are consistently better |
 
 ## 10. Doc-sync touchpoints
 

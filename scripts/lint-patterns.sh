@@ -83,6 +83,9 @@ LINT_PATTERNS=(
   # Workspace / process archaeology (observed leaking to the public issue
   # tracker: post-mortem material about local machine state and review runs)
   'stash@\{'                      # git stash refs (stash@{0})
+  '[Cc][Oo][Nn][Dd][Uu][Cc][Tt][Oo][Rr]-[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee]-[Ll][Ii][Nn][Kk]'  # app-added private workspace footer
+  '[Aa][Pp][Pp]\.[Cc][Oo][Nn][Dd][Uu][Cc][Tt][Oo][Rr]\.[Bb][Uu][Ii][Ll][Dd]/workspace([/?#]|$)'
+  '[Cc][Oo][Nn][Dd][Uu][Cc][Tt][Oo][Rr]://'  # deep links embed prompts and local paths
   '\blocal-only\b'
   "\\bFlorian['’]?s( local)? machine\\b"
   '\babandoned (attempt|stash|design|branch)'

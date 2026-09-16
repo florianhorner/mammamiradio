@@ -13,13 +13,15 @@ a new section, a new mode.
 
 - **`mock_ha.py`** — a tiny mock Home Assistant REST API. Serves a *staged* home scene so
   the producer genuinely derives a home mood and the hosts weave it into banter, without a
-  real HA and without leaking real-home telemetry. Scenarios are plain dicts chosen so the
+  real HA. Values are staged; some identifiers and labels still match legacy
+  runtime mappings, so these fixtures are not fully anonymized. Scenarios are chosen so the
   real `classify_home_mood()` returns the intended mood (default `coffee` →
   "Caffè in preparazione"; `homecoming` stages the front door for the unlock moment).
   Add scenarios by editing `SCENARIOS` / `FORECASTS`. States are **mutable at runtime**
   via `POST /__set {"entity_id": ..., "state": ...}` — the station derives events by
-  diffing consecutive polls, so a reactive trigger (door unlock → "bentornato") only
-  fires when a capture stages the *transition*, not just the end state.
+  diffing consecutive polls, so a reactive trigger needs the *transition*, not just
+  the end state. A lock transition supports an unlocking observation. A named
+  welcome requires a separate person-return source.
 - **`capture.py`** — drives the local station: connects a warmup listener, waits for a long
   lead track, forces the segment order, records `/stream`, and auto-trims the contiguous
   arc into a final clip. The arc is configurable (`--arc banter` for a single-segment
@@ -66,16 +68,18 @@ python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
 
 ## Staged home-event capture (reactive-trigger moments)
 
-For moments driven by a `REACTIVE_TRIGGERS` directive (door unlock, coffee machine
+For moments driven by a `REACTIVE_TRIGGERS` directive (coffee machine
 switching on, a person arriving) the entity has to *change state between two polls* —
-serving the end state from boot produces no event. Flow:
+serving the end state from boot produces no event. The example below stages only
+a lock observation. Set `LOCK_ENTITY_ID` to the lock ID returned by the local
+mock's `/api/states`; a door unlock does not authorize a named welcome.
 
 ```bash
 python scripts/showreel/mock_ha.py --port 8123 --scenario homecoming &
 # Start the station as above. Its command sets the 15s context TTL required here.
 python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
   --lead-track "Night in Venice" --arc banter \
-  --home-event lock.lock_ultra_8d3c:unlocked --mock-ha http://127.0.0.1:8123 \
+  --home-event "${LOCK_ENTITY_ID:?select a lock from the local mock}:unlocked" --mock-ha http://127.0.0.1:8123 \
   --ha-poll-interval 15 \
   --final scripts/showreel_out/door-bentornato.mp3
 ```

@@ -70,7 +70,8 @@ before tagging has moved.
 
 The ordinary pull-request gate runs one cold aarch64 launch in
 `.github/workflows/pi-smoke.yml`; it does not require physical-device receipts.
-Finalize version, changelogs, and the V2 preship receipt before recording.
+Finalize version, changelogs, and all other cut content before recording.
+Review-receipt admission is retired; historical files do not need refreshing.
 For a stable release, start from the exact clean commit running on Home
 Assistant Green and record twenty cold runs locally on that device:
 

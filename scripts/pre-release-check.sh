@@ -25,7 +25,7 @@ case "${1:-}" in
     cat <<'EOF'
 Usage: scripts/pre-release-check.sh
 
-Pre-release sanity check. Run before bumping the version number.
+Pre-release sanity check. Run after the release version and changelogs are updated.
 Verifies version consistency across pyproject.toml + addon config.yaml,
 CHANGELOG head matches the version, all release invariants (FFmpeg eq
 chain count, recovery and browser audio, test mocks, post-restart guard).

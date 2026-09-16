@@ -1493,7 +1493,7 @@ def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
         },
     }
 
-    assert _filter_state("device_tracker.florian_iphone", tracker, hits) is None
+    assert _filter_state("device_tracker.example_phone", tracker, hits) is None
     assert hits["privacy:device_tracker"] == 1
 
     scored = _build_scored_entities(
@@ -1570,7 +1570,7 @@ def test_filter_state_keeps_person_presence_but_strips_location_and_identity():
     a privacy-denied domain."""
     hits: dict[str, int] = {}
     filtered = _filter_state(
-        "person.florian_horner",
+        "person.example_resident",
         {
             "state": "not_home",
             "attributes": {
@@ -1579,7 +1579,7 @@ def test_filter_state_keeps_person_presence_but_strips_location_and_identity():
                 "longitude": 13.4,
                 "gps_accuracy": 5,
                 "user_id": "abcd1234ef567890",
-                "device_trackers": ["device_tracker.florian_iphone"],
+                "device_trackers": ["device_tracker.example_phone"],
             },
         },
         hits,
@@ -2060,7 +2060,7 @@ def test_narrow_cached_hard_mute_does_not_reenable_derived_mood(tmp_path):
 @pytest.mark.asyncio
 async def test_fetch_returns_cached_if_fresh():
     cache = HomeContext(
-        raw_states={"person.florian_horner": {"state": "home", "attributes": {}}},
+        raw_states={"person.example_resident": {"state": "home", "attributes": {}}},
         summary="cached",
         timestamp=time.time(),
     )

@@ -400,6 +400,21 @@ to grandfather rather than a regression you just wrote. Fixed entries leave as a
 
 When changing the public install or add-on guides, run `bash scripts/check-docs-safety.sh`. It catches retired Home Assistant navigation, unsafe live-recovery instructions, and broken relative Markdown links before CI does.
 
+Public examples use synthetic entity IDs such as `person.example_resident`,
+`device_tracker.example_phone`, and `lock.example_front_door`. Keep observed
+household identifiers and private capture notes out of new docs and fixtures.
+The documentation check enforces that convention for its selected public
+examples and rejects obsolete review-receipt requirements in maintained release
+guides. Coupled legacy runtime fixtures require a separate compatibility change.
+
+Before publishing a PR or a curated GitHub release, save the exact body in a
+local file and run `bash scripts/check-pr-body-lint.sh <body-file>`. The same
+public-text rules apply to both. Internal workspace links are rejected without
+echoing their identifiers into the check's output; public tool documentation and
+contributor attribution remain valid. PR CI checks published text using the base
+branch's rules. It cannot prevent initial publication or guarantee what another
+application may append, so inspect the final payload as well.
+
 
 
 <!-- BEGIN: commit-message-standards (managed by bootstrap-repo.sh — do not hand-edit) -->
