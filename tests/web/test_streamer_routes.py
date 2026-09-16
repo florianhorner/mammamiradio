@@ -7897,6 +7897,154 @@ async def test_resume_cold_cache_reserves_packaged_continuity_without_probe(tmp_
     probe.assert_not_called()
 
 
+def _install_starter_playlist(state: StationState) -> None:
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+
+    tracks = load_starter_tracks()
+    state.playlist = tracks
+    state.playlist_source = starter_source(len(tracks))
+
+
+@pytest.mark.asyncio
+async def test_resume_cold_cache_reserves_starter_music_without_probe(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    with patch("mammamiradio.web.streamer.probe_duration_sec") as probe:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert len(runway) == 1
+    assert runway[0].metadata["audio_source"] == "starter"
+    assert runway[0].metadata["continuity_reservation"] is True
+    assert runway[0].path != _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert runway[0].path.is_file()
+    probe.assert_not_called()
+    reserved = state.music_admission_reservations[runway[0].metadata["queue_id"]]
+    assert reserved.source == "starter"
+    assert reserved.cache_key in {track.cache_key for track in state.playlist}
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_stopped_when_stop_lands_during_starter_prepare(tmp_path):
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+    epoch = state.continuity_epoch
+    real_prepare = producer_mod._prepare_starter_catalog_runway
+
+    async def prepare_then_stop(*args, **kwargs):
+        prepared = await real_prepare(*args, **kwargs)
+        state.continuity_epoch += 1
+        return prepared
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=prepare_then_stop):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 503
+    assert state.session_stopped is True
+    assert marker.exists()
+    assert app.state.queue.empty()
+    assert not state.resume_event.is_set()
+    assert state.continuity_epoch == epoch + 1
+    assert state.music_admission_reservations == {}
+
+
+@pytest.mark.asyncio
+async def test_ha_resume_cold_cache_reserves_starter_music(tmp_path):
+    from mammamiradio.web.streamer import _resume_station
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+
+    await _resume_station(app.state)
+
+    runway = list(app.state.queue._queue)
+    assert len(runway) == 1
+    assert runway[0].metadata["audio_source"] == "starter"
+    assert state.session_stopped is False
+    assert not marker.exists()
+    assert state.resume_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_resume_warm_cache_prefers_cache_over_starter(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    cached = _write_indexed_cache_track(
+        tmp_path, "norm_warm_song_192k.mp3", title="Warm Song", artist="Cache Artist", duration=180.0, state=state
+    )
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    with patch("mammamiradio.web.streamer.probe_duration_sec") as probe:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert [segment.path for segment in runway] == [cached]
+    assert runway[0].metadata["audio_source"] == "norm_cache"
+    probe.assert_not_called()
+    assert state.music_admission_reservations == {}
+
+
+def test_continuity_reservation_prefers_prepared_starter_over_canned(tmp_path):
+    state = StationState()
+    starter_path = tmp_path / "starter-ready.mp3"
+    starter_path.write_bytes(b"starter-audio" * 256)
+    preferred = Segment(
+        type=SegmentType.MUSIC,
+        path=starter_path,
+        duration_sec=180.0,
+        metadata={
+            "title": "Starter Song",
+            "artist": "Starter Artist",
+            "title_only": "Starter Song",
+            "audio_source": "starter",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+
+    segments = _continuity_reservation_segments(
+        state,
+        SimpleNamespace(),
+        target_seconds=1.0,
+        max_segments=1,
+        preferred_ready_segments=[preferred],
+    )
+
+    assert segments == [preferred]
+    assert _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3" not in {segment.path for segment in segments}
+
+
 @pytest.mark.asyncio
 async def test_resume_without_any_immediate_audio_fails_closed(tmp_path):
     app = _make_test_app()

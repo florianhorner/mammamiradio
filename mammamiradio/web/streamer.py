@@ -21,7 +21,7 @@ import shutil
 import stat as _stat
 import time
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1368,11 +1368,14 @@ def _continuity_reservation_segments(
     max_segments: int | None = None,
     excluded_paths: set[Path] | None = None,
     excluded_track_keys: set[tuple[str, str]] | None = None,
+    preferred_ready_segments: Sequence[Segment] | None = None,
 ) -> list[Segment]:
     """Build no-wait packaged/cache fallback segments for a control action.
 
     This deliberately avoids ffprobe, network, synthesis, and FFmpeg.  A control
-    can only reserve audio that is already safe to play now.
+    can only reserve audio that is already safe to play now. Pre-verified starter
+    runway may be supplied by an async Resume path; it still sits below cache
+    music and above the packaged continuity clip.
     """
     selected: list[Segment] = []
     covered = 0.0
@@ -1501,6 +1504,21 @@ def _continuity_reservation_segments(
     # straight into it: a 4.4s canned line in front of the song is what made a
     # repeat sound like a deliberate rotation choice instead of a hiccup, and it
     # is the one voice on air that belongs to neither host.
+    if not selected and preferred_ready_segments:
+        for candidate in preferred_ready_segments:
+            if not _can_add() or _target_met():
+                break
+            if candidate.path in excluded_paths:
+                continue
+            if not _segment_is_immediately_playable(
+                state,
+                candidate,
+                excluded_paths=excluded_paths,
+                excluded_track_keys=transient_blocked_keys,
+            ):
+                continue
+            _add(candidate)
+
     if (
         not selected
         and _can_add()
@@ -1838,6 +1856,7 @@ def _reserve_continuity_runway(
     capacity_slot_excluded_queue_ids: frozenset[str] = frozenset(),
     outcome: ContinuityRunwayOutcome | None = None,
     minimum_runway_seconds: float = 0.0,
+    preferred_ready_segments: Sequence[Segment] | None = None,
 ) -> int:
     """Reserve playable runway, then bind it to the timeline it was created on.
 
@@ -1869,9 +1888,103 @@ def _reserve_continuity_runway(
         capacity_slot_excluded_queue_ids=capacity_slot_excluded_queue_ids,
         outcome=outcome,
         minimum_runway_seconds=minimum_runway_seconds,
+        preferred_ready_segments=preferred_ready_segments,
     )
     _stamp_continuity_runway_epoch(app_state.queue, state)
     return dropped
+
+
+def _continuity_chose_cache_music(segments: Sequence[Segment]) -> bool:
+    """Return whether a reservation probe already has immediately playable cache music."""
+    return any(
+        (segment.metadata if isinstance(segment.metadata, dict) else {}).get("audio_source") == "norm_cache"
+        for segment in segments
+    )
+
+
+async def _reserve_resume_runway(
+    app_state,
+    state: StationState,
+    config,
+    *,
+    discard_reason: str,
+) -> int:
+    """Reserve Resume audio, preferring verified starter music on a cold cache.
+
+    The live-control ladder cannot await. Verification therefore happens here,
+    off the event loop, and is rechecked before the prepared song is offered as
+    the rung below cache music. Unused preparations release their cycle
+    reservation so later rotation can still select that track.
+    """
+    from mammamiradio.scheduling.producer import (
+        _arm_accepted_heading_announcement,
+        _prepare_starter_catalog_runway,
+        _reserve_music_segment,
+    )
+
+    preferred: list[Segment] = []
+    prepared_track: Track | None = None
+    source = state.playlist_source
+    resume_epoch = state.continuity_epoch
+    try:
+        if (
+            source is not None
+            and source.kind == "starter"
+            and state.listener_request_handoff is None
+            and not _continuity_chose_cache_music(
+                _continuity_reservation_segments(
+                    state,
+                    config,
+                    ANY_PLAYABLE_RUNWAY_SECONDS,
+                    max_segments=1,
+                )
+            )
+        ):
+            prepared = await _prepare_starter_catalog_runway(state, config, context="resume runway")
+            # The prepare await is interruptible. A newer epoch (Stop) must win.
+            if state.continuity_epoch != resume_epoch:
+                if prepared is not None:
+                    prepared.segment.release()
+                return 0
+            if prepared is not None:
+                segment = prepared.segment
+                segment.metadata[_CONTINUITY_RESERVATION_FLAG] = True
+                segment.metadata["rescue"] = True
+                segment.metadata["continuity_reservation_id"] = uuid4().hex
+                segment.metadata["queue_reason"] = "Protected continuity audio."
+                segment.metadata.setdefault("queue_id", uuid4().hex)
+                try:
+                    _reserve_music_segment(state, prepared.track, segment)
+                except RuntimeError:
+                    segment.release()
+                else:
+                    preferred.append(segment)
+                    prepared_track = prepared.track
+        dropped = _reserve_continuity_runway(
+            app_state,
+            state,
+            config,
+            discard_reason=discard_reason,
+            minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+            preferred_ready_segments=preferred,
+        )
+        admitted = bool(
+            preferred
+            and (
+                state.continuity_slot is preferred[0]
+                or any(item is preferred[0] for item in getattr(app_state.queue, "_queue", ()))
+            )
+        )
+        if preferred and not admitted:
+            preferred[0].release()
+        elif admitted and prepared_track is not None:
+            _arm_accepted_heading_announcement(state, prepared_track)
+            state.after_music(prepared_track)
+        return dropped
+    except BaseException:
+        if preferred:
+            preferred[0].release()
+        raise
 
 
 def _reserve_continuity_runway_unstamped(
@@ -1888,6 +2001,7 @@ def _reserve_continuity_runway_unstamped(
     capacity_slot_excluded_queue_ids: frozenset[str] = frozenset(),
     outcome: ContinuityRunwayOutcome | None = None,
     minimum_runway_seconds: float = 0.0,
+    preferred_ready_segments: Sequence[Segment] | None = None,
 ) -> int:
     """Reserve immediately playable runway before a live control mutates audio.
 
@@ -1993,6 +2107,7 @@ def _reserve_continuity_runway_unstamped(
         # original path while ``last_music_file`` has advanced to a later song.
         excluded_paths=excluded_paths | surviving_paths,
         excluded_track_keys=excluded_track_keys | surviving_track_keys,
+        preferred_ready_segments=preferred_ready_segments,
     )
     if not reservation:
         logger.warning("No packaged or cache continuity audio available for live control")
@@ -2810,12 +2925,11 @@ async def _resume_station(app_state: Any) -> None:
     config = app_state.config
     was_stopped = state.session_stopped
     if was_stopped:
-        _reserve_continuity_runway(
+        await _reserve_resume_runway(
             app_state,
             state,
             config,
             discard_reason=GenerationWasteReason.OPERATOR_STOP,
-            minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
         )
         _discard_unplayable_queue_prefix(
             app_state.queue,
@@ -8456,17 +8570,14 @@ async def resume_session(
         return {"ok": True, "recovering": True, "runway_source": "none"}
 
     # Resume needs *some* playable audio, not a full runway: the producer
-    # replenishes once it wakes. This keeps the reservation non-empty even when
-    # the runway floor is configured to 0, so the fail-closed check below is a
-    # real test of playability rather than a no-op. The reservation is epoch-
-    # stamped inside the call, so a queue waiter blocked since before the Stop
-    # still accepts it.
-    _reserve_continuity_runway(
+    # replenishes once it wakes. Starter catalog verification runs off the
+    # event loop before this reservation so a cold cache can still start on a
+    # real song.
+    await _reserve_resume_runway(
         app_state,
         state,
         config,
         discard_reason=GenerationWasteReason.OPERATOR_STOP,
-        minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
     )
     # The reservation counts ready seconds across every protected segment, but
     # the gate below reads only the queue head — the loop's next pull. A dead

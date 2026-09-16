@@ -9622,6 +9622,199 @@ async def test_drain_bridge_queues_starter_music_when_norm_cache_is_cold(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_resume_bridge_queues_starter_music_when_norm_cache_is_cold(tmp_path):
+    """Forced resume uses the same starter rung drain already has."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    queued: list[Segment] = []
+
+    async def _enqueue(segment: Segment, **kwargs) -> bool:
+        admission = kwargs.get("admission_callback")
+        if admission is not None:
+            admission(segment)
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_continuity_bridge(
+            _enqueue,
+            state,
+            config,
+            bridge_type="resume",
+            bridge_flag="resume_bridge",
+            canned_title="Resume bridge",
+            music_runway=True,
+            starter_catalog_runway=True,
+        )
+
+    assert ok is True
+    assert len(queued) == 1
+    segment = queued[0]
+    assert segment.type is SegmentType.MUSIC
+    assert segment.path != canned_clip
+    assert segment.metadata.get("audio_source") == "starter"
+    assert segment.metadata.get("resume_bridge") is True
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("resume", "starter_catalog")]
+
+
+@pytest.mark.asyncio
+async def test_idle_bridge_queues_starter_music_when_norm_cache_is_cold(tmp_path):
+    """Idle wake prefers bundled music over the canned warm-up line."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    queued: list[Segment] = []
+
+    async def _enqueue(segment: Segment, **kwargs) -> bool:
+        admission = kwargs.get("admission_callback")
+        if admission is not None:
+            admission(segment)
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_continuity_bridge(
+            _enqueue,
+            state,
+            config,
+            bridge_type="idle",
+            bridge_flag="idle_bridge",
+            canned_title="Station warm-up",
+            canned_metadata={"warmup": True, "rescue": True},
+            music_runway=True,
+            starter_catalog_runway=True,
+        )
+
+    assert ok is True
+    assert len(queued) == 1
+    segment = queued[0]
+    assert segment.type is SegmentType.MUSIC
+    assert segment.path != canned_clip
+    assert segment.metadata.get("audio_source") == "starter"
+    assert segment.metadata.get("idle_bridge") is True
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("idle", "starter_catalog")]
+
+
+@pytest.mark.asyncio
+async def test_forced_resume_bridge_queues_starter_music_from_producer_loop(tmp_path):
+    """The producer call site, not only the helper, requests starter runway."""
+    state = _make_starter_state()
+    state.session_stopped = True
+    state.force_recovery_active = True
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=8.0),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while queue.qsize() < 1:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Resume bridge did not queue starter music")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    runway = queue.get_nowait()
+    assert queue.empty()
+    assert runway.type is SegmentType.MUSIC
+    assert runway.path != canned_clip
+    assert runway.metadata.get("resume_bridge") is True
+    assert runway.metadata.get("audio_source") == "starter"
+    assert (state.bridge_events[-1]["bridge_type"], state.bridge_events[-1]["source"]) == (
+        "resume",
+        "starter_catalog",
+    )
+
+
+@pytest.mark.asyncio
+async def test_starter_prepare_rejects_a_ban_that_lands_during_verification(tmp_path):
+    """A ban under the off-loop verify must not be admitted on resume/idle."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    track = state.playlist[0]
+    rendered_path = tmp_path / "verified.mp3"
+    rendered_path.write_bytes(b"verified starter")
+    rendered = producer.RenderedMusicTrack(
+        track=track,
+        path=rendered_path,
+        cache_path=rendered_path,
+        cache_hit=True,
+    )
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"canned")
+    queued: list[Segment] = []
+
+    async def _render(selected, *_args, **_kwargs):
+        state.blocklist = {selected.normalized_key: {"display": selected.display}}
+        return rendered
+
+    async def _capture(segment: Segment, **_kwargs) -> bool:
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=4.4),
+        patch(f"{PRODUCER_MODULE}._select_accepted_music_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render),
+    ):
+        ok = await producer._queue_continuity_bridge(
+            _capture,
+            state,
+            config,
+            bridge_type="resume",
+            bridge_flag="resume_bridge",
+            canned_title="Resume bridge",
+            music_runway=True,
+            starter_catalog_runway=True,
+        )
+
+    assert ok is True
+    assert [segment.path for segment in queued] == [canned_clip]
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("resume", "canned")]
+    assert list(state.played_tracks) == []
+
+
+@pytest.mark.asyncio
 async def test_drain_bridge_falls_back_to_canned_when_starter_admission_is_rejected(tmp_path):
     """A starter admission refusal keeps the existing canned safety rung intact."""
     from mammamiradio.scheduling import producer
