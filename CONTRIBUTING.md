@@ -116,13 +116,17 @@ pytest tests/core/test_config.py tests/scheduling/test_scheduler.py
 make test-fast
 ```
 
-Before committing, run the complete local gate:
+Before pushing, run the deterministic lint bundle (the pre-push hook runs it
+automatically when installed):
 
 ```bash
-make check
+scripts/pre-lint.sh
 ```
 
-`make check` is the pre-commit source of truth: lint, format check, type checking, dead-code scan, the full pytest suite, coverage, and per-module coverage floors. A focused test is the fast feedback loop, not a substitute for this gate.
+It mirrors the Quality lint job without auto-fixing files or starting the full
+pytest/coverage run. Use `make check` for the complete local gate before `/ship`
+when a broad runtime or coverage change needs full-suite proof; required CI
+still makes the final repository-wide decision.
 
 Notes:
 
@@ -341,7 +345,11 @@ pip install pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-The repo wires `scripts/validate-addon.sh` into both `pre-commit` and `pre-push` for files that can break the Home Assistant add-on build. Docker Desktop or Podman must be installed for `--build` checks.
+The repo runs `scripts/pre-lint.sh` on pre-push and wires
+`scripts/validate-addon.sh` into both `pre-commit` and `pre-push` for files that
+can break the Home Assistant add-on build. The lint bundle requires ShellCheck
+0.11.0 or Docker; Docker Desktop or Podman is also required for add-on `--build`
+checks.
 
 ## Manual smoke test
 

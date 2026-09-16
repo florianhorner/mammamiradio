@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -43,7 +44,7 @@ def test_run_coverage_ratchets_only_a_supported_aggregate_floor(tmp_path, monkey
             command, 0, "mammamiradio/core/config.py 100 7 0 0 93%\nTOTAL 100 7 0 0 93%\n", ""
         )
 
-    monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(module, "_run_streaming", run)
     assert module.run_coverage() == ({"mammamiradio.core.config": 93}, expected)
     assert json.loads(snapshot.read_text())["total_pct"] == expected
     # The artifact consumer must promote the same safe floor as the fresh run.
@@ -61,11 +62,11 @@ def test_run_coverage_does_not_publish_a_failed_test_run(tmp_path, monkeypatch):
     snapshot = tmp_path / "snapshot.json"
     monkeypatch.setattr(module, "COVERAGE_SNAPSHOT", snapshot)
     monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "TOTAL 100 0 0 0 100%\n", "test failed"),
+        module,
+        "_run_streaming",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 7, "TOTAL 100 0 0 0 100%\n", "test failed"),
     )
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit, match="7"):
         module.run_coverage()
     assert not snapshot.exists()
 
@@ -80,6 +81,100 @@ def test_coverage_ratchet_loads_snapshot_input(tmp_path, monkeypatch) -> None:
 
     assert modules == {"mammamiradio.core.config": 91}
     assert total_pct == 82
+
+
+def test_streaming_runner_emits_heartbeat_and_retains_output(capsys) -> None:
+    module = _load_coverage_ratcheter()
+    command = [
+        sys.executable,
+        "-c",
+        "import time; print('start', flush=True); time.sleep(0.08); print('done')",
+    ]
+
+    result = module._run_streaming(command, heartbeat_seconds=0.02)
+
+    assert result.returncode == 0
+    assert result.stdout == "start\ndone\n"
+    captured = capsys.readouterr().out
+    assert "start" in captured
+    assert "pytest still running" in captured
+    assert "done" in captured
+
+
+def test_streaming_runner_preserves_child_exit_status() -> None:
+    module = _load_coverage_ratcheter()
+
+    result = module._run_streaming([sys.executable, "-c", "raise SystemExit(7)"])
+
+    assert result.returncode == 7
+
+
+def test_streaming_runner_kills_child_and_propagates_reader_failure(monkeypatch, capsys) -> None:
+    module = _load_coverage_ratcheter()
+
+    class BrokenOutput:
+        def __iter__(self):
+            yield "partial output\n"
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    class Process:
+        stdout = BrokenOutput()
+        killed = False
+        waited = False
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            self.waited = True
+            return -9
+
+    process = Process()
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(UnicodeDecodeError, match="invalid start byte"):
+        module._run_streaming(["pytest"])
+
+    assert process.killed is True
+    assert process.waited is True
+    assert capsys.readouterr().out == "partial output\n"
+
+
+def test_junit_args_are_opt_in(monkeypatch) -> None:
+    module = _load_coverage_ratcheter()
+    monkeypatch.delenv("COVERAGE_RATCHET_JUNIT", raising=False)
+    assert module.junit_args() == []
+
+    monkeypatch.setenv("COVERAGE_RATCHET_JUNIT", "pytest-results.xml")
+    assert module.junit_args() == ["--junitxml=pytest-results.xml"]
+
+
+def test_coverage_command_requests_slow_test_report(tmp_path, monkeypatch) -> None:
+    module = _load_coverage_ratcheter()
+    monkeypatch.setattr(module, "COVERAGE_SNAPSHOT", None)
+    seen: list[str] = []
+
+    def run(command, **kwargs):
+        seen.extend(command)
+        report_arg = next(argument for argument in command if argument.startswith("--cov-report=json:"))
+        Path(report_arg.removeprefix("--cov-report=json:")).write_text(
+            json.dumps({"totals": {"percent_covered": 93.0}})
+        )
+        return subprocess.CompletedProcess(
+            command, 0, "mammamiradio/core/config.py 100 7 0 0 93%\nTOTAL 100 7 0 0 93%\n", ""
+        )
+
+    monkeypatch.setattr(module, "_run_streaming", run)
+    monkeypatch.setenv("COVERAGE_RATCHET_JUNIT", str(tmp_path / "pytest.xml"))
+
+    module.run_coverage()
+
+    assert "--durations=20" in seen
+    assert "--durations-min=1.0" in seen
+    assert f"--junitxml={tmp_path / 'pytest.xml'}" in seen
 
 
 # ---------------------------------------------------------------------------

@@ -33,11 +33,13 @@ def test_ordinary_pr_keeps_one_cold_smoke_without_twenty_run_gate() -> None:
 
 def test_local_pre_release_is_actionably_strict() -> None:
     script = _read("scripts/pre-release-check.sh")
+    gate = _read("scripts/ha-green-receipt-gate.sh")
     makefile = _read("Makefile")
 
-    assert '"$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py' in script
-    assert '--release-version "$ADDON_VER"' in script
-    assert "record 20 runs" in script
+    assert 'source "$SCRIPT_DIR/ha-green-receipt-gate.sh"' in script
+    assert '"$SCRIPT_DIR/validate-ha-green-release-evidence.py"' in script
+    assert '"$python" "$validator" --release-version "$release_version"' in gate
+    assert "record 20 runs" in gate
     assert re.search(r"(?m)^ha-green-release-proof:", makefile)
     assert re.search(r"(?m)^pre-release:", makefile)
 

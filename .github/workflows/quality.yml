@@ -50,31 +50,12 @@ jobs:
 
       - uses: ./.github/actions/setup-python-ci
 
-      - name: ShellCheck scripts
-        # Pinned to v0.11.0 by digest, matching this job's other supply-chain-hardened steps.
-        run: docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d scripts/*.sh
-
-      - name: Ruff lint
-        run: ruff check .
-
-      - name: Ruff format
-        run: ruff format --check .
+      - name: Deterministic pre-lint
+        run: bash scripts/pre-lint.sh
 
       - name: Admin panel standards check
         if: github.event_name == 'pull_request'
         run: bash scripts/check-admin-standards.sh
-
-      - name: Changelog content lint
-        run: bash scripts/check-changelog-lint.sh
-
-      - name: Documentation safety lint
-        run: bash scripts/check-docs-safety.sh
-
-      - name: UI copy lint
-        run: bash scripts/check-ui-copy-lint.sh
-
-      - name: Backlog-file guard
-        run: bash scripts/check-no-backlog-files.sh
 
   types:
     runs-on: ubuntu-latest
@@ -123,7 +104,16 @@ jobs:
         env:
           COVERAGE_RATCHET_SNAPSHOT: coverage-ratchet-current.json
           COVERAGE_RATCHET_XDIST: auto
+          COVERAGE_RATCHET_JUNIT: pytest-results.xml
         run: python scripts/coverage-ratchet.py check
+
+      - name: Upload pytest results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: pytest-results-${{ github.sha }}
+          path: pytest-results.xml
+          if-no-files-found: warn
 
       - name: Upload coverage ratchet snapshot
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'

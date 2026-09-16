@@ -17,6 +17,7 @@ CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
 CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
 CHECK_UI_COPY_LINT = ROOT / "scripts" / "check-ui-copy-lint.sh"
+PRE_LINT = ROOT / "scripts" / "pre-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
 MODEL_REGISTRY_GATE_SELF_TEST = ROOT / "tests" / "workflows" / "test_model_registry_gate.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
@@ -346,14 +347,115 @@ def test_pre_commit_registers_version_sync_hook() -> None:
     assert "stages: [pre-commit]" in config
 
 
-def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:
+def test_pre_lint_is_registered_for_pre_push_and_matches_ci_ruff() -> None:
+    config = (ROOT / ".pre-commit-config.yaml").read_text()
+    requirements = (ROOT / "requirements-dev.txt").read_text()
+
+    ruff_version = next(line.removeprefix("ruff==") for line in requirements.splitlines() if line.startswith("ruff=="))
+    assert f"rev: v{ruff_version}" in config
+    assert "id: pre-lint" in config
+    assert "entry: scripts/pre-lint.sh" in config
+    assert "stages: [pre-push]" in config
+
+
+def test_pre_lint_is_non_mutating_and_keeps_expensive_tests_out() -> None:
+    script = PRE_LINT.read_text()
+
+    for command in (
+        '"$RUFF_BIN" check .',
+        '"$RUFF_BIN" format --check .',
+        "shellcheck scripts/*.sh",
+        "bash scripts/check-changelog-lint.sh",
+        "bash scripts/check-docs-safety.sh",
+        "bash scripts/check-ui-copy-lint.sh",
+        "bash scripts/check-no-backlog-files.sh",
+    ):
+        assert command in script
+    assert "pytest" not in script
+    assert "--fix" not in script
+    assert "--write-baseline" not in script
+
+
+def test_pre_lint_propagates_the_first_failure(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    _write(
+        bin_dir / "shellcheck",
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = --version ]; then printf 'version: 0.11.0\\n'; exit 0; fi\n"
+        f"printf 'shellcheck\\n' >> {log!s}\n",
+    )
+    _write(
+        bin_dir / "ruff",
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = --version ]; then printf 'ruff 0.16.7\\n'; exit 0; fi\n"
+        f"printf 'ruff %s\\n' \"$*\" >> {log!s}\n"
+        "exit 7\n",
+    )
+    os.chmod(bin_dir / "shellcheck", 0o755)
+    os.chmod(bin_dir / "ruff", 0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    # Hide the repository venv so PATH controls the test without a production
+    # test-only override in pre-lint.sh.
+    isolated = tmp_path / "repo"
+    shutil.copytree(ROOT / "scripts", isolated / "scripts")
+    shutil.copy2(ROOT / "requirements-dev.txt", isolated / "requirements-dev.txt")
+    result = _run(["bash", str(isolated / "scripts/pre-lint.sh")], cwd=isolated, env=env)
+
+    assert result.returncode == 7
+    assert log.read_text().splitlines() == ["shellcheck", "ruff check ."]
+    assert "Ruff format" not in result.stdout
+
+
+def test_pre_lint_uses_pinned_docker_when_installed_shellcheck_is_stale(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    _write(bin_dir / "shellcheck", "#!/usr/bin/env bash\nprintf 'version: 0.9.0\\n'\n")
+    _write(
+        bin_dir / "docker",
+        f"#!/usr/bin/env bash\nprintf 'docker %s\\n' \"$*\" >> {log!s}\n",
+    )
+    _write(
+        bin_dir / "ruff",
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = --version ]; then printf 'ruff 0.16.7\\n'; exit 0; fi\nexit 7\n",
+    )
+    for executable in ("shellcheck", "docker", "ruff"):
+        os.chmod(bin_dir / executable, 0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    isolated = tmp_path / "repo"
+    shutil.copytree(ROOT / "scripts", isolated / "scripts")
+    shutil.copy2(ROOT / "requirements-dev.txt", isolated / "requirements-dev.txt")
+    result = _run(["bash", str(isolated / "scripts/pre-lint.sh")], cwd=isolated, env=env)
+
+    assert result.returncode == 7
+    assert "ShellCheck 0.9.0 is stale; using pinned Docker image." in result.stdout
+    docker_command = log.read_text()
+    assert "koalaman/shellcheck@sha256:" in docker_command
+    assert "scripts/pre-lint.sh" in docker_command
+
+
+def _init_changelog_sync_repo(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
+    _write(
+        tmp_path / "pyproject.toml",
+        '[project]\nname = "mammamiradio"\nversion = "1.0.0"\ndependencies = ["fastapi"]\n'
+        "\n[tool.coverage.report]\nfail_under = 92\n",
+    )
     _write(tmp_path / "CHANGELOG.md", "# Changelog\n")
     _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n")
     _run(["git", "add", "."], cwd=tmp_path)
     _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+
+
+def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:
+    _init_changelog_sync_repo(tmp_path)
 
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
@@ -367,13 +469,7 @@ def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path:
 
 
 def test_check_changelog_sync_passes_when_both_changelogs_staged(tmp_path: Path) -> None:
-    _init_git_repo(tmp_path)
-    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
-    _write(tmp_path / "CHANGELOG.md", "# Changelog\n")
-    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n")
-    _run(["git", "add", "."], cwd=tmp_path)
-    _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+    _init_changelog_sync_repo(tmp_path)
 
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
@@ -394,6 +490,60 @@ def test_check_changelog_sync_passes_when_both_changelogs_staged(tmp_path: Path)
     result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
 
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    [
+        pytest.param(
+            '[project]\nname = "mammamiradio"\nversion = "1.0.0"\ndependencies = ["fastapi", "httpx"]\n'
+            "\n[tool.coverage.report]\nfail_under = 92\n",
+            id="dependency-only",
+        ),
+        pytest.param(
+            '[project]\nname = "mammamiradio"\nversion = "1.0.0"\ndependencies = ["fastapi"]\n'
+            "\n[tool.coverage.report]\nfail_under = 93\n",
+            id="coverage-only",
+        ),
+    ],
+)
+def test_check_changelog_sync_ignores_non_version_pyproject_edits(tmp_path: Path, pyproject: str) -> None:
+    _init_changelog_sync_repo(tmp_path)
+    _write(tmp_path / "pyproject.toml", pyproject)
+    _run(["git", "add", "pyproject.toml"], cwd=tmp_path)
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_check_changelog_sync_ignores_unstaged_version_value(tmp_path: Path) -> None:
+    _init_changelog_sync_repo(tmp_path)
+    project = tmp_path / "pyproject.toml"
+    project.write_text(project.read_text().replace('dependencies = ["fastapi"]', 'dependencies = ["fastapi", "httpx"]'))
+    _run(["git", "add", "pyproject.toml"], cwd=tmp_path)
+    project.write_text(project.read_text().replace('version = "1.0.0"', 'version = "1.1.0"'))
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_check_changelog_sync_uses_staged_version_over_worktree(tmp_path: Path) -> None:
+    _init_changelog_sync_repo(tmp_path)
+    project = tmp_path / "pyproject.toml"
+    addon = tmp_path / "ha-addon/mammamiradio/config.yaml"
+    project.write_text(project.read_text().replace('version = "1.0.0"', 'version = "1.1.0"'))
+    addon.write_text('version: "1.1.0"\n')
+    _run(["git", "add", "pyproject.toml", "ha-addon/mammamiradio/config.yaml"], cwd=tmp_path)
+    project.write_text(project.read_text().replace('version = "1.1.0"', 'version = "1.0.0"'))
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert "requires staged CHANGELOG.md" in result.stdout
 
 
 def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Path) -> None:

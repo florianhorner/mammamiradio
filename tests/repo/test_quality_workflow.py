@@ -108,9 +108,13 @@ def test_quality_workflow_passes_coverage_snapshot_by_artifact() -> None:
 
     assert "COVERAGE_RATCHET_SNAPSHOT: coverage-ratchet-current.json" in tests_block
     assert "COVERAGE_RATCHET_XDIST: auto" in tests_block
+    assert "COVERAGE_RATCHET_JUNIT: pytest-results.xml" in tests_block
     assert "python scripts/coverage-ratchet.py check" in tests_block
     assert re.search(r"actions/upload-artifact@", tests_block) is not None
     assert "name: coverage-ratchet-current" in tests_block
+    assert "name: Upload pytest results" in tests_block
+    assert "if: always()" in tests_block
+    assert "path: pytest-results.xml" in tests_block
     assert re.search(r"actions/download-artifact@", ratchet_block) is not None
     assert "name: coverage-ratchet-current" in ratchet_block
     assert "COVERAGE_RATCHET_INPUT: coverage-ratchet-current.json" in ratchet_block
@@ -133,13 +137,15 @@ def test_browser_smoke_caches_playwright_browsers() -> None:
     assert 'cache-playwright: "true"' in browser_block
 
 
-def test_quality_workflow_runs_shellcheck_on_scripts() -> None:
+def test_quality_workflow_uses_shared_deterministic_pre_lint() -> None:
     lint_block = _job_block(_workflow_text(), "lint")
+    script = (REPO_ROOT / "scripts" / "pre-lint.sh").read_text()
 
-    assert "ShellCheck scripts" in lint_block
-    assert "koalaman/shellcheck@sha256:" in lint_block
-    assert "v0.11.0" in lint_block
-    assert "scripts/*.sh" in lint_block
+    assert "Deterministic pre-lint" in lint_block
+    assert "bash scripts/pre-lint.sh" in lint_block
+    assert "koalaman/shellcheck@sha256:" in script
+    assert "0.11.0" in script
+    assert "scripts/*.sh" in script
 
 
 def test_quality_workflow_emits_strict_media_proof_on_prs_and_main() -> None:

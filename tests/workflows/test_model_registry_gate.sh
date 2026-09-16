@@ -5,8 +5,8 @@
 # The section must fail the cut on a registry nobody decided in 45 days (stale, future,
 # malformed, or missing stamp), fail it on a pin the provider has deprecated or retired,
 # and WAIVE, never PASS, when the provider docs cannot be read. Most cases drive the
-# sourced section directly with stub reporters that print the real script's lines; four
-# cases run the whole release check to prove the wiring, the CI skip, and the summary.
+# sourced section directly with stub reporters that print and count the real script's
+# lines; one case runs the whole release check to prove the wiring and summary.
 
 set -euo pipefail
 
@@ -47,11 +47,12 @@ EOF
 chmod +x "$TEST_BIN/python3"
 
 # Run the sourced section alone with explicit test paths and reporters shaped like
-# the real script's.
-run_section() {  # $1 registry path, $2 fixture dir
+# the real script's. Optional $3/$4 select the gate mode and GITHUB_ACTIONS value.
+run_section() {  # $1 registry path, $2 fixture dir, [$3 gate mode], [$4 GITHUB_ACTIONS]
+  local gate_mode="${3:-always}" github_actions="${4:-}"
   set +e
-  out="$(MMR_MODEL_REGISTRY_GATE=always \
-    bash -c 'source "$0"; ok() { echo "  [PASS] $*"; }; fail() { echo "  [FAIL] $*"; }; waive() { echo "  [WAIVED] $*"; }; model_registry_gate_for_test "$1" "$2" "$3" "$4"' \
+  out="$(MMR_MODEL_REGISTRY_GATE="$gate_mode" GITHUB_ACTIONS="$github_actions" \
+    bash -c 'source "$0"; PASS=0; FAIL=0; WAIVED=0; ok() { echo "  [PASS] $*"; PASS=$((PASS + 1)); }; fail() { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }; waive() { echo "  [WAIVED] $*"; WAIVED=$((WAIVED + 1)); }; model_registry_gate_for_test "$1" "$2" "$3" "$4"; echo "  Passed: $PASS  Failed: $FAIL  Waived: $WAIVED"' \
     "$GATE" "$PYTHON" "$CHECKER" "$1" "$2" 2>&1)"
   rc=$?
   set -e
@@ -126,7 +127,8 @@ run_section "$TMP/fresh.toml" "$TMP/does-not-exist"
 grep -q "\[WAIVED\] NOT CHECKED: the provider docs could not be read" <<<"$out" || die "unreadable docs should waive the liveness gate, in plain words"
 grep -q "\[PASS\] Pinned models are alive" <<<"$out" && die "unreadable docs must never count as a liveness PASS"
 grep -q "\[FAIL\] A pinned model" <<<"$out" && die "unreadable docs must not be reported as a dead pin"
-passed "unreachable docs waive the liveness gate without passing or failing it"
+grep -qE "Waived: 1( |$)" <<<"$out" || die "the sourced reporter must count the liveness waiver"
+passed "unreachable docs waive the liveness gate and increment its reporter"
 
 # Case 9: anything but auto|always is a hard error, never a silent skip (the receipt
 # gate's rule). One value through the whole script proves it stops before section 1.
@@ -151,12 +153,7 @@ grep -q "\[PASS\] Pinned models are alive" <<<"$out" || die "whole-script run: t
 grep -qE "Waived: 1( |$)" <<<"$out" || die "expected only the receipt waiver, got: $(grep -E 'Waived:' <<<"$out")"
 passed "whole release check runs section 11 and counts no liveness waiver"
 
-# Case 11 (whole script): unreadable docs add exactly one waiver to the summary.
-run_script "$TMP/fresh.toml" "$TMP/does-not-exist" always ""
-grep -qE "Waived: 2( |$)" <<<"$out" || die "expected the receipt waiver plus the liveness waiver, got: $(grep -E 'Waived:' <<<"$out")"
-passed "unreachable docs are counted as a waiver in the summary"
-
-# Case 12 (whole script): in CI, a diff that changes no version line is not a cut; the
+# Case 11 (sourced section): in CI, a diff that changes no version line is not a cut; the
 # section notes itself and skips, even with a stale stamp that would otherwise FAIL.
 if ! git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
   echo "SKIP: origin/main is not available, cannot assert the non-cut skip"
@@ -164,20 +161,20 @@ elif git diff origin/main...HEAD -- pyproject.toml ha-addon/mammamiradio/config.
      | grep -qE '^\+[[:space:]]*"?version"?[[:space:]]*[:=]'; then
   echo "SKIP: this branch changes a version line, cannot assert the non-cut skip"
 else
-  run_script "$TMP/stale.toml" "$FIXTURES" auto true
+  run_section "$TMP/stale.toml" "$FIXTURES" auto true
   grep -q "\[NOTE\] not a release cut" <<<"$out" || die "a CI run without a version change should note the skip"
   grep -q "Model registry review age" <<<"$out" && die "the review-age gate ran on a non-cut CI diff"
   grep -q "Pinned models" <<<"$out" && die "the liveness gate ran on a non-cut CI diff"
   passed "non-cut CI diff skips both gates and says so"
 fi
 
-# Case 13: MMR_MODEL_REGISTRY_GATE=always forces the section even in CI.
-run_script "$TMP/fresh.toml" "$FIXTURES" always true
+# Case 12: MMR_MODEL_REGISTRY_GATE=always forces the sourced section even in CI.
+run_section "$TMP/fresh.toml" "$FIXTURES" always true
 grep -q "\[PASS\] Model registry review age" <<<"$out" || die "always should run the review-age gate in CI"
 grep -q "\[PASS\] Pinned models are alive" <<<"$out" || die "always should run the liveness gate in CI"
 passed "MMR_MODEL_REGISTRY_GATE=always runs both gates in CI"
 
-# Case 14: the real release call passes no test inputs. Legacy ambient overrides must
+# Case 13: the real release call passes no test inputs. Legacy ambient overrides must
 # not reach the checker even when a caller exports them.
 cat > "$TMP/record-args" <<'EOF'
 #!/usr/bin/env bash
