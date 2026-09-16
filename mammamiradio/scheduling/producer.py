@@ -1246,6 +1246,7 @@ async def _queue_continuity_bridge(
     canned_metadata: dict | None = None,
     music_runway: bool = False,
     starter_catalog_runway: bool = False,
+    recovery_needed: Callable[[Segment | None], bool] | None = None,
 ) -> bool:
     """Queue the best available producer-side continuity bridge.
 
@@ -1262,12 +1263,23 @@ async def _queue_continuity_bridge(
     # action mid-bridge rejected every remaining rung down to the emergency
     # tone, disarming the whole dead-air ladder in one go.
     bridge_continuity_epoch = state.continuity_epoch
+    admitting: Segment | None = None
+
+    async def _admit(segment: Segment, **kwargs: Any) -> bool:
+        nonlocal admitting
+        admitting = segment
+        try:
+            return await queue_segment(segment, **kwargs)
+        finally:
+            admitting = None
 
     def _arm_bridge_rung() -> None:
         nonlocal bridge_continuity_epoch
         bridge_continuity_epoch = state.continuity_epoch
 
     def _bridge_stale_reason() -> str | None:
+        if recovery_needed is not None and not recovery_needed(admitting):
+            return GenerationWasteReason.STALE_CONTINUITY
         if state.continuity_epoch == bridge_continuity_epoch:
             return None
         logger.warning(
@@ -1283,9 +1295,11 @@ async def _queue_continuity_bridge(
         )
         return GenerationWasteReason.STALE_CONTINUITY
 
+    if recovery_needed is not None and not recovery_needed(admitting):
+        return False
     _arm_bridge_rung()
     if music_runway and await _queue_norm_cache_bridge_segment(
-        queue_segment,
+        _admit,
         state,
         config,
         bridge_type=bridge_type,
@@ -1300,9 +1314,11 @@ async def _queue_continuity_bridge(
         _record_bridge_fire(state, bridge_type, "norm_cache")
         return True
 
+    if recovery_needed is not None and not recovery_needed(admitting):
+        return False
     _arm_bridge_rung()
     if starter_catalog_runway and await _queue_starter_catalog_bridge_segment(
-        queue_segment,
+        _admit,
         state,
         config,
         bridge_type=bridge_type,
@@ -1312,6 +1328,8 @@ async def _queue_continuity_bridge(
         _record_bridge_fire(state, bridge_type, "starter_catalog")
         return True
 
+    if recovery_needed is not None and not recovery_needed(admitting):
+        return False
     fallback = _pick_recovery_clip(state)
     if fallback:
         _arm_bridge_rung()
@@ -1330,7 +1348,7 @@ async def _queue_continuity_bridge(
             protected_keys = {"type", "canned", bridge_flag, "rescue", "title", "duration_ms", "clip_audio_class"}
             metadata.update({key: value for key, value in canned_metadata.items() if key not in protected_keys})
         logger.warning("%s bridge: inserting packaged recovery clip", bridge_type.capitalize())
-        ok = await queue_segment(
+        ok = await _admit(
             Segment(
                 type=SegmentType.BANTER,
                 path=fallback,
@@ -1365,9 +1383,11 @@ async def _queue_continuity_bridge(
     # listener heard recently genuinely beats it. Every real caller passes
     # music_runway=True, so gating this rung on `not music_runway` made it dead
     # code and dropped a warm-cache station straight to the tone.
+    if recovery_needed is not None and not recovery_needed(admitting):
+        return False
     _arm_bridge_rung()
     ok = await _queue_norm_cache_bridge_segment(
-        queue_segment,
+        _admit,
         state,
         config,
         bridge_type=bridge_type,
@@ -1379,6 +1399,8 @@ async def _queue_continuity_bridge(
         _record_bridge_fire(state, bridge_type, "norm_cache")
         return ok
 
+    if recovery_needed is not None and not recovery_needed(admitting):
+        return False
     tone_path = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
     if not is_approved_packaged_audio_asset(tone_path, assets_root=_DEMO_ASSETS_DIR):
         logger.error("%s bridge: packaged emergency tone is missing or unapproved", bridge_type.capitalize())
@@ -1390,7 +1412,7 @@ async def _queue_continuity_bridge(
     # Last rung. The tone is the floor between the listener and dead air, so it
     # is armed against the current timeline no matter what happened above it.
     _arm_bridge_rung()
-    ok = await queue_segment(
+    ok = await _admit(
         Segment(
             type=SegmentType.MUSIC,
             path=tone_path,
@@ -1711,6 +1733,8 @@ async def _queue_drain_recovery_bridge(
     queue_segment: Callable[..., Awaitable[bool]],
     state: StationState,
     config: StationConfig,
+    *,
+    recovery_needed: Callable[[Segment | None], bool] | None = None,
 ) -> bool:
     """Queue a drain bridge with cache or verified starter music runway."""
     return await _queue_continuity_bridge(
@@ -1722,6 +1746,7 @@ async def _queue_drain_recovery_bridge(
         canned_title="Station continuity",
         music_runway=True,
         starter_catalog_runway=True,
+        recovery_needed=recovery_needed,
     )
 
 
@@ -5882,6 +5907,7 @@ async def _run_producer_inner(
     _segments_produced = 0  # count for humanity event gating
     _producer_idle_logged = False
     _was_idle = False
+    _idle_audible_epoch = state.audible_playback_epoch
     _was_stopped = state.session_stopped  # True when transitioning out of a stopped state
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
@@ -6032,7 +6058,18 @@ async def _run_producer_inner(
             if producer_task is not None:
                 producer_task.add_done_callback(lambda _task: _timer_poll_task.cancel())
 
+    # Streamer owns the queue/slot playability rules and active playback object.
+    # Import at runtime to keep the producer/route module initialization acyclic.
+    from mammamiradio.web.streamer import _recovery_runway_owned
+
     while True:
+        boundary_audible_epoch = state.audible_playback_epoch
+
+        def _recovery_needed(admitting: Segment | None = None, *, since_epoch: int = boundary_audible_epoch) -> bool:
+            return not state.session_stopped and not _recovery_runway_owned(
+                queue, state, since_audible_epoch=since_epoch, exclude_segment=admitting
+            )
+
         # Any ATTEMPTED cue reaching a new producer cycle failed before queue
         # ownership transferred. Settle it before considering another break.
         _abandon_unowned_companionship_attempt(state)
@@ -6043,6 +6080,11 @@ async def _run_producer_inner(
         # bridge-only admissions have had a chance to transfer their own audio.
         attempt_owner.discard()
         if observed_continuity_epoch != state.continuity_epoch:
+            # A control's reservation may have finished before this producer
+            # wakes. Acknowledge it once, even if Stop itself was never observed.
+            _drain_guard_queued = _recovery_runway_owned(queue, state, since_audible_epoch=-1)
+            if _drain_guard_queued:
+                _was_idle = False
             # A streamer control rebuilt the queue outside this coroutine. Re-read
             # its final tail before producing again so a removed song cannot lend
             # a talk bed or transition sting to the next speech segment.
@@ -6083,23 +6125,29 @@ async def _run_producer_inner(
             state.resume_event.clear()
             continue
 
-        # Resume bridge: when transitioning out of a stopped state, immediately seed
-        # audio so the listener hears something within ~1s rather than waiting 55s+
-        # for the first track to normalize on slow hardware (Pi).
+        # Normal admin/HA Resume reserves its own audio before publishing the
+        # running state. Consuming that reservation is not a new recovery gap.
         if _was_stopped:
             _was_stopped = False
-            if queue.empty():
-                await _queue_continuity_bridge(
-                    _queue_segment,
-                    state,
-                    config,
-                    bridge_type="resume",
-                    bridge_flag="resume_bridge",
-                    canned_title="Resume bridge",
-                    music_runway=True,
-                )
+            if _recovery_runway_owned(queue, state, since_audible_epoch=-1):
+                _drain_guard_queued = True
+
+        # Explicit forced start is the exception: it has no reserved runway.
+        if state.force_recovery_active and not _drain_guard_queued and _recovery_needed():
+            _drain_guard_queued = await _queue_continuity_bridge(
+                _queue_segment,
+                state,
+                config,
+                bridge_type="resume",
+                bridge_flag="resume_bridge",
+                canned_title="Resume bridge",
+                music_runway=True,
+                recovery_needed=_recovery_needed,
+            )
 
         if state.listeners_active == 0:
+            if not _was_idle:
+                _idle_audible_epoch = state.audible_playback_epoch
             if not _producer_idle_logged:
                 logger.info("Producer idle: no listeners connected")
                 _producer_idle_logged = True
@@ -6109,12 +6157,14 @@ async def _run_producer_inner(
 
         if _was_idle:
             logger.info("Producer resuming (%d listener(s) connected)", state.listeners_active)
+            if _recovery_runway_owned(queue, state, since_audible_epoch=_idle_audible_epoch):
+                _drain_guard_queued = True
             # Queue is empty after idle — immediately seed audio so the listener hears
             # something while the producer generates real content.
-            if queue.empty():
+            if not _drain_guard_queued and _recovery_needed():
                 # idle_bridge marks canned warm-up clips as rescue audio so the
                 # fallback classifier does not report them as the primary station.
-                await _queue_continuity_bridge(
+                _drain_guard_queued = await _queue_continuity_bridge(
                     _queue_segment,
                     state,
                     config,
@@ -6123,6 +6173,7 @@ async def _run_producer_inner(
                     canned_title="Station warm-up",
                     canned_metadata={"warmup": True, "rescue": True},
                     music_runway=True,
+                    recovery_needed=_recovery_needed,
                 )
             _was_idle = False
         _producer_idle_logged = False
@@ -6145,7 +6196,8 @@ async def _run_producer_inner(
             )
             and not _drain_guard_queued
             and state.listener_request_handoff is None
-            and await _queue_drain_recovery_bridge(_queue_segment, state, config)
+            and _recovery_needed()
+            and await _queue_drain_recovery_bridge(_queue_segment, state, config, recovery_needed=_recovery_needed)
         ):
             _drain_guard_queued = True
 
