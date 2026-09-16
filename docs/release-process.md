@@ -116,7 +116,9 @@ there is a real discipline on top of it:
 - **The changelog is folded IN the cut commit**, so the tagged tree describes exactly
   what it ships. Under the old order the fold landed after the tag and `v2.17.0`'s tree
   has no `[2.17.0]` section at all.
-- **Preship V2 comes before HA runs.** It excludes validated HA receipts; HA includes V2 and excludes only HA receipts, keeping both proofs squash-safe.
+- **Finalize the cut before HA runs.** Physical evidence binds the complete cut
+  content, excluding only validated HA receipts. Review-receipt admission is
+  retired; existing historical files do not need refreshing.
 - **The cut asks whether the hosts' models were decided lately and are still alive.**
   `scripts/pre-release-check.sh` section 11 refuses a `model_registry.toml` whose
   `last_reviewed` stamp is missing, malformed, or older than 45 days, and refuses a

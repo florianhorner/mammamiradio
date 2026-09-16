@@ -1,6 +1,7 @@
 # H4 — complete First Listen recovery validation
 
-Workspace `kathmandu`. Branch `florianhorner/chore/h4-remaining-work`.
+Historical validation record for the cited candidate. Results, counts, and
+acceptance limits below do not certify current HEAD or v3.
 Base at first execution: `338ff96c` (#1118 squash). Three-step PR1 cut
 `ea9fb00c` + copy fix `1397db47`. Integrated current `origin/main`
 (`bb6c3aeb` #1123 and `c5552122` #1125) as merge `5b0b5040`.
@@ -94,20 +95,17 @@ regeneration.
 
 `git diff --stat origin/main` on this assembled candidate: **42 files,
 4,840 insertions / 922 deletions**, including eight audio binaries (welcome,
-privacy, ai, free-voices, and the four home moments). Florian asked for the
-complete polished stack on one branch; the old PR1-only ~3,200 envelope does
-not apply. Florian waived the 1,000-line rule in `docs/agents.md` for this PR
-explicitly on 2026-09-11 ("i wave 1k rule here"). Recorded as his statement
-rather than inferred from this file's own narrative.
+privacy, ai, free-voices, and the four home moments). The historical scope
+covered the complete First Listen recovery candidate; the old PR1-only ~3,200
+envelope did not apply. The maintainer explicitly approved an exception to
+the 1,000-line PR limit on 2026-09-11.
 
-**This is past the stop-line this file set for itself.** The declared envelope
+**The recorded candidate exceeded its declared envelope.** The declared envelope
 was 29 files / 3,484 insertions with a ~30% growth limit; insertions grew 39%
 and the file count grew 45%. The growth is bot-review and CI-driven rather than
 new feature scope: doc-sync corrections the branch owed, a delivery-pacing
 contract fix, the readiness stamp the arm64 smoke caught, and the guards those
-changes needed. Recorded here rather than quietly absorbed, because a stop-line
-that is only enforced when convenient is not a stop-line. Re-declaring the
-envelope is Florian's call.
+changes needed. This historical record preserves that deviation.
 
 ## Checks that were actually run
 

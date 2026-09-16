@@ -34,7 +34,8 @@ The hosts notice the coffee machine just switched on, the kitchen window is open
 is on the way — and fold it into the chatter. On a home that's actually connected, that's
 your **real** Home Assistant state (strictly read-only: the station *notices*, it never
 *acts*). For this sample the home is staged — a mock HA feeding a "coffee brewing" scene —
-and the household details are fictional, but the awareness itself is the real engine
+and its state values are staged. The mock still reuses legacy runtime entity
+identifiers. The awareness itself is the real engine
 deriving a mood from home state and handing it to the writer. A stream URL can't know your
 kitchen.
 
@@ -89,5 +90,8 @@ section, new mode → new scene file → new snippet. (See `scripts/showreel/REA
 
 ---
 
-*Household details in the home scene are fictional. Music bed is CC0 (FreePD, public
-domain). Ad brand "Caffè Turbino" is a fictional brand from the station's config.*
+*State values are staged; the mock still reuses legacy runtime identifiers.
+The original music-bed attribution is CC0 (FreePD, public domain); that bed
+provenance has not been revalidated for this archived sample. The separate song
+credit appears in the table above. Ad brand "Caffè Turbino" is a fictional brand
+from the station's config.*

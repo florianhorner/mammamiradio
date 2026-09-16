@@ -4,7 +4,8 @@
 The station's REAL home-awareness code (mammamiradio/home/ha_context.py) polls a
 Home Assistant instance over its REST API. This serves a *staged* home so the
 producer genuinely derives a home mood + summary and the hosts weave it into
-banter — without a real HA, and without leaking any real-home telemetry.
+banter without a real HA. State values are staged locally; some fixture
+identifiers and labels still match the legacy runtime mappings.
 
 It implements exactly the two calls fetch_home_context makes:
   GET  /api/states                          -> list of entity state objects
@@ -13,13 +14,14 @@ plus GET /api/ as a liveness probe.
 
 Scenarios are plain dicts (entity_id -> {state, attributes}) chosen so the real
 classify_home_mood() returns the intended mood. The default scenario "coffee"
-yields "Caffè in preparazione" (sensor.kuche_kaffeemaschine_steckdose_power > 50).
+yields "Caffè in preparazione" when the staged coffee-power sensor exceeds 50 W.
 
 States are mutable at runtime via a local control endpoint, so a capture can
 stage a *transition* (the station derives events by diffing consecutive polls —
-a reactive trigger like the door unlock only fires on a state change):
+a reactive trigger only fires on a state change):
 
-    POST /__set  {"entity_id": "lock.lock_ultra_8d3c", "state": "unlocked"}
+POST /__set accepts a scenario entity ID and its new state. A lock-state
+transition alone does not establish that a particular resident arrived.
 
 Usage:
     python scripts/showreel/mock_ha.py --port 8123 --scenario coffee
@@ -32,11 +34,11 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Entity ids below are the ones classify_home_mood() / the summary builder key on
-# (see mammamiradio/home/ha_context.py). The friendly names are what surface in
-# the prompt's home_state_data block — keep them fictional/illustrative.
+# (see mammamiradio/home/ha_context.py). Some identifiers and friendly names
+# still match those legacy mappings; these fixtures are not fully anonymized.
 SCENARIOS: dict[str, dict[str, dict]] = {
     # Coffee brewing — the "the house knew before we did" impossible moment.
-    # sensor.kuche_kaffeemaschine_steckdose_power > 50 -> "Caffè in preparazione".
+    # The staged coffee-power sensor exceeds 50 W -> "Caffè in preparazione".
     # The switch starts OFF so a capture can stage the reactive "coffee just
     # switched on" event via POST /__set (same flow as the homecoming door).
     "coffee": {
@@ -78,11 +80,9 @@ SCENARIOS: dict[str, dict[str, dict]] = {
             },
         },
     },
-    # Homecoming — the "the radio heard the front door" impossible moment.
-    # The lock starts LOCKED; flip it to "unlocked" mid-capture via POST /__set
-    # so diff_states produces the unlock event and the REACTIVE_TRIGGERS
-    # directive ("bentornato") rides into the next banter. person.florian_horner
-    # is staged not_home for an optional follow-up flip (the named-welcome take).
+    # The lock starts locked. Unlocking stages a lock-state observation, not
+    # proof that a person arrived. The person fixture starts away for a separate,
+    # explicitly sourced return scenario.
     "homecoming": {
         "lock.lock_ultra_8d3c": {
             "state": "locked",
@@ -158,7 +158,7 @@ def make_handler(scenario: str):
             self.end_headers()
             self.wfile.write(body)
 
-        def do_GET(self):
+        def do_GET(self):  # noqa: N802, RUF100 - required protocol name; hook/runtime Ruff differ
             path = self.path.split("?", 1)[0]
             if path == "/api/states":
                 # Rebuilt per request: /__set mutations must show up on the next poll.
@@ -168,7 +168,7 @@ def make_handler(scenario: str):
             else:
                 self._send({"error": "not found"}, 404)
 
-        def do_POST(self):
+        def do_POST(self):  # noqa: N802, RUF100 - required protocol name; hook/runtime Ruff differ
             path = self.path.split("?", 1)[0]
             length = int(self.headers.get("Content-Length", 0))
             body_raw = self.rfile.read(length) if length else b""
