@@ -4089,3 +4089,54 @@ def test_runtime_build_label_without_git():
         assert _runtime_build_label() == "build unavailable"
     with patch(f"{MODULE}.Path.exists", return_value=False):
         assert _runtime_build_label() == "build unavailable"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_a_pending_resume_starter_verification():
+    """Resume leaves a slow verification running; teardown must be the one to cancel it,
+    so its late result cannot run eligibility bookkeeping after shutdown begins."""
+    import mammamiradio.main as main_mod
+    from mammamiradio.core.models import StationState
+
+    main_mod._prewarm_task = None
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.background_tasks = set()
+    main_mod.app.state.stream_hub = MagicMock()
+    main_mod.app.state.station_state = StationState()
+    verify_task = MagicMock()
+    verify_task.done.return_value = False
+    main_mod.app.state.resume_starter_prepare_task = verify_task
+
+    with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+        await main_mod.shutdown()
+
+    verify_task.cancel.assert_called_once()
+    _args, _kwargs = mock_gather.call_args
+    assert verify_task in _args
+
+    main_mod.app.state.resume_starter_prepare_task = None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_leaves_a_finished_resume_starter_verification_alone():
+    import mammamiradio.main as main_mod
+    from mammamiradio.core.models import StationState
+
+    main_mod._prewarm_task = None
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.background_tasks = set()
+    main_mod.app.state.stream_hub = MagicMock()
+    main_mod.app.state.station_state = StationState()
+    finished = MagicMock()
+    finished.done.return_value = True
+    main_mod.app.state.resume_starter_prepare_task = finished
+
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()
+
+    finished.cancel.assert_not_called()
+    main_mod.app.state.resume_starter_prepare_task = None
