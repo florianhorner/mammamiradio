@@ -1344,6 +1344,11 @@ def _segment_is_immediately_playable(
     """Return whether a queued/slot segment is safe to use as live runway now."""
     excluded_paths = excluded_paths or set()
     excluded_track_keys = excluded_track_keys or set()
+    # ``mark_playback_started`` refuses a released segment, so it is not runway
+    # whatever its path says. Reading it as playable let Resume answer success
+    # over a head the playback loop then skipped.
+    if getattr(segment, "released", False):
+        return False
     if segment.path in excluded_paths:
         return False
     is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
@@ -1369,6 +1374,7 @@ def _continuity_reservation_segments(
     excluded_paths: set[Path] | None = None,
     excluded_track_keys: set[tuple[str, str]] | None = None,
     preferred_ready_segments: Sequence[Segment] | None = None,
+    prune_index: bool = True,
 ) -> list[Segment]:
     """Build no-wait packaged/cache fallback segments for a control action.
 
@@ -1376,6 +1382,10 @@ def _continuity_reservation_segments(
     can only reserve audio that is already safe to play now. Pre-verified starter
     runway may be supplied by an async Resume path; it still sits below cache
     music and above the packaged continuity clip.
+
+    ``prune_index=False`` makes the call a pure question. Resume's probe uses it
+    so that asking "would this pick cache music" cannot change the index the
+    real reservation reads a moment later.
     """
     selected: list[Segment] = []
     covered = 0.0
@@ -1496,8 +1506,9 @@ def _continuity_reservation_segments(
                 break
             _add_cached_segment(cached, duration, metadata)
 
-    for path in prune_paths:
-        state.immediate_audio_index.pop(path, None)
+    if prune_index:
+        for path in prune_paths:
+            state.immediate_audio_index.pop(path, None)
 
     # The packaged sweeper is the rung BELOW cached music, not a mandatory
     # preamble to it. When the warm cache yielded a real song the control goes
@@ -1875,23 +1886,66 @@ def _reserve_continuity_runway(
     ~22 live-control call sites, so a typo'd argument type-checked clean and
     raised at request time inside a control whose job is preventing dead air.
     """
-    dropped = _reserve_continuity_runway_unstamped(
-        app_state,
-        state,
-        config,
-        replace_queue=replace_queue,
-        discard_reason=discard_reason,
-        excluded_paths=excluded_paths,
-        excluded_track_keys=excluded_track_keys,
-        preserve_queue_ids=preserve_queue_ids,
-        prefer_capacity_slot=prefer_capacity_slot,
-        capacity_slot_excluded_queue_ids=capacity_slot_excluded_queue_ids,
-        outcome=outcome,
-        minimum_runway_seconds=minimum_runway_seconds,
-        preferred_ready_segments=preferred_ready_segments,
-    )
+    prior_queue = list(getattr(app_state.queue, "_queue", ()))
+    prior_slot = state.continuity_slot
+    try:
+        dropped = _reserve_continuity_runway_unstamped(
+            app_state,
+            state,
+            config,
+            replace_queue=replace_queue,
+            discard_reason=discard_reason,
+            excluded_paths=excluded_paths,
+            excluded_track_keys=excluded_track_keys,
+            preserve_queue_ids=preserve_queue_ids,
+            prefer_capacity_slot=prefer_capacity_slot,
+            capacity_slot_excluded_queue_ids=capacity_slot_excluded_queue_ids,
+            outcome=outcome,
+            minimum_runway_seconds=minimum_runway_seconds,
+            preferred_ready_segments=preferred_ready_segments,
+        )
+    finally:
+        _release_superseded_continuity_audio(app_state, state, prior_queue, prior_slot)
     _stamp_continuity_runway_epoch(app_state.queue, state)
     return dropped
+
+
+def _release_superseded_continuity_audio(
+    app_state,
+    state: StationState,
+    prior_queue: Sequence[Segment],
+    prior_slot: Segment | None,
+) -> None:
+    """Release protected continuity audio a reservation replaced without discarding.
+
+    A non-replacing rebuild keeps ``ordinary + reservation`` and simply omits the
+    previous protected set, and the planner clears an unplayable slot. Neither
+    goes through ``_discard_queued_segments``. That was harmless while protected
+    runway was only cache and packaged audio, which own nothing. A starter song
+    reserved by Resume owns a music admission reservation, and dropping it
+    unreleased leaves its key in ``starter_cycle_reserved`` for the session: once
+    every other starter track has aired, the cycle waits on a song that is no
+    longer queued anywhere.
+
+    Deliberately narrow. Only segments carrying the continuity-reservation flag,
+    plus the prior slot, are candidates -- continuity audio is owned solely by
+    this runway, whereas ordinary queue items can be carried into listener-request
+    and handoff bookkeeping and must be settled by their own paths. ``release()``
+    is idempotent, so anything already discarded is unaffected.
+    """
+    live_queue = list(getattr(app_state.queue, "_queue", ()))
+    live_slot = state.continuity_slot
+    candidates = [
+        segment
+        for segment in prior_queue
+        if (segment.metadata if isinstance(segment.metadata, dict) else {}).get(_CONTINUITY_RESERVATION_FLAG)
+    ]
+    if prior_slot is not None:
+        candidates.append(prior_slot)
+    for segment in candidates:
+        if segment is live_slot or any(segment is item for item in live_queue):
+            continue
+        segment.release()
 
 
 def _continuity_chose_cache_music(segments: Sequence[Segment]) -> bool:
@@ -1900,6 +1954,77 @@ def _continuity_chose_cache_music(segments: Sequence[Segment]) -> bool:
         (segment.metadata if isinstance(segment.metadata, dict) else {}).get("audio_source") == "norm_cache"
         for segment in segments
     )
+
+
+# Starter verification is one manifest match plus one SHA-256 over a packaged
+# MP3, so on healthy storage it finishes in a fraction of this. The bound exists
+# for the unhealthy case: Home Assistant runs the whole resume callback inside a
+# 5-second budget (``HAPlaybackTimeouts.callback``), and a Resume that overruns it
+# is reported as failed while its shielded task un-pauses the station anyway.
+_RESUME_STARTER_PREPARE_TIMEOUT_SECONDS = 2.0
+# How long a Resume waits for another in-flight Resume. Longer than the prepare
+# bound, so a normal in-flight Resume always finishes first and the waiter takes
+# the cheap already-running path; short enough to leave that same HA budget.
+_RESUME_LOCK_TIMEOUT_SECONDS = 3.0
+
+
+def _resume_runway_wants_starter(app_state, state: StationState, config) -> bool:
+    """Whether Resume should spend a starter verification. Writes nothing.
+
+    Asks the reservation's own question through ``_plan_continuity_runway``, so
+    the answer cannot drift from what ``_reserve_continuity_runway`` then does:
+    no verification when protected runway already covers the target (the
+    reservation would discard the song), and none when the first rung the
+    reservation picks, under its real exclusions, is cache music.
+    """
+    plan = _plan_continuity_runway(
+        app_state,
+        state,
+        replace_queue=False,
+        excluded_paths=None,
+        excluded_track_keys=None,
+        preserve_queue_ids=frozenset(),
+        minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+        heal_slot=False,
+    )
+    if plan.covered:
+        return False
+    first_rung = _continuity_reservation_segments(
+        state,
+        config,
+        plan.target_seconds,
+        max_segments=1,
+        excluded_paths=plan.selection_excluded_paths,
+        excluded_track_keys=plan.selection_excluded_track_keys,
+        prune_index=False,
+    )
+    return not _continuity_chose_cache_music(first_rung)
+
+
+def _resume_lock(app_state) -> asyncio.Lock:
+    """The one lock both Resume entry points share, created on first use.
+
+    ``session_stopped`` stays True across Resume's await, so without this two
+    concurrent Resumes (a double tap, or the admin and Home Assistant at once)
+    both run the whole path: two selector passes, two marker writes, and a second
+    ``_clear_session_stopped`` that resets the silence watchdog on a station that
+    had already started airing. Stop deliberately does not take it -- a Stop must
+    win immediately, which is what ``session_stop_revision`` detects.
+    """
+    lock = getattr(app_state, "resume_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app_state.resume_lock = lock
+    return lock
+
+
+async def _acquire_resume_lock(lock: asyncio.Lock) -> bool:
+    """Wait briefly for an in-flight Resume, returning False instead of hanging."""
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=_RESUME_LOCK_TIMEOUT_SECONDS)
+    except TimeoutError:
+        return False
+    return True
 
 
 class ResumeRunwayOutcome(NamedTuple):
@@ -1934,6 +2059,15 @@ def _chain_starter_runway_accounting(state: StationState, segment: Segment, trac
     def _admit_and_account() -> bool:
         if chained is not None and chained() is not True:
             return False
+        if song_identity_key_is_blocklisted(
+            _segment_blocklist_key(segment), state.blocklist
+        ) or _segment_is_listener_reserved(state, segment):
+            # The playback loop admits first and applies its last-mile ban and
+            # listener-reservation fence immediately after, with no await in
+            # between. Returning True keeps admission semantics identical; the
+            # fence then discards the segment. Do not count a song that will
+            # not air.
+            return True
         try:
             state.source_readiness.mark_playable(track.source)
             _arm_accepted_heading_announcement(state, track)
@@ -2003,16 +2137,23 @@ async def _reserve_resume_runway(
                 source is not None
                 and source.kind == "starter"
                 and state.listener_request_handoff is None
-                and not _continuity_chose_cache_music(
-                    _continuity_reservation_segments(
-                        state,
-                        config,
-                        ANY_PLAYABLE_RUNWAY_SECONDS,
-                        max_segments=1,
-                    )
-                )
+                and _resume_runway_wants_starter(app_state, state, config)
             ):
-                prepared = await _prepare_starter_catalog_runway(state, config, context="resume runway")
+                try:
+                    prepared = await asyncio.wait_for(
+                        _prepare_starter_catalog_runway(state, config, context="resume runway"),
+                        timeout=_RESUME_STARTER_PREPARE_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError:
+                    # Slow storage is not a broken catalog: do not mark the
+                    # source failed. Nothing was reserved before this await (the
+                    # selector holds no admission, and the pin swap has no await
+                    # inside it), so cancelling it strands nothing.
+                    prepared = None
+                    logger.info(
+                        "Resume runway: starter verification took longer than %.1fs; using the packaged ladder",
+                        _RESUME_STARTER_PREPARE_TIMEOUT_SECONDS,
+                    )
                 if prepared is None:
                     pass
                 elif state.continuity_epoch != resume_epoch:
@@ -2080,6 +2221,145 @@ async def _reserve_resume_runway(
         raise
 
 
+@dataclass
+class _ContinuityRunwayPlan:
+    """What a continuity reservation decides from, computed in one place.
+
+    The reservation and Resume's read-only probe both build this, so the probe
+    asks exactly the question the reservation will answer: the same exclusions,
+    the same target, and the same "already covered" short-circuit. The probe
+    used to approximate it with no exclusions at all, which let it report cache
+    music the reservation would then refuse.
+    """
+
+    excluded_paths: set[Path]
+    excluded_track_keys: set[tuple[str, str]]
+    existing: list[Segment]
+    protected: list[Segment]
+    ordinary: list[Segment]
+    ready_duration: Callable[[Segment], float]
+    required_survivors: list[Segment]
+    target_seconds: float
+    protected_ready_seconds: float
+    covered: bool
+    selection_excluded_paths: set[Path]
+    selection_excluded_track_keys: set[tuple[str, str]]
+
+
+def _plan_continuity_runway(
+    app_state,
+    state: StationState,
+    *,
+    replace_queue: bool,
+    excluded_paths: set[Path] | None,
+    excluded_track_keys: set[tuple[str, str]] | None,
+    preserve_queue_ids: frozenset[str],
+    minimum_runway_seconds: float,
+    heal_slot: bool,
+) -> _ContinuityRunwayPlan:
+    """Measure the live queue and slot against the runway target.
+
+    ``heal_slot=True`` is the reservation's behaviour: an unplayable
+    capacity-exempt slot is cleared before it is counted. ``heal_slot=False``
+    computes the same numbers without writing anything, treating that slot as
+    zero seconds, so a probe can never mutate what it is measuring.
+    """
+    from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
+
+    excluded_paths = set(excluded_paths or ())
+    excluded_track_keys = set(excluded_track_keys or ())
+    # A live reservation's original source is hidden behind the shortened head
+    # path. Exclude it (and canonical cache copies) even for ordinary, non-purge
+    # runway additions while that head is active or its successor is due.
+    for original_path, music in handoff_original_sources(state):
+        excluded_paths.add(original_path)
+        track_key = _segment_track_key(music)
+        if track_key != ("", ""):
+            excluded_track_keys.add(track_key)
+    existing = list(getattr(app_state.queue, "_queue", ()))
+    protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
+    ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
+
+    # NOTE (perf, deferred): each segment is measured here 2-3x per reservation
+    # (ordinary/protected, then current_queue/combined), and the playability check
+    # does a path.stat(). If Pi CPU shows up on the skip/remove/reserve path, memoize
+    # this by id(segment) — its inputs (excluded_*, state.blocklist) don't mutate
+    # mid-call, so a per-call cache dict is safe.
+    def _ready_duration(segment: Segment) -> float:
+        if not _segment_is_immediately_playable(
+            state,
+            segment,
+            excluded_paths=excluded_paths,
+            excluded_track_keys=excluded_track_keys,
+        ):
+            return 0.0
+        return float(getattr(segment, "duration_sec", 0.0) or 0.0)
+
+    def _must_preserve(segment: Segment) -> bool:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        queue_id = str(metadata.get("queue_id") or "")
+        return bool(queue_id and queue_id in preserve_queue_ids and _ready_duration(segment) > 0)
+
+    required_survivors = [segment for segment in existing if _must_preserve(segment)]
+
+    slot = state.continuity_slot
+    slot_ready = slot is not None and _segment_is_immediately_playable(
+        state,
+        slot,
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+    )
+    if slot is not None and not slot_ready and heal_slot:
+        state.continuity_slot = None
+
+    # Measure ordinary runway separately from the active protected set. This
+    # prevents double-counting an existing reservation: the target is what the
+    # protected queue members + capacity-exempt slot must cover together.
+    ordinary_ready = 0.0 if replace_queue else buffered_audio_seconds(_ready_duration(segment) for segment in ordinary)
+    # `minimum_runway_seconds` matters only when the configured floor is 0 (runway
+    # replenishment disabled). Without it the target would also be 0, an empty
+    # protected set would already "meet" it, and the caller would get no audio at
+    # all — see ANY_PLAYABLE_RUNWAY_SECONDS at the Resume site.
+    runway_floor = max(float(RUNWAY_FLOOR_SECONDS), minimum_runway_seconds)
+    target = max(0.0, runway_floor - ordinary_ready)
+    if replace_queue:
+        protected_ready = 0.0
+    else:
+        slot_seconds = _continuity_slot_seconds(state, self_heal=heal_slot) if slot_ready else 0.0
+        protected_ready = buffered_audio_seconds(
+            [
+                *(_ready_duration(segment) for segment in protected),
+                slot_seconds,
+            ]
+        )
+
+    # A non-replacing control keeps these ordinary segments in the real queue.
+    # Never append the same cached bytes (or the same canonical song through
+    # another cached path) as "recovery" behind them. In particular, queue-remove
+    # may just have restored a handoff predecessor to its full original path
+    # while ``last_music_file`` has advanced to a later song.
+    surviving_paths = {segment.path for segment in ordinary} if not replace_queue else set()
+    surviving_track_keys = (
+        {track_key for segment in ordinary if (track_key := _segment_track_key(segment)) != ("", "")}
+        if not replace_queue
+        else set()
+    )
+    return _ContinuityRunwayPlan(
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+        existing=existing,
+        protected=protected,
+        ordinary=ordinary,
+        ready_duration=_ready_duration,
+        required_survivors=required_survivors,
+        target_seconds=target,
+        protected_ready_seconds=protected_ready,
+        covered=not replace_queue and protected_ready >= target,
+        selection_excluded_paths=excluded_paths | surviving_paths,
+        selection_excluded_track_keys=excluded_track_keys | surviving_track_keys,
+    )
+
+
 def _reserve_continuity_runway_unstamped(
     app_state,
     state: StationState,
@@ -2107,99 +2387,39 @@ def _reserve_continuity_runway_unstamped(
     the real queue open for stronger ownership; excluded queue ids remain there
     so the caller can settle their dependencies by id.
     """
-    from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
-
     q = app_state.queue
-    excluded_paths = set(excluded_paths or ())
-    excluded_track_keys = set(excluded_track_keys or ())
-    # A live reservation's original source is hidden behind the shortened head
-    # path. Exclude it (and canonical cache copies) even for ordinary, non-purge
-    # runway additions while that head is active or its successor is due.
-    for original_path, music in handoff_original_sources(state):
-        excluded_paths.add(original_path)
-        track_key = _segment_track_key(music)
-        if track_key != ("", ""):
-            excluded_track_keys.add(track_key)
-    existing = list(getattr(q, "_queue", ()))
-    current_queue = list(existing)
-    protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
-    ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
-
-    # NOTE (perf, deferred): each segment is measured here 2-3x per reservation
-    # (ordinary/protected, then current_queue/combined), and the playability check
-    # does a path.stat(). If Pi CPU shows up on the skip/remove/reserve path, memoize
-    # this by id(segment) — its inputs (excluded_*, state.blocklist) don't mutate
-    # mid-call, so a per-call cache dict is safe.
-    def _ready_duration(segment: Segment) -> float:
-        if not _segment_is_immediately_playable(
-            state,
-            segment,
-            excluded_paths=excluded_paths,
-            excluded_track_keys=excluded_track_keys,
-        ):
-            return 0.0
-        return float(getattr(segment, "duration_sec", 0.0) or 0.0)
-
-    def _must_preserve(segment: Segment) -> bool:
-        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-        queue_id = str(metadata.get("queue_id") or "")
-        return bool(queue_id and queue_id in preserve_queue_ids and _ready_duration(segment) > 0)
-
-    required_survivors = [segment for segment in existing if _must_preserve(segment)]
-    required_survivor_ids = {id(segment) for segment in required_survivors}
-
-    slot = state.continuity_slot
-    if slot is not None and not _segment_is_immediately_playable(
+    plan = _plan_continuity_runway(
+        app_state,
         state,
-        slot,
+        replace_queue=replace_queue,
         excluded_paths=excluded_paths,
         excluded_track_keys=excluded_track_keys,
-    ):
-        state.continuity_slot = None
-        slot = None
-
-    # Measure ordinary runway separately from the active protected set. This
-    # prevents double-counting an existing reservation: the target is what the
-    # protected queue members + capacity-exempt slot must cover together.
-    ordinary_ready = 0.0 if replace_queue else buffered_audio_seconds(_ready_duration(segment) for segment in ordinary)
-    # `minimum_runway_seconds` matters only when the configured floor is 0 (runway
-    # replenishment disabled). Without it the target would also be 0, an empty
-    # protected set would already "meet" it, and the caller would get no audio at
-    # all — see ANY_PLAYABLE_RUNWAY_SECONDS at the Resume site.
-    runway_floor = max(float(RUNWAY_FLOOR_SECONDS), minimum_runway_seconds)
-    target = max(0.0, runway_floor - ordinary_ready)
-    protected_ready = (
-        0.0
-        if replace_queue
-        else buffered_audio_seconds(
-            [
-                *(_ready_duration(segment) for segment in protected),
-                _continuity_slot_seconds(state),
-            ]
-        )
+        preserve_queue_ids=preserve_queue_ids,
+        minimum_runway_seconds=minimum_runway_seconds,
+        heal_slot=True,
     )
-    if not replace_queue and protected_ready >= target:
+    excluded_paths = plan.excluded_paths
+    excluded_track_keys = plan.excluded_track_keys
+    existing = plan.existing
+    current_queue = list(existing)
+    protected = plan.protected
+    ordinary = plan.ordinary
+    _ready_duration = plan.ready_duration
+    required_survivors = plan.required_survivors
+    required_survivor_ids = {id(segment) for segment in required_survivors}
+    target = plan.target_seconds
+    protected_ready = plan.protected_ready_seconds
+    if plan.covered:
         return 0
 
     max_segments = q.maxsize if q.maxsize > 0 else None
-    surviving_paths = {segment.path for segment in ordinary} if not replace_queue else set()
-    surviving_track_keys = (
-        {track_key for segment in ordinary if (track_key := _segment_track_key(segment)) != ("", "")}
-        if not replace_queue
-        else set()
-    )
     reservation = _continuity_reservation_segments(
         state,
         config,
         target,
         max_segments=max_segments,
-        # A non-replacing control keeps these ordinary segments in the real
-        # queue. Never append the same cached bytes (or the same canonical song
-        # through another cached path) as "recovery" behind them. In particular,
-        # queue-remove may just have restored a handoff predecessor to its full
-        # original path while ``last_music_file`` has advanced to a later song.
-        excluded_paths=excluded_paths | surviving_paths,
-        excluded_track_keys=excluded_track_keys | surviving_track_keys,
+        excluded_paths=plan.selection_excluded_paths,
+        excluded_track_keys=plan.selection_excluded_track_keys,
         preferred_ready_segments=preferred_ready_segments,
     )
     if not reservation:
@@ -3013,7 +3233,19 @@ async def _resume_station(app_state: Any) -> None:
     Home Assistant playback invokes this callback before dispatching the media
     source. Mirror the admin Start gate: a stopped station only resumes after an
     immediately playable runway exists and the durable marker has been removed.
+    Serialized with the admin route through ``_resume_lock``.
     """
+    lock = _resume_lock(app_state)
+    if not await _acquire_resume_lock(lock):
+        raise RuntimeError("station is already resuming")
+    try:
+        await _resume_station_locked(app_state)
+    finally:
+        lock.release()
+
+
+async def _resume_station_locked(app_state: Any) -> None:
+    """Body of ``_resume_station``; the caller holds ``_resume_lock``."""
     state: StationState = app_state.station_state
     config = app_state.config
     was_stopped = state.session_stopped
@@ -8617,9 +8849,29 @@ async def resume_session(
     _: None = Depends(require_admin_access),
 ):
     """Resume with immediate audio, or explicitly force a host-audio rebuild."""
-    state = request.app.state.station_state
     app_state = request.app.state
-    config = request.app.state.config
+    lock = _resume_lock(app_state)
+    if not await _acquire_resume_lock(lock):
+        logger.info("Resume declined: another Resume is still starting the station")
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": (
+                    "The station is already starting. Give it a few seconds, then press Start again if it stays paused."
+                ),
+            },
+        )
+    try:
+        return await _resume_session_locked(app_state, force=force)
+    finally:
+        lock.release()
+
+
+async def _resume_session_locked(app_state: Any, *, force: bool):
+    """Body of ``POST /api/resume``; the caller holds ``_resume_lock``."""
+    state = app_state.station_state
+    config = app_state.config
 
     if not state.session_stopped:
         try:

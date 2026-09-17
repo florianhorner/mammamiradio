@@ -1520,6 +1520,15 @@ def _starter_catalog_runway_segment(state: StationState, rendered: RenderedMusic
     track = rendered.track
     source = state.playlist_source
     playlist_index = next((index for index, candidate in enumerate(state.playlist) if candidate is track), -1)
+    if playlist_index < 0:
+        # Eligibility accepts the same recording by normalized key, because a
+        # crate refresh can replace the Track object under the verify await.
+        # Resolve the index the same way so the admin can still locate the row.
+        track_key = track.normalized_key
+        playlist_index = next(
+            (index for index, candidate in enumerate(state.playlist) if candidate.normalized_key == track_key),
+            -1,
+        )
     rationale = generate_track_rationale(track, source=source, listener=state.listener)
     crate = classify_track_crate(track, source)
     return Segment(
@@ -1637,7 +1646,20 @@ async def _queue_starter_catalog_bridge_segment(
     stale_check: Callable[[], bool | str | None] | None = None,
 ) -> bool:
     """Queue one verified starter song when a continuity bridge cannot see cache music."""
-    prepared = await _prepare_starter_catalog_runway(state, config, context=f"{bridge_type} bridge")
+    try:
+        prepared = await _prepare_starter_catalog_runway(state, config, context=f"{bridge_type} bridge")
+    except Exception:
+        # The canned clip and the emergency tone sit below this rung in
+        # ``_queue_continuity_bridge``. An unexpected raise from selection,
+        # rationale, crate classification, or manifest resolution must fall
+        # through to them rather than escape the ladder: a malformed starter row
+        # is not a reason for a drain or an idle wake to end in silence.
+        logger.warning(
+            "%s bridge: starter-catalog preparation failed; continuing down the ladder",
+            bridge_type.capitalize(),
+            exc_info=True,
+        )
+        return False
     if prepared is None:
         return False
     segment = prepared.segment

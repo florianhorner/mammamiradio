@@ -14928,3 +14928,280 @@ def test_packaged_opening_bitrate_matches_its_delivery_clock(filename):
         text=True,
     )
     assert int(json.loads(result.stdout)["streams"][0]["bit_rate"]) == DEFAULT_CLIP_BITRATE_KBPS * 1000
+
+
+@pytest.mark.asyncio
+async def test_superseded_protected_starter_runway_releases_its_reservation(tmp_path):
+    """A later control that rebuilds protected runway must release what it replaces.
+
+    Protected continuity segments used to be plain cache or packaged audio, so a
+    rebuild could drop them silently. A starter song reserved by Resume holds a
+    music admission reservation; dropping it without ``release()`` leaves its key
+    in ``starter_cycle_reserved`` forever, and once every other starter track has
+    aired the cycle waits on a song that is no longer queued anywhere.
+    """
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+    from mammamiradio.web.streamer import _reserve_continuity_runway
+
+    # conftest pins the floor to 0 so any protected segment covers the target.
+    # Use the production floor: the leak needs a rebuild, and a rebuild needs a
+    # protected set that falls short of it.
+    production_floor = 240
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    # Only songs shorter than the runway floor, so the reserved starter cannot
+    # cover the target by itself and a later reservation is allowed to rebuild.
+    short = [track for track in load_starter_tracks() if track.duration_ms / 1000 < production_floor]
+    assert short
+    state.playlist = short
+    state.playlist_source = starter_source(len(short))
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", production_floor):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+    assert response.status_code == 200
+    starter_segment = next(iter(app.state.queue._queue))
+    assert starter_segment.metadata["audio_source"] == "starter"
+    starter_key = state.music_admission_reservations[starter_segment.metadata["queue_id"]].cache_key
+    assert starter_key in state.starter_cycle_reserved
+
+    # The cache warms with a song longer than the reserved starter, so the next
+    # control's reservation outranks the protected set and rebuilds it.
+    cached = _write_indexed_cache_track(
+        tmp_path, "norm_long_song_192k.mp3", title="Long Song", artist="Cache Artist", duration=900.0, state=state
+    )
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", production_floor):
+        _reserve_continuity_runway(app.state, state, app.state.config)
+
+    assert [segment.path for segment in app.state.queue._queue] == [cached]
+    assert starter_segment.released
+    assert state.music_admission_reservations == {}
+    assert starter_key not in state.starter_cycle_reserved
+
+
+def _stopped_starter_app(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+    return app, state
+
+
+async def _post_resume(app):
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.post("/api/resume")
+
+
+@pytest.mark.asyncio
+async def test_resume_falls_back_to_ladder_when_starter_verification_is_slow(tmp_path):
+    """Slow storage costs the starter song, not the Resume, and is not a catalog failure."""
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app, state = _stopped_starter_app(tmp_path)
+
+    async def _slow(*_args, **_kwargs):
+        await asyncio.sleep(30)
+
+    with (
+        patch("mammamiradio.web.streamer._RESUME_STARTER_PREPARE_TIMEOUT_SECONDS", 0.05),
+        patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=_slow),
+        patch.object(state.source_readiness, "mark_failure") as mark_failure,
+    ):
+        response = await _post_resume(app)
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert runway[0].path == _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert state.music_admission_reservations == {}
+    mark_failure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_resumes_run_the_path_once(tmp_path):
+    """A double tap serializes: one verification, and the second Resume reconciles."""
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app, state = _stopped_starter_app(tmp_path)
+    real_prepare = producer_mod._prepare_starter_catalog_runway
+    calls = 0
+
+    async def _counting_prepare(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)
+        return await real_prepare(*args, **kwargs)
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=_counting_prepare):
+        first, second = await asyncio.gather(_post_resume(app), _post_resume(app))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls == 1
+    assert state.session_stopped is False
+    assert len(state.music_admission_reservations) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_declines_with_way_out_when_another_resume_holds_the_lock(tmp_path):
+    from mammamiradio.web.streamer import _resume_lock
+
+    app, state = _stopped_starter_app(tmp_path)
+    lock = _resume_lock(app.state)
+    await lock.acquire()
+    try:
+        with patch("mammamiradio.web.streamer._RESUME_LOCK_TIMEOUT_SECONDS", 0.05):
+            response = await _post_resume(app)
+    finally:
+        lock.release()
+
+    assert response.status_code == 409
+    assert "already starting" in response.json()["error"]
+    assert "force_available" not in response.json()
+    assert state.session_stopped is True
+
+
+@pytest.mark.asyncio
+async def test_ha_resume_raises_when_another_resume_holds_the_lock(tmp_path):
+    from mammamiradio.web.streamer import _resume_lock, _resume_station
+
+    app, state = _stopped_starter_app(tmp_path)
+    lock = _resume_lock(app.state)
+    await lock.acquire()
+    try:
+        with (
+            patch("mammamiradio.web.streamer._RESUME_LOCK_TIMEOUT_SECONDS", 0.05),
+            pytest.raises(RuntimeError, match="already resuming"),
+        ):
+            await _resume_station(app.state)
+    finally:
+        lock.release()
+    assert state.session_stopped is True
+
+
+def test_released_segment_is_never_immediately_playable(tmp_path):
+    """``mark_playback_started`` refuses a released segment, so runway must too."""
+    from mammamiradio.web.streamer import _segment_is_immediately_playable
+
+    state = StationState()
+    audio = tmp_path / "norm_ready_192k.mp3"
+    audio.write_bytes(b"audio" * 256)
+    segment = Segment(type=SegmentType.BANTER, path=audio, duration_sec=5.0, metadata={}, ephemeral=False)
+    assert _segment_is_immediately_playable(state, segment)
+
+    segment.release()
+
+    assert segment.released
+    assert not _segment_is_immediately_playable(state, segment)
+
+
+def test_resume_starter_probe_writes_nothing(tmp_path):
+    """Asking whether Resume wants a starter song cannot change what the reservation reads."""
+    from mammamiradio.web.streamer import _resume_runway_wants_starter
+
+    app, state = _stopped_starter_app(tmp_path)
+    missing = tmp_path / "norm_gone_192k.mp3"
+    state.immediate_audio_index[missing] = 180.0  # indexed, file absent: a prune candidate
+    dead_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished.mp3",
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = dead_slot
+
+    assert _resume_runway_wants_starter(app.state, state, app.state.config) is True
+
+    assert missing in state.immediate_audio_index
+    assert state.continuity_slot is dead_slot
+    assert not dead_slot.released
+
+
+def test_resume_starter_probe_skips_verification_when_runway_is_already_covered(tmp_path):
+    from mammamiradio.web.streamer import _resume_runway_wants_starter
+
+    app, state = _stopped_starter_app(tmp_path)
+    covering = tmp_path / "covering.mp3"
+    covering.write_bytes(b"audio" * 256)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=covering,
+            duration_sec=600.0,
+            metadata={"continuity_reservation": True},
+            ephemeral=False,
+        )
+    )
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        assert _resume_runway_wants_starter(app.state, state, app.state.config) is False
+
+
+def test_resume_starter_probe_uses_the_reservations_exclusions(tmp_path):
+    """Cache music the reservation would refuse must not suppress the starter song.
+
+    The only cached song is already queued as ordinary audio, so the reservation
+    excludes it. The probe used to ask with no exclusions, saw cache music, and
+    skipped the starter song -- landing on the packaged clip anyway.
+    """
+    from mammamiradio.web.streamer import _resume_runway_wants_starter
+
+    app, state = _stopped_starter_app(tmp_path)
+    cached = _write_indexed_cache_track(
+        tmp_path, "norm_only_song_192k.mp3", title="Only Song", artist="Cache Artist", duration=180.0, state=state
+    )
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=cached,
+            duration_sec=180.0,
+            metadata={"title": "Only Song", "title_only": "Only Song", "artist": "Cache Artist"},
+            ephemeral=False,
+        )
+    )
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        assert _resume_runway_wants_starter(app.state, state, app.state.config) is True
+
+
+@pytest.mark.asyncio
+async def test_resume_releases_a_prepared_starter_the_reservation_did_not_take(tmp_path):
+    from mammamiradio.web.streamer import _reserve_resume_runway
+
+    app, state = _stopped_starter_app(tmp_path)
+
+    with patch("mammamiradio.web.streamer._reserve_continuity_runway", return_value=0):
+        outcome = await _reserve_resume_runway(app.state, state, app.state.config, discard_reason="operator_stop")
+
+    assert outcome.superseded_by_stop is False
+    assert app.state.queue.empty()
+    assert state.music_admission_reservations == {}
+    assert not state.starter_cycle_reserved
+
+
+@pytest.mark.asyncio
+async def test_starter_runway_accounting_skips_a_song_the_last_mile_fence_will_discard(tmp_path):
+    """Admission stays True, but a song banned before it airs counts for nothing."""
+    app, state = _stopped_starter_app(tmp_path)
+    response = await _post_resume(app)
+    assert response.status_code == 200
+    segment = next(iter(app.state.queue._queue))
+    songs_since_banter = state.songs_since_banter
+    reserved = state.music_admission_reservations[segment.metadata["queue_id"]]
+    state.blocklist[(reserved.artist.strip().lower(), reserved.title.strip().lower())] = {"display": reserved.display}
+
+    assert segment.mark_playback_started() is True
+
+    assert list(state.played_tracks) == []
+    assert state.current_track is None
+    assert state.songs_since_banter == songs_since_banter

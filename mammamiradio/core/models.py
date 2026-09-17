@@ -895,6 +895,16 @@ class Segment:
     _playback_started: bool = field(default=False, init=False, repr=False, compare=False)
     _released: bool = field(default=False, init=False, repr=False, compare=False)
 
+    @property
+    def released(self) -> bool:
+        """Whether ``release()`` has run. A released segment can never be admitted.
+
+        ``mark_playback_started`` refuses it, so anything measuring runway must
+        refuse it too; otherwise a released queue head reads as ready audio and
+        the playback loop skips it at the moment it should air.
+        """
+        return self._released
+
     def mark_playback_started(self) -> bool:
         """Synchronously admit a segment and notify its provider before airing.
 

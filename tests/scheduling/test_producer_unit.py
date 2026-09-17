@@ -11700,3 +11700,76 @@ def test_remember_enqueued_indexes_rescue_music_and_skips_breaks(tmp_path):
     banter = Segment(type=SegmentType.BANTER, path=banter_path, duration_sec=12.0, metadata={})
     _remember_enqueued(state, banter, banter_path)
     assert banter_path not in state.immediate_audio_index
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bridge_type", ["resume", "idle"])
+async def test_starter_bridge_failure_still_reaches_emergency_tone_with_no_canned_or_cache(tmp_path, bridge_type):
+    """Scenario 2 for the starter rung: every rung above the tone is unavailable.
+
+    Canned clips absent, norm cache empty, and starter preparation raising. The
+    starter rung is an improvement on the rungs below it, never a precondition:
+    the bridge must still reach the packaged emergency tone instead of raising
+    past it.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queued: list[Segment] = []
+
+    async def _enqueue(segment: Segment, **kwargs) -> bool:
+        admission = kwargs.get("admission_callback")
+        if admission is not None:
+            admission(segment)
+        queued.append(segment)
+        return True
+
+    async def _explode(*_args, **_kwargs):
+        raise TypeError("rationale generator blew up on a malformed starter row")
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._prepare_starter_catalog_runway", side_effect=_explode),
+    ):
+        ok = await producer._queue_continuity_bridge(
+            _enqueue,
+            state,
+            config,
+            bridge_type=bridge_type,
+            bridge_flag=f"{bridge_type}_bridge",
+            canned_title="Bridge",
+            music_runway=True,
+            starter_catalog_runway=True,
+        )
+
+    assert ok is True
+    assert [segment.metadata.get("audio_source") for segment in queued] == ["emergency_tone"]
+    assert state.music_admission_reservations == {}
+
+
+def test_starter_runway_segment_resolves_playlist_index_by_recording_when_object_changed():
+    """A crate refresh can replace the Track object under the verify await.
+
+    Eligibility accepts the same recording by normalized key, so the segment's
+    ``playlist_index`` must resolve the same way instead of reporting -1.
+    """
+    import dataclasses
+
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    original = state.playlist[3]
+    replacement = dataclasses.replace(original)
+    assert replacement is not original
+    state.playlist[3] = replacement
+    rendered = producer.RenderedMusicTrack(
+        track=original, path=Path("/tmp/starter.mp3"), cache_path=Path("/tmp/starter.mp3"), cache_hit=True
+    )
+
+    segment = producer._starter_catalog_runway_segment(state, rendered)
+
+    assert segment.metadata["playlist_index"] == 3

@@ -319,7 +319,11 @@ producer bridge-frequency warning.
 
 A Resume that a Stop overtakes is not the assetless path and must not offer Force
 Start: it answers `409` with "The station was paused again while it was starting"
-and leaves the marker in place.
+and leaves the marker in place. A second Resume sent while the first is still
+starting waits up to 3 seconds for it, then answers `409` with "The station is
+already starting". Starter verification is bounded at 2 seconds so Home
+Assistant's 5-second resume budget holds; a slower verification falls back to
+the packaged clip without marking the starter source failed.
 
 The assetless path represents a corrupt installation and never starts
 automatically. After the normal `503`, the admin requires explicit operator
