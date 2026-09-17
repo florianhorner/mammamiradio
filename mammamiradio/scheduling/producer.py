@@ -158,7 +158,9 @@ from mammamiradio.scheduling.handoff import (
     reconcile_handoff_queue_items,
 )
 from mammamiradio.scheduling.queue_mutations import (
+    discard_continuity_slot,
     drop_matching_segments,
+    park_continuity_slot,
     settle_listener_request_queue_dependencies,
 )
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
@@ -2820,7 +2822,9 @@ def _front_insert_queue_and_shadow(
             None,
         )
         if protected_index is not None:
-            state.continuity_slot = items.pop(protected_index)
+            # This loop can park more than once; each park displaces the last.
+            # The displaced item has already left ``items``, so release it.
+            park_continuity_slot(state, items.pop(protected_index))
             continue
         # A safety warning outranks ordinary Air Next promises. If all queue
         # slots are already priority entries, evict only the furthest-future
@@ -4669,7 +4673,7 @@ async def _fire_interrupt(
     # A hard interrupt supersedes every prior continuity reservation. Clear the
     # out-of-band slot before committing the interrupt bridge so playback cannot
     # serve stale control audio between that bridge and the urgent banter.
-    state.continuity_slot = None
+    discard_continuity_slot(state)
 
     # Commit the bridge before touching the ready queue. This synchronous step
     # cannot expose a drained queue to playback.

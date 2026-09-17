@@ -211,6 +211,9 @@ from mammamiradio.scheduling.handoff import (
     reconcile_handoff_queue_items,
 )
 from mammamiradio.scheduling.queue_mutations import (
+    discard_continuity_slot as _discard_continuity_slot,
+)
+from mammamiradio.scheduling.queue_mutations import (
     discard_queued_segment as _discard_queued_segment,
 )
 from mammamiradio.scheduling.queue_mutations import (
@@ -222,6 +225,9 @@ from mammamiradio.scheduling.queue_mutations import (
 )
 from mammamiradio.scheduling.queue_mutations import (
     drop_segment_moment_receipts as _drop_segment_moment_receipts,
+)
+from mammamiradio.scheduling.queue_mutations import (
+    park_continuity_slot as _park_continuity_slot,
 )
 from mammamiradio.scheduling.queue_mutations import (
     unlink_ephemeral_best_effort as _unlink_ephemeral_best_effort,
@@ -1598,7 +1604,7 @@ def _continuity_slot_seconds(state: StationState, *, self_heal: bool = True) -> 
     if not _indexed_audio_path_is_file(slot.path):
         if self_heal:
             logger.warning("Protected continuity slot disappeared before playback; clearing it")
-            state.continuity_slot = None
+            _discard_continuity_slot(state)
         return 0.0
     return buffered_audio_seconds([float(getattr(slot, "duration_sec", 0.0) or 0.0)])
 
@@ -1618,11 +1624,11 @@ def _claim_continuity_slot(state: StationState) -> Segment | None:
         _segment_blocklist_key(slot), state.blocklist
     ):
         logger.warning("Protected continuity slot became blocklisted before playback; clearing it")
-        state.continuity_slot = None
+        _discard_continuity_slot(state)
         return None
     if _segment_is_listener_reserved(state, slot):
         logger.info("Protected continuity slot now belongs to a pending listener dedication; clearing it")
-        state.continuity_slot = None
+        _discard_continuity_slot(state)
         return None
     state.continuity_slot = None
     return slot
@@ -6067,7 +6073,7 @@ async def run_playback_loop(app) -> None:
             except asyncio.QueueFull:  # pragma: no cover - the get() freed this exact slot
                 _consume_queue_shadow(segment_queue, state, segment)
                 segment_queue.task_done()
-                state.continuity_slot = segment
+                _park_continuity_slot(state, segment)
             state.queue_empty_since = None
             gap_clips_served = 0
             logger.info(

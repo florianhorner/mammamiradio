@@ -15205,3 +15205,66 @@ async def test_starter_runway_accounting_skips_a_song_the_last_mile_fence_will_d
     assert list(state.played_tracks) == []
     assert state.current_track is None
     assert state.songs_since_banter == songs_since_banter
+
+
+def test_claim_releases_a_slot_that_became_banned_before_playback(tmp_path):
+    from mammamiradio.web.streamer import _claim_continuity_slot
+
+    state = StationState()
+    released: list[str] = []
+    audio = tmp_path / "starter.mp3"
+    audio.write_bytes(b"audio" * 256)
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=audio,
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True, "title_only": "Song", "artist": "Artist"},
+        ephemeral=False,
+    )
+    slot.release_callback = lambda: released.append("slot")
+    state.continuity_slot = slot
+    state.blocklist[("artist", "song")] = {"display": "Artist - Song"}
+
+    assert _claim_continuity_slot(state) is None
+    assert state.continuity_slot is None
+    assert slot.released
+    assert released == ["slot"]
+
+
+def test_slot_self_heal_releases_a_slot_whose_file_vanished(tmp_path):
+    from mammamiradio.web.streamer import _continuity_slot_seconds
+
+    state = StationState()
+    released: list[str] = []
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished.mp3",
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    slot.release_callback = lambda: released.append("slot")
+    state.continuity_slot = slot
+
+    assert _continuity_slot_seconds(state) == 0.0
+    assert state.continuity_slot is None
+    assert released == ["slot"]
+
+
+def test_slot_status_read_never_releases(tmp_path):
+    """The read-only status path must not release the dead-air safety slot."""
+    from mammamiradio.web.streamer import _continuity_slot_seconds
+
+    state = StationState()
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished.mp3",
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    assert _continuity_slot_seconds(state, self_heal=False) == 0.0
+    assert state.continuity_slot is slot
+    assert not slot.released

@@ -108,6 +108,31 @@ def drop_segment_moment_receipts(state: StationState, segment: Segment, reason: 
         logger.debug("Moment receipt queue drop failed", exc_info=True)
 
 
+def discard_continuity_slot(state: StationState) -> None:
+    """Empty the capacity-exempt continuity slot and release what it owned.
+
+    Every path that drops the slot without airing it must come through here.
+    Continuity runway used to be cache and packaged audio that owned nothing, so
+    a bare ``state.continuity_slot = None`` was enough. A starter song reserved by
+    Resume owns a music admission reservation; clearing it bare leaves its key in
+    ``starter_cycle_reserved`` for the session, and the starter cycle eventually
+    waits on a song that is queued nowhere. The one path that must NOT use this
+    is handing the slot to playback to air.
+    """
+    slot = state.continuity_slot
+    state.continuity_slot = None
+    if slot is not None:
+        unlink_ephemeral_best_effort(slot)
+
+
+def park_continuity_slot(state: StationState, segment: Segment) -> None:
+    """Park ``segment`` in the slot, releasing a different segment it displaces."""
+    prior = state.continuity_slot
+    state.continuity_slot = segment
+    if prior is not None and prior is not segment:
+        unlink_ephemeral_best_effort(prior)
+
+
 def unlink_ephemeral_best_effort(segment: Segment) -> None:
     """Remove a discarded temporary render while preserving package data."""
     segment.release()

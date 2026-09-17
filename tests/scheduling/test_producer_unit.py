@@ -11773,3 +11773,77 @@ def test_starter_runway_segment_resolves_playlist_index_by_recording_when_object
     segment = producer._starter_catalog_runway_segment(state, rendered)
 
     assert segment.metadata["playlist_index"] == 3
+
+
+@pytest.mark.asyncio
+async def test_hard_interrupt_releases_the_continuity_slot_it_supersedes(tmp_path):
+    """A hard interrupt clears the slot; a starter song parked there must be released."""
+    from mammamiradio.scheduling import producer
+
+    state = StationState()
+    released: list[str] = []
+    parked = tmp_path / "parked.mp3"
+    parked.write_bytes(b"parked audio")
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=parked,
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True, "audio_source": "starter"},
+        ephemeral=False,
+    )
+    slot.release_callback = lambda: released.append("slot")
+    state.continuity_slot = slot
+
+    fired = await producer._fire_interrupt(
+        state,
+        InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
+        asyncio.Queue(maxsize=8),
+        asyncio.Event(),
+        bridge_tmp_dir=tmp_path,
+    )
+
+    assert fired is True
+    assert state.continuity_slot is None
+    assert slot.released
+    assert released == ["slot"]
+    assert parked.exists(), "a non-ephemeral parked song must never be unlinked"
+
+
+def test_every_continuity_slot_write_is_accounted_for():
+    """Guard: a bare write to ``state.continuity_slot`` must be on this list.
+
+    Dropping the slot without ``release()`` leaks a starter song's admission
+    reservation and can stall the starter cycle for the session. New drop sites
+    use ``queue_mutations.discard_continuity_slot`` / ``park_continuity_slot``.
+    Adding a function here is a decision, not a formality: name why it is safe.
+    """
+    import ast
+
+    repo = Path(__file__).resolve().parents[2]
+    allowed = {
+        # The helpers themselves.
+        ("mammamiradio/scheduling/queue_mutations.py", "discard_continuity_slot"),
+        ("mammamiradio/scheduling/queue_mutations.py", "park_continuity_slot"),
+        # Hands the slot to playback to air: releasing would silence it.
+        ("mammamiradio/web/streamer.py", "_claim_continuity_slot"),
+        # Inside the _reserve_continuity_runway boundary, which releases every
+        # superseded continuity segment and prior slot on exit.
+        ("mammamiradio/web/streamer.py", "_plan_continuity_runway"),
+        ("mammamiradio/web/streamer.py", "_reserve_continuity_runway_unstamped"),
+        # Releases through unlink_ephemeral_best_effort on the line before.
+        ("mammamiradio/web/streamer.py", "stop_session"),
+    }
+    found: set[tuple[str, str]] = set()
+    for path in sorted((repo / "mammamiradio").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(func):
+                targets = node.targets if isinstance(node, ast.Assign) else []
+                for target in targets:
+                    if isinstance(target, ast.Attribute) and target.attr == "continuity_slot":
+                        found.add((path.relative_to(repo).as_posix(), func.name))
+
+    unaccounted = sorted(found - allowed)
+    assert not unaccounted, f"bare continuity_slot writes need release handling or an allowlist reason: {unaccounted}"
