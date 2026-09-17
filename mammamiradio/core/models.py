@@ -895,6 +895,16 @@ class Segment:
     _playback_started: bool = field(default=False, init=False, repr=False, compare=False)
     _released: bool = field(default=False, init=False, repr=False, compare=False)
 
+    @property
+    def released(self) -> bool:
+        """Whether ``release()`` has run. A released segment can never be admitted.
+
+        ``mark_playback_started`` refuses it, so anything measuring runway must
+        refuse it too; otherwise a released queue head reads as ready audio and
+        the playback loop skips it at the moment it should air.
+        """
+        return self._released
+
     def mark_playback_started(self) -> bool:
         """Synchronously admit a segment and notify its provider before airing.
 
@@ -1335,6 +1345,12 @@ class StationState:
     ad_experiment_completed_breaks: int = 0
     ad_experiment_brand_airings: dict[str, int] = field(default_factory=dict)
     session_stopped: bool = False
+    # Advanced by the operator Stop route, and by nothing else. A Resume that
+    # awaits (starter-catalog verification does) needs to tell "a Stop landed
+    # under me, stay paused" apart from "some other live control ran"; it cannot
+    # read that from ``session_stopped``, which is already True for the whole
+    # resume, nor from ``continuity_epoch``, which every reservation advances.
+    session_stop_revision: int = 0
     # True only after an explicit assetless force-resume, until a listener
     # accepts the first rebuilt segment. Readiness stays "starting" meanwhile.
     force_recovery_active: bool = False

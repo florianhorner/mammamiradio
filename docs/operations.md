@@ -57,11 +57,10 @@ On an empty queue the rescue ladder opens after `FIRST_BYTE_GRACE_SECONDS` (1s).
 Normal admin and Home Assistant Resume own their immediate audio reservation;
 the producer starts ordinary programming without adding a second resume clip.
 Only explicit forced start delegates that first bridge to the producer. Forced
-start and idle bridges prefer a cached song, then the short branded continuity
+start, idle wake, and drain bridges prefer a cached song, then a verified starter
+catalog song when that is the active source, then the short branded continuity
 clip, with a permissive cache retry before the emergency tone when the clip is
-unavailable. An active-playback drain adds one rung after the strict cache miss:
-when the packaged starter catalog is the active source, it admits a verified
-starter song directly before falling back to the continuity clip. Startup first
+unavailable. Startup first
 tries the restart handoff spool (`cache/restart_handoff/`), admitting
 already-normalized music ahead of the producer/playback tasks (see
 `docs/architecture.md` → "Restart handoff spool"). The producer's multi-segment
@@ -296,8 +295,12 @@ Stop is persistence-first:
 
 Resume remains paused while it prepares the handoff:
 
-1. Reserve readable immediate audio: eligible norm-cache music, then
+1. Reserve readable immediate audio: eligible norm-cache music, then a
+   verified starter catalog song when that is the active source, then
    `continuity_1.mp3`, then `emergency_tone.mp3`.
+   Starter verification runs off the event loop; ownership is rechecked
+   before admission. Bans, cycle reservations, and pending dedications stay
+   ineligible.
 2. If no playable runway exists, return `503` with `force_available: true` and
    keep the marker.
 3. Remove the marker. If removal fails, return `503` and stay paused.
@@ -313,6 +316,17 @@ admission and playback fallback preparation recheck ownership after awaited work
 New playable runway takes precedence over a prepared fallback. Deliberate Resume
 airplay remains in the informational `continuity` counter, excluded from the
 producer bridge-frequency warning.
+
+A Resume that a Stop overtakes is not the assetless path and must not offer Force
+Start: it answers `409` with "The station was paused again while it was starting"
+and leaves the marker in place. A second Resume sent while the first is still
+starting waits up to 3 seconds for it, then answers `409` with "The station is
+already starting". Starter verification is bounded at 2 seconds so Home
+Assistant's 5-second resume budget holds; a slower verification falls back to
+the packaged clip without marking the starter source failed, keeps running in
+the background, and a retry while it runs skips verification rather than
+starting a second one. A Resume queued behind another still honours a Stop that
+lands while it waits: it answers `409` too.
 
 The assetless path represents a corrupt installation and never starts
 automatically. After the normal `503`, the admin requires explicit operator

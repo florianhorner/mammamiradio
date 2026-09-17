@@ -1189,6 +1189,13 @@ async def shutdown():
     if verdict_task:
         verdict_task.cancel()
         tasks_to_cancel.append(verdict_task)
+    # Resume leaves a slow starter verification running rather than cancelling
+    # it mid-request. Teardown is the one place that must, so its late result
+    # cannot run eligibility bookkeeping against a station that is shutting down.
+    resume_prepare_task = getattr(app.state, "resume_starter_prepare_task", None)
+    if resume_prepare_task and not resume_prepare_task.done():
+        resume_prepare_task.cancel()
+        tasks_to_cancel.append(resume_prepare_task)
     listener_session_tasks = getattr(getattr(app.state, "station_state", None), "listener_session_tasks", None)
     if listener_session_tasks:
         for _session_task in list(listener_session_tasks):

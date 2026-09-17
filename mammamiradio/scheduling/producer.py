@@ -158,7 +158,9 @@ from mammamiradio.scheduling.handoff import (
     reconcile_handoff_queue_items,
 )
 from mammamiradio.scheduling.queue_mutations import (
+    discard_continuity_slot,
     drop_matching_segments,
+    park_continuity_slot,
     settle_listener_request_queue_dependencies,
 )
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
@@ -618,6 +620,12 @@ class RenderedMusicTrack:
     path: Path
     cache_path: Path
     cache_hit: bool
+
+
+class PreparedStarterRunway(NamedTuple):
+    segment: Segment
+    track: Track
+    rendered: RenderedMusicTrack
 
 
 def _is_session_rejected_without_concrete_source(track: Track, config: StationConfig) -> bool:
@@ -1254,7 +1262,8 @@ async def _queue_continuity_bridge(
     song instead of a canned line in a voice that belongs to neither host) and
     the faster one: the norm-cache payload derives its duration from the sidecar,
     while the packaged clip pays an ffprobe in a worker thread before it can be
-    queued. The clip stays as the rung below, for a cold cache.
+    queued. When ``starter_catalog_runway`` is set, a verified starter song sits
+    between a cold cache and that clip so a fresh install resumes into music.
     """
     # Re-armed before each rung rather than captured once for the whole ladder.
     # A rung that awaits (the packaged clip pays an ffprobe) must still be
@@ -1478,80 +1487,53 @@ async def _queue_norm_cache_bridge_segment(
     )
 
 
-async def _queue_starter_catalog_bridge_segment(
-    queue_segment: Callable[..., Awaitable[bool]],
+def _starter_catalog_track_still_eligible(
     state: StationState,
-    config: StationConfig,
+    track: Track,
     *,
-    bridge_type: str,
-    bridge_flag: str,
-    stale_check: Callable[[], bool | str | None] | None = None,
+    captured_source_revision: int,
 ) -> bool:
-    """Queue one verified starter song when a drain cannot see cache music."""
+    """Return whether a prepared starter candidate may still be admitted.
+
+    Selection happens before verification. Verification awaits, so a ban,
+    dedication, source switch, or cycle reservation can land under it. Resume
+    and idle bridges must not air that stale choice.
+    """
     source = state.playlist_source
-    if source is None or source.kind != "starter" or not state.playlist or state.listener_request_handoff is not None:
+    if source is None or source.kind != "starter" or track.source != "starter" or not state.playlist:
         return False
+    if state.listener_request_handoff is not None:
+        return False
+    if captured_source_revision != state.source_revision:
+        return False
+    track_key = track.normalized_key
+    if not any(candidate is track or candidate.normalized_key == track_key for candidate in state.playlist):
+        return False
+    if song_identity_key_is_blocklisted(normalized_track_key(track), state.blocklist):
+        return False
+    if state.listener_track_reservations().reserves_track(track):
+        return False
+    state._sync_starter_cycle()
+    return track.cache_key in state.starter_cycle_remaining and track.cache_key not in state.starter_cycle_reserved
 
-    captured_playlist_revision = state.playlist_revision
-    captured_source_revision = state.source_revision
-    source_readiness = state.source_readiness
-    # Recovery must not consume an operator/listener pin merely by asking the
-    # canonical selector for an automatic starter candidate. This call has no
-    # await, so temporarily hiding and restoring the pin is atomic to the event
-    # loop and preserves both the value and its ownership revision.
-    held_pin = state.pinned_track
-    held_pin_revision = state.pinned_track_revision
-    try:
-        # The drain guard excludes listener handoffs before entering this helper,
-        # which is the only selector branch that mutates the supplied queue. The
-        # remaining acceptance rules live in StationState and its reservation
-        # ledger, so a private empty queue is enough to reuse the canonical
-        # selector without widening every continuity-bridge call signature.
-        # Restrict this rung to starter media even when the
-        # global weighted selector would prefer the operator's local base.
-        if held_pin is not None:
-            state.pinned_track = None
-        try:
-            track = _select_accepted_music_track(state, config, asyncio.Queue(), restrict_to_source="starter")
-        finally:
-            if held_pin is not None:
-                state.pinned_track = held_pin
-                state.pinned_track_revision = held_pin_revision
-    except StarterCycleReservationPendingError:
-        logger.info("%s bridge: starter cycle is waiting for queued reservations", bridge_type.capitalize())
-        return False
-    except RuntimeError:
-        logger.info("%s bridge: no starter-catalog track is currently eligible", bridge_type.capitalize())
-        return False
-    if track is None or track.source != "starter":
-        return False
 
-    try:
-        rendered = await _render_music_track(
-            track,
-            config,
-            temp_prefix="starter_bridge",
-            context=f"{bridge_type} bridge",
-            playlist=state.playlist,
-            source_readiness=source_readiness,
-        )
-    except Exception:
-        source_readiness.mark_failure(track.source, "A starter track could not be verified for recovery")
-        logger.warning(
-            "%s bridge: starter-catalog verification failed for %s",
-            bridge_type.capitalize(),
-            track.display,
-            exc_info=True,
-        )
-        return False
-    if rendered is None:
-        source_readiness.mark_failure(track.source, "A starter track could not be prepared for recovery")
-        return False
-
+def _starter_catalog_runway_segment(state: StationState, rendered: RenderedMusicTrack) -> Segment:
+    """Build the listener-facing starter runway without admitting it."""
+    track = rendered.track
+    source = state.playlist_source
     playlist_index = next((index for index, candidate in enumerate(state.playlist) if candidate is track), -1)
+    if playlist_index < 0:
+        # Eligibility accepts the same recording by normalized key, because a
+        # crate refresh can replace the Track object under the verify await.
+        # Resolve the index the same way so the admin can still locate the row.
+        track_key = track.normalized_key
+        playlist_index = next(
+            (index for index, candidate in enumerate(state.playlist) if candidate.normalized_key == track_key),
+            -1,
+        )
     rationale = generate_track_rationale(track, source=source, listener=state.listener)
     crate = classify_track_crate(track, source)
-    segment = Segment(
+    return Segment(
         type=SegmentType.MUSIC,
         path=rendered.path,
         duration_sec=(track.duration_ms or 0) / 1000.0,
@@ -1572,10 +1554,121 @@ async def _queue_starter_catalog_bridge_segment(
             "playlist_index": playlist_index,
             "source_kind": track.source,
             "heading_id": track.heading_id,
-            bridge_flag: True,
         },
         ephemeral=False,
     )
+
+
+async def _prepare_starter_catalog_runway(
+    state: StationState,
+    config: StationConfig,
+    *,
+    context: str,
+) -> PreparedStarterRunway | None:
+    """Select and verify one starter song off the event loop without admitting it."""
+    source = state.playlist_source
+    if source is None or source.kind != "starter" or not state.playlist or state.listener_request_handoff is not None:
+        return None
+
+    captured_source_revision = state.source_revision
+    source_readiness = state.source_readiness
+    # Recovery must not consume an operator/listener pin merely by asking the
+    # canonical selector for an automatic starter candidate. This call has no
+    # await, so temporarily hiding and restoring the pin is atomic to the event
+    # loop and preserves both the value and its ownership revision.
+    held_pin = state.pinned_track
+    held_pin_revision = state.pinned_track_revision
+    try:
+        # Listener handoffs are excluded before entering this helper, which is
+        # the only selector branch that mutates the supplied queue. The remaining
+        # acceptance rules live in StationState and its reservation ledger, so a
+        # private empty queue is enough to reuse the canonical selector without
+        # widening every continuity-bridge call signature.
+        # Restrict this rung to starter media even when the
+        # global weighted selector would prefer the operator's local base.
+        if held_pin is not None:
+            state.pinned_track = None
+        try:
+            track = _select_accepted_music_track(state, config, asyncio.Queue(), restrict_to_source="starter")
+        finally:
+            if held_pin is not None:
+                state.pinned_track = held_pin
+                state.pinned_track_revision = held_pin_revision
+    except StarterCycleReservationPendingError:
+        logger.info("%s: starter cycle is waiting for queued reservations", context)
+        return None
+    except RuntimeError:
+        logger.info("%s: no starter-catalog track is currently eligible", context)
+        return None
+    if track is None or track.source != "starter":
+        return None
+
+    try:
+        rendered = await _render_music_track(
+            track,
+            config,
+            temp_prefix="starter_bridge",
+            context=context,
+            playlist=state.playlist,
+            source_readiness=source_readiness,
+        )
+    except Exception:
+        source_readiness.mark_failure(track.source, "A starter track could not be verified for recovery")
+        logger.warning(
+            "%s: starter-catalog verification failed for %s",
+            context,
+            track.display,
+            exc_info=True,
+        )
+        return None
+    if rendered is None:
+        source_readiness.mark_failure(track.source, "A starter track could not be prepared for recovery")
+        return None
+    if not _starter_catalog_track_still_eligible(
+        state,
+        track,
+        captured_source_revision=captured_source_revision,
+    ):
+        logger.info("%s: starter-catalog candidate became ineligible before admission", context)
+        return None
+    return PreparedStarterRunway(
+        segment=_starter_catalog_runway_segment(state, rendered),
+        track=track,
+        rendered=rendered,
+    )
+
+
+async def _queue_starter_catalog_bridge_segment(
+    queue_segment: Callable[..., Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+    *,
+    bridge_type: str,
+    bridge_flag: str,
+    stale_check: Callable[[], bool | str | None] | None = None,
+) -> bool:
+    """Queue one verified starter song when a continuity bridge cannot see cache music."""
+    try:
+        prepared = await _prepare_starter_catalog_runway(state, config, context=f"{bridge_type} bridge")
+    except Exception:
+        # The canned clip and the emergency tone sit below this rung in
+        # ``_queue_continuity_bridge``. An unexpected raise from selection,
+        # rationale, crate classification, or manifest resolution must fall
+        # through to them rather than escape the ladder: a malformed starter row
+        # is not a reason for a drain or an idle wake to end in silence.
+        logger.warning(
+            "%s bridge: starter-catalog preparation failed; continuing down the ladder",
+            bridge_type.capitalize(),
+            exc_info=True,
+        )
+        return False
+    if prepared is None:
+        return False
+    segment = prepared.segment
+    track = prepared.track
+    segment.metadata[bridge_flag] = True
+    captured_playlist_revision = state.playlist_revision
+    captured_source_revision = state.source_revision
 
     def _starter_stale_reason() -> bool | str | None:
         if stale_check is not None:
@@ -1602,10 +1695,10 @@ async def _queue_starter_catalog_bridge_segment(
     if not queued:
         return False
 
-    source_readiness.mark_playable(track.source)
+    state.source_readiness.mark_playable(track.source)
     _arm_accepted_heading_announcement(state, track)
     state.after_music(track)
-    _remember_rendered_music(rendered, state)
+    _remember_rendered_music(prepared.rendered, state)
     return True
 
 
@@ -2729,7 +2822,9 @@ def _front_insert_queue_and_shadow(
             None,
         )
         if protected_index is not None:
-            state.continuity_slot = items.pop(protected_index)
+            # This loop can park more than once; each park displaces the last.
+            # The displaced item has already left ``items``, so release it.
+            park_continuity_slot(state, items.pop(protected_index))
             continue
         # A safety warning outranks ordinary Air Next promises. If all queue
         # slots are already priority entries, evict only the furthest-future
@@ -4578,7 +4673,7 @@ async def _fire_interrupt(
     # A hard interrupt supersedes every prior continuity reservation. Clear the
     # out-of-band slot before committing the interrupt bridge so playback cannot
     # serve stale control audio between that bridge and the urgent banter.
-    state.continuity_slot = None
+    discard_continuity_slot(state)
 
     # Commit the bridge before touching the ready queue. This synchronous step
     # cannot expose a drained queue to playback.
@@ -6142,6 +6237,7 @@ async def _run_producer_inner(
                 bridge_flag="resume_bridge",
                 canned_title="Resume bridge",
                 music_runway=True,
+                starter_catalog_runway=True,
                 recovery_needed=_recovery_needed,
             )
 
@@ -6173,6 +6269,7 @@ async def _run_producer_inner(
                     canned_title="Station warm-up",
                     canned_metadata={"warmup": True, "rescue": True},
                     music_runway=True,
+                    starter_catalog_runway=True,
                     recovery_needed=_recovery_needed,
                 )
             _was_idle = False
