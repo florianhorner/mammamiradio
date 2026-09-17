@@ -323,7 +323,10 @@ and leaves the marker in place. A second Resume sent while the first is still
 starting waits up to 3 seconds for it, then answers `409` with "The station is
 already starting". Starter verification is bounded at 2 seconds so Home
 Assistant's 5-second resume budget holds; a slower verification falls back to
-the packaged clip without marking the starter source failed.
+the packaged clip without marking the starter source failed, keeps running in
+the background, and a retry while it runs skips verification rather than
+starting a second one. A Resume queued behind another still honours a Stop that
+lands while it waits: it answers `409` too.
 
 The assetless path represents a corrupt installation and never starts
 automatically. After the normal `503`, the admin requires explicit operator

@@ -222,7 +222,8 @@ the same epoch, so it is not a Stop marker: a Resume interrupted by a real Stop
 answers `409` and logs `session_resume_superseded`, while a Resume interrupted by
 any other control logs `a live control superseded the starter candidate` and still
 reserves the packaged ladder. `starter verification took longer than 2.0s` means
-slow storage fell back to the clip, not a broken catalog. `Resume declined: another
+slow storage fell back to the clip, not a broken catalog; `an earlier starter
+verification is still running` is the retry that declined to stack a second one. `Resume declined: another
 Resume is still starting the station` is a double tap or a concurrent Home
 Assistant play, and clears on its own. `starter-catalog preparation failed;
 continuing down the ladder` from an idle or drain bridge means the starter rung

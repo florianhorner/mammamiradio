@@ -108,6 +108,22 @@ def drop_segment_moment_receipts(state: StationState, segment: Segment, reason: 
         logger.debug("Moment receipt queue drop failed", exc_info=True)
 
 
+CONTINUITY_RESERVATION_KEY = "continuity_reservation"
+
+
+def is_continuity_reservation(segment: Segment) -> bool:
+    """Whether ``segment`` is protected continuity audio owned only by the runway.
+
+    The capacity-exempt slot usually holds such audio, but the replace-queue
+    failure path can park an ordinary survivor there, including one linked to a
+    listener dedication. Releasing that one would roll back its admission
+    reservation without settling the dedication it belongs to, so release
+    decisions are scoped to this flag.
+    """
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return bool(metadata.get(CONTINUITY_RESERVATION_KEY))
+
+
 def discard_continuity_slot(state: StationState) -> None:
     """Empty the capacity-exempt continuity slot and release what it owned.
 
@@ -121,7 +137,7 @@ def discard_continuity_slot(state: StationState) -> None:
     """
     slot = state.continuity_slot
     state.continuity_slot = None
-    if slot is not None:
+    if slot is not None and is_continuity_reservation(slot):
         unlink_ephemeral_best_effort(slot)
 
 
@@ -129,7 +145,7 @@ def park_continuity_slot(state: StationState, segment: Segment) -> None:
     """Park ``segment`` in the slot, releasing a different segment it displaces."""
     prior = state.continuity_slot
     state.continuity_slot = segment
-    if prior is not None and prior is not segment:
+    if prior is not None and prior is not segment and is_continuity_reservation(prior):
         unlink_ephemeral_best_effort(prior)
 
 
