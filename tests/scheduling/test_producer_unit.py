@@ -1357,7 +1357,7 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Pubblicita.", None)
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script) as mock_write_ad,
         patch(
             f"{PRODUCER_MODULE}._select_ad_creative",
             return_value=("classic_pitch", SonicWorld(), ["hammer"]),
@@ -1387,6 +1387,7 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
     assert mock_synthesize_ad.call_args.args[3] == packaged_sfx
     assert mock_synthesize_ad.call_args.kwargs["bed_assets_dir"] == packaged_beds
+    assert mock_write_ad.await_args.kwargs["require_generated"] is True
 
 
 @pytest.mark.asyncio
@@ -12102,6 +12103,71 @@ async def test_a_forced_ad_armed_before_the_key_was_cleared_never_reaches_the_ad
     assert queue.get_nowait().type == SegmentType.MUSIC
     write_ad.assert_not_called()
     assert state.operator_force_pending is None
+
+
+@pytest.mark.asyncio
+async def test_key_cleared_after_ad_selection_queues_recovery_instead_of_placeholder(tmp_path):
+    """The render boundary rechecks capability after the schedule decision."""
+    state = _make_state()
+    state.songs_since_ad = 7
+    config = _ad_capable_config(key=True, brands=True)
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.ad_spots_per_break = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=tmp_path / "recovery.mp3",
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True},
+    )
+    recovery.path.write_bytes(b"recovery")
+
+    def _select_then_clear_key(*_args, **_kwargs):
+        config.anthropic_api_key = ""
+        config.openai_api_key = ""
+        return config.ads.brands[0], "classic_pitch", SonicWorld(), {}
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"voice")
+
+    async def _keep_voice(path, *_args, **_kwargs):
+        return path
+
+    imaging = MagicMock()
+    imaging.core_break_foreground_source_ids.return_value = set()
+    imaging.pick_ad_bumper.side_effect = lambda output_path, *_args, **_kwargs: output_path.write_bytes(b"bumper")
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_select_then_clear_key),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicità.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=None),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_keep_voice),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(
+            f"{PRODUCER_MODULE}._producer_error_recovery_segment",
+            new_callable=AsyncMock,
+            return_value=recovery,
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    queued = queue.get_nowait()
+    assert queued is recovery
+    assert queued.type is SegmentType.SWEEPER
+    synthesize_ad.assert_not_awaited()
+    assert state.last_ad_script == {}
+    assert state.songs_since_ad == 7, "the unserved natural break must remain owed"
 
 
 @pytest.mark.asyncio

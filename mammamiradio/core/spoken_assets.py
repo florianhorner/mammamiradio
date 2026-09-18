@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,19 +12,8 @@ from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
 from mammamiradio.core.path_safety import safe_path_within
 
 MANIFEST_FILENAME = "spoken_assets.json"
-DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter", "first_listen", "ads")
+DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter", "first_listen")
 PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY = "_packaged_banter_predecessor_starter_id"
-
-# A packaged advertisement is a finished spot, not a brand name read aloud. The
-# station shipped a no-key fallback that spoke two sentences and called it an ad;
-# these bounds are what made that unpackageable rather than merely discouraged.
-# Both ends matter: below the floor there is no room for a premise, escalation
-# and payoff, and above the ceiling a spot outstays a music break.
-PACKAGED_AD_MIN_SECONDS = 25.0
-PACKAGED_AD_MAX_SECONDS = 40.0
-
-# Modes the station speaks in, and the language each one must be recorded in.
-_MODE_LANGUAGES = {"normal": "en", "super_italian": "it"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +28,6 @@ class SpokenAssetEntry:
     mode: str = ""
     required_previous_starter_id: str = ""
     special: bool = False
-    duration_seconds: float = 0.0
 
 
 def validate_spoken_asset_manifest(*, assets_root: Path = DEMO_ASSETS_DIR) -> list[str]:
@@ -225,56 +212,18 @@ def _entry_policy_errors(entry: SpokenAssetEntry) -> list[str]:
 
     subdir = Path(entry.relative_path).parent.as_posix()
     if subdir == "banter":
-        errors.extend(_mode_language_errors(entry, "banter"))
+        if entry.mode not in {"normal", "super_italian"}:
+            errors.append(f"{entry.relative_path} banter mode must be normal or super_italian")
+        expected_language = {"normal": "en", "super_italian": "it"}.get(entry.mode)
+        if expected_language is not None and entry.language != expected_language:
+            errors.append(f"{entry.relative_path} banter language does not match its mode")
         starter_id = entry.required_previous_starter_id
         if starter_id and (len(starter_id) > 80 or any(not (char.isalnum() or char in "._-") for char in starter_id)):
             errors.append(f"{entry.relative_path} required starter id is invalid")
         if entry.special and (entry.mode != "normal" or starter_id):
             errors.append(f"{entry.relative_path} special banter must be evergreen Normal Mode copy")
-    elif Path(entry.relative_path).parts[0] == "ads":
-        errors.extend(_ad_entry_policy_errors(entry))
     elif entry.mode or entry.required_previous_starter_id or entry.special:
         errors.append(f"{entry.relative_path} non-banter asset has banter metadata")
-    return errors
-
-
-def _ad_entry_policy_errors(entry: SpokenAssetEntry) -> list[str]:
-    """Return the policy errors that keep a packaged spot a finished advertisement.
-
-    A packaged ad is mode-bound like banter, but it carries no adjacency: an ad
-    never depends on the song before it, and there is no rare-special tier. The
-    duration floor is the part that matters most. The station's no-key fallback
-    spoke the brand name and a tagline, rendered successfully, and aired as an
-    advertisement; nothing in the packaging contract could object, because the
-    contract had no opinion about how long an advertisement is.
-    """
-
-    errors = _mode_language_errors(entry, "ad")
-    if Path(entry.relative_path).parent.as_posix() != "ads":
-        # Discovery and runtime selection both read ads/ flat, so a nested spot
-        # would be invisible to one and unchecked by the other.
-        errors.append(f"{entry.relative_path} packaged ad must sit directly in ads/")
-    if entry.required_previous_starter_id or entry.special:
-        errors.append(f"{entry.relative_path} ad must not carry banter adjacency metadata")
-    if entry.duration_seconds <= 0.0:
-        errors.append(f"{entry.relative_path} ad must declare duration_seconds")
-    elif not PACKAGED_AD_MIN_SECONDS <= entry.duration_seconds <= PACKAGED_AD_MAX_SECONDS:
-        errors.append(
-            f"{entry.relative_path} ad is {entry.duration_seconds:g}s; "
-            f"a packaged ad runs {PACKAGED_AD_MIN_SECONDS:g}-{PACKAGED_AD_MAX_SECONDS:g}s"
-        )
-    return errors
-
-
-def _mode_language_errors(entry: SpokenAssetEntry, noun: str) -> list[str]:
-    """Return errors when an entry's mode is unknown or its language does not match."""
-
-    errors: list[str] = []
-    if entry.mode not in _MODE_LANGUAGES:
-        errors.append(f"{entry.relative_path} {noun} mode must be normal or super_italian")
-    expected_language = _MODE_LANGUAGES.get(entry.mode)
-    if expected_language is not None and entry.language != expected_language:
-        errors.append(f"{entry.relative_path} {noun} language does not match its mode")
     return errors
 
 
@@ -284,10 +233,7 @@ def _read_manifest(root: Path) -> tuple[dict[str, object] | None, list[str]]:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None, [f"{MANIFEST_FILENAME} is missing"]
-    except (OSError, ValueError) as exc:
-        # ValueError covers JSONDecodeError and UnicodeDecodeError, and also the
-        # plain ValueError json.loads raises for an integer longer than 4300
-        # digits. The rescue ladder reads this manifest and must never raise.
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         return None, [f"{MANIFEST_FILENAME} is unreadable: {exc}"]
     if not isinstance(raw, dict):
         return None, [f"{MANIFEST_FILENAME} root must be an object"]
@@ -316,14 +262,6 @@ def _parse_entry(raw: object, *, root: Path, prefix: str) -> tuple[SpokenAssetEn
         return None, [f"{prefix}.sha256 must be 64 lowercase hex characters"]
     if not _stays_inside_root(root / relative, root):
         return None, [f"{prefix}.path escapes the asset root"]
-    duration_seconds, duration_error = _parse_duration(raw.get("duration_seconds", 0))
-    if duration_error:
-        if relative.parts[0] == "ads":
-            return None, [f"{prefix}.duration_seconds {duration_error}"]
-        # Only ads read a duration. Every other category ignored the field before
-        # it existed, and a typo in it must not drop a recovery clip from the
-        # rescue ladder.
-        duration_seconds = 0.0
     return (
         SpokenAssetEntry(
             relative_path=relative.as_posix(),
@@ -334,29 +272,9 @@ def _parse_entry(raw: object, *, root: Path, prefix: str) -> tuple[SpokenAssetEn
             mode=mode,
             required_previous_starter_id=required_previous_starter_id,
             special=special,
-            duration_seconds=duration_seconds,
         ),
         [],
     )
-
-
-def _parse_duration(raw_duration: object) -> tuple[float, str]:
-    """Return ``(seconds, "")`` or ``(0.0, reason)`` without ever raising."""
-
-    # ``bool`` is an ``int`` subclass, so ``True`` would otherwise read as 1.0 and
-    # declare a one-second advertisement.
-    if isinstance(raw_duration, bool) or not isinstance(raw_duration, (int, float)):
-        return 0.0, "must be a number"
-    # JSON integers are unbounded, and ``float()`` raises on one too large to
-    # represent. This parser sits under the dead-air rescue ladder, which must
-    # never raise, so conversion failure is a reason, not an exception.
-    try:
-        duration_seconds = float(raw_duration)
-    except (OverflowError, ValueError):
-        return 0.0, "must be a non-negative finite number"
-    if not math.isfinite(duration_seconds) or duration_seconds < 0.0:
-        return 0.0, "must be a non-negative finite number"
-    return duration_seconds, ""
 
 
 def _sha256(path: Path) -> str:

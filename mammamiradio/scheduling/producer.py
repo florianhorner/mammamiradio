@@ -4157,11 +4157,10 @@ def ad_programme_block(config: StationConfig, state: StationState | None = None)
 def _every_writing_key_refused(config: StationConfig, state: StationState) -> bool:
     """Whether each configured writing key has been definitively refused by its provider.
 
-    A refused key is as unable to write an ad as a missing one: ``write_ad`` fails
-    and airs the brand fallback. The verdict is sticky, set only on an outright
+    A refused key is as unable to write an ad as a missing one. The verdict is sticky, set only on an outright
     401 and reset to ``"unverified"`` when that key is replaced, so treating it as
     no key cannot put the scheduler into a retry loop. A quota, rate-limit or
-    network failure never sets it, and those still reach the ad writer.
+    network failure never sets it; those reach the ad writer and fail closed there.
     """
 
     statuses = []
@@ -4201,8 +4200,7 @@ def _drop_unmakeable_forced_ad(state: StationState, config: StationConfig) -> bo
 
     ``/api/trigger`` refuses such an ad, but a force can be armed before a key is
     cleared, and every forced ad passes through here on its way to render.
-    Rendering it would air "<brand>. <tagline>" as an advertisement. The force is
-    dropped, the one-at-a-time guard it held is released, and an operator pick
+    The force is dropped, the one-at-a-time guard it held is released, and an operator pick
     it had displaced is restored, the way the forced branch does. Capability is
     checked live, not read from the per-tick flag, because awaits separate them.
     """
@@ -8711,6 +8709,7 @@ async def _run_producer_inner(
                                     spot_index=i,
                                     callback_gag=(_callback_gag_text if i == 0 else None),
                                     submission_guard=_home_submission_guard,
+                                    require_generated=True,
                                 )
                                 for i, (brand, af, sn, vm, _recipe) in enumerate(_spot_params)
                             )
