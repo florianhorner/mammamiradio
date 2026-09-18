@@ -589,16 +589,12 @@ def test_ads_are_available_by_default_so_configured_stations_are_unaffected():
     assert next_segment_type(state, pacing) == SegmentType.AD
 
 
-def test_the_schedule_preview_agrees_with_what_will_actually_air():
-    """Scaletta and the integration up-next must not promise an ad that is skipped."""
+def test_the_v1_schedule_preview_preserves_its_frozen_ad_prediction():
+    """Live suppression must not silently change the frozen integration contract."""
     from mammamiradio.scheduling.scheduler import preview_upcoming
 
     pacing = PacingSection(songs_between_ads=2, songs_between_banter=99)
     state = _make_state(segments_produced=5, songs_since_ad=2, songs_since_banter=0)
     state.ad_programme_available = False
     predicted = preview_upcoming(state, pacing, state.playlist, count=6)
-    # Station IDs still fire on music slots; the claim is only that no ad is promised.
-    assert not any(entry["type"] == "ad" for entry in predicted), predicted
-
-    state.ad_programme_available = True
-    assert any(entry["type"] == "ad" for entry in preview_upcoming(state, pacing, state.playlist, count=6))
+    assert any(entry["type"] == "ad" for entry in predicted), predicted

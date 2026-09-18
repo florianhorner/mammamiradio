@@ -11986,18 +11986,9 @@ async def test_an_unfillable_ad_break_airs_real_music_through_the_producer_loop(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("boot_state", ["session_stopped", "empty_playlist"])
-async def test_the_preview_stops_promising_an_ad_from_the_first_boot_step(boot_state):
-    """Scenario 3 — post-restart.
-
-    A restart builds a fresh state with the default "ads available". The
-    schedule preview is served from the moment the app starts, while a First
-    Listen install holds the producer's first decision for its opening, and a
-    session stopped before the restart makes prewarm return without producing.
-    Prewarm still settles ad capability first, so the preview a restarted,
-    stopped, keyless station serves never lists an ad break it cannot make.
-    """
+async def test_the_first_boot_step_settles_ad_capability_before_returning(boot_state):
+    """Stopped and empty-playlist boots still settle the live pacing guard."""
     from mammamiradio.scheduling.producer import prewarm_first_segment
-    from mammamiradio.scheduling.scheduler import preview_upcoming
 
     config = _ad_capable_config(key=False, brands=True)
     config.pacing.songs_between_ads = 1
@@ -12013,10 +12004,6 @@ async def test_the_preview_stops_promising_an_ad_from_the_first_boot_step(boot_s
     assert await prewarm_first_segment(queue, state, config) is False
     assert queue.empty()
     assert state.ad_programme_available is False
-
-    state.playlist = state.playlist or _make_state().playlist
-    predicted = preview_upcoming(state, config.pacing, state.playlist, count=6)
-    assert not any(entry["type"] == "ad" for entry in predicted), predicted
 
 
 def test_brands_that_cannot_be_cast_count_as_no_brands():

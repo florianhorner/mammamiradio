@@ -164,7 +164,6 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Tr
                 songs_since_news=songs_since_news,
                 segments_since_station_id=segments_since_station_id,
                 segments_since_time_check=segments_since_time_check,
-                ad_available=state.ad_programme_available,
             )
 
         if seg_type == SegmentType.MUSIC:

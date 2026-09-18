@@ -1620,9 +1620,8 @@ class StationState:
     # Whether the station can currently produce a real advertisement: an AI key
     # and at least one ad brand. False makes the scheduler skip the ad break
     # instead of filling it with a placeholder, and leaves ``songs_since_ad`` owed
-    # rather than forgiven. Defaults to available; the producer settles it at boot
-    # (in prewarm, before the schedule preview can be read) and again before every
-    # pacing decision.
+    # rather than forgiven. The producer settles it during prewarm and again
+    # before every pacing decision.
     ad_programme_available: bool = True
     # Persona store for compounding listener memory (set by main.py at startup)
     persona_store: PersonaStore | None = None
