@@ -431,20 +431,69 @@ def test_a_non_finite_duration_is_refused(tmp_path, duration):
     assert any("non-negative finite number" in error for error in errors), errors
 
 
-def test_an_unrepresentable_duration_fails_closed_instead_of_raising(tmp_path):
-    """JSON integers are unbounded and ``float()`` raises on one too large.
+def _huge_duration_manifest(root, entry):
+    """Write a manifest whose entry declares an integer too large for a float."""
+    text = json.dumps(entry)
+    huge = text[:-1] + ', "duration_seconds": 1' + "0" * 400 + "}"
+    (root / "spoken_assets.json").write_text('{"schema_version": 1, "assets": [' + huge + "]}", encoding="utf-8")
 
-    The same parser answers the dead-air rescue ladder's question about which
-    packaged audio it may use, and that question must never raise.
-    """
-    (tmp_path / "recovery").mkdir()
-    payload = b"continuity"
-    (tmp_path / "recovery" / "continuity_1.mp3").write_bytes(payload)
-    entry = json.dumps(_entry("recovery/continuity_1.mp3", payload, language="it"))
-    huge = entry[:-1] + ', "duration_seconds": 1' + "0" * 400 + "}"
-    (tmp_path / "spoken_assets.json").write_text('{"schema_version": 1, "assets": [' + huge + "]}", encoding="utf-8")
+
+def test_an_unrepresentable_ad_duration_is_refused_without_raising(tmp_path):
+    """JSON integers are unbounded and ``float()`` raises on one too large."""
+    (tmp_path / "ads").mkdir()
+    payload = b"packaged-ad"
+    (tmp_path / "ads" / "spot.mp3").write_bytes(payload)
+    entry = _ad_entry("ads/spot.mp3", payload)
+    del entry["duration_seconds"]
+    _huge_duration_manifest(tmp_path, entry)
 
     errors = validate_spoken_asset_manifest(assets_root=tmp_path)
     assert any("non-negative finite number" in error for error in errors), errors
-    assert is_approved_packaged_audio_asset(tmp_path / "recovery" / "continuity_1.mp3", assets_root=tmp_path) is False
-    assert approved_spoken_asset_entries("recovery", assets_root=tmp_path) == []
+    assert approved_spoken_asset_entries("ads", assets_root=tmp_path) == []
+
+
+def test_a_bad_duration_cannot_drop_a_recovery_clip_from_the_rescue_ladder(tmp_path):
+    """Only ads read a duration. Elsewhere the field stays inert, as it was.
+
+    The rescue ladder asks this parser which packaged audio it may use, and a
+    typo in a field recovery never reads must not remove a clip from it.
+    """
+    (tmp_path / "recovery").mkdir()
+    payload = b"continuity"
+    clip = tmp_path / "recovery" / "continuity_1.mp3"
+    clip.write_bytes(payload)
+    _huge_duration_manifest(tmp_path, _entry("recovery/continuity_1.mp3", payload, language="it"))
+
+    assert validate_spoken_asset_manifest(assets_root=tmp_path) == []
+    assert is_approved_packaged_audio_asset(clip, assets_root=tmp_path) is True
+
+    _write_manifest(
+        tmp_path, [{**_entry("recovery/continuity_1.mp3", payload, language="it"), "duration_seconds": "15s"}]
+    )
+    assert is_approved_packaged_audio_asset(clip, assets_root=tmp_path) is True
+
+
+def test_a_manifest_integer_too_long_to_parse_fails_closed_instead_of_raising(tmp_path):
+    """``json.loads`` raises a plain ValueError past 4300 digits, not a decode error."""
+    (tmp_path / "recovery").mkdir()
+    clip = tmp_path / "recovery" / "continuity_1.mp3"
+    clip.write_bytes(b"continuity")
+    (tmp_path / "spoken_assets.json").write_text(
+        '{"schema_version": 1' + "0" * 5000 + ', "assets": []}', encoding="utf-8"
+    )
+
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+    assert any("unreadable" in error for error in errors), errors
+    assert is_approved_packaged_audio_asset(clip, assets_root=tmp_path) is False
+
+
+def test_a_packaged_ad_in_a_subfolder_is_refused(tmp_path):
+    """Discovery and selection read ads/ flat; a nested spot would escape both."""
+    (tmp_path / "ads" / "normal").mkdir(parents=True)
+    payload = b"packaged-ad"
+    (tmp_path / "ads" / "normal" / "spot.mp3").write_bytes(payload)
+    _write_manifest(tmp_path, [_ad_entry("ads/normal/spot.mp3", payload, duration=2.0)])
+
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+    assert any("must sit directly in ads/" in error for error in errors), errors
+    assert any("a packaged ad runs 25-40s" in error for error in errors), errors

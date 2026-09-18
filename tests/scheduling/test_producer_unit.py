@@ -12016,3 +12016,114 @@ async def test_the_preview_stops_promising_an_ad_from_the_first_boot_step(boot_s
     state.playlist = state.playlist or _make_state().playlist
     predicted = preview_upcoming(state, config.pacing, state.playlist, count=6)
     assert not any(entry["type"] == "ad" for entry in predicted), predicted
+
+
+def test_brands_that_cannot_be_cast_count_as_no_brands():
+    """A brand failing its voice-cast check never airs, so it cannot justify an ad."""
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    config = _ad_capable_config(key=True, brands=True)
+    config.ads.brands[0].cast_eligible = False
+    assert ad_programme_block(config) == "no_ad_brands"
+
+
+def test_a_forced_ad_the_station_cannot_make_is_dropped_and_its_guard_released():
+    from mammamiradio.scheduling.producer import _drop_unmakeable_forced_ad
+
+    config = _ad_capable_config(key=False, brands=True)
+    state = _make_state()
+    state.set_force_next(SegmentType.AD)
+    state.operator_force_pending = SegmentType.AD
+
+    assert _drop_unmakeable_forced_ad(state, config) is True
+    assert state.force_next is None
+    assert state.operator_force_pending is None, "a stuck guard refuses every later tap"
+
+
+def test_dropping_a_forced_ad_restores_the_operator_pick_it_displaced():
+    """Mirrors the forced branch: a replaced operator pick is re-armed, not lost."""
+    from mammamiradio.scheduling.producer import _drop_unmakeable_forced_ad
+
+    config = _ad_capable_config(key=False, brands=True)
+    state = _make_state()
+    state.set_force_next(SegmentType.AD)
+    state.operator_force_pending = SegmentType.BANTER
+
+    assert _drop_unmakeable_forced_ad(state, config) is True
+    assert state.force_next is SegmentType.BANTER
+    assert state.operator_force_pending is SegmentType.BANTER
+
+
+@pytest.mark.parametrize("forced", [SegmentType.AD, SegmentType.BANTER, None])
+def test_forces_the_station_can_honour_are_left_alone(forced):
+    from mammamiradio.scheduling.producer import _drop_unmakeable_forced_ad
+
+    config = _ad_capable_config(key=forced is SegmentType.AD, brands=True)
+    state = _make_state()
+    if forced is not None:
+        state.set_force_next(forced)
+
+    assert _drop_unmakeable_forced_ad(state, config) is False
+    assert state.force_next is forced
+
+
+@pytest.mark.asyncio
+async def test_a_forced_ad_armed_before_the_key_was_cleared_never_reaches_the_ad_writer(tmp_path):
+    """The route saw a key; by the time the producer consumes the force, it is gone."""
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.segments_produced = 6
+    state.songs_since_banter = 0
+    state.set_force_next(SegmentType.AD)
+    state.operator_force_pending = SegmentType.AD
+    config = _ad_capable_config(key=False, brands=True)
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.songs_between_banter = 99
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    source_audio = tmp_path / "source.mp3"
+    source_audio.write_bytes(b"\x00" * 2048)
+
+    def fake_normalize(_src: Path, dst: Path, *_args, **_kwargs) -> None:
+        dst.write_bytes(b"\x00" * 2048)
+
+    write_ad = AsyncMock()
+    with (
+        patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 0),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source_audio),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=fake_normalize),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", write_ad),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.get_nowait().type == SegmentType.MUSIC
+    write_ad.assert_not_called()
+    assert state.operator_force_pending is None
+
+
+@pytest.mark.asyncio
+async def test_an_idle_producer_still_keeps_ad_capability_current():
+    """With no listeners the producer never reaches a pacing decision, for minutes."""
+    state = _make_state()
+    state.listeners_active = 0
+    state.ad_programme_available = True
+    config = _ad_capable_config(key=False, brands=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    task = asyncio.create_task(run_producer(queue, state, config))
+    try:
+        deadline = asyncio.get_event_loop().time() + 2.0
+        while state.ad_programme_available and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert state.ad_programme_available is False
+    assert queue.empty(), "an idle producer must not have produced anything"

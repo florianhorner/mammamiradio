@@ -74,6 +74,7 @@ from mammamiradio.core.config import (
     MODEL_REGISTRY_FILENAME,
     PACING_BOUNDS,
     ModelsSection,
+    StationConfig,
     load_model_registry,
 )
 from mammamiradio.core.first_listen import (
@@ -9125,7 +9126,10 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
         if block == "no_ai_key":
             return {
                 "ok": False,
-                "error": "The hosts need an AI key to write an ad. Add one in Motore, then tap Ad break again.",
+                "error": (
+                    "The hosts need a working AI key to write an ad. Add or check it in Motore, "
+                    "then tap Ad break again."
+                ),
             }
         if block == "no_ad_brands":
             return {
@@ -12554,6 +12558,14 @@ async def public_status(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers=headers)
 
 
+def _ad_programme_block(config: StationConfig) -> str | None:
+    """Name what stops the station airing a real advertisement, or ``None``."""
+
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    return ad_programme_block(config)
+
+
 @router.get("/status")
 async def status(
     request: Request,
@@ -12656,6 +12668,10 @@ async def status(
                 "ad_spots_per_break": config.pacing.ad_spots_per_break,
                 "songs_since_banter": state.songs_since_banter,
                 "songs_since_ad": state.songs_since_ad,
+                # Why ads cannot air, or None. While set, the owed break is held
+                # at the threshold, and the counter alone would read "— next"
+                # forever; the admin shows this reason instead.
+                "ad_block": _ad_programme_block(config),
             },
             "consumption": {
                 "api_calls": state.api_calls,

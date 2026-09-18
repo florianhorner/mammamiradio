@@ -4145,7 +4145,9 @@ def ad_programme_block(config: StationConfig) -> AdProgrammeBlock | None:
     placeholder.
     """
 
-    if not config.ads.brands:
+    # A brand that fails its voice-cast check never airs (``safe_brands`` in
+    # ``hosts/ad_creative.py``), so a list of only those is as empty as no list.
+    if not any(brand.cast_eligible for brand in config.ads.brands):
         return "no_ad_brands"
     if not _sw.has_script_llm(config):
         return "no_ai_key"
@@ -4174,6 +4176,29 @@ def next_segment_type_for(state: StationState, config: StationConfig) -> Segment
     if not state.ad_programme_available:
         state.songs_since_ad = min(state.songs_since_ad, config.pacing.songs_between_ads)
     return next_segment_type(state, config.pacing)
+
+
+def _drop_unmakeable_forced_ad(state: StationState, config: StationConfig) -> bool:
+    """Drop a forced ad the station cannot make before any branch consumes it.
+
+    ``/api/trigger`` refuses such an ad, but a force can be armed before a key is
+    cleared, and every forced ad passes through here on its way to render.
+    Rendering it would air "<brand>. <tagline>" as an advertisement. The force is
+    dropped, the one-at-a-time guard it held is released, and an operator pick
+    it had displaced is restored, the way the forced branch does. Capability is
+    checked live, not read from the per-tick flag, because awaits separate them.
+    """
+
+    if state.force_next is not SegmentType.AD or ad_programme_available(config):
+        return False
+    state.clear_force_next()
+    displaced_operator_pick = state.operator_force_pending
+    if displaced_operator_pick is SegmentType.AD:
+        state.operator_force_pending = None
+    elif displaced_operator_pick is not None:
+        state.set_force_next(displaced_operator_pick)
+    logger.info("Dropped a forced ad: the station cannot write one right now")
+    return True
 
 
 def _queued_predecessor_starter_id(queue: asyncio.Queue[Segment]) -> str:
@@ -6214,6 +6239,10 @@ async def _run_producer_inner(
 
     while True:
         boundary_audible_epoch = state.audible_playback_epoch
+        # The producer idles with a full queue or no listeners, sometimes for
+        # minutes. Refreshing here, not only at a pacing decision, keeps the
+        # schedule preview honest after an AI key is saved or cleared mid-session.
+        state.ad_programme_available = ad_programme_available(config)
 
         def _recovery_needed(admitting: Segment | None = None, *, since_epoch: int = boundary_audible_epoch) -> bool:
             return not state.session_stopped and not _recovery_runway_owned(
@@ -6426,6 +6455,7 @@ async def _run_producer_inner(
         # its request-owned handoff. Promote the oldest retry before arming the
         # next music cycle so a newer request cannot strand the earlier promise.
         state.promote_listener_request_retry_handoff()
+        _drop_unmakeable_forced_ad(state, config)
         # A failed promised-song render retains its request-owned handoff. Arm
         # the retry at the cycle boundary, where consuming the force and later
         # queue admission cannot erase a newer operator directive mid-render.

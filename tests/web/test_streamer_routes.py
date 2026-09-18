@@ -6856,12 +6856,32 @@ async def test_a_paused_station_is_named_before_a_missing_key():
 @pytest.mark.asyncio
 async def test_banter_and_news_triggers_are_unaffected_without_a_key():
     """Only the ad needs a writer that is absent; the other picks have fallbacks that are real."""
-    app = _keyless_ad_app()
+    for picked in ("banter", "news_flash"):
+        app = _keyless_ad_app()
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/trigger", json={"type": picked})
+
+        assert response.json() == {"ok": True, "triggered": picked}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "brands", "expected"),
+    [(True, True, None), (False, True, "no_ai_key"), (True, False, "no_ad_brands")],
+)
+async def test_status_names_why_ads_cannot_air(key, brands, expected):
+    """The admin replaces the held "N/M — next" counter with this reason."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key" if key else ""
+    app.state.config.openai_api_key = ""
+    if not brands:
+        app.state.config.ads.brands = []
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/trigger", json={"type": "banter"})
+        body = (await client.get("/status")).json()
 
-    assert response.json() == {"ok": True, "triggered": "banter"}
+    assert body["pacing"]["ad_block"] == expected
 
 
 @pytest.mark.asyncio
