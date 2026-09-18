@@ -613,3 +613,76 @@ def test_encoder_delay_and_padding_are_trimmed_like_ffprobe_does(tmp_path):
     path.write_bytes(_mp3_bytes(30.0, gapless=(576, 1000)))
     expected = (round(30.0 / _MP3_FRAME_SECONDS) * 1152 - 1576) / 44100
     assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(expected)
+
+
+def _mpeg2_mono_frame(payload=b""):
+    """One MPEG-2 Layer III frame: 64 kbps, 22.05 kHz, mono, 208 bytes."""
+    return b"\xff\xf3\x80\xc0" + payload.ljust(204, b"\x00")
+
+
+def _mpeg25_mono_frame():
+    """One MPEG-2.5 Layer III frame: 8 kbps, 8 kHz, mono, 72 bytes."""
+    return b"\xff\xe3\x18\xc0" + b"\x00" * 68
+
+
+def test_mpeg2_mono_frames_are_measured_with_their_own_tables(tmp_path):
+    path = tmp_path / "spot.mp3"
+    info = b"\x00" * 9 + b"Info" + b"\x00\x00\x00\x01" + b"\x00" * 4 + b"Lavc61.19" + b"\x00" * 12
+    info += ((100 << 12) | 200).to_bytes(3, "big")
+    path.write_bytes(_mpeg2_mono_frame(info) + _mpeg2_mono_frame() * 10)
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx((10 * 576 - 300) / 22050)
+
+
+def test_mpeg25_frames_are_measured_with_their_own_tables(tmp_path):
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(_mpeg25_mono_frame() * 3)
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(3 * 576 / 8000)
+
+
+def test_frames_that_change_version_or_sample_rate_are_refused(tmp_path):
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(_mpeg2_mono_frame() * 10 + _mpeg25_mono_frame() * 3)
+    with pytest.raises(ValueError, match="changes MPEG version or sample rate"):
+        spoken_assets._mp3_duration_seconds(path)
+
+
+def test_audio_that_happens_to_spell_tag_is_not_cut_as_id3v1(tmp_path):
+    audio = bytearray(_mp3_bytes(30.0))
+    audio[-128:-125] = b"TAG"
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(bytes(audio))
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(
+        round(30.0 / _MP3_FRAME_SECONDS) * _MP3_FRAME_SECONDS
+    )
+
+
+def test_every_xing_field_shifts_the_lame_tag_it_precedes(tmp_path):
+    info = b"\x00" * 32 + b"Xing" + b"\x00\x00\x00\x0f" + b"\x00" * (4 + 4 + 100 + 4)
+    info += b"LAME3.100" + b"\x00" * 12 + ((576 << 12) | 1000).to_bytes(3, "big")
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(_mp3_frame(info) + _mp3_bytes(30.0))
+    expected = (round(30.0 / _MP3_FRAME_SECONDS) * 1152 - 1576) / 44100
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(expected)
+
+
+def test_an_id3v2_footer_is_skipped(tmp_path):
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(b"ID3\x04\x00\x10\x00\x00\x00\x02" + b"\x00" * 2 + b"3DI" + b"\x00" * 7 + _mp3_bytes(30.0))
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(
+        round(30.0 / _MP3_FRAME_SECONDS) * _MP3_FRAME_SECONDS
+    )
+
+
+@pytest.mark.parametrize("tail", [b"\xff", b"\xff\xfb", b"\xff\xfb\x90"])
+def test_a_partial_frame_header_at_the_end_is_refused(tmp_path, tail):
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(_mp3_bytes(30.0) + tail)
+    with pytest.raises(ValueError, match="trailing bytes"):
+        spoken_assets._mp3_duration_seconds(path)
+
+
+def test_a_trim_longer_than_the_audio_leaves_no_audio(tmp_path):
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(_mp3_bytes(0.05, gapless=(4000, 4000)))
+    with pytest.raises(ValueError, match="no audio frames"):
+        spoken_assets._mp3_duration_seconds(path)

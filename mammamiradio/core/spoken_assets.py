@@ -408,7 +408,8 @@ def _mp3_duration_seconds(path: Path) -> float:
 
     Stdlib-only so the release gate can run it under macOS's Python 3.9. The
     walk is strict: after an optional ID3v2 tag, every byte must belong to a
-    frame, apart from one trailing 128-byte ID3v1 tag. A truncated or padded
+    frame, apart from one trailing 128-byte ID3v1 tag, and every frame must
+    share the first frame's MPEG version and sample rate. A truncated or padded
     file is refused rather than estimated. A Xing/Info header frame carries no
     audio and is not counted.
     """
@@ -417,9 +418,6 @@ def _mp3_duration_seconds(path: Path) -> float:
         data = handle.read(PACKAGED_AD_MAX_BYTES + 1)
     if len(data) > PACKAGED_AD_MAX_BYTES:
         raise ValueError(f"file exceeds {PACKAGED_AD_MAX_BYTES} bytes")
-    end = len(data)
-    if end >= 128 and data[end - 128 : end - 125] == b"TAG":
-        end -= 128
     offset = 0
     if data[:3] == b"ID3" and len(data) >= 10:
         size_bytes = data[6:10]
@@ -429,11 +427,22 @@ def _mp3_duration_seconds(path: Path) -> float:
         for byte in size_bytes:
             size = (size << 7) | byte
         offset = 10 + size + (10 if data[5] & 0x10 else 0)
+    try:
+        return _walk_mp3_frames(data, offset, len(data))
+    except ValueError:
+        # "TAG" 128 bytes from the end is only an ID3v1 tag if the frames stop
+        # exactly there; audio bytes that happen to spell it must not be cut.
+        if len(data) - offset < 128 or data[-128:-125] != b"TAG":
+            raise
+        return _walk_mp3_frames(data, offset, len(data) - 128)
 
+
+def _walk_mp3_frames(data: bytes, offset: int, end: int) -> float:
     seconds = 0.0
     frames = 0
     trim_samples = 0
     trim_rate = 0
+    stream: tuple[int, int] | None = None
     while offset < end:
         if end - offset < 4:
             raise ValueError(f"trailing bytes at offset {offset}")
@@ -451,6 +460,10 @@ def _mp3_duration_seconds(path: Path) -> float:
             raise ValueError(f"no Layer III frame at offset {offset}")
         bitrate = _MP3_BITRATES_KBPS[version][bitrate_index] * 1000
         sample_rate = _MP3_SAMPLE_RATES_HZ[version][rate_index]
+        if stream is None:
+            stream = (version, sample_rate)
+        elif stream != (version, sample_rate):
+            raise ValueError(f"frame at offset {offset} changes MPEG version or sample rate")
         samples = 1152 if version == _MPEG1 else 576
         length = samples // 8 * bitrate // sample_rate + ((header >> 9) & 1)
         if offset + length > end:
