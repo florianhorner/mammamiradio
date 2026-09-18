@@ -4131,11 +4131,7 @@ AdProgrammeBlock = Literal["no_ad_brands", "no_ai_key"]
 
 
 def ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
-    """Name what stops the station making a real advertisement, or ``None``.
-
-    Brands come first: with none configured there is nothing to advertise, and
-    adding a key would not help. Otherwise a keyed, ad-routed model is required.
-    """
+    """Name what stops the station making a real advertisement, or ``None``."""
 
     # A brand that fails its voice-cast check never airs (``safe_brands`` in
     # ``hosts/ad_creative.py``), so a list of only those is as empty as no list.
@@ -4164,16 +4160,7 @@ def ad_programme_available(config: StationConfig, state: StationState | None = N
 
 
 def next_segment_type_for(state: StationState, config: StationConfig) -> SegmentType:
-    """Resolve what can actually air, then choose the next segment.
-
-    Refreshed per decision because an operator can add an AI key from Motore
-    mid-session, and the owed ad break must fire then rather than at restart.
-
-    While ads are unavailable the owed break is held at the pacing threshold
-    instead of growing without limit. It still fires the moment a real ad is
-    possible, and the admin's "songs since last ad" counter stays bounded rather
-    than climbing past a hundred on a station that simply has no key.
-    """
+    """Choose what can air now, holding an unavailable ad at its due threshold."""
 
     state.ad_programme_available = ad_programme_available(config, state)
     if not state.ad_programme_available:
@@ -4182,14 +4169,7 @@ def next_segment_type_for(state: StationState, config: StationConfig) -> Segment
 
 
 def _drop_unmakeable_forced_ad(state: StationState, config: StationConfig) -> bool:
-    """Drop a forced ad the station cannot make before any branch consumes it.
-
-    ``/api/trigger`` refuses such an ad, but a force can be armed before a key is
-    cleared, and every forced ad passes through here on its way to render.
-    The force is dropped, the one-at-a-time guard it held is released, and an operator pick
-    it had displaced is restored, the way the forced branch does. Capability is
-    checked live, not read from the per-tick flag, because awaits separate them.
-    """
+    """Drop a forced ad the station cannot make before any branch consumes it."""
 
     if state.force_next is not SegmentType.AD or ad_programme_available(config, state):
         return False
@@ -4527,11 +4507,8 @@ async def prewarm_first_segment(
     alone cannot guarantee that, because work can outlive its awaiter — the
     fence at the admission boundary is the guarantee.
     """
-    # Settle ad capability before anything can return early. The schedule
-    # preview is served from the moment the app starts, while a First Listen
-    # install holds the producer's first pacing decision for its opening. Prewarm
-    # runs on every boot path, stopped and empty ones included, so this is the
-    # earliest point a preview can stop promising an ad the station cannot make.
+    # Settle capability before early returns so the first schedule preview
+    # cannot promise an ad the station cannot make.
     state.ad_programme_available = ad_programme_available(config, state)
     if not state.playlist:
         return False
@@ -6088,6 +6065,7 @@ async def _run_producer_inner(
     _was_stopped = state.session_stopped  # True when transitioning out of a stopped state
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
+    _defer_natural_ad_until_music = False
     _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
     _ha_tasks: set[asyncio.Task[Any]] = set()
 
@@ -6505,6 +6483,9 @@ async def _run_producer_inner(
         elif _release_campaign_should_force_first_banter(state):
             seg_type = SegmentType.BANTER
             logger.info("Release campaign first airing: forcing a safe banter slot")
+        elif _defer_natural_ad_until_music:
+            seg_type = SegmentType.MUSIC
+            logger.info("Deferring failed ad retry until real music lands")
         else:
             seg_type = next_segment_type_for(state, config)
             natural_banter_candidate = seg_type == SegmentType.BANTER
@@ -8999,6 +8980,8 @@ async def _run_producer_inner(
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             if isinstance(e, TTSUnavailableError):
                 _reset_due_counters_after_tts_failure(state, seg_type)
+            if isinstance(e, _sw.AdGenerationUnavailableError):
+                _defer_natural_ad_until_music = True
             _unlink_render_scratch(render_failure_scratch)
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # A recovery segment must not inherit queue/playback accounting from
@@ -9421,6 +9404,8 @@ async def _run_producer_inner(
             # ``changed_at`` need to see this even without a segment transition.
             state.last_state_change_at = time.time()
             if "error" not in segment.metadata and not segment.metadata.get("rescue"):
+                if segment.type is SegmentType.MUSIC:
+                    _defer_natural_ad_until_music = False
                 if success_callback:
                     success_callback()
                 if (

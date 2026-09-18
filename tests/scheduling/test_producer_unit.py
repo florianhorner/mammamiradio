@@ -12114,6 +12114,7 @@ async def test_key_cleared_after_ad_selection_queues_recovery_instead_of_placeho
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
     config.pacing.ad_spots_per_break = 1
+    config.pacing.lookahead_segments = 2
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     host = config.hosts[0]
     recovery = Segment(
@@ -12142,7 +12143,7 @@ async def test_key_cleared_after_ad_selection_queues_recovery_instead_of_placeho
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
-        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_select_then_clear_key),
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_select_then_clear_key) as select_spot,
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
@@ -12159,8 +12160,11 @@ async def test_key_cleared_after_ad_selection_queues_recovery_instead_of_placeho
         ),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(
+            f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=RuntimeError("offline")
+        ) as render_music,
     ):
-        await _run_until_queued(queue, state, config)
+        await _run_until_queue_depth(queue, state, config, 2)
 
     queued = queue.get_nowait()
     assert queued is recovery
@@ -12168,6 +12172,8 @@ async def test_key_cleared_after_ad_selection_queues_recovery_instead_of_placeho
     synthesize_ad.assert_not_awaited()
     assert state.last_ad_script == {}
     assert state.songs_since_ad == 7, "the unserved natural break must remain owed"
+    select_spot.assert_called_once()
+    render_music.assert_awaited_once()
 
 
 @pytest.mark.asyncio
