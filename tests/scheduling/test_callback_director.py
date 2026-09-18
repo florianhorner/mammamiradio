@@ -279,6 +279,7 @@ async def test_ad_callback_lands_retires_gag(tmp_path):
         spot_index=None,
         callback_gag=None,
         submission_guard=None,
+        require_generated=False,
     ):
         if callback_gag:
             state_arg.pending_callback_landed = True
@@ -321,6 +322,7 @@ async def test_ad_callback_ignored_does_not_retire(tmp_path):
         spot_index=None,
         callback_gag=None,
         submission_guard=None,
+        require_generated=False,
     ):
         if callback_gag:
             state_arg.pending_callback_landed = False
