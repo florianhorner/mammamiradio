@@ -686,3 +686,20 @@ def test_a_trim_longer_than_the_audio_leaves_no_audio(tmp_path):
     path.write_bytes(_mp3_bytes(0.05, gapless=(4000, 4000)))
     with pytest.raises(ValueError, match="no audio frames"):
         spoken_assets._mp3_duration_seconds(path)
+
+
+def test_a_crc_flagged_info_frame_is_read_where_lame_writes_it(tmp_path):
+    """LAME ``-p`` sets the CRC bit on its Info frame but writes no CRC gap.
+
+    The tag sits right after the header and side information, and ffmpeg reads
+    it there too. Shifting two bytes for the CRC misses the tag, counts the
+    Info frame as audio and skips the gapless trim, so a real encode reads
+    about 0.07s long.
+    """
+    info = b"\x00" * 32 + b"Info" + b"\x00\x00\x00\x01" + b"\x00" * 4
+    info += b"LAME3.100" + b"\x00" * 12 + ((576 << 12) | 1000).to_bytes(3, "big")
+    crc_flagged_frame = b"\xff\xfa\x90\x00" + info.ljust(413, b"\x00")
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(crc_flagged_frame + _mp3_bytes(30.0))
+    expected = (round(30.0 / _MP3_FRAME_SECONDS) * 1152 - 1576) / 44100
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(expected)
