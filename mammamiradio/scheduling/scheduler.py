@@ -28,7 +28,7 @@ def _reason_for_decision(reason_key: str, *, threshold: int = 0) -> str:
         # for a key they already have.
         "ad_owed_no_programme": (
             "No finished advertisement is ready, so the music keeps playing. "
-            "Ads need an AI key in Motore and at least one ad brand; "
+            "Ads need a working AI key in Motore and at least one ad brand; "
             "the break airs as soon as both are in place."
         ),
     }

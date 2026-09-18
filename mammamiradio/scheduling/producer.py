@@ -4130,7 +4130,7 @@ def _pick_canned_clip(
 AdProgrammeBlock = Literal["no_ad_brands", "no_ai_key"]
 
 
-def ad_programme_block(config: StationConfig) -> AdProgrammeBlock | None:
+def ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
     """Name what stops the station making a real advertisement, or ``None``.
 
     Two separate things are needed, and the fix differs for each, so callers that
@@ -4149,15 +4149,33 @@ def ad_programme_block(config: StationConfig) -> AdProgrammeBlock | None:
     # ``hosts/ad_creative.py``), so a list of only those is as empty as no list.
     if not any(brand.cast_eligible for brand in config.ads.brands):
         return "no_ad_brands"
-    if not _sw.has_script_llm(config):
+    if not _sw.has_script_llm(config) or (state is not None and _every_writing_key_refused(config, state)):
         return "no_ai_key"
     return None
 
 
-def ad_programme_available(config: StationConfig) -> bool:
+def _every_writing_key_refused(config: StationConfig, state: StationState) -> bool:
+    """Whether each configured writing key has been definitively refused by its provider.
+
+    A refused key is as unable to write an ad as a missing one: ``write_ad`` fails
+    and airs the brand fallback. The verdict is sticky, set only on an outright
+    401 and reset to ``"unverified"`` when that key is replaced, so treating it as
+    no key cannot put the scheduler into a retry loop. A quota, rate-limit or
+    network failure never sets it, and those still reach the ad writer.
+    """
+
+    statuses = []
+    if config.anthropic_api_key:
+        statuses.append(state.anthropic_key_status)
+    if config.openai_api_key:
+        statuses.append(state.openai_key_status)
+    return bool(statuses) and all(status == "rejected" for status in statuses)
+
+
+def ad_programme_available(config: StationConfig, state: StationState | None = None) -> bool:
     """Whether the station can currently produce a real advertisement."""
 
-    return ad_programme_block(config) is None
+    return ad_programme_block(config, state) is None
 
 
 def next_segment_type_for(state: StationState, config: StationConfig) -> SegmentType:
@@ -4172,7 +4190,7 @@ def next_segment_type_for(state: StationState, config: StationConfig) -> Segment
     than climbing past a hundred on a station that simply has no key.
     """
 
-    state.ad_programme_available = ad_programme_available(config)
+    state.ad_programme_available = ad_programme_available(config, state)
     if not state.ad_programme_available:
         state.songs_since_ad = min(state.songs_since_ad, config.pacing.songs_between_ads)
     return next_segment_type(state, config.pacing)
@@ -4189,7 +4207,7 @@ def _drop_unmakeable_forced_ad(state: StationState, config: StationConfig) -> bo
     checked live, not read from the per-tick flag, because awaits separate them.
     """
 
-    if state.force_next is not SegmentType.AD or ad_programme_available(config):
+    if state.force_next is not SegmentType.AD or ad_programme_available(config, state):
         return False
     state.clear_force_next()
     displaced_operator_pick = state.operator_force_pending
@@ -4530,7 +4548,7 @@ async def prewarm_first_segment(
     # install holds the producer's first pacing decision for its opening. Prewarm
     # runs on every boot path, stopped and empty ones included, so this is the
     # earliest point a preview can stop promising an ad the station cannot make.
-    state.ad_programme_available = ad_programme_available(config)
+    state.ad_programme_available = ad_programme_available(config, state)
     if not state.playlist:
         return False
     if state.session_stopped:
@@ -6242,7 +6260,7 @@ async def _run_producer_inner(
         # The producer idles with a full queue or no listeners, sometimes for
         # minutes. Refreshing here, not only at a pacing decision, keeps the
         # schedule preview honest after an AI key is saved or cleared mid-session.
-        state.ad_programme_available = ad_programme_available(config)
+        state.ad_programme_available = ad_programme_available(config, state)
 
         def _recovery_needed(admitting: Segment | None = None, *, since_epoch: int = boundary_audible_epoch) -> bool:
             return not state.session_stopped and not _recovery_runway_owned(

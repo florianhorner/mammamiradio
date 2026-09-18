@@ -6827,6 +6827,24 @@ async def test_ad_break_button_names_brands_when_brands_are_what_is_missing():
 
 
 @pytest.mark.asyncio
+async def test_ad_break_button_refuses_when_the_provider_refused_the_key():
+    """A saved key the provider turned down writes no ad; the refusal says to check it."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    app.state.config.openai_api_key = ""
+    app.state.station_state.anthropic_key_status = "rejected"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        trigger = (await client.post("/api/trigger", json={"type": "ad"})).json()
+        status = (await client.get("/status")).json()
+
+    assert trigger["ok"] is False
+    assert "check it in motore" in trigger["error"].lower()
+    assert status["pacing"]["ad_block"] == "no_ai_key"
+    assert app.state.station_state.force_next is None
+
+
+@pytest.mark.asyncio
 async def test_a_missing_key_is_named_even_while_another_pick_is_pending():
     """Waiting cannot fix a missing key, so "tap again in a few seconds" would be wrong."""
     app = _keyless_ad_app(operator_force_pending=SegmentType.BANTER)

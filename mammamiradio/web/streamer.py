@@ -9122,7 +9122,7 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
     if valid[seg_type] is SegmentType.AD:
         from mammamiradio.scheduling.producer import ad_programme_block
 
-        block = ad_programme_block(request.app.state.config)
+        block = ad_programme_block(request.app.state.config, state)
         if block == "no_ai_key":
             return {
                 "ok": False,
@@ -12558,12 +12558,12 @@ async def public_status(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers=headers)
 
 
-def _ad_programme_block(config: StationConfig) -> str | None:
+def _ad_programme_block(config: StationConfig, state: StationState) -> str | None:
     """Name what stops the station airing a real advertisement, or ``None``."""
 
     from mammamiradio.scheduling.producer import ad_programme_block
 
-    return ad_programme_block(config)
+    return ad_programme_block(config, state)
 
 
 @router.get("/status")
@@ -12671,7 +12671,7 @@ async def status(
                 # Why ads cannot air, or None. While set, the owed break is held
                 # at the threshold, and the counter alone would read "— next"
                 # forever; the admin shows this reason instead.
-                "ad_block": _ad_programme_block(config),
+                "ad_block": _ad_programme_block(config, state),
             },
             "consumption": {
                 "api_calls": state.api_calls,

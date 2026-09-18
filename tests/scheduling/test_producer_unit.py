@@ -12127,3 +12127,48 @@ async def test_an_idle_producer_still_keeps_ad_capability_current():
 
     assert state.ad_programme_available is False
     assert queue.empty(), "an idle producer must not have produced anything"
+
+
+def test_a_key_the_provider_refused_counts_as_no_key():
+    """``write_ad`` fails on a refused key and airs the brand fallback."""
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    config = _ad_capable_config(key=True, brands=True)
+    state = _make_state()
+    state.anthropic_key_status = "rejected"
+    assert ad_programme_block(config, state) == "no_ai_key"
+
+
+def test_a_refused_key_does_not_block_ads_while_another_key_works():
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    config = _ad_capable_config(key=True, brands=True)
+    config.openai_api_key = "test-key"
+    state = _make_state()
+    state.anthropic_key_status = "rejected"
+    state.openai_key_status = "unverified"
+    assert ad_programme_block(config, state) is None
+
+
+@pytest.mark.parametrize("status", ["unverified", "valid"])
+def test_only_a_definitive_refusal_blocks_ads(status):
+    """Quota, rate-limit and network trouble leave the verdict unverified, not refused."""
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    config = _ad_capable_config(key=True, brands=True)
+    state = _make_state()
+    state.anthropic_key_status = status
+    assert ad_programme_block(config, state) is None
+
+
+def test_a_forced_ad_on_a_refused_key_is_dropped():
+    from mammamiradio.scheduling.producer import _drop_unmakeable_forced_ad
+
+    config = _ad_capable_config(key=True, brands=True)
+    state = _make_state()
+    state.anthropic_key_status = "rejected"
+    state.set_force_next(SegmentType.AD)
+    state.operator_force_pending = SegmentType.AD
+
+    assert _drop_unmakeable_forced_ad(state, config) is True
+    assert state.operator_force_pending is None
