@@ -8319,12 +8319,20 @@ async function savePacingField(field,value,{silent=false}={}){
   });
   el.addEventListener('change',()=>savePacingField(PACE_FIELDS[n],el.value));
 });
+// While ads cannot air, the owed break is held at the threshold, so the plain
+// counter would promise "— next" forever. Say why instead, with the fix.
+const AD_PAUSED_COPY={
+  no_ai_key:'<strong>Ads paused</strong> — the hosts need a working AI key to write one. Add or check it in Motore.',
+  no_ad_route:'<strong>Ads paused</strong> — no ad model route resolves. Check the active profile in model_registry.toml, then restart the station.',
+  no_ad_brands:'<strong>Ads paused</strong> — none of the ad brands can air. Check the brands and their campaign voices in radio.toml, then restart the station.',
+};
 function updatePaceCounters(pacing){
   if(!pacing)return;
   const b=pacing.songs_since_banter||0,bMax=pacing.songs_between_banter||2;
   const a=pacing.songs_since_ad||0,aMax=pacing.songs_between_ads||4;
   document.getElementById('pcBanter').innerHTML='<strong>'+b+'/'+bMax+'</strong> tracks since last banter'+(b>=bMax?' — next':'');
-  document.getElementById('pcAds').innerHTML='<strong>'+a+'/'+aMax+'</strong> tracks since last ad'+(a>=aMax?' — next':'');
+  const adPaused=AD_PAUSED_COPY[pacing.ad_block];
+  document.getElementById('pcAds').innerHTML=adPaused||('<strong>'+a+'/'+aMax+'</strong> tracks since last ad'+(a>=aMax?' — next':''));
   const pacingMeta=document.getElementById('pacingMeta');
   if(pacingMeta)pacingMeta.textContent='Banter every '+bMax+' tracks';
 }

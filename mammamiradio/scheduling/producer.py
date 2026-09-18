@@ -4127,6 +4127,66 @@ def _pick_canned_clip(
     return pick
 
 
+AdProgrammeBlock = Literal["no_ad_brands", "no_ad_route", "no_ai_key"]
+
+
+def ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
+    """Name what stops the station making a real advertisement, or ``None``."""
+
+    # A brand that fails its voice-cast check never airs (``safe_brands`` in
+    # ``hosts/ad_creative.py``), so a list of only those is as empty as no list.
+    if not any(brand.cast_eligible for brand in config.ads.brands):
+        return "no_ad_brands"
+    if not config.anthropic_api_key and not config.openai_api_key:
+        return "no_ai_key"
+    if not _sw.has_script_llm(config, caller="ad"):
+        return "no_ad_route"
+    if state is not None and _every_writing_key_refused(config, state):
+        return "no_ai_key"
+    return None
+
+
+def _every_writing_key_refused(config: StationConfig, state: StationState) -> bool:
+    """Whether every keyed provider with an ad route was definitively refused."""
+
+    statuses = []
+    if config.anthropic_api_key and _sw.resolve_model(config.models, "ad", "anthropic"):
+        statuses.append(state.anthropic_key_status)
+    if config.openai_api_key and _sw.resolve_model(config.models, "ad", "openai"):
+        statuses.append(state.openai_key_status)
+    return bool(statuses) and all(status == "rejected" for status in statuses)
+
+
+def ad_programme_available(config: StationConfig, state: StationState | None = None) -> bool:
+    """Whether the station can currently produce a real advertisement."""
+
+    return ad_programme_block(config, state) is None
+
+
+def next_segment_type_for(state: StationState, config: StationConfig) -> SegmentType:
+    """Choose what can air now, holding an unavailable ad at its due threshold."""
+
+    state.ad_programme_available = ad_programme_available(config, state)
+    if not state.ad_programme_available:
+        state.songs_since_ad = min(state.songs_since_ad, config.pacing.songs_between_ads)
+    return next_segment_type(state, config.pacing)
+
+
+def _drop_unmakeable_forced_ad(state: StationState, config: StationConfig) -> bool:
+    """Drop a forced ad the station cannot make before any branch consumes it."""
+
+    if state.force_next is not SegmentType.AD or ad_programme_available(config, state):
+        return False
+    state.clear_force_next()
+    displaced_operator_pick = state.operator_force_pending
+    if displaced_operator_pick is SegmentType.AD:
+        state.operator_force_pending = None
+    elif displaced_operator_pick is not None:
+        state.set_force_next(displaced_operator_pick)
+    logger.info("Dropped a forced ad: the station cannot write one right now")
+    return True
+
+
 def _queued_predecessor_starter_id(queue: asyncio.Queue[Segment]) -> str:
     """Return a proven adjacent starter id, or empty when adjacency is uncertain."""
 
@@ -4451,6 +4511,9 @@ async def prewarm_first_segment(
     alone cannot guarantee that, because work can outlive its awaiter — the
     fence at the admission boundary is the guarantee.
     """
+    # Settle capability before early returns so the first schedule preview
+    # cannot promise an ad the station cannot make.
+    state.ad_programme_available = ad_programme_available(config, state)
     if not state.playlist:
         return False
     if state.session_stopped:
@@ -6006,6 +6069,7 @@ async def _run_producer_inner(
     _was_stopped = state.session_stopped  # True when transitioning out of a stopped state
     _prefetch_task: asyncio.Task[None] | None = None  # background norm prefetch for next track
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
+    _defer_natural_ad_until_music = False
     _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
     _ha_tasks: set[asyncio.Task[Any]] = set()
 
@@ -6159,6 +6223,10 @@ async def _run_producer_inner(
 
     while True:
         boundary_audible_epoch = state.audible_playback_epoch
+        # The producer idles with a full queue or no listeners, sometimes for
+        # minutes. Refreshing here, not only at a pacing decision, keeps the
+        # schedule preview honest after an AI key is saved or cleared mid-session.
+        state.ad_programme_available = ad_programme_available(config, state)
 
         def _recovery_needed(admitting: Segment | None = None, *, since_epoch: int = boundary_audible_epoch) -> bool:
             return not state.session_stopped and not _recovery_runway_owned(
@@ -6371,6 +6439,7 @@ async def _run_producer_inner(
         # its request-owned handoff. Promote the oldest retry before arming the
         # next music cycle so a newer request cannot strand the earlier promise.
         state.promote_listener_request_retry_handoff()
+        _drop_unmakeable_forced_ad(state, config)
         # A failed promised-song render retains its request-owned handoff. Arm
         # the retry at the cycle boundary, where consuming the force and later
         # queue admission cannot erase a newer operator directive mid-render.
@@ -6418,8 +6487,11 @@ async def _run_producer_inner(
         elif _release_campaign_should_force_first_banter(state):
             seg_type = SegmentType.BANTER
             logger.info("Release campaign first airing: forcing a safe banter slot")
+        elif _defer_natural_ad_until_music:
+            seg_type = SegmentType.MUSIC
+            logger.info("Deferring failed ad retry until real music lands")
         else:
-            seg_type = next_segment_type(state, config.pacing)
+            seg_type = next_segment_type_for(state, config)
             natural_banter_candidate = seg_type == SegmentType.BANTER
             if seg_type in _RUNWAY_GOVERNED_TYPES:
                 should_defer, buffered = _should_defer_for_runway(queue, config.pacing.lookahead_segments)
@@ -8608,6 +8680,7 @@ async def _run_producer_inner(
                                     spot_index=i,
                                     callback_gag=(_callback_gag_text if i == 0 else None),
                                     submission_guard=_home_submission_guard,
+                                    require_generated=True,
                                 )
                                 for i, (brand, af, sn, vm, _recipe) in enumerate(_spot_params)
                             )
@@ -8911,6 +8984,8 @@ async def _run_producer_inner(
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
             if isinstance(e, TTSUnavailableError):
                 _reset_due_counters_after_tts_failure(state, seg_type)
+            if isinstance(e, _sw.AdGenerationUnavailableError):
+                _defer_natural_ad_until_music = True
             _unlink_render_scratch(render_failure_scratch)
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # A recovery segment must not inherit queue/playback accounting from
@@ -9333,6 +9408,8 @@ async def _run_producer_inner(
             # ``changed_at`` need to see this even without a segment transition.
             state.last_state_change_at = time.time()
             if "error" not in segment.metadata and not segment.metadata.get("rescue"):
+                if segment.type is SegmentType.MUSIC:
+                    _defer_natural_ad_until_music = False
                 if success_callback:
                     success_callback()
                 if (

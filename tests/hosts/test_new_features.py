@@ -424,8 +424,13 @@ async def test_trigger_endpoint_banter():
 
 @pytest.mark.asyncio
 async def test_trigger_endpoint_ad():
-    """POST /api/trigger with type=ad should work."""
+    """POST /api/trigger with type=ad should work on a station that can write an ad.
+
+    Without an AI key the route refuses instead; that path is covered in
+    tests/web/test_streamer_routes.py.
+    """
     app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/trigger", json={"type": "ad"})

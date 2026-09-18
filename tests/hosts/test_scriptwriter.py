@@ -1862,6 +1862,34 @@ async def test_write_ad_normal_mode_fallback_after_all_italian_repair_is_english
 
 
 @pytest.mark.asyncio
+async def test_write_ad_require_generated_rejects_final_language_fallback(config, state):
+    config.super_italian_mode = False
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+    italian_response = {
+        "parts": [
+            {
+                "type": "voice",
+                "text": "Questa offerta arriva adesso e la casa respira piano mentre tutti restano qui.",
+            }
+        ],
+        "summary": "Rejected all-Italian ad",
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, italian_response],
+        ),
+        pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="FallbackBrand"),
+    ):
+        await write_ad(brand, voices, state, config, require_generated=True)
+
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 1)
+
+
+@pytest.mark.asyncio
 async def test_write_banter_has_no_connection_arrival_prompt(config, state):
     regulars = _regular_hosts(config)
     response_json = json.dumps(
@@ -5951,6 +5979,42 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_ad_require_generated_rejects_provider_fallback(config, state):
+    """The on-air producer contract must never turn a provider outage into an ad."""
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="FallbackBrand"),
+    ):
+        await write_ad(brand, voices, state, config, require_generated=True)
+
+
+@pytest.mark.asyncio
+async def test_write_ad_require_generated_rejects_unusable_output(config, state):
+    """Malformed provider output cannot fall back to a brand name or tagline."""
+    config.super_italian_mode = True
+    brand = AdBrand(name="SilentBrand", tagline="Silenzio è oro", category="luxury")
+    voices = {"default": AdVoice(name="Voce Tre", voice="it-IT-ElsaNeural", style="whispery")}
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value={"parts": [{"type": "pause", "duration": 0.5}]},
+        ),
+        pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="no usable voice copy"),
+    ):
+        await write_ad(brand, voices, state, config, require_generated=True)
+
+
+@pytest.mark.asyncio
 async def test_write_ad_no_llm_restores_legacy_attention_script(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
@@ -6169,6 +6233,9 @@ async def test_write_ad_replaces_partner_only_direct_campaign_output(config, sta
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
         result = await write_ad(brand, voices, state, config, ad_format=ad_format)
+        if ad_format == "duo_scene":
+            with pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="required spokesperson"):
+                await write_ad(brand, voices, state, config, ad_format=ad_format, require_generated=True)
 
     assert result.format == "classic_pitch"
     assert [part.role for part in result.parts if part.type == "voice"] == ["hammer"]
@@ -7680,6 +7747,11 @@ def test_has_script_llm_true_with_registry_false_when_registry_unavailable(confi
     config.openai_api_key = "openai-key"
     # Real registry loaded by the fixture resolves a route.
     assert has_script_llm(config) is True
+    for profile in config.models.profiles.values():
+        for provider in profile.values():
+            provider.pop("creative", None)
+    assert has_script_llm(config) is True
+    assert has_script_llm(config, caller="ad") is False
 
     # Registry unavailable — keys still set, but no route resolves.
     config.models = _empty_models()
@@ -8816,6 +8888,9 @@ async def test_pharma_canonical_disclaimer_wins_over_the_models_own(config, stat
         },
     ):
         result = await write_ad(brand, voices, state, config)
+        if only_disclaimer:
+            with pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="only fine print"):
+                await write_ad(brand, voices, state, config, require_generated=True)
 
     disclaimers = [p for p in result.parts if p.role == DISCLAIMER_ROLE]
     assert len(disclaimers) == 1, f"expected one disclaimer, got {[d.text for d in disclaimers]}"

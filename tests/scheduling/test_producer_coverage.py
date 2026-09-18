@@ -1040,6 +1040,9 @@ async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
         return None
 
     with (
+        # The AD render path is under test, so the station must be able to make an ad;
+        # without a key the producer now drops a forced ad before it renders.
+        patch(f"{PRODUCER_MODULE}.ad_programme_available", return_value=True),
         patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_no_safe_campaign) as select_spot,
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock) as write_ad,
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
@@ -1112,6 +1115,9 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     os.environ.pop("MAMMAMIRADIO_SKIP_QUALITY_GATE", None)
 
     with (
+        # The AD render path is under test, so the station must be able to make an ad;
+        # without a key the producer now drops a forced ad before it renders.
+        patch(f"{PRODUCER_MODULE}.ad_programme_available", return_value=True),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,

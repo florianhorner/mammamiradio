@@ -846,6 +846,9 @@ async def _run_ad_wrapper_failure(
             new_callable=AsyncMock,
             return_value=(host, "Pubblicita.", None),
         ),
+        # The AD render path is under test, so the station must be able to make an ad;
+        # without a key the producer now drops a forced ad before it renders.
+        patch(f"{PRODUCER_MODULE}.ad_programme_available", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=voice_side_effect),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_ad_voice),

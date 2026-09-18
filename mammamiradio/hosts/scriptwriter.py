@@ -112,6 +112,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class AdGenerationUnavailableError(RuntimeError):
+    """Raised when a complete, generated advertisement is unavailable."""
+
+
 # Reusable Anthropic client — avoids creating a new TCP connection per LLM call
 _anthropic_client: anthropic.AsyncAnthropic | None = None
 _anthropic_key: str = ""
@@ -862,9 +867,9 @@ def _get_openai_client(api_key: str):
     return _openai_client
 
 
-def has_script_llm(config: StationConfig) -> bool:
-    """Return whether a keyed provider also has a resolved script route."""
-    callers = tuple(config.models.routing) or ("banter",)
+def has_script_llm(config: StationConfig, caller: str | None = None) -> bool:
+    """Return whether a keyed provider has the requested or any script route."""
+    callers = (caller,) if caller else tuple(config.models.routing) or ("banter",)
     return any(
         (config.anthropic_api_key and resolve_model(config.models, caller, "anthropic"))
         or (config.openai_api_key and resolve_model(config.models, caller, "openai"))
@@ -4042,11 +4047,13 @@ async def write_ad(
     spot_index: int | None = None,
     callback_gag: str | None = None,
     submission_guard: Callable[[], bool] | None = None,
+    require_generated: bool = False,
 ) -> AdScript:
     """Generate a structured fictional ad script for one brand with role-based voices.
 
     ``callback_gag`` is an optional single verbal gag (chosen by the producer via
-    the verbal-gag ledger) to land cross-domain; None means no callback.
+    the verbal-gag ledger) to land cross-domain; None means no callback. The
+    on-air producer sets ``require_generated`` so compatibility copy cannot air.
     """
     sonic = sonic or SonicWorld()
     direct_primary_role = (
@@ -4054,7 +4061,9 @@ async def write_ad(
         if brand.campaign and isinstance(brand.campaign.spokesperson_role, str)
         else ""
     )
-    if not has_script_llm(config):
+    if not has_script_llm(config, caller="ad"):
+        if require_generated:
+            raise AdGenerationUnavailableError("No script-writing provider is configured for ads")
         return AdScript(
             brand=brand.name,
             parts=_ensure_attention_grabbing_ad_parts(
@@ -4304,6 +4313,8 @@ Return JSON:
         # else.
         used_owned_fallback = False
         if not any(p.type == "voice" and isinstance(p.text, str) and p.text.strip() for p in parts):
+            if require_generated:
+                raise AdGenerationUnavailableError(f"Generated ad for {brand.name} contained no usable voice copy")
             # The recovery value needs the same guarantee it is recovering: a blank
             # `text` key, or a brand whose tagline is blank in radio.toml, would
             # rebuild the identical silent part. Brand name is the last resort
@@ -4319,14 +4330,14 @@ Return JSON:
             for part in parts
         ):
             # A direct campaign must never become a partner-only ad because
-            # the model omitted its named character. Keep the recovery copy on
-            # the owned role and demote the format rather than silently airing
-            # a different campaign voice.
+            # the model omitted its named character.
             logger.warning(
-                "Generated ad for %s omitted required direct spokesperson role %s; using owned fallback",
+                "Generated ad for %s omitted required direct spokesperson role %s",
                 brand.name,
                 direct_primary_role,
             )
+            if require_generated:
+                raise AdGenerationUnavailableError(f"Generated ad for {brand.name} omitted its required spokesperson")
             parts = [
                 AdPart(
                     type="voice",
@@ -4377,7 +4388,10 @@ Return JSON:
                 )
             parts = [p for p in parts if p.role != DISCLAIMER_ROLE]
             if not any(p.type == "voice" and isinstance(p.text, str) and p.text.strip() for p in parts):
-                # Keep the brand audible if the model returned only fine print.
+                if require_generated:
+                    raise AdGenerationUnavailableError(
+                        f"Generated pharma ad for {brand.name} contained only fine print"
+                    )
                 parts.append(AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role))
                 used_owned_fallback = True
             parts.append(
@@ -4392,6 +4406,8 @@ Return JSON:
         voice_texts = [p.text for p in parts if p.type == "voice" and p.text]
         if not _normal_mode_language_ok(voice_texts, config):
             state.language_guard_failures += 1
+            if require_generated:
+                raise AdGenerationUnavailableError(f"Generated ad for {brand.name} failed the language check")
             logger.warning("Ad failed final Normal Mode language check; using deterministic fallback")
             fallback_parts = [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)]
             if brand.category == "pharma":
@@ -4417,8 +4433,12 @@ Return JSON:
             roles_used=sorted(roles_found),
         )
 
+    except AdGenerationUnavailableError:
+        raise
     except Exception as e:
         logger.error("Ad generation failed: %s", e)
+        if require_generated:
+            raise AdGenerationUnavailableError(f"Ad generation failed for {brand.name}") from e
         text = _ad_fallback_text(brand, config)
         return AdScript(
             brand=brand.name,

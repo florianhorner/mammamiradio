@@ -74,6 +74,7 @@ from mammamiradio.core.config import (
     MODEL_REGISTRY_FILENAME,
     PACING_BOUNDS,
     ModelsSection,
+    StationConfig,
     load_model_registry,
 )
 from mammamiradio.core.first_listen import (
@@ -9114,6 +9115,38 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
             "ok": False,
             "error": "The station is paused. Press Start, then tap the Air Next control again.",
         }
+    # A forced ad skips the scheduler's availability check, so without this the
+    # button airs the brand name and tagline as an advertisement on exactly the
+    # install that has no way to write one. Refuse before the pending check:
+    # waiting a few seconds cannot fix a missing key, so that advice would be wrong.
+    if valid[seg_type] is SegmentType.AD:
+        from mammamiradio.scheduling.producer import ad_programme_block
+
+        block = ad_programme_block(request.app.state.config, state)
+        if block == "no_ai_key":
+            return {
+                "ok": False,
+                "error": (
+                    "The hosts need a working AI key to write an ad. Add or check it in Motore, "
+                    "then tap Ad break again."
+                ),
+            }
+        if block == "no_ad_route":
+            return {
+                "ok": False,
+                "error": (
+                    "No ad model route resolves. Check the active profile in model_registry.toml, "
+                    "restart, then tap Ad break again."
+                ),
+            }
+        if block == "no_ad_brands":
+            return {
+                "ok": False,
+                "error": (
+                    "None of the ad brands can air right now. Check the brands and their campaign "
+                    "voices in radio.toml, restart the station, then tap Ad break again."
+                ),
+            }
     # Air-next builds and front-inserts one operator trigger at a time. Reject a
     # second tap while one is still pending — with a way out (leadership #5),
     # never a silent overwrite of the first pick.
@@ -12533,6 +12566,14 @@ async def public_status(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers=headers)
 
 
+def _ad_programme_block(config: StationConfig, state: StationState) -> str | None:
+    """Name what stops the station airing a real advertisement, or ``None``."""
+
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    return ad_programme_block(config, state)
+
+
 @router.get("/status")
 async def status(
     request: Request,
@@ -12635,6 +12676,10 @@ async def status(
                 "ad_spots_per_break": config.pacing.ad_spots_per_break,
                 "songs_since_banter": state.songs_since_banter,
                 "songs_since_ad": state.songs_since_ad,
+                # Why ads cannot air, or None. While set, the owed break is held
+                # at the threshold, and the counter alone would read "— next"
+                # forever; the admin shows this reason instead.
+                "ad_block": _ad_programme_block(config, state),
             },
             "consumption": {
                 "api_calls": state.api_calls,
