@@ -6710,6 +6710,9 @@ async def test_status_operator_force_pending_set_only_by_trigger():
     force_next directly) must NOT — otherwise the panel lies during an incident.
     """
     app = _make_test_app()
+    # An ad trigger needs a station that can write one; this test is about who
+    # gets credit for a force, not about ad availability.
+    app.state.config.anthropic_api_key = "test-key"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         # Internal force (simulates the 60s-silence dead-air rescue / stop-skip music force).
@@ -6733,6 +6736,7 @@ async def test_trigger_rejects_second_while_one_pending():
     from mammamiradio.core.models import SegmentType
 
     app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"  # the second tap is an ad; it must be makeable
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         first = await client.post("/api/trigger", json={"type": "banter"})
@@ -6773,6 +6777,91 @@ async def test_interrupt_supersedes_earlier_operator_trigger_without_stranding_g
 
     assert retry.json() == {"ok": True, "triggered": "banter"}
     assert state.operator_force_pending is SegmentType.BANTER
+
+
+def _keyless_ad_app(**overrides):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = ""
+    app.state.config.openai_api_key = ""
+    for name, value in overrides.items():
+        setattr(app.state.station_state, name, value)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_ad_break_button_refuses_an_ad_the_station_cannot_write():
+    """The forced path skips the scheduler, so the route is the guard.
+
+    Without it, a fresh install with no key answers "Ad break" by airing the
+    brand name and its tagline as an advertisement.
+    """
+    app = _keyless_ad_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "ai key" in body["error"].lower()
+    assert "motore" in body["error"].lower()  # the way out, leadership #5
+    assert "tap ad break again" in body["error"].lower()
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.operator_force_pending is None
+
+
+@pytest.mark.asyncio
+async def test_ad_break_button_names_brands_when_brands_are_what_is_missing():
+    """Advice that fits only one cause sends a keyed operator hunting for a key."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    app.state.config.ads.brands = []
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "ad brands" in body["error"].lower()
+    assert "ai key" not in body["error"].lower()
+    assert app.state.station_state.force_next is None
+
+
+@pytest.mark.asyncio
+async def test_a_missing_key_is_named_even_while_another_pick_is_pending():
+    """Waiting cannot fix a missing key, so "tap again in a few seconds" would be wrong."""
+    app = _keyless_ad_app(operator_force_pending=SegmentType.BANTER)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "ai key" in body["error"].lower()
+    assert app.state.station_state.operator_force_pending is SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_a_paused_station_is_named_before_a_missing_key():
+    """Scenario 3: after a restart the session can still be stopped. Start comes first."""
+    app = _keyless_ad_app(session_stopped=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_banter_and_news_triggers_are_unaffected_without_a_key():
+    """Only the ad needs a writer that is absent; the other picks have fallbacks that are real."""
+    app = _keyless_ad_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "banter"})
+
+    assert response.json() == {"ok": True, "triggered": "banter"}
 
 
 @pytest.mark.asyncio

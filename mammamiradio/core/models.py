@@ -1617,6 +1617,13 @@ class StationState:
     _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener
     canned_clips_streamed: int = 0
+    # Whether the station can currently produce a real advertisement: an AI key
+    # and at least one ad brand. False makes the scheduler skip the ad break
+    # instead of filling it with a placeholder, and leaves ``songs_since_ad`` owed
+    # rather than forgiven. Defaults to available; the producer settles it at boot
+    # (in prewarm, before the schedule preview can be read) and again before every
+    # pacing decision.
+    ad_programme_available: bool = True
     # Persona store for compounding listener memory (set by main.py at startup)
     persona_store: PersonaStore | None = None
     # Evening running-gag ledger (Impossible Moments v2 A); set by main.py at startup

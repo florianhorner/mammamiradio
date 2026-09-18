@@ -11847,3 +11847,172 @@ def test_every_continuity_slot_write_is_accounted_for():
 
     unaccounted = sorted(found - allowed)
     assert not unaccounted, f"bare continuity_slot writes need release handling or an allowlist reason: {unaccounted}"
+
+
+# --- Whether the station can produce a real advertisement -----------------------
+
+
+def _ad_capable_config(*, key: bool, brands: bool):
+    config = _make_config()
+    config.anthropic_api_key = "test-key" if key else ""
+    config.openai_api_key = ""
+    config.ads.brands = [AdBrand(name="Scarpe Volanti", tagline="Perché te lo meriti.")] if brands else []
+    return config
+
+
+def test_a_station_with_an_ai_key_and_brands_can_advertise():
+    from mammamiradio.scheduling.producer import ad_programme_available, ad_programme_block
+
+    config = _ad_capable_config(key=True, brands=True)
+    assert ad_programme_block(config) is None
+    assert ad_programme_available(config) is True
+
+
+def test_a_fresh_install_without_an_ai_key_cannot_advertise():
+    """The default first-run state: brands are configured, nothing can write them.
+
+    This is the configuration that aired "Scarpe Volanti. Perché te lo meriti."
+    as an advertisement on every ad break.
+    """
+    from mammamiradio.scheduling.producer import ad_programme_available, ad_programme_block
+
+    config = _ad_capable_config(key=False, brands=True)
+    assert ad_programme_block(config) == "no_ai_key"
+    assert ad_programme_available(config) is False
+
+
+def test_missing_brands_are_named_before_a_missing_key():
+    """With nothing to advertise, adding a key would not help, so say brands first."""
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    assert ad_programme_block(_ad_capable_config(key=True, brands=False)) == "no_ad_brands"
+    assert ad_programme_block(_ad_capable_config(key=False, brands=False)) == "no_ad_brands"
+
+
+def test_an_openai_only_station_can_advertise():
+    """Availability follows the resolved script route, not one named provider."""
+    from mammamiradio.scheduling.producer import ad_programme_available
+
+    config = _ad_capable_config(key=False, brands=True)
+    config.openai_api_key = "test-key"
+    assert ad_programme_available(config) is True
+
+
+def test_an_owed_ad_break_fires_as_soon_as_a_key_is_added_mid_session():
+    from mammamiradio.scheduling.producer import next_segment_type_for
+
+    config = _ad_capable_config(key=False, brands=True)
+    config.pacing.songs_between_ads = 2
+    config.pacing.songs_between_banter = 99
+    state = _make_state()
+    state.segments_produced = 6
+    state.songs_since_ad = 2
+    state.songs_since_banter = 0
+
+    assert next_segment_type_for(state, config) == SegmentType.MUSIC
+    assert state.songs_since_ad == 2, "the skipped break must not be forgiven"
+
+    config.anthropic_api_key = "test-key"
+    assert next_segment_type_for(state, config) == SegmentType.AD
+
+
+def test_an_owed_ad_break_is_held_at_the_threshold_instead_of_growing():
+    """The admin shows songs-since-last-ad; it must not climb past a hundred."""
+    from mammamiradio.scheduling.producer import next_segment_type_for
+
+    config = _ad_capable_config(key=False, brands=True)
+    config.pacing.songs_between_ads = 4
+    config.pacing.songs_between_banter = 99
+    state = _make_state()
+    state.segments_produced = 6
+    state.songs_since_banter = 0
+    state.songs_since_ad = 167
+
+    next_segment_type_for(state, config)
+    assert state.songs_since_ad == 4
+
+    state.songs_since_ad = 2  # below the threshold is left alone
+    next_segment_type_for(state, config)
+    assert state.songs_since_ad == 2
+
+
+@pytest.mark.asyncio
+async def test_an_unfillable_ad_break_airs_real_music_through_the_producer_loop(tmp_path):
+    """Scenario 2 — nothing to fall back on.
+
+    No AI key, no packaged clips, an empty normalization cache, and an ad break
+    that is due. The real scheduler and the real producer loop run; the break
+    must become a real music segment, and the ad writer must never be asked.
+
+    The runway floor is pinned to zero on purpose. An empty queue otherwise
+    trips the runway governor, which turns any natural ad into music by itself,
+    and this test would pass with the availability check deleted.
+    """
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.segments_produced = 6
+    state.songs_since_ad = 9
+    state.songs_since_banter = 0
+    config = _ad_capable_config(key=False, brands=True)
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.songs_between_ads = 4
+    config.pacing.songs_between_banter = 99
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    source_audio = tmp_path / "source.mp3"
+    source_audio.write_bytes(b"\x00" * 2048)
+
+    def fake_normalize(_src: Path, dst: Path, *_args, **_kwargs) -> None:
+        dst.write_bytes(b"\x00" * 2048)
+
+    write_ad = AsyncMock()
+    with (
+        patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 0),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source_audio),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=fake_normalize),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", write_ad),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.duration_sec > 0
+    write_ad.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boot_state", ["session_stopped", "empty_playlist"])
+async def test_the_preview_stops_promising_an_ad_from_the_first_boot_step(boot_state):
+    """Scenario 3 — post-restart.
+
+    A restart builds a fresh state with the default "ads available". The
+    schedule preview is served from the moment the app starts, while a First
+    Listen install holds the producer's first decision for its opening, and a
+    session stopped before the restart makes prewarm return without producing.
+    Prewarm still settles ad capability first, so the preview a restarted,
+    stopped, keyless station serves never lists an ad break it cannot make.
+    """
+    from mammamiradio.scheduling.producer import prewarm_first_segment
+    from mammamiradio.scheduling.scheduler import preview_upcoming
+
+    config = _ad_capable_config(key=False, brands=True)
+    config.pacing.songs_between_ads = 1
+    config.pacing.songs_between_banter = 99
+    state = _make_state()
+    assert state.ad_programme_available is True  # what a restart starts from
+    if boot_state == "session_stopped":
+        state.session_stopped = True
+    else:
+        state.playlist = []
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    assert await prewarm_first_segment(queue, state, config) is False
+    assert queue.empty()
+    assert state.ad_programme_available is False
+
+    state.playlist = state.playlist or _make_state().playlist
+    predicted = preview_upcoming(state, config.pacing, state.playlist, count=6)
+    assert not any(entry["type"] == "ad" for entry in predicted), predicted

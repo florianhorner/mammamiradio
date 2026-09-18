@@ -4127,6 +4127,55 @@ def _pick_canned_clip(
     return pick
 
 
+AdProgrammeBlock = Literal["no_ad_brands", "no_ai_key"]
+
+
+def ad_programme_block(config: StationConfig) -> AdProgrammeBlock | None:
+    """Name what stops the station making a real advertisement, or ``None``.
+
+    Two separate things are needed, and the fix differs for each, so callers that
+    speak to an operator must be able to tell them apart. Brands come first: with
+    none configured there is nothing to advertise, and adding a key would not help.
+
+    The station shipped a no-key path that spoke the brand name and a tagline and
+    aired it as an advertisement; refusing is honest where that was not. When the
+    packaged advertisement pack exists this grows a clause beside the airing path
+    it depends on. It is deliberately not written ahead of those recordings: an
+    availability claim nothing can satisfy would send the scheduler back into the
+    placeholder.
+    """
+
+    if not config.ads.brands:
+        return "no_ad_brands"
+    if not _sw.has_script_llm(config):
+        return "no_ai_key"
+    return None
+
+
+def ad_programme_available(config: StationConfig) -> bool:
+    """Whether the station can currently produce a real advertisement."""
+
+    return ad_programme_block(config) is None
+
+
+def next_segment_type_for(state: StationState, config: StationConfig) -> SegmentType:
+    """Resolve what can actually air, then choose the next segment.
+
+    Refreshed per decision because an operator can add an AI key from Motore
+    mid-session, and the owed ad break must fire then rather than at restart.
+
+    While ads are unavailable the owed break is held at the pacing threshold
+    instead of growing without limit. It still fires the moment a real ad is
+    possible, and the admin's "songs since last ad" counter stays bounded rather
+    than climbing past a hundred on a station that simply has no key.
+    """
+
+    state.ad_programme_available = ad_programme_available(config)
+    if not state.ad_programme_available:
+        state.songs_since_ad = min(state.songs_since_ad, config.pacing.songs_between_ads)
+    return next_segment_type(state, config.pacing)
+
+
 def _queued_predecessor_starter_id(queue: asyncio.Queue[Segment]) -> str:
     """Return a proven adjacent starter id, or empty when adjacency is uncertain."""
 
@@ -4451,6 +4500,12 @@ async def prewarm_first_segment(
     alone cannot guarantee that, because work can outlive its awaiter — the
     fence at the admission boundary is the guarantee.
     """
+    # Settle ad capability before anything can return early. The schedule
+    # preview is served from the moment the app starts, while a First Listen
+    # install holds the producer's first pacing decision for its opening. Prewarm
+    # runs on every boot path, stopped and empty ones included, so this is the
+    # earliest point a preview can stop promising an ad the station cannot make.
+    state.ad_programme_available = ad_programme_available(config)
     if not state.playlist:
         return False
     if state.session_stopped:
@@ -6419,7 +6474,7 @@ async def _run_producer_inner(
             seg_type = SegmentType.BANTER
             logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
-            seg_type = next_segment_type(state, config.pacing)
+            seg_type = next_segment_type_for(state, config)
             natural_banter_candidate = seg_type == SegmentType.BANTER
             if seg_type in _RUNWAY_GOVERNED_TYPES:
                 should_defer, buffered = _should_defer_for_runway(queue, config.pacing.lookahead_segments)

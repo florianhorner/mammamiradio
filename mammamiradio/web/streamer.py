@@ -9114,6 +9114,27 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
             "ok": False,
             "error": "The station is paused. Press Start, then tap the Air Next control again.",
         }
+    # A forced ad skips the scheduler's availability check, so without this the
+    # button airs the brand name and tagline as an advertisement on exactly the
+    # install that has no way to write one. Refuse before the pending check:
+    # waiting a few seconds cannot fix a missing key, so that advice would be wrong.
+    if valid[seg_type] is SegmentType.AD:
+        from mammamiradio.scheduling.producer import ad_programme_block
+
+        block = ad_programme_block(request.app.state.config)
+        if block == "no_ai_key":
+            return {
+                "ok": False,
+                "error": "The hosts need an AI key to write an ad. Add one in Motore, then tap Ad break again.",
+            }
+        if block == "no_ad_brands":
+            return {
+                "ok": False,
+                "error": (
+                    "There are no ad brands to advertise yet. Add at least one to radio.toml "
+                    "and restart the station, then tap Ad break again."
+                ),
+            }
     # Air-next builds and front-inserts one operator trigger at a time. Reject a
     # second tap while one is still pending — with a way out (leadership #5),
     # never a silent overwrite of the first pick.
