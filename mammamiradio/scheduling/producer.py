@@ -4127,7 +4127,7 @@ def _pick_canned_clip(
     return pick
 
 
-AdProgrammeBlock = Literal["no_ad_brands", "no_ai_key"]
+AdProgrammeBlock = Literal["no_ad_brands", "no_ad_route", "no_ai_key"]
 
 
 def ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
@@ -4137,7 +4137,11 @@ def ad_programme_block(config: StationConfig, state: StationState | None = None)
     # ``hosts/ad_creative.py``), so a list of only those is as empty as no list.
     if not any(brand.cast_eligible for brand in config.ads.brands):
         return "no_ad_brands"
-    if not _sw.has_script_llm(config, caller="ad") or (state is not None and _every_writing_key_refused(config, state)):
+    if not config.anthropic_api_key and not config.openai_api_key:
+        return "no_ai_key"
+    if not _sw.has_script_llm(config, caller="ad"):
+        return "no_ad_route"
+    if state is not None and _every_writing_key_refused(config, state):
         return "no_ai_key"
     return None
 

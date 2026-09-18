@@ -8323,6 +8323,7 @@ async function savePacingField(field,value,{silent=false}={}){
 // counter would promise "— next" forever. Say why instead, with the fix.
 const AD_PAUSED_COPY={
   no_ai_key:'<strong>Ads paused</strong> — the hosts need a working AI key to write one. Add or check it in Motore.',
+  no_ad_route:'<strong>Ads paused</strong> — no ad model route resolves. Check the active profile in model_registry.toml, then restart the station.',
   no_ad_brands:'<strong>Ads paused</strong> — none of the ad brands can air. Check the brands and their campaign voices in radio.toml, then restart the station.',
 };
 function updatePaceCounters(pacing){

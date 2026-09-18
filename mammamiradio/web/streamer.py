@@ -9131,6 +9131,14 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
                     "then tap Ad break again."
                 ),
             }
+        if block == "no_ad_route":
+            return {
+                "ok": False,
+                "error": (
+                    "No ad model route resolves. Check the active profile in model_registry.toml, "
+                    "restart, then tap Ad break again."
+                ),
+            }
         if block == "no_ad_brands":
             return {
                 "ok": False,

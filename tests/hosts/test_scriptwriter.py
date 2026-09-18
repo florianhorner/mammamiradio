@@ -6233,6 +6233,9 @@ async def test_write_ad_replaces_partner_only_direct_campaign_output(config, sta
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
         result = await write_ad(brand, voices, state, config, ad_format=ad_format)
+        if ad_format == "duo_scene":
+            with pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="required spokesperson"):
+                await write_ad(brand, voices, state, config, ad_format=ad_format, require_generated=True)
 
     assert result.format == "classic_pitch"
     assert [part.role for part in result.parts if part.type == "voice"] == ["hammer"]
@@ -8885,6 +8888,9 @@ async def test_pharma_canonical_disclaimer_wins_over_the_models_own(config, stat
         },
     ):
         result = await write_ad(brand, voices, state, config)
+        if only_disclaimer:
+            with pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="only fine print"):
+                await write_ad(brand, voices, state, config, require_generated=True)
 
     disclaimers = [p for p in result.parts if p.role == DISCLAIMER_ROLE]
     assert len(disclaimers) == 1, f"expected one disclaimer, got {[d.text for d in disclaimers]}"
