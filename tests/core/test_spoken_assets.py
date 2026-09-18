@@ -322,3 +322,294 @@ def test_unreadable_manifested_asset_fails_closed_instead_of_raising(tmp_path, m
 
     assert any("is unreadable: denied" in error for error in errors)
     assert approved_spoken_assets("recovery", assets_root=tmp_path) == []
+
+
+_MP3_FRAME_SECONDS = 1152 / 44100
+
+
+def _mp3_frame(payload=b""):
+    """One MPEG-1 Layer III frame: 128 kbps, 44.1 kHz, stereo, 417 bytes."""
+    body = payload.ljust(413, b"\x00")
+    return b"\xff\xfb\x90\x00" + body
+
+
+def _mp3_bytes(seconds, *, id3=False, xing=False, id3v1=False, gapless=None):
+    frames = b"".join(_mp3_frame() for _ in range(round(seconds / _MP3_FRAME_SECONDS)))
+    if xing or gapless:
+        # Stereo MPEG-1 side info is 32 bytes; the tag sits right after it.
+        info = b"\x00" * 32 + b"Info" + b"\x00\x00\x00\x01" + b"\x00" * 4
+        if gapless:
+            delay, padding = gapless
+            info += b"LAME3.100" + b"\x00" * 12 + ((delay << 12) | padding).to_bytes(3, "big")
+        frames = _mp3_frame(info) + frames
+    if id3:
+        frames = b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"\x00" * 10 + frames
+    if id3v1:
+        frames += b"TAG" + b"\x00" * 125
+    return frames
+
+
+def _ad_entry(path, payload, *, mode="normal", language="en", duration=30.0, **overrides):
+    entry = _entry(path, payload, language=language, transcript="A finished thirty-second spot for a fictional brand.")
+    entry["mode"] = mode
+    entry["duration_seconds"] = duration
+    entry.update(overrides)
+    return entry
+
+
+def _ad_root(tmp_path, *, duration=30.0, audio_seconds=None, payload=None, **overrides):
+    (tmp_path / "ads").mkdir()
+    if payload is None:
+        audio = duration if isinstance(duration, (int, float)) and not isinstance(duration, bool) else 30.0
+        if audio_seconds is not None:
+            audio = audio_seconds
+        payload = _mp3_bytes(audio if 0 < audio < 1000 else 30.0)
+    (tmp_path / "ads" / "spot.mp3").write_bytes(payload)
+    _write_manifest(tmp_path, [_ad_entry("ads/spot.mp3", payload, duration=duration, **overrides)])
+    return tmp_path
+
+
+def test_a_packaged_ad_of_ordinary_length_is_admitted(tmp_path):
+    root = _ad_root(tmp_path)
+    assert validate_spoken_asset_manifest(assets_root=root) == []
+    entries = approved_spoken_asset_entries("ads", assets_root=root)
+    assert [entry.relative_path for entry in entries] == ["ads/spot.mp3"]
+    assert entries[0].duration_seconds == 30.0
+
+
+@pytest.mark.parametrize("duration", [2.0, 24.9, 40.1, 90.0])
+def test_an_ad_outside_the_spot_length_is_refused(tmp_path, duration):
+    """The shipped no-key fallback spoke a brand name and a tagline and aired.
+
+    A two-second render is a successful render of copy that was never an
+    advertisement. The packaging contract is where that gets caught.
+    """
+    root = _ad_root(tmp_path, duration=duration)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("a packaged ad runs 25-40s" in error for error in errors), errors
+    assert approved_spoken_asset_entries("ads", assets_root=root) == []
+
+
+def test_an_ad_without_a_declared_duration_is_refused(tmp_path):
+    (tmp_path / "ads").mkdir()
+    payload = _mp3_bytes(30.0)
+    (tmp_path / "ads" / "spot.mp3").write_bytes(payload)
+    entry = _ad_entry("ads/spot.mp3", payload)
+    del entry["duration_seconds"]
+    _write_manifest(tmp_path, [entry])
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+    assert any("must declare duration_seconds" in error for error in errors), errors
+
+
+def test_a_boolean_duration_cannot_pass_as_one_second(tmp_path):
+    """``bool`` is an ``int`` subclass; ``True`` must not read as 1.0."""
+    root = _ad_root(tmp_path, duration=True)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("duration_seconds must be a number" in error for error in errors), errors
+
+
+def test_an_ad_recorded_in_the_wrong_language_for_its_mode_is_refused(tmp_path):
+    root = _ad_root(tmp_path, mode="super_italian", language="en")
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("ad language does not match its mode" in error for error in errors), errors
+
+
+def test_an_ad_without_a_mode_is_refused(tmp_path):
+    root = _ad_root(tmp_path, mode="")
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("ad mode must be normal or super_italian" in error for error in errors), errors
+
+
+def test_an_ad_may_not_borrow_banter_adjacency(tmp_path):
+    """An ad never depends on the song before it, and has no rare-special tier."""
+    root = _ad_root(tmp_path, required_previous_starter_id="USUAN1100173", special=True)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("must not carry banter adjacency metadata" in error for error in errors), errors
+
+
+def test_undeclared_audio_in_the_ads_directory_fails_closed(tmp_path):
+    root = _ad_root(tmp_path)
+    (root / "ads" / "smuggled.mp3").write_bytes(b"not-declared")
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("ads/smuggled.mp3 is unlisted packaged audio" in error for error in errors), errors
+
+
+def test_declaring_a_duration_leaves_other_categories_unchanged(tmp_path):
+    """Banter and recovery never declared a length; adding the field is additive."""
+    (tmp_path / "recovery").mkdir()
+    payload = b"continuity"
+    (tmp_path / "recovery" / "continuity_1.mp3").write_bytes(payload)
+    _write_manifest(tmp_path, [_entry("recovery/continuity_1.mp3", payload, language="it")])
+    assert validate_spoken_asset_manifest(assets_root=tmp_path) == []
+    entries = approved_spoken_asset_entries("recovery", assets_root=tmp_path)
+    assert entries[0].duration_seconds == 0.0
+
+
+@pytest.mark.parametrize("duration", [25.0, 40.0, 25, 40])
+def test_an_ad_exactly_at_either_limit_is_admitted(tmp_path, duration):
+    """Both bounds are inclusive; integers are as valid as floats."""
+    root = _ad_root(tmp_path, duration=duration)
+    assert validate_spoken_asset_manifest(assets_root=root) == []
+    assert len(approved_spoken_asset_entries("ads", assets_root=root)) == 1
+
+
+@pytest.mark.parametrize("duration", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_duration_is_refused(tmp_path, duration):
+    root = _ad_root(tmp_path, duration=duration)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("non-negative finite number" in error for error in errors), errors
+
+
+def _huge_duration_manifest(root, entry):
+    """Write a manifest whose entry declares an integer too large for a float."""
+    text = json.dumps(entry)
+    huge = text[:-1] + ', "duration_seconds": 1' + "0" * 400 + "}"
+    (root / "spoken_assets.json").write_text('{"schema_version": 1, "assets": [' + huge + "]}", encoding="utf-8")
+
+
+def test_an_unrepresentable_ad_duration_is_refused_without_raising(tmp_path):
+    """JSON integers are unbounded and ``float()`` raises on one too large."""
+    (tmp_path / "ads").mkdir()
+    payload = _mp3_bytes(30.0)
+    (tmp_path / "ads" / "spot.mp3").write_bytes(payload)
+    entry = _ad_entry("ads/spot.mp3", payload)
+    del entry["duration_seconds"]
+    _huge_duration_manifest(tmp_path, entry)
+
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+    assert any("non-negative finite number" in error for error in errors), errors
+    assert approved_spoken_asset_entries("ads", assets_root=tmp_path) == []
+
+
+def test_a_bad_duration_cannot_drop_a_recovery_clip_from_the_rescue_ladder(tmp_path):
+    """Only ads read a duration. Elsewhere the field stays inert, as it was.
+
+    The rescue ladder asks this parser which packaged audio it may use, and a
+    typo in a field recovery never reads must not remove a clip from it.
+    """
+    (tmp_path / "recovery").mkdir()
+    payload = b"continuity"
+    clip = tmp_path / "recovery" / "continuity_1.mp3"
+    clip.write_bytes(payload)
+    _huge_duration_manifest(tmp_path, _entry("recovery/continuity_1.mp3", payload, language="it"))
+
+    assert validate_spoken_asset_manifest(assets_root=tmp_path) == []
+    assert is_approved_packaged_audio_asset(clip, assets_root=tmp_path) is True
+
+    _write_manifest(
+        tmp_path, [{**_entry("recovery/continuity_1.mp3", payload, language="it"), "duration_seconds": "15s"}]
+    )
+    assert is_approved_packaged_audio_asset(clip, assets_root=tmp_path) is True
+
+
+def test_a_manifest_integer_too_long_to_parse_fails_closed_instead_of_raising(tmp_path):
+    """``json.loads`` raises a plain ValueError past 4300 digits, not a decode error."""
+    (tmp_path / "recovery").mkdir()
+    clip = tmp_path / "recovery" / "continuity_1.mp3"
+    clip.write_bytes(b"continuity")
+    (tmp_path / "spoken_assets.json").write_text(
+        '{"schema_version": 1' + "0" * 5000 + ', "assets": []}', encoding="utf-8"
+    )
+
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+    assert any("unreadable" in error for error in errors), errors
+    assert is_approved_packaged_audio_asset(clip, assets_root=tmp_path) is False
+
+
+def test_a_packaged_ad_in_a_subfolder_is_refused(tmp_path):
+    """Discovery and selection read ads/ flat; a nested spot would escape both."""
+    (tmp_path / "ads" / "normal").mkdir(parents=True)
+    payload = _mp3_bytes(2.0)
+    (tmp_path / "ads" / "normal" / "spot.mp3").write_bytes(payload)
+    _write_manifest(tmp_path, [_ad_entry("ads/normal/spot.mp3", payload, duration=2.0)])
+
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+    assert any("must sit directly in ads/" in error for error in errors), errors
+    assert any("a packaged ad runs 25-40s" in error for error in errors), errors
+
+
+def test_an_ad_whose_audio_is_shorter_than_declared_is_refused(tmp_path):
+    """The declared length is a claim; a two-second file cannot wear a 30s label."""
+    root = _ad_root(tmp_path, duration=30.0, audio_seconds=2.0)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("declares 30s but the audio runs 2." in error for error in errors), errors
+    assert any("audio runs 2.011s; a packaged ad runs 25-40s" in error for error in errors), errors
+    # The release boundary is the proof; runtime admission stays hash-only.
+    assert len(approved_spoken_asset_entries("ads", assets_root=root)) == 1
+
+
+def test_an_ad_within_range_but_off_its_declaration_is_refused(tmp_path):
+    root = _ad_root(tmp_path, duration=30.0, audio_seconds=35.0)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert errors == [next(error for error in errors if "declares 30s but the audio runs 35." in error)], errors
+
+
+def test_an_ad_within_one_frame_of_its_declaration_is_admitted(tmp_path):
+    root = _ad_root(tmp_path, duration=30.05, audio_seconds=30.0)
+    assert validate_spoken_asset_manifest(assets_root=root) == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"packaged-ad",
+        b"",
+        b"\xff\xfb\x90\x00" + b"\x00" * 100,  # truncated frame
+        _mp3_bytes(30.0) + b"junk",  # trailing bytes after the last frame
+        b"\xff\xfb\xf0\x00" + b"\x00" * 413,  # bitrate index 15 is invalid
+        b"\xff\xfd\x90\x00" + b"\x00" * 413,  # Layer II, not Layer III
+        b"ID3\x04\x00\x00\x00\x00\x00\x80" + _mp3_bytes(30.0),  # size is not syncsafe
+    ],
+)
+def test_ad_audio_that_is_not_decodable_mp3_fails_closed(tmp_path, payload):
+    root = _ad_root(tmp_path, payload=payload)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("ads/spot.mp3 is not decodable MP3 audio" in error for error in errors), errors
+
+
+def test_an_oversized_ad_file_is_refused_before_it_is_parsed(tmp_path, monkeypatch):
+    monkeypatch.setattr(spoken_assets, "PACKAGED_AD_MAX_BYTES", 1024)
+    root = _ad_root(tmp_path)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert any("file exceeds 1024 bytes" in error for error in errors), errors
+
+
+def test_a_missing_ad_file_fails_closed(tmp_path):
+    (tmp_path / "ads").mkdir()
+    _write_manifest(tmp_path, [_ad_entry("ads/spot.mp3", _mp3_bytes(30.0))])
+    errors = validate_spoken_asset_manifest(assets_root=tmp_path)
+    assert errors == ["ads/spot.mp3 is missing"]
+    assert approved_spoken_asset_entries("ads", assets_root=tmp_path) == []
+
+
+def test_an_unreadable_ad_file_fails_closed_instead_of_raising(tmp_path, monkeypatch):
+    root = _ad_root(tmp_path)
+    real_open = Path.open
+
+    def guarded_open(self, *args, **kwargs):
+        if self.name == "spot.mp3":
+            raise PermissionError("denied")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    assert errors.count("ads/spot.mp3 is unreadable: denied") == 2, errors
+    assert approved_spoken_asset_entries("ads", assets_root=root) == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"id3": True}, {"xing": True}, {"id3v1": True}, {"id3": True, "xing": True, "id3v1": True}],
+)
+def test_tags_and_the_info_header_are_not_counted_as_audio(tmp_path, options):
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(_mp3_bytes(30.0, **options))
+    expected = round(30.0 / _MP3_FRAME_SECONDS) * _MP3_FRAME_SECONDS
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(expected)
+
+
+def test_encoder_delay_and_padding_are_trimmed_like_ffprobe_does(tmp_path):
+    path = tmp_path / "spot.mp3"
+    path.write_bytes(_mp3_bytes(30.0, gapless=(576, 1000)))
+    expected = (round(30.0 / _MP3_FRAME_SECONDS) * 1152 - 1576) / 44100
+    assert spoken_assets._mp3_duration_seconds(path) == pytest.approx(expected)
