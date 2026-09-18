@@ -9135,8 +9135,8 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
             return {
                 "ok": False,
                 "error": (
-                    "There are no ad brands to advertise yet. Add at least one to radio.toml "
-                    "and restart the station, then tap Ad break again."
+                    "None of the ad brands can air right now. Check the brands and their campaign "
+                    "voices in radio.toml, restart the station, then tap Ad break again."
                 ),
             }
     # Air-next builds and front-inserts one operator trigger at a time. Reject a

@@ -1682,7 +1682,10 @@ def _validate(config: StationConfig) -> None:
         errors.append(_err("playlist.jamendo_limit", "must be between 1 and 200"))
 
     if not (config.anthropic_api_key or config.openai_api_key):
-        log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
+        log.warning(
+            "No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter uses packaged clips; "
+            "ad breaks are skipped until an AI key is added"
+        )
     if config.homeassistant.mood_llm_enabled and not config.anthropic_api_key:
         log.warning("Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY — using heuristic home mood")
     if config.homeassistant.enabled and not config.ha_token:
