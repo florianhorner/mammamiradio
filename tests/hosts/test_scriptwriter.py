@@ -7744,6 +7744,11 @@ def test_has_script_llm_true_with_registry_false_when_registry_unavailable(confi
     config.openai_api_key = "openai-key"
     # Real registry loaded by the fixture resolves a route.
     assert has_script_llm(config) is True
+    for profile in config.models.profiles.values():
+        for provider in profile.values():
+            provider.pop("creative", None)
+    assert has_script_llm(config) is True
+    assert has_script_llm(config, caller="ad") is False
 
     # Registry unavailable — keys still set, but no route resolves.
     config.models = _empty_models()

@@ -4133,40 +4133,26 @@ AdProgrammeBlock = Literal["no_ad_brands", "no_ai_key"]
 def ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
     """Name what stops the station making a real advertisement, or ``None``.
 
-    Two separate things are needed, and the fix differs for each, so callers that
-    speak to an operator must be able to tell them apart. Brands come first: with
-    none configured there is nothing to advertise, and adding a key would not help.
-
-    The station shipped a no-key path that spoke the brand name and a tagline and
-    aired it as an advertisement; refusing is honest where that was not. When the
-    packaged advertisement pack exists this grows a clause beside the airing path
-    it depends on. It is deliberately not written ahead of those recordings: an
-    availability claim nothing can satisfy would send the scheduler back into the
-    placeholder.
+    Brands come first: with none configured there is nothing to advertise, and
+    adding a key would not help. Otherwise a keyed, ad-routed model is required.
     """
 
     # A brand that fails its voice-cast check never airs (``safe_brands`` in
     # ``hosts/ad_creative.py``), so a list of only those is as empty as no list.
     if not any(brand.cast_eligible for brand in config.ads.brands):
         return "no_ad_brands"
-    if not _sw.has_script_llm(config) or (state is not None and _every_writing_key_refused(config, state)):
+    if not _sw.has_script_llm(config, caller="ad") or (state is not None and _every_writing_key_refused(config, state)):
         return "no_ai_key"
     return None
 
 
 def _every_writing_key_refused(config: StationConfig, state: StationState) -> bool:
-    """Whether each configured writing key has been definitively refused by its provider.
-
-    A refused key is as unable to write an ad as a missing one. The verdict is sticky, set only on an outright
-    401 and reset to ``"unverified"`` when that key is replaced, so treating it as
-    no key cannot put the scheduler into a retry loop. A quota, rate-limit or
-    network failure never sets it; those reach the ad writer and fail closed there.
-    """
+    """Whether every keyed provider with an ad route was definitively refused."""
 
     statuses = []
-    if config.anthropic_api_key:
+    if config.anthropic_api_key and _sw.resolve_model(config.models, "ad", "anthropic"):
         statuses.append(state.anthropic_key_status)
-    if config.openai_api_key:
+    if config.openai_api_key and _sw.resolve_model(config.models, "ad", "openai"):
         statuses.append(state.openai_key_status)
     return bool(statuses) and all(status == "rejected" for status in statuses)
 

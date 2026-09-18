@@ -867,9 +867,9 @@ def _get_openai_client(api_key: str):
     return _openai_client
 
 
-def has_script_llm(config: StationConfig) -> bool:
-    """Return whether a keyed provider also has a resolved script route."""
-    callers = tuple(config.models.routing) or ("banter",)
+def has_script_llm(config: StationConfig, caller: str | None = None) -> bool:
+    """Return whether a keyed provider has the requested or any script route."""
+    callers = (caller,) if caller else tuple(config.models.routing) or ("banter",)
     return any(
         (config.anthropic_api_key and resolve_model(config.models, caller, "anthropic"))
         or (config.openai_api_key and resolve_model(config.models, caller, "openai"))
@@ -4061,7 +4061,7 @@ async def write_ad(
         if brand.campaign and isinstance(brand.campaign.spokesperson_role, str)
         else ""
     )
-    if not has_script_llm(config):
+    if not has_script_llm(config, caller="ad"):
         if require_generated:
             raise AdGenerationUnavailableError("No script-writing provider is configured for ads")
         return AdScript(

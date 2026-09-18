@@ -12216,6 +12216,18 @@ def test_a_refused_key_does_not_block_ads_while_another_key_works():
     assert ad_programme_block(config, state) is None
 
 
+def test_a_key_without_an_ad_route_does_not_mask_a_refused_ad_provider():
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    config = _ad_capable_config(key=True, brands=True)
+    config.openai_api_key = "test-key"
+    for profile in config.models.profiles.values():
+        profile["openai"].pop("creative", None)
+    state = _make_state()
+    state.anthropic_key_status = "rejected"
+    assert ad_programme_block(config, state) == "no_ai_key"
+
+
 @pytest.mark.parametrize("status", ["unverified", "valid"])
 def test_only_a_definitive_refusal_blocks_ads(status):
     """Quota, rate-limit and network trouble leave the verdict unverified, not refused."""
