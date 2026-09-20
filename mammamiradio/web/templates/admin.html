@@ -2153,7 +2153,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
         <div>
           <div class="ttl-eyebrow">First Listen</div>
           <h2>Hear Mamma Mi Radio, right here.</h2>
-          <div class="sub">Hear the station, confirm the sound, then choose privacy.</div>
+          <div class="sub">Meet the voices behind your station. Then we’ll make it yours.</div>
         </div>
       </header>
       <div id="firstListenPanelMount"></div>
@@ -2462,7 +2462,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
       <header class="mmr-panel-head"><h2>Motore</h2><div class="sub">Station health, runtime, costs, and settings. <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></div></header>
       <div class="motore-setup-restart">
         <button type="button" class="btn btn-util" id="firstListenRestartBtn" aria-describedby="motoreRestartNote" data-stopped-exempt onclick="restartFirstListen()">Restart First Listen</button>
-        <p id="motoreRestartNote">Revisit the welcome and setup. Your settings stay saved.</p>
+        <p id="motoreRestartNote">Revisit the arrival and setup. Your settings stay saved.</p>
       </div>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
@@ -2562,66 +2562,49 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               <span id="setupNext">Preparing First Listen.</span>
             </div>
             <section class="first-listen-surface" id="journeySurface" aria-labelledby="firstListenShowTitle" data-current-step="1">
-              <header class="first-listen-opening first-listen-invitation" id="firstListenShowCard">
-                <div class="invitation-stage" aria-hidden="true"><img src="/static/favicon.svg" alt=""></div>
-                <p class="opening-kicker" id="firstListenShowKicker">Welcome to Mamma Mi Radio</p>
-                <h3 class="first-listen-opening-title" id="firstListenShowTitle" tabindex="-1">Your seat’s ready.</h3>
-                <div class="program-strip">
-                  <span class="program-mark" aria-hidden="true"><img src="/static/favicon.svg" alt="" aria-hidden="true"></span>
-                  <div>
-                    <span class="program-label" id="firstListenShowNextLabel">Meet your hosts</span>
-                    <p class="first-listen-opening-copy" id="firstListenShowCopy">Meet Marco, your host, and Giulia, the other voice behind the desk.<br>He’s made room for you. She’s looking for her coffee.</p>
-                    <span class="sr-only" id="firstListenShowNext">Live radio</span>
-                    <span class="sr-only" id="firstListenShowThen">Your station</span>
-                  </div>
-                </div>
-                <div class="guide-audio" data-guide="welcome">
-                    <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Take your seat</button>
-                    <p class="guide-audio-copy" id="guideWelcomeNote"><strong>Sound on. Meet Marco &amp; Giulia.</strong><span>Recorded welcome · 16 seconds on this device</span></p>
-                    <p class="invitation-next">Now, let’s get your station playing.</p>
-                  <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee. <strong>Giulia:</strong> I’m Giulia. I run the desk. Touch my coffee again and you’re in the corridor, Marco. Come in. Three small steps. Then we’re on air.</p></details>
-                </div>
-                <p class="progress-line" id="firstListenProgressLine">Step 1 of 3. Next: play it here.</p>
-                <p class="use-copy" id="firstListenRestartNote" hidden></p>
-              </header>
-
-              <section class="first-listen-readiness" id="firstListenSourceStep" aria-label="Music readiness">
-                <details class="first-listen-source-preview" id="firstListenSourcePreviewDetails">
-                  <summary id="firstListenSourceHeading"><span class="status-chip working" id="firstListenSourceChip" role="status" aria-live="polite" aria-atomic="true">Still checking</span> <span class="readiness-details-label">Music details</span></summary>
-                  <div class="first-listen-readiness-body" id="firstListenSourceBody">
-                    <p class="use-copy" id="firstListenSourceSummary">The welcome is ready. We’re checking that music can continue afterward.</p>
-                    <div class="first-listen-source-list" id="firstListenSourcePreview"><div class="empty">Checking what can play…</div></div>
-                  <div class="first-listen-status" id="firstListenSourceRepair"></div>
-                  <div class="first-listen-actions" id="firstListenSourceActions" hidden>
-                    <button type="button" class="btn btn-util first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
-                  </div>
-                  </div>
-                </details>
-              </section>
-
               <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
-              <section class="first-listen-step" id="firstListenSpeakerStep" data-state="current" aria-current="step" aria-labelledby="firstListenSpeakerHeading">
-                <div class="first-listen-head">
-                  <span class="first-listen-number" aria-hidden="true">1</span>
-                  <h3 class="first-listen-heading" id="firstListenSpeakerHeading" tabindex="-1">Play it here</h3>
-                  <span class="status-chip idle" id="firstListenSpeakerChip" aria-label="Playback status: waiting" hidden>Waiting</span>
-                  <div class="first-listen-summary" id="firstListenSpeakerSummary">The station plays right here, on whatever you are reading this on.</div>
-                  <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review playback</button>
-                </div>
-                <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" aria-hidden="false">
-                  <h4 class="benefit-heading">Hear the station where you want it.</h4>
-                  <p class="use-copy">The station plays on this device. Choose headphones, Bluetooth, or this device’s speaker. Hearing it here is enough to finish setup.</p>
-                  <details class="guide-transcript" id="firstListenHomeAssistantGuide">
-                    <summary>Optional: play on a Home Assistant speaker later</summary>
-                    <p>Use the Home Assistant Community Store (HACS) to add the optional Mamma Mi Radio connection. In HACS, open the three-dot menu → Custom repositories, enter https://github.com/florianhorner/mammamiradio, choose Integration as the category, and install Mamma Mi Radio.</p>
-                    <p>Restart Home Assistant, then choose Settings → Devices &amp; Services → Add Integration → Mamma Mi Radio. After setup, open Media → Mamma Mi Radio → Mamma Mi Radio Live and choose a speaker.</p>
-                    <p><a href="https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback" target="_blank" rel="noopener noreferrer">Open the full Home Assistant speaker guide</a></p>
-                  </details>
-                  <div class="first-listen-actions" style="margin-top:0">
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)" disabled>Play my station</button>
+              <section class="first-listen-step first-listen-arrival" id="firstListenSpeakerStep" data-state="current" aria-current="step" aria-labelledby="firstListenShowTitle">
+                <header class="first-listen-opening first-listen-invitation first-listen-head" id="firstListenShowCard">
+                  <div class="invitation-stage" aria-hidden="true"><img src="/static/favicon.svg" alt=""></div>
+                  <p class="opening-kicker" id="firstListenShowKicker">Welcome to Mamma Mi Radio</p>
+                  <h3 class="first-listen-opening-title first-listen-heading" id="firstListenShowTitle" tabindex="-1">Your seat’s ready.</h3>
+                  <div class="program-strip">
+                    <span class="program-mark" aria-hidden="true"><img src="/static/favicon.svg" alt="" aria-hidden="true"></span>
+                    <div>
+                      <span class="program-label" id="firstListenShowNextLabel">Meet your hosts on air</span>
+                      <p class="first-listen-opening-copy" id="firstListenShowCopy">Meet the voices behind your station. Their opening flows straight into live radio.</p>
+                      <span class="sr-only" id="firstListenShowNext">Marco and Giulia’s station opening</span>
+                      <span class="sr-only" id="firstListenShowThen">Your live station</span>
+                    </div>
                   </div>
-                  <div class="setup-note" id="firstListenSpeakerHelp">A new play starts a new sound check.</div>
-                  <div class="first-listen-status" id="firstListenSpeakerStatus" role="status" aria-live="polite" aria-atomic="true"></div>
+                  <div class="first-listen-arrival-action">
+                    <button type="button" class="btn btn-trigger first-listen-action first-listen-start" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)" disabled>Start my station</button>
+                    <span class="status-chip idle sr-only" id="firstListenSpeakerChip" aria-label="Playback status: waiting" hidden>Waiting</span>
+                    <p class="first-listen-summary" id="firstListenSpeakerSummary">Sound on. The station starts here and keeps playing from this device.</p>
+                    <p class="first-listen-status" id="firstListenSpeakerStatus" role="status" aria-live="polite" aria-atomic="true"></p>
+                  </div>
+                  <details class="guide-transcript first-listen-opening-transcript">
+                    <summary>Read the station opening</summary>
+                    <p><strong>Marco:</strong> Mamma Mi Radio, live from Studio B. The coffee is back where it belongs. Everyone’s happy. <strong>Giulia:</strong> The coffee’s happy. I’m reserving judgment. <strong>Marco:</strong> Our newest regular deserves a proper welcome. <strong>Giulia:</strong> Then put a record on, Marco.</p>
+                  </details>
+                  <p class="use-copy" id="firstListenRestartNote" hidden></p>
+                  <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review playback</button>
+                </header>
+                <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenShowTitle" aria-hidden="false">
+                  <section class="first-listen-readiness" id="firstListenSourceStep" aria-label="Music readiness">
+                    <details class="first-listen-source-preview" id="firstListenSourcePreviewDetails">
+                      <summary id="firstListenSourceHeading"><span class="status-chip working" id="firstListenSourceChip" role="status" aria-live="polite" aria-atomic="true">Still checking</span> <span class="readiness-details-label">Music details</span></summary>
+                      <div class="first-listen-readiness-body" id="firstListenSourceBody">
+                        <p class="use-copy" id="firstListenSourceSummary">The station opening is ready. We’re checking what can continue afterward.</p>
+                        <div class="first-listen-source-list" id="firstListenSourcePreview"><div class="empty">Checking what can play…</div></div>
+                        <div class="first-listen-status" id="firstListenSourceRepair"></div>
+                        <div class="first-listen-actions" id="firstListenSourceActions" hidden>
+                          <button type="button" class="btn btn-util first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
+                        </div>
+                      </div>
+                    </details>
+                  </section>
+                  <p class="setup-note" id="firstListenSpeakerHelp">A new start begins a new sound check. Speaker routing stays out of the way until you choose Listen elsewhere.</p>
                 </div>
               </section>
 
@@ -2635,20 +2618,23 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 </div>
                 <div class="first-listen-body" id="firstListenVerifyBody" role="region" aria-labelledby="firstListenVerifyHeading" hidden aria-hidden="true" inert>
                   <div class="listening-invitation">
-                    <p><strong>Marco</strong><span>“Is this thing on?”</span></p>
-                    <p><strong>Giulia</strong><span>“Let them answer, Marco.”</span></p>
+                    <p><strong>Marco</strong><span>“Our newest regular deserves a proper welcome.”</span></p>
+                    <p><strong>Giulia</strong><span>“Then put a record on, Marco.”</span></p>
                   </div>
-                  <div class="guide-audio sound-check-help" id="firstListenSoundHelp" data-guide="sound-check">
-                    <button type="button" class="guide-audio-play" data-guide-key="sound-check" aria-describedby="guideSoundNote" onclick="toggleFirstListenGuide('sound-check',this)">Hear why we ask</button>
-                    <p class="guide-audio-copy" id="guideSoundNote"><strong>Marco has a question. Giulia has a point.</strong><span>Recorded exchange · 14 seconds on this device</span></p>
-                    <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> We are on! Right now, out of that little speaker in your hand. If you can hear me, and you should, say yes. <strong>Giulia:</strong> The machine knows it pressed play. It cannot hear your room. That part is yours, not his.</p></details>
-                  </div>
-                  <p class="use-copy">Hear the hosts or music? Let us know.</p>
+                  <p class="use-copy">The browser is playing. Only you can confirm that the sound reached the room.</p>
                   <div class="first-listen-actions" id="firstListenVerifyActions" style="margin-top:0">
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>I hear you</button>
-                    <button type="button" class="btn btn-util first-listen-action" id="firstListenNotYetBtn" data-stopped-exempt onclick="verifyFirstListen(false,this)" disabled>No sound yet</button>
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>Yes, sounds great</button>
+                    <button type="button" class="btn btn-util first-listen-action" id="firstListenNotYetBtn" data-stopped-exempt onclick="verifyFirstListen(false,this)" disabled>Not yet</button>
                   </div>
                   <div class="first-listen-status" id="firstListenVerifyStatus" role="status" aria-live="polite" aria-atomic="true"></div>
+                  <details class="first-listen-explanation" id="firstListenSoundHelp">
+                    <summary>Why do I need to confirm?</summary>
+                    <div class="guide-audio sound-check-help" data-guide="sound-check">
+                      <button type="button" class="guide-audio-play" data-guide-key="sound-check" aria-describedby="guideSoundNote" onclick="toggleFirstListenGuide('sound-check',this)">Hear why we ask</button>
+                      <p class="guide-audio-copy" id="guideSoundNote"><strong>Marco has a question. Giulia has a point.</strong><span>Recorded exchange · 14 seconds on this device</span></p>
+                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> We are on! Right now, out of that little speaker in your hand. If you can hear me, and you should, say yes. <strong>Giulia:</strong> The machine knows it pressed play. It cannot hear your room. That part is yours, not his.</p></details>
+                    </div>
+                  </details>
                   <div class="first-listen-repair" id="firstListenReceiptRepair" hidden>
                     <h4 class="benefit-heading">Restore the sound check.</h4>
                     <p>The station already started on this device. Restore the missing sound check without playing it again.</p>
@@ -2690,30 +2676,23 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="first-listen-review" data-review-step="privacy" aria-expanded="false" aria-controls="firstListenPrivacyBody" onclick="toggleFirstListenReview('privacy',this)" hidden>Review privacy choice</button>
                 </div>
                 <div class="first-listen-body" id="firstListenPrivacyBody" role="region" aria-labelledby="firstListenPrivacyHeading" hidden aria-hidden="true" inert>
-                    <div class="first-listen-lock" id="firstListenPrivacyLock"><span class="first-listen-lock-shape" aria-hidden="true">○</span>Confirm that you heard the station first.</div>
-                  <div class="show-invitation" id="firstListenConnectionInvite">
-                    <h4 class="benefit-heading">Your home becomes part of the show.</h4>
-                    <p class="use-copy">Home Assistant can give the hosts material from your world: a finished wash, a homecoming, the kitchen temperature. Ordinary details. Very serious radio.</p>
-                    <p class="use-copy">Music and recorded host moments are already yours. Connect a writing service for new conversations, choose their voices, then preview the Home Assistant details you want to share.</p>
-                    <p class="setup-note">On day one your station knows the sky: weather and daylight, which is the evening moment below and works on a fresh install. The laundry, the arrival and the kitchen need household details a fresh station does not have yet; those arrive with a later update. New host lines of any kind need a writing service — add one below, or keep listening without.</p>
-                    <p class="setup-note" id="firstListenConnectionPromise">No keys needed to start listening. Home stays private until you choose otherwise. Connected services may charge for use.</p>
-                    <div class="first-listen-actions first-listen-decision">
-                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Finish with Home private</button>
-                      <button type="button" class="btn btn-util first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Add live host writing</button>
-                    </div>
-                    <p class="setup-note">Or hear what the hosts do with a home first. These are staged station moments, not readings from your home.</p>
-                    <div class="home-moments" aria-label="Staged example scenes, not your home">
-                      <div class="listening-invitation household-scene" data-explainer-scenario="quiet" data-reachability="day-one">
-                        <h5>Evening, officially. <em class="day-one-chip">day one</em></h5>
-                        <p class="scene-caption">Sunset · clear night · eleven degrees</p>
+                  <div class="first-listen-lock" id="firstListenPrivacyLock"><span class="first-listen-lock-shape" aria-hidden="true">○</span>Confirm that you heard the station first.</div>
+                  <div class="show-invitation first-listen-proof" id="firstListenHouseholdProof" aria-labelledby="firstListenHouseholdProofHeading">
+                    <p class="proof-kicker">One scene · staged, not your home</p>
+                    <h4 class="benefit-heading" id="firstListenHouseholdProofHeading">Hear what your home adds.</h4>
+                    <p class="use-copy">This evening uses only weather and daylight — details a fresh station can use today once you connect and approve them. Nothing from your home has been read.</p>
+                    <div class="home-moments" aria-label="Staged household proof, not your home">
+                      <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="quiet" data-reachability="day-one">
+                        <h5>Evening, officially. <em class="day-one-chip">available today</em></h5>
+                        <p class="scene-caption">Staged home · sunset · clear night · eleven degrees</p>
                         <p><strong>Giulia</strong><span>“Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.”</span></p>
                         <div class="household-example" data-home-moment="quiet">
-                          <button type="button" class="household-example-play" data-household-example="quiet" data-stopped-exempt aria-describedby="householdQuietNote" onclick="toggleHouseholdExample('quiet',this)">Hear the evening</button>
-                          <p class="guide-audio-copy" id="householdQuietNote"><strong>About 36 seconds on this device</strong><span>Staged station moment · your station can do this today</span></p>
+                          <button type="button" class="household-example-play" data-household-example="quiet" data-household-proof data-stopped-exempt aria-describedby="householdQuietNote" onclick="toggleHouseholdExample('quiet',this)">Hear the evening</button>
+                          <p class="guide-audio-copy" id="householdQuietNote"><strong>About 36 seconds on this device</strong><span>The station ducks, then returns · no Home details are read</span></p>
                           <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. <strong>Giulia:</strong> It’s a landline, Marco, and you unplug it so your ego can charge. <strong>Giulia:</strong> The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly. <strong>Marco:</strong> Officially evening means slow songs only from here. I don’t make the rules. Giulia makes the rules.</p></details>
                         </div>
                       </div>
-                      <div class="listening-invitation household-scene" data-explainer-scenario="laundry" data-reachability="home-grant">
+                      <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="laundry" data-reachability="home-grant" hidden inert>
                         <h5>The laundry finished. Nobody noticed.</h5>
                         <p class="scene-caption">Washing machine · finished</p>
                         <p><strong>Marco</strong><span>“Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.”</span></p>
@@ -2723,7 +2702,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                           <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Giulia:</strong> Four minutes on one penalty kick tonight, Marco. Three of them were about your hair. <strong>Marco:</strong> The hair is part of the sport, Giulia. Cinema. Pure cinema. <strong>Marco:</strong> You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us. <strong>Giulia:</strong> You heard it here first. Up next: the sports desk, which is unfortunately still Marco’s.</p></details>
                         </div>
                       </div>
-                      <div class="listening-invitation household-scene" data-explainer-scenario="arrival" data-reachability="home-grant">
+                      <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="arrival" data-reachability="home-grant" hidden inert>
                         <h5>Someone’s home early.</h5>
                         <p class="scene-caption">Arrival · front door · evening light</p>
                         <p><strong>Marco</strong><span>“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</span></p>
@@ -2733,7 +2712,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                           <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Limit 70! Kevin MacLeod. The official soundtrack of the drive home, Giulia. <strong>Giulia:</strong> You have never once driven the speed limit, Marco. <strong>Marco:</strong> And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa. <strong>Giulia:</strong> Benvenuto a casa indeed. Next up, a song for walking in the door.</p></details>
                         </div>
                       </div>
-                      <div class="listening-invitation household-scene" data-explainer-scenario="coffee" data-reachability="home-grant">
+                      <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="coffee" data-reachability="home-grant" hidden inert>
                         <h5>The kitchen just woke up.</h5>
                         <p class="scene-caption">Coffee machine · room temperature</p>
                         <p><strong>Giulia</strong><span>“The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.”</span></p>
@@ -2744,10 +2723,20 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                         </div>
                       </div>
                     </div>
-                    <div class="guide-audio" data-guide="privacy">
-                      <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Hear weather become a bit</button>
-                      <p class="guide-audio-copy" id="guidePrivacyNote"><strong>Rain cancels Marco’s rooftop disco.</strong><span>Recorded scene · invented weather · 10 seconds on this device</span></p>
-                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Rain all afternoon. I’ve cancelled the rooftop disco. <strong>Giulia:</strong> It was a speaker on a bin, Marco. Bring it inside. We’re not cancelling Saturday.</p></details>
+                    <div class="first-listen-actions proof-escape-actions">
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenProofSkipBtn" data-stopped-exempt onclick="completeFirstListenHouseholdProof('skipped')">Skip this example</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenProofPrivateBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Finish with Home private</button>
+                    </div>
+                  </div>
+                  <div class="show-invitation" id="firstListenConnectionInvite" hidden>
+                    <p class="proof-kicker">The example was staged</p>
+                    <h4 class="benefit-heading" id="firstListenConnectionHeading" tabindex="-1">Now make it yours.</h4>
+                    <p class="use-copy">A writing service gives Marco and Giulia fresh lines between records. Then you preview the exact Home details they would receive and decide whether to share them.</p>
+                    <p class="use-copy">Without a writing key, the live station and its included recordings keep playing. For now, a fresh station’s Home preview is limited to weather and daylight.</p>
+                    <p class="setup-note" id="firstListenConnectionPromise">No key is needed to keep listening. Home stays private until you approve a preview. Connected services may charge for use.</p>
+                    <div class="first-listen-actions first-listen-decision">
+                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Connect live writing</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Finish with Home private</button>
                     </div>
                   </div>
                   <div id="firstListenHomeChoice" hidden>
@@ -2759,6 +2748,14 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                       <p class="setup-note">Fresh installs can share broad weather and daylight. Existing stations may already share more. Check the preview below before choosing. New Home conversations need a writing service; the included studio recordings don’t use Home details.</p>
                       <p class="privacy-promise">Keep Home private and we request nothing. To share details, preview exactly what the hosts would receive, then decide.</p>
                     </div>
+                    <details class="first-listen-explanation permission-explanation">
+                      <summary>Why does the preview come first?</summary>
+                      <div class="guide-audio" data-guide="privacy">
+                        <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Hear weather become a bit</button>
+                        <p class="guide-audio-copy" id="guidePrivacyNote"><strong>Rain cancels Marco’s rooftop disco.</strong><span>Recorded scene · invented weather · 10 seconds on this device</span></p>
+                        <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Rain all afternoon. I’ve cancelled the rooftop disco. <strong>Giulia:</strong> It was a speaker on a bin, Marco. Bring it inside. We’re not cancelling Saturday.</p></details>
+                      </div>
+                    </details>
                     <div class="ha-preview" id="haContextPreview" role="region" aria-label="Your Home preview" tabindex="-1"><div class="empty">No Home Assistant data has been requested for this preview.</div></div>
                     <template id="haPreviewActionTemplate"><button type="button" class="btn btn-util ha-preview-action" data-stopped-exempt></button></template>
                     <p class="setup-note" id="firstListenHomeUnavailable" hidden>Home Assistant isn’t connected yet. Keep listening, then connect it from Station controls whenever you’re ready.</p>
@@ -2775,6 +2772,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               </section>
 
               </div>
+              <p class="progress-line" id="firstListenProgressLine">Step 1 of 3. Start the station.</p>
 
               <section class="first-listen-optional" id="firstListenOptional" aria-labelledby="firstListenOptionalHeading">
               <h3 class="first-listen-optional-heading" id="firstListenOptionalHeading">Your ongoing show</h3>
@@ -2852,7 +2850,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               <details class="setup-advanced technical-details" id="setupAdvancedDetails">
                 <summary>Technical details and help</summary>
                 <div class="technical-body" aria-hidden="true" inert>
-                  <section class="technical-group technical-group-wide"><h4>Music after the welcome</h4><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
+                  <section class="technical-group technical-group-wide"><h4>Music after the opening</h4><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
                   <section class="technical-group"><h4>Exact Home Assistant source</h4><p><code>media-source://mammamiradio/live</code></p><p>Exactly one selected <code>media_player</code>. No automatic room choice or volume change.</p></section>
                   <section class="technical-group"><h4>Identity</h4><div class="setup-list" id="setupIdentity"></div></section>
                   <section class="technical-group"><h4>Original setup evidence</h4><ul class="setup-steps" id="setupSteps"></ul></section>
@@ -2905,6 +2903,13 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               </div>
             </section>
             <div class="sr-only" id="firstListenLiveRegion" role="status" aria-live="polite" aria-atomic="true"></div>
+            <template id="firstListenWelcomeCompatibility">
+              <div class="guide-audio" data-guide="welcome">
+                <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Take your seat</button>
+                <p class="guide-audio-copy" id="guideWelcomeNote"><strong>Sound on. Meet Marco &amp; Giulia.</strong><span>Recorded welcome · 16 seconds on this device</span></p>
+                <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! I’m Marco. I cleared you a place in Studio B. Had to move Giulia’s coffee. <strong>Giulia:</strong> I’m Giulia. I run the desk. Touch my coffee again and you’re in the corridor, Marco. Come in. Three small steps. Then we’re on air.</p></details>
+              </div>
+            </template>
 
 
           </div>
@@ -2987,7 +2992,7 @@ const SOURCE_CHIPS={
 let _lastSetupJson=null;
 const FIRST_LISTEN_STREAM='/stream?first_listen=1';
 const FIRST_LISTEN_LIVE_STREAM='/stream?first_listen=live';
-const FIRST_LISTEN_WELCOME_COPY=document.getElementById('firstListenShowCopy')?.innerHTML||'';
+const FIRST_LISTEN_ARRIVAL_COPY=document.getElementById('firstListenShowCopy')?.innerHTML||'';
 const FIRST_LISTEN_ERRORS={
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then try again.'},
   ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
@@ -2999,7 +3004,7 @@ const FIRST_LISTEN_ERRORS={
   service_rejected:{title:'Home Assistant did not start playback',message:'The speaker could not start the station this time.',action:'Check the target and test the exact Live source in Home Assistant, then retry once.'},
   request_in_flight:{title:'We’re still waiting for the station',message:'The first attempt has not finished yet.',action:'Give it a moment before trying again.'},
   receipt_unavailable:{title:'The station started, but the sound check was not saved',message:'Restoring the sound check will not start playback again.',action:'Choose “Save my sound check.”'},
-  receipt_recovery_missing:{title:'That sound check can no longer be restored',message:'The station did not play again.',action:'Refresh First Listen, then select “Play my station” on this device once more.'},
+  receipt_recovery_missing:{title:'That sound check can no longer be restored',message:'The station did not play again.',action:'Refresh First Listen, then select “Start my station” on this device once more.'},
   attempt_mismatch:{title:'This sound check belongs to an earlier play',message:'A newer play replaced it in this tab.',action:'Listen to the latest play, or start this device again.'},
   preview_unavailable:{title:'Your Home details are not available right now',message:'Opening a preview does not change your sharing choice.',action:'Try the preview again, or choose to keep Home private.'},
   preview_required:{title:'Check your Home details again before turning this on',message:'The earlier preview is out of date.',action:'Show a new preview, then choose whether Marco and Giulia may use it.'},
@@ -3031,6 +3036,7 @@ const _firstListenUi={
   privacyPreview:'untouched',
   privacyPreviewValid:false,
   privacyPreviewUseful:false,
+  householdProof:'ready',
   privacySaving:false,
   receiptSaving:false,
   privacyChoice:null,
@@ -3072,6 +3078,7 @@ const FIRST_LISTEN_GUIDE_NOUNS={welcome:'welcome','sound-check':'explanation','n
 // actually reach; the other three need household details it does not have yet.
 // home_moments/spoken_assets.json carries that boundary as data, and
 // validate-spoken-assets.py binds these versions to its sha256 prefixes.
+const FIRST_LISTEN_HOME_PROOF_KEY='quiet';
 const HOUSEHOLD_EXAMPLES={
   quiet:{file:'quiet.mp3',version:'02fc7d83734a'},
   laundry:{file:'laundry.mp3',version:'e7607b0c0566'},
@@ -3102,7 +3109,7 @@ function firstListenGuideContainer(button){return button?.closest('.guide-audio,
 function firstListenGuideLocksRoomProof(){
   // Narration decorates the journey, it never gates it. Only a clip that is
   // genuinely playing holds the room proof; a slow or missing one leaves
-  // "I hear you" and "No sound yet" exactly where the operator left them.
+  // the sound-confirmation actions exactly where the operator left them.
   const state=firstListenGuideContainer(_firstListenUi.guideButton)?.dataset.state||'';
   return state==='playing';
 }
@@ -3221,11 +3228,13 @@ function initFirstListenGuideAudio(){
   });
   audio.addEventListener('ended',()=>{
     const button=_firstListenUi.guideButton;
+    const completedHouseholdProof=button?.hasAttribute('data-household-proof')===true;
     // Natural completion uses the same gain-restoration boundary as dismissal.
     stopFirstListenGuide();
     if(button){button.textContent=firstListenGuideLabel(button,'ended');button.setAttribute('aria-pressed','false');}
     const container=firstListenGuideContainer(button);
     if(container)container.dataset.state='ended';
+    if(completedHouseholdProof)completeFirstListenHouseholdProof('heard');
     renderFirstListenProgress();
   });
   audio.addEventListener('error',()=>{
@@ -3244,6 +3253,13 @@ function initFirstListenGuideAudio(){
 }
 async function toggleHouseholdExample(key,button){
   return toggleFirstListenGuide(key,button);
+}
+function completeFirstListenHouseholdProof(outcome='heard'){
+  if(!['heard','skipped'].includes(outcome)||_firstListenUi.householdProof!=='ready')return;
+  stopFirstListenGuide();
+  _firstListenUi.householdProof=outcome;
+  renderFirstListenProgress();
+  requestAnimationFrame(()=>document.getElementById('firstListenConnectionHeading')?.focus());
 }
 initFirstListenGuideAudio();
 initFirstListenStationAudio();
@@ -3573,7 +3589,7 @@ function showAdminTab(name,{render=true,persist=true}={}){
   delete document.body.dataset.firstListenSetupView;
   setFirstListenSetupView();
   if(name!=='setup'&&_firstListenUi.restarting){
-    Object.assign(_firstListenUi,{restarting:false,selectionDirty:false,retestPending:false,selectedEntityId:'',selectedName:'',attemptId:'',dispatch:'ready',verification:'awaiting',privacyChoice:null,privacyReceiptChoice:null,privacyPreview:'untouched',privacyPreviewValid:false,privacyPreviewUseful:false,repairOpen:false,reviewStep:'',optionalStep:'',reviewTrigger:null,showSuccess:false});
+    Object.assign(_firstListenUi,{restarting:false,selectionDirty:false,retestPending:false,selectedEntityId:'',selectedName:'',attemptId:'',dispatch:'ready',verification:'awaiting',privacyChoice:null,privacyReceiptChoice:null,privacyPreview:'untouched',privacyPreviewValid:false,privacyPreviewUseful:false,householdProof:'ready',repairOpen:false,reviewStep:'',optionalStep:'',reviewTrigger:null,showSuccess:false});
     document.body.dataset.firstListenEntry='pending';
     _lastSetupJson='';
     syncFirstListenSetupMount();
@@ -4003,7 +4019,7 @@ async function doPurge(el){
 const STOP_FAILURE_COPY="We couldn't pause the station. Give the studio a few seconds, then press Stop again.";
 const RESUME_FAILURE_COPY="We couldn't resume the station. Give the studio a few seconds, then press Start again.";
 const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? The station may be quiet briefly while the studio rebuilds.";
-const FIRST_LISTEN_RESUME_FAILURE_COPY="The station could not start just now. Give it a few seconds, then tap Play my station again.";
+const FIRST_LISTEN_RESUME_FAILURE_COPY="The station could not start just now. Give it a few seconds, then tap Start my station again.";
 // Stop and Resume answer with the precise reason they refused. Prefer it over
 // the generic line because it names the way out. An assetless Resume may also
 // offer the separately confirmed force-start below; it is never sent implicitly.
@@ -5398,7 +5414,11 @@ function openSetupPanel(focus=''){
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
     if(focus==='source')focusFirstListenStep('source');
-    else if(focus==='choices')document.querySelector('#firstListenPrivacyStep[data-state="complete"] .first-listen-review')?.focus({preventScroll:true});
+    else if(focus==='choices'){
+      const trigger=document.querySelector('#firstListenPrivacyStep[data-state="complete"] .first-listen-review');
+      if(trigger)toggleFirstListenReview('privacy',trigger);
+      else if(firstListenRequired)focusCurrentFirstListenStep();
+    }
     else if(firstListenRequired)focusCurrentFirstListenStep();
     else summary?.focus({preventScroll:true});
   },50);
@@ -5408,7 +5428,7 @@ function restartFirstListen(){
   if(firstListenRestartBusy())return;
   _firstListenUi.connectionStage='invite';
   cancelFirstListenHandoff();stopFirstListenGuide();
-  Object.assign(_firstListenUi,{restarting:true,selectionDirty:true,retestPending:true,selectedEntityId:'',selectedName:'',attemptId:'',dispatch:'ready',verification:'awaiting',privacyChoice:null,privacyReceiptChoice:null,privacyPreview:'untouched',privacyPreviewValid:false,privacyPreviewUseful:false,repairOpen:false,reviewStep:'',optionalStep:'',reviewTrigger:null,showSuccess:false,successAnnounced:false,activationStartedAt:0,activationMs:null,firstUnresolvedRenderedAt:performance.now()});
+  Object.assign(_firstListenUi,{restarting:true,selectionDirty:true,retestPending:true,selectedEntityId:'',selectedName:'',attemptId:'',dispatch:'ready',verification:'awaiting',privacyChoice:null,privacyReceiptChoice:null,privacyPreview:'untouched',privacyPreviewValid:false,privacyPreviewUseful:false,householdProof:'ready',repairOpen:false,reviewStep:'',optionalStep:'',reviewTrigger:null,showSuccess:false,successAnnounced:false,activationStartedAt:0,activationMs:null,firstUnresolvedRenderedAt:performance.now()});
   document.querySelectorAll('#journeySurface details,.success-saved').forEach(details=>{details.open=false;});
   document.querySelectorAll('.guide-audio,.household-example').forEach(card=>{card.dataset.state='idle';const button=card.querySelector('.guide-audio-play,.household-example-play');if(button){button.textContent=firstListenGuideIdleLabel(button);button.setAttribute('aria-pressed','false');}});
   renderHomeContextPreview({ok:true,status:'review',entities:[]});
@@ -5660,6 +5680,7 @@ function toggleFirstListenOptional(key,trigger){
 function showFirstListenConnection(stage){
   const projection=firstListenProjection();
   if(!projection.privacyUnlocked||_firstListenUi.keySaving||_firstListenUi.privacySaving)return;
+  if(stage!=='invite'&&firstListenHouseholdProofRequired(projection)&&_firstListenUi.householdProof==='ready')return;
   stopFirstListenGuide();
   _firstListenUi.connectionStage=stage;
   _firstListenUi.optionalStep=['writing','voices'].includes(stage)?'ai':'';
@@ -5716,6 +5737,10 @@ function firstListenVoiceEvidence(){
   if(failed)return{state:'degraded',label:'A voice service needs attention',detail:'Check its key and available credit. The station may use fallback voices while it recovers.'};
   return{state:'working',label:'Voice settings saved',detail:'Listen for the next host break to hear the current voices. Saving a key does not confirm that the recorded voices are available.'};
 }
+function firstListenHouseholdProofRequired(projection=firstListenProjection()){
+  const origin=String(projection.first?.install_origin||'unknown').toLowerCase();
+  return _firstListenUi.restarting||(!projection.legacy&&origin!=='existing');
+}
 function renderFirstListenConnection(){
   const p=firstListenProjection(),stage=_firstListenUi.connectionStage;
   const busy=firstListenRestartBusy();
@@ -5723,18 +5748,31 @@ function renderFirstListenConnection(){
   done.hidden=document.body.dataset.firstListenEntry!=='completing'||!p.privacyReviewed||_firstListenUi.showSuccess;
   done.disabled=busy;
   const home=stage==='home'||_firstListenUi.reviewStep==='privacy'||_firstListenUi.privacyReceiptChoice!==null||(!_firstListenUi.restarting&&(p.legacy||p.first.install_origin==='existing'));
-  document.getElementById('firstListenConnectionInvite').hidden=home;
+  const proofRequired=firstListenHouseholdProofRequired(p);
+  const proofComplete=!proofRequired||_firstListenUi.householdProof!=='ready';
+  const proof=document.getElementById('firstListenHouseholdProof');
+  document.querySelectorAll('[data-household-proof-candidate]').forEach(scene=>{
+    const selected=scene.dataset.explainerScenario===FIRST_LISTEN_HOME_PROOF_KEY;
+    scene.hidden=!selected;scene.toggleAttribute('inert',!selected);
+    scene.querySelector('.household-example-play')?.toggleAttribute('data-household-proof',selected);
+  });
+  if(proof)proof.hidden=home||!p.privacyUnlocked||p.privacyReviewed||!proofRequired||proofComplete;
+  document.getElementById('firstListenConnectionInvite').hidden=home||!proofComplete;
   document.getElementById('firstListenHomeChoice').hidden=!home;
   document.getElementById('firstListenOptional').hidden=!_firstListenUi.optionalStep&&!p.privacyReviewed;
   const promise=document.getElementById('firstListenConnectionPromise');
-  promise.textContent=p.privacyEnabled?'Your saved Home sharing is on. A connected writing service may use those details. Connected services may charge for use.':'No keys needed to start listening. Home stays private until you choose otherwise. Connected services may charge for use.';
+  promise.textContent=p.privacyEnabled?'Your saved Home sharing is on. A connected writing service may use those details. Connected services may charge for use.':'No key is needed to keep listening. Home stays private until you approve a preview. Connected services may charge for use.';
   const keep=document.getElementById('firstListenKeepListeningBtn');
   keep.textContent=p.privacyEnabled?'Review my Home choice':'Finish with Home private';
   keep.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
-  document.getElementById('firstListenMakeYoursBtn').disabled=!p.privacyUnlocked;
+  document.getElementById('firstListenMakeYoursBtn').disabled=!p.privacyUnlocked||!proofComplete;
+  const proofSkip=document.getElementById('firstListenProofSkipBtn');
+  const proofPrivate=document.getElementById('firstListenProofPrivateBtn');
+  if(proofSkip)proofSkip.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
+  if(proofPrivate)proofPrivate.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
   document.getElementById('firstListenHomeUnavailable').hidden=p.haAccess;
   document.getElementById('firstListenExistingHomeNotice').hidden=!p.privacyEnabled;
-  if(!home&&p.privacyUnlocked&&!p.privacyReviewed)document.getElementById('firstListenPrivacySummary').textContent='Finish with Home private, or add live host writing first.';
+  if(!home&&p.privacyUnlocked&&!p.privacyReviewed)document.getElementById('firstListenPrivacySummary').textContent=proofComplete?'Connect live writing, or finish with Home private.':'Hear one staged Home moment, then decide what to connect.';
   document.querySelectorAll('[data-connection-stage]').forEach(pane=>{pane.hidden=pane.dataset.connectionStage!==(stage==='voices'?'voices':'writing');});
   const provider=document.getElementById('firstListenWritingProvider').value;
   document.querySelectorAll('[data-writing-provider]').forEach(field=>{field.hidden=field.dataset.writingProvider!==provider;});
@@ -6150,7 +6188,7 @@ function renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,rec
   if(title)title.textContent=priorInstall?'Review your First Listen choices.':'Your seat’s ready.';
   if(!copy)return;
   if(priorInstall)copy.textContent='Your saved listening path and privacy choice stay in place until you change them.';
-  else copy.innerHTML=FIRST_LISTEN_WELCOME_COPY;
+  else copy.innerHTML=FIRST_LISTEN_ARRIVAL_COPY;
 }
 function firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable}){
   if(healthy)return 'Listen for Marco and Giulia, then the first song.';
@@ -6179,7 +6217,7 @@ function renderFirstListenProgress(){
   document.getElementById('firstListenRestartBtn').disabled=firstListenRestartBusy();
   const restartNote=document.getElementById('firstListenRestartNote');
   restartNote.hidden=!_firstListenUi.restarting;
-  restartNote.textContent=projection.privacyEnabled?'Your saved Home context is still on. You can change it in step 3.':'Your saved settings stay in place. Home stays private until you choose otherwise.';
+  restartNote.textContent=projection.privacyEnabled?'Your saved Home choice stays in place while you listen. You can review it after the sound check.':'You can personalise the station after you’ve heard it. Home stays private until you choose otherwise.';
   const existingProof=priorInstall&&!_firstListenUi.selectionDirty&&!projection.proofPending;
   const receiptRepairRequired=_firstListenUi.dispatch==='receipt_failed';
   const listenAccepted=projection.accepted||existingProof||receiptRepairRequired;
@@ -6200,16 +6238,29 @@ function renderFirstListenProgress(){
   const requiredSteps=[...document.querySelectorAll('#firstListenPath > .first-listen-step')];
   const currentNumber=requiredSteps.findIndex(step=>step.dataset.state==='current')+1;
   const currentKey=FIRST_LISTEN_STEP_KEYS[requiredSteps[currentNumber-1]?.id];
-  const nextLabels={speaker:'play it here',verify:'tell us how it sounds',privacy:'make the show yours, or keep listening'};
-  if(surface)surface.dataset.currentStep=currentNumber?String(currentNumber):'complete';
+  const nextLabels={speaker:'start the station',verify:'confirm the sound',privacy:'hear one Home moment, then make it yours'};
+  if(surface){
+    surface.dataset.currentStep=currentNumber?String(currentNumber):'complete';
+    surface.dataset.musicRepair=!currentNumber&&!continuityAvailable?'true':'false';
+  }
   if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of ${requiredCount}. Next: ${nextLabels[currentKey]||'finish'}.`:!continuityAvailable&&!priorInstall?'Your three choices are saved. Music still needs attention.':'First Listen complete. Review any choice below.';
+  const sourcePreviewDetails=document.getElementById('firstListenSourcePreviewDetails');
+  if(!currentNumber&&!continuityAvailable){
+    if(sourcePreviewDetails)sourcePreviewDetails.open=true;
+    const speakerBody=document.getElementById('firstListenSpeakerBody');
+    if(speakerBody){
+      speakerBody.hidden=false;
+      speakerBody.setAttribute('aria-hidden','false');
+      speakerBody.removeAttribute('inert');
+    }
+  }
 
   const sourceSummary=document.getElementById('firstListenSourceSummary');
   const sourceRepair=document.getElementById('firstListenSourceRepair');
   const sourceAction=firstListenMusicSourceAction();
   if(!sourceKnown){
     firstListenSetChip('firstListenSourceChip','working','Still checking');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready. We’re checking that music can continue afterward.';
+    if(sourceSummary)sourceSummary.textContent='The station opening is ready. We’re checking what can continue afterward.';
     if(sourceRepair)sourceRepair.textContent='';
   }else if(healthy){
     firstListenSetChip('firstListenSourceChip','ready','Music is ready');
@@ -6217,20 +6268,20 @@ function renderFirstListenProgress(){
     if(sourceRepair)sourceRepair.textContent='';
   }else if(recoveryOnAir){
     firstListenSetChip('firstListenSourceChip','degraded','Music needs attention');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup audio is keeping the station on.';
+    if(sourceSummary)sourceSummary.textContent='The station opening is ready. Backup audio is keeping the station on.';
     if(sourceRepair)sourceRepair.textContent='You can continue First Listen with backup audio. Check music sources to hear songs afterward.';
   }else if(recoveryAvailable){
     firstListenSetChip('firstListenSourceChip','degraded','Music needs attention');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup audio can keep the station playing while primary music is repaired.';
+    if(sourceSummary)sourceSummary.textContent='The station opening is ready. Backup audio can keep the station playing while primary music is repaired.';
     if(sourceRepair)sourceRepair.textContent=sourceAction.target==='checking'
       ?'You can continue First Listen with backup audio. We’re checking which music-source repair is available.'
       :`You can continue First Listen with backup audio. Music still needs attention; ${sourceAction.button.toLowerCase()} when you are ready.`;
   }else{
     firstListenSetChip('firstListenSourceChip','degraded','Music needs attention');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready, but music cannot continue afterward yet.';
+    if(sourceSummary)sourceSummary.textContent='The station opening is ready, but music cannot continue afterward yet.';
     if(sourceRepair)sourceRepair.textContent=sourceAction.target==='checking'
-      ?'The welcome can still play, but there is no audio ready afterward. We’re checking which music-source repair is available.'
-      :`The welcome can still play, but there is no audio ready afterward. ${sourceAction.button} to continue.`;
+      ?'The station opening can still play, but there is no audio ready afterward. We’re checking which music-source repair is available.'
+      :`The station opening can still play, but there is no audio ready afterward. ${sourceAction.button} to continue.`;
   }
   // A later capabilities refresh must not overwrite an unresolved setup error.
   if(document.getElementById('setupAccessError')?.hidden===false){
@@ -6254,7 +6305,7 @@ function renderFirstListenProgress(){
   const deliberateRetry=_firstListenUi.verification==='not_yet'&&!listenComplete;
   if(playBtn){
     playBtn.disabled=!sourceKnown||speakerBusy||browserGuidePlaying||(listenAccepted&&!deliberateRetry);
-    playBtn.textContent=_firstListenUi.dispatch==='starting'?'Starting your station…':deliberateRetry?'Play my station again':'Play my station';
+    playBtn.textContent=_firstListenUi.dispatch==='starting'?'Starting your station…':deliberateRetry?'Start my station again':'Start my station';
     firstListenSetActionTone(playBtn,!listenAccepted);
   }
   if(retryBtn)retryBtn.disabled=!deliberateRetry||speakerBusy||browserGuidePlaying;
@@ -6275,7 +6326,7 @@ function renderFirstListenProgress(){
     if(speakerSummary)speakerSummary.textContent='Your station started on this device.';
   }else if(sourceKnown){
     firstListenSetChip('firstListenSpeakerChip','idle','Your turn');
-    if(speakerSummary)speakerSummary.textContent='Tap Play my station to hear it on this device.';
+    if(speakerSummary)speakerSummary.textContent='Start the station here. Marco and Giulia’s opening flows straight into live radio.';
   }else{
     firstListenSetChip('firstListenSpeakerChip','idle','Waiting');
   }
@@ -6691,7 +6742,7 @@ function initFirstListenStationAudio(){
     if(_firstListenPlayback.intent){_firstListenPlayback.phase='interrupted';renderFirstListenPlayer();}
     if(_firstListenUi.dispatch!=='starting')return;
     _firstListenUi.dispatch='rejected';
-    firstListenSetStatus('firstListenSpeakerStatus','This device could not start the station. Check volume, then try Play my station again.','blocked');
+    firstListenSetStatus('firstListenSpeakerStatus','This device could not start the station. Check volume, then try Start my station again.','blocked');
     renderFirstListenProgress();
   });
 }
@@ -6729,7 +6780,7 @@ async function startFirstListen(el){
       // Force Start rebuilds the station with no playable runway. The producer
       // desk confirms before doing this; onboarding must not do it silently.
       if(!window.confirm(FORCE_RESUME_CONFIRM_COPY)){
-        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Play my station again.','degraded');
+        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Start my station again.','degraded');
         _firstListenUi.dispatch='idle';
         return;
       }
@@ -6737,7 +6788,7 @@ async function startFirstListen(el){
       if(epoch!==p.epoch||!p.intent)return;
       // ok:true with recovering:false still means the station is on air (#1022).
       if(!(forceResponse.ok&&forcePayload?.ok===true)){
-        const detail=transportFailureCopy(forcePayload,'The studio could not rebuild the station just now. Give it a few seconds, then tap Play my station again.');
+        const detail=transportFailureCopy(forcePayload,'The studio could not rebuild the station just now. Give it a few seconds, then tap Start my station again.');
         firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');
         _firstListenUi.dispatch='idle';
         return;
@@ -6825,7 +6876,7 @@ async function verifyFirstListen(heard,el){
   stopFirstListenGuide();
   _firstListenUi.busy=true;
   if(el)el.setAttribute('aria-busy','true');
-  firstListenSetStatus('firstListenVerifyStatus',requestedHeard?'Saving your listening check…':'Saving “No sound yet” and opening help…');
+  firstListenSetStatus('firstListenVerifyStatus',requestedHeard?'Saving your listening check…':'Saving “Not yet” and opening help…');
   try{
     const {response,payload}=await apiResponse('POST','/api/setup/first-listen/listener-confirm',{heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify);
     const resp=payload&&typeof payload==='object'?payload:{};
@@ -7074,7 +7125,7 @@ function renderFirstListen(setup,modeLabel,stationLabel){
   const next=document.getElementById('setupNext');
   const badge=document.getElementById('setupReadyBadge');
   const priorInstall=projection.legacy||projection.first.install_origin==='existing';
-  if(meta)meta.textContent='The welcome works without AI or Home details.';
+  if(meta)meta.textContent='The station opening works without AI or Home details.';
   if(priorInstall&&!projection.privacyReviewed){
     if(headline)headline.textContent='Your existing station stays as it is.';
     if(next)next.textContent='Next: review your Home details. You do not need to replay the station.';

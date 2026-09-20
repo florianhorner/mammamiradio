@@ -14,6 +14,12 @@ startup render or network dependency. Because it never enters
 producer remain untouched. Completed and pre-feature installs go straight to
 the live hub.
 
+The Admin's single **Start my station** action opens that real stream, waits for
+its media `playing` event, then reveals sound confirmation and one staged
+weather/daylight proof. Hearing or skipping it unlocks the writing-key
+explanation and existing exact Home preview/consent boundary; the proof reads
+no Home state and grants no authorization.
+
 ## Runtime overview
 
 ```text
@@ -124,6 +130,12 @@ the shared audio queue:
   fresh install without audible proof. The `/stream` generator sends it directly
   to that client before joining `LiveStreamHub`; it never becomes a `Segment` or
   changes shared now-playing state.
+
+`FIRST_LISTEN_HOME_PROOF_KEY` selects one day-one scene from the hash-bound
+`HOUSEHOLD_EXAMPLES` map. It is `quiet` while fresh installs expose only weather
+and daylight; a later Home Profile grant can replace the scene without changing
+the arrival, sound-check, key, or consent progression. Validation rejects a
+selected scene that is not day-one reachable.
 
 `StationState.source_readiness` is event evidence, not a filesystem scan on each
 status request. The `golden_path.source_readiness` object from `/status` and the

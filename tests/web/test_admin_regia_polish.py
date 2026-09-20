@@ -653,7 +653,7 @@ def test_admin_has_h1_with_brand_accent() -> None:
     technical = html[html.index('id="setupAdvancedDetails"') : html.index('id="setupCachedContextDiagnostics"')]
     assert technical.count("<h4>") == 6 and "<h3>" not in technical
     for copy in (
-        "Hear the station, confirm the sound, then choose privacy.",
+        "Meet the voices behind your station. Then we’ll make it yours.",
         "What is prepared to air next.",
         "Live modes, pacing, and quick actions.",
         "History and saved moments.",
