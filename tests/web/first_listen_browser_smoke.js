@@ -1699,10 +1699,12 @@ async (page) => {
     assert(await page.locator('#firstListenHouseholdProof .household-scene:visible').count()===1,'proof slot exposed more than one scene');
     assert(await page.locator('#firstListenHouseholdProof [data-household-proof]:visible').count()===1,'selected proof scene is not playable');
     assert(await page.evaluate(()=>typeof toggleHouseholdExample==='function'),'household examples lost their play helper');
-    assert(
-      await page.locator('[data-explainer-scenario="quiet"] .day-one-chip').count()===1,
-      'day-one moment lost its visible chip',
-    );
+    assert((await page.locator('#householdQuietNote').innerText()).includes('An imagined evening. No details from your home.'),'proof lost its invented-context disclosure');
+    const eveningArt=page.locator('.evening-scene img');
+    await eveningArt.evaluate(image=>image.decode());
+    assert(await eveningArt.getAttribute('alt')==='A golden radio waveform becomes a warmly lit home beneath a crescent moon.','evening artwork lost its accessible description');
+    assert(await eveningArt.evaluate(image=>image.naturalWidth===1280&&image.naturalHeight===1300),'evening artwork did not load from the packaged asset');
+    assert(await page.locator('#firstListenProgressLine').innerText()==='Step 3 of 3 · Make it yours','evening step lost its approved progress label');
     await page.locator('[data-household-example="quiet"]').click();
     await page.waitForFunction(()=>_firstListenUi.guideKey==='quiet'&&!firstListenGuideAudio().paused);
     const quietDebug=await page.evaluate(()=>({
@@ -1713,12 +1715,21 @@ async (page) => {
       /\/static\/audio\/home_moments\/quiet\.mp3\?v=02fc7d83734a/.test(quietDebug.src||quietDebug.currentSrc||''),
       `day-one moment loaded the wrong source: ${JSON.stringify(quietDebug)}`,
     );
+    const proofFocus=await page.evaluate(()=>document.activeElement?.getAttribute('data-household-example'));
+    // Accelerate real decoded media; let its native ended event settle the scene.
+    await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=8;});
+    await page.waitForFunction(()=>_firstListenUi.householdProof==='heard',null,{timeout:10000});
+    await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=1;});
+    assert(await page.locator('#firstListenHouseholdProof').isVisible(),'natural completion hid proof Replay');
+    assert(await page.evaluate(()=>document.activeElement?.getAttribute('data-household-example'))===proofFocus,'natural completion stole focus');
+    assert((await page.locator('[data-household-example="quiet"]').innerText()).includes('Replay'),'native end lost Replay');
     await page.locator('[data-household-example="quiet"]').click();
-    await page.locator('#firstListenGuideAudio').evaluate((audio) => audio.dispatchEvent(new Event('ended')));
-    await page.waitForFunction(()=>_firstListenUi.householdProof==='heard');
-    assert(await page.locator('#firstListenHouseholdProof').isHidden(),'completed proof remained active');
+    await page.waitForFunction(()=>_firstListenUi.guideKey==='quiet'&&!firstListenGuideAudio().paused);
+    await page.locator('[data-household-example="quiet"]').click();
     assert(await page.locator('#firstListenConnectionInvite').isVisible(),'proof completion did not reveal the key explanation');
-    assert((await page.locator('#firstListenConnectionInvite').innerText()).toLowerCase().includes('the example was staged'),'key request blurred staged proof with the listener home');
+    assert((await page.locator('#householdQuietNote').innerText()).includes('Recorded example'),'key request blurred staged proof with the listener home');
+    assert(await page.locator('#firstListenConnectionPromise').innerText()==='You choose what they get to know.','proof completion overwrote the approved choice note');
+    assert(await page.locator('#firstListenKeepListeningBtn').innerText()==='Keep my home private','proof completion overwrote the private choice');
     assert((await page.locator('#firstListenPrivacyHeading').innerText())==='Make it yours','privacy step lost its polished heading');
     assert(await page.locator('[data-guide="free-voices"]').isHidden(),'free audition appeared before voice choice');
     assert(await page.locator('#firstListenSetupDoneBtn').count()===1,'Done with setup is missing');

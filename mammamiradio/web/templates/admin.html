@@ -2678,24 +2678,23 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 <div class="first-listen-body" id="firstListenPrivacyBody" role="region" aria-labelledby="firstListenPrivacyHeading" hidden aria-hidden="true" inert>
                   <div class="first-listen-lock" id="firstListenPrivacyLock"><span class="first-listen-lock-shape" aria-hidden="true">○</span>Confirm that you heard the station first.</div>
                   <div class="show-invitation first-listen-proof" id="firstListenHouseholdProof" aria-labelledby="firstListenHouseholdProofHeading">
-                    <p class="proof-kicker">One scene · staged, not your home</p>
-                    <h4 class="benefit-heading" id="firstListenHouseholdProofHeading">Hear what your home adds.</h4>
-                    <p class="use-copy">This evening uses only weather and daylight — details a fresh station can use today once you connect and approve them. Nothing from your home has been read.</p>
+                    <p class="proof-kicker">A little home, on air</p>
+                    <h3 class="benefit-heading" id="firstListenHouseholdProofHeading" tabindex="-1">Your home gives them something to talk about.</h3>
+                    <p class="use-copy">A quiet evening. A setting sun. Marco and Giulia take it from there.</p>
                     <div class="home-moments" aria-label="Staged household proof, not your home">
                       <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="quiet" data-reachability="day-one">
-                        <h5>Evening, officially. <em class="day-one-chip">available today</em></h5>
-                        <p class="scene-caption">Staged home · sunset · clear night · eleven degrees</p>
-                        <p><strong>Giulia</strong><span>“Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.”</span></p>
+                        <h5 class="sr-only">Evening, officially.</h5>
+                        <div class="evening-scene"><img src="/static/images/first-listen-evening.webp" width="1280" height="1300" alt="A golden radio waveform becomes a warmly lit home beneath a crescent moon."></div>
                         <div class="household-example" data-home-moment="quiet">
-                          <button type="button" class="household-example-play" data-household-example="quiet" data-household-proof data-stopped-exempt aria-describedby="householdQuietNote" onclick="toggleHouseholdExample('quiet',this)">Hear the evening</button>
-                          <p class="guide-audio-copy" id="householdQuietNote"><strong>About 36 seconds on this device</strong><span>The station ducks, then returns · no Home details are read</span></p>
+                          <button type="button" class="household-example-play" data-household-example="quiet" data-replay-label="Replay evening" data-household-proof data-stopped-exempt aria-describedby="householdQuietNote" onclick="toggleHouseholdExample('quiet',this)">Hear the evening</button>
+                          <p class="guide-audio-copy" id="householdQuietNote"><strong>Recorded example · 36 seconds</strong><span>An imagined evening. No details from your home.</span></p>
                           <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. <strong>Giulia:</strong> It’s a landline, Marco, and you unplug it so your ego can charge. <strong>Giulia:</strong> The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly. <strong>Marco:</strong> Officially evening means slow songs only from here. I don’t make the rules. Giulia makes the rules.</p></details>
                         </div>
                       </div>
                       <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="laundry" data-reachability="home-grant" hidden inert>
                         <h5>The laundry finished. Nobody noticed.</h5>
                         <p class="scene-caption">Washing machine · finished</p>
-                        <p><strong>Marco</strong><span>“Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.”</span></p>
+                        <p><strong>Marco</strong><span data-scene-quote>“Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.”</span></p>
                         <div class="household-example" data-home-moment="laundry">
                           <button type="button" class="household-example-play" data-household-example="laundry" data-stopped-exempt aria-describedby="householdLaundryNote" onclick="toggleHouseholdExample('laundry',this)">Hear the laundry</button>
                           <p class="guide-audio-copy" id="householdLaundryNote"><strong>About 31 seconds on this device</strong><span>Staged station moment · not your home</span></p>
@@ -2705,7 +2704,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                       <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="arrival" data-reachability="home-grant" hidden inert>
                         <h5>Someone’s home early.</h5>
                         <p class="scene-caption">Arrival · front door · evening light</p>
-                        <p><strong>Marco</strong><span>“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</span></p>
+                        <p><strong>Marco</strong><span data-scene-quote>“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</span></p>
                         <div class="household-example" data-home-moment="arrival">
                           <button type="button" class="household-example-play" data-household-example="arrival" data-stopped-exempt aria-describedby="householdArrivalNote" onclick="toggleHouseholdExample('arrival',this)">Hear the arrival</button>
                           <p class="guide-audio-copy" id="householdArrivalNote"><strong>About 30 seconds on this device</strong><span>Staged station moment · not your home</span></p>
@@ -2715,7 +2714,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                       <div class="listening-invitation household-scene" data-household-proof-candidate data-explainer-scenario="coffee" data-reachability="home-grant" hidden inert>
                         <h5>The kitchen just woke up.</h5>
                         <p class="scene-caption">Coffee machine · room temperature</p>
-                        <p><strong>Giulia</strong><span>“The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.”</span></p>
+                        <p><strong>Giulia</strong><span data-scene-quote>“The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.”</span></p>
                         <div class="household-example" data-home-moment="coffee">
                           <button type="button" class="household-example-play" data-household-example="coffee" data-stopped-exempt aria-describedby="householdCoffeeNote" onclick="toggleHouseholdExample('coffee',this)">Hear the kitchen</button>
                           <p class="guide-audio-copy" id="householdCoffeeNote"><strong>About 36 seconds on this device</strong><span>Staged station moment · not your home</span></p>
@@ -2725,18 +2724,15 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     </div>
                     <div class="first-listen-actions proof-escape-actions">
                       <button type="button" class="btn btn-util first-listen-action" id="firstListenProofSkipBtn" data-stopped-exempt onclick="completeFirstListenHouseholdProof('skipped')">Skip this example</button>
-                      <button type="button" class="btn btn-util first-listen-action" id="firstListenProofPrivateBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Finish with Home private</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenProofPrivateBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Keep my home private</button>
                     </div>
                   </div>
                   <div class="show-invitation" id="firstListenConnectionInvite" hidden>
-                    <p class="proof-kicker">The example was staged</p>
-                    <h4 class="benefit-heading" id="firstListenConnectionHeading" tabindex="-1">Now make it yours.</h4>
-                    <p class="use-copy">A writing service gives Marco and Giulia fresh lines between records. Then you preview the exact Home details they would receive and decide whether to share them.</p>
-                    <p class="use-copy">Without a writing key, the live station and its included recordings keep playing. For now, a fresh station’s Home preview is limited to weather and daylight.</p>
-                    <p class="setup-note" id="firstListenConnectionPromise">No key is needed to keep listening. Home stays private until you approve a preview. Connected services may charge for use.</p>
+                    <h4 class="sr-only" id="firstListenConnectionHeading" tabindex="-1">Make it yours.</h4>
+                    <p class="setup-note" id="firstListenConnectionPromise">You choose what they get to know.</p>
                     <div class="first-listen-actions first-listen-decision">
-                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Connect live writing</button>
-                      <button type="button" class="btn btn-util first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Finish with Home private</button>
+                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Make it mine</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Keep my home private</button>
                     </div>
                   </div>
                   <div id="firstListenHomeChoice" hidden>
@@ -3259,7 +3255,7 @@ function completeFirstListenHouseholdProof(outcome='heard'){
   stopFirstListenGuide();
   _firstListenUi.householdProof=outcome;
   renderFirstListenProgress();
-  requestAnimationFrame(()=>document.getElementById('firstListenConnectionHeading')?.focus());
+  if(outcome==='skipped')showFirstListenConnection('writing');
 }
 initFirstListenGuideAudio();
 initFirstListenStationAudio();
@@ -5608,7 +5604,8 @@ function firstListenSetStep(id,state){
   }
 }
 function focusCurrentFirstListenStep(){
-  const heading=document.querySelector('#firstListenPath > .first-listen-step[data-state="current"] .first-listen-heading');
+  const proof=document.getElementById('firstListenHouseholdProof');
+  const heading=!proof.hidden&&proof.getClientRects().length?document.getElementById('firstListenHouseholdProofHeading'):document.querySelector('#firstListenPath > .first-listen-step[data-state="current"] .first-listen-heading');
   if(heading){heading.focus();return true}
   return false;
 }
@@ -5756,22 +5753,25 @@ function renderFirstListenConnection(){
     scene.hidden=!selected;scene.toggleAttribute('inert',!selected);
     scene.querySelector('.household-example-play')?.toggleAttribute('data-household-proof',selected);
   });
-  if(proof)proof.hidden=home||!p.privacyUnlocked||p.privacyReviewed||!proofRequired||proofComplete;
-  document.getElementById('firstListenConnectionInvite').hidden=home||!proofComplete;
+  if(proof)proof.hidden=home||!p.privacyUnlocked||p.privacyReviewed||!proofRequired||Boolean(_firstListenUi.optionalStep);
+  document.getElementById('firstListenConnectionInvite').hidden=home||!proofComplete||Boolean(_firstListenUi.optionalStep);
   document.getElementById('firstListenHomeChoice').hidden=!home;
   document.getElementById('firstListenOptional').hidden=!_firstListenUi.optionalStep&&!p.privacyReviewed;
   const promise=document.getElementById('firstListenConnectionPromise');
-  promise.textContent=p.privacyEnabled?'Your saved Home sharing is on. A connected writing service may use those details. Connected services may charge for use.':'No key is needed to keep listening. Home stays private until you approve a preview. Connected services may charge for use.';
+  promise.textContent=p.privacyEnabled?'Your saved Home sharing is still on.':'You choose what they get to know.';
   const keep=document.getElementById('firstListenKeepListeningBtn');
-  keep.textContent=p.privacyEnabled?'Review my Home choice':'Finish with Home private';
+  keep.textContent=p.privacyEnabled?'Review my Home choice':'Keep my home private';
   keep.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
   document.getElementById('firstListenMakeYoursBtn').disabled=!p.privacyUnlocked||!proofComplete;
   const proofSkip=document.getElementById('firstListenProofSkipBtn');
   const proofPrivate=document.getElementById('firstListenProofPrivateBtn');
-  if(proofSkip)proofSkip.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
-  if(proofPrivate)proofPrivate.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
+  if(proofSkip){proofSkip.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;proofSkip.hidden=proofComplete;}
+  if(proofPrivate){proofPrivate.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;proofPrivate.hidden=proofComplete;proofPrivate.textContent=p.privacyEnabled?'Review my Home choice':'Keep my home private';}
   document.getElementById('firstListenHomeUnavailable').hidden=p.haAccess;
   document.getElementById('firstListenExistingHomeNotice').hidden=!p.privacyEnabled;
+  document.getElementById('firstListenPrivacyStep').hidden=Boolean(_firstListenUi.optionalStep);
+  const homeHead=document.querySelector('#firstListenPrivacyStep > .first-listen-head');
+  homeHead.hidden=!home&&!p.privacyReviewed;
   if(!home&&p.privacyUnlocked&&!p.privacyReviewed)document.getElementById('firstListenPrivacySummary').textContent=proofComplete?'Connect live writing, or finish with Home private.':'Hear one staged Home moment, then decide what to connect.';
   document.querySelectorAll('[data-connection-stage]').forEach(pane=>{pane.hidden=pane.dataset.connectionStage!==(stage==='voices'?'voices':'writing');});
   const provider=document.getElementById('firstListenWritingProvider').value;
@@ -6244,6 +6244,7 @@ function renderFirstListenProgress(){
     surface.dataset.musicRepair=!currentNumber&&!continuityAvailable?'true':'false';
   }
   if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of ${requiredCount}. Next: ${nextLabels[currentKey]||'finish'}.`:!continuityAvailable&&!priorInstall?'Your three choices are saved. Music still needs attention.':'First Listen complete. Review any choice below.';
+  if(progressLine&&currentKey==='privacy'&&_firstListenUi.connectionStage!=='home')progressLine.textContent=`Step ${currentNumber} of ${requiredCount} · Make it yours`;
   const sourcePreviewDetails=document.getElementById('firstListenSourcePreviewDetails');
   if(!currentNumber&&!continuityAvailable){
     if(sourcePreviewDetails)sourcePreviewDetails.open=true;

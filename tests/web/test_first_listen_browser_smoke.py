@@ -51,7 +51,7 @@ def test_first_listen_browser_smoke_contract_is_deterministic() -> None:
         "home_moments\\/quiet",
         "proof slot exposed more than one scene",
         "key request appeared before the household proof",
-        '[data-explainer-scenario="quiet"] .day-one-chip',
+        "proof lost its invented-context disclosure",
         "toggleHouseholdExample",
         "firstListenSetupDoneBtn",
         "firstListenSetupReturnBtn",

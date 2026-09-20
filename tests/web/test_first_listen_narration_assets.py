@@ -1511,8 +1511,8 @@ def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
     template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
     errors = _admin_home_moment_errors(
         template.replace(
-            "Sunset was twenty minutes ago, eleven degrees and clear.",
-            "Sunset was ten minutes ago, nine degrees and cloudy.",
+            "Breaking news from the laundry room: it’s done.",
+            "Breaking news from the laundry room: it’s on fire.",
         )
     )
     assert any("quote does not match its manifest quote" in error for error in errors), errors
@@ -1546,10 +1546,10 @@ def test_admin_home_moment_metadata_rejects_an_empty_spoken_noun() -> None:
     assert any("quiet is empty" in error for error in errors), errors
 
 
-def test_admin_home_moment_metadata_rejects_a_missing_chip_and_a_missing_scene() -> None:
+def test_admin_home_moment_metadata_allows_illustration_without_quote_but_requires_scene() -> None:
     template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    stripped = template.replace(' <em class="day-one-chip">available today</em>', "")
-    assert any("carries no day-one-chip" in error for error in _admin_home_moment_errors(stripped))
+    assert 'class="evening-scene"' in template
+    assert _admin_home_moment_errors(template) == []
 
     missing = template.replace('data-explainer-scenario="quiet"', 'data-explainer-scenario="extra"', 1)
     errors = _admin_home_moment_errors(missing)

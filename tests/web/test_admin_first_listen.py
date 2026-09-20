@@ -153,13 +153,13 @@ def test_step_three_has_one_replaceable_day_one_proof_scene() -> None:
     assert "scene.dataset.explainerScenario===FIRST_LISTEN_HOME_PROOF_KEY" in html
 
 
-def test_the_day_one_marking_lands_on_the_selected_proof_scene() -> None:
-    """The one visible proof must wear the day-one truth boundary."""
+def test_the_day_one_scene_retains_its_truth_boundary_without_a_badge() -> None:
+    """Reachability is data, not a promotional badge above a staged recording."""
 
     html = _html()
     scenes = dict(
         re.findall(
-            r'data-explainer-scenario="([a-z]+)" data-reachability="([a-z-]+)"[^>]*>\s*<h5>(?:.*?)</h5>',
+            r'data-explainer-scenario="([a-z]+)" data-reachability="([a-z-]+)"[^>]*>\s*<h5[^>]*>(?:.*?)</h5>',
             html,
             re.DOTALL,
         )
@@ -168,15 +168,10 @@ def test_the_day_one_marking_lands_on_the_selected_proof_scene() -> None:
 
     block = html[html.index('class="home-moments"') : html.index('id="firstListenConnectionInvite"')]
     chunks = re.split(r'(?=<div class="listening-invitation household-scene")', block)[1:]
-    chipped = []
-    for chunk in chunks:
-        if "day-one-chip" not in chunk:
-            continue
-        match = re.search(r'data-explainer-scenario="([a-z]+)"', chunk)
-        assert match is not None
-        chipped.append(match.group(1))
     assert len(chunks) == 4
-    assert chipped == ["quiet"]
+    assert "day-one-chip" not in block
+    assert "An imagined evening. No details from your home." in chunks[0]
+    assert "Recorded example" in chunks[0]
 
 
 def test_step_three_explains_the_proof_boundary_before_asking_for_a_key() -> None:
@@ -185,11 +180,10 @@ def test_step_three_explains_the_proof_boundary_before_asking_for_a_key() -> Non
     html = _html()
     proof = html[html.index('id="firstListenHouseholdProof"') : html.index('id="firstListenConnectionInvite"')]
     invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
-    assert "weather and daylight" in proof
-    assert "Nothing from your home has been read" in proof
-    assert "Staged home" in proof
-    assert "writing service gives Marco and Giulia fresh lines" in invite
-    assert "fresh station’s Home preview is limited to weather and daylight" in invite
+    assert "Your home gives them something to talk about." in proof
+    assert "An imagined evening. No details from your home." in proof
+    assert "Nothing from your home has been read" not in proof  # saved sharing can already be on
+    assert "You choose what they get to know." in invite
     assert html.index('id="firstListenHouseholdProof"') < html.index('id="firstListenMakeYoursBtn"')
 
 
@@ -202,8 +196,8 @@ def test_step_three_decision_follows_the_proof_and_is_named_by_outcome() -> None
     assert invite.index('id="firstListenMakeYoursBtn"') < invite.index('id="firstListenKeepListeningBtn"')
     writing_at = invite.index('id="firstListenMakeYoursBtn"')
     assert "btn-trigger" in invite[writing_at - 200 : writing_at]
-    assert ">Finish with Home private<" in invite
-    assert ">Connect live writing<" in invite
+    assert ">Keep my home private<" in invite
+    assert ">Make it mine<" in invite
     assert ">Keep listening<" not in invite
     assert 'id="firstListenProofPrivateBtn"' in html
     assert 'id="firstListenProofSkipBtn"' in html
@@ -620,7 +614,7 @@ def test_discovery_and_privacy_preview_require_canonical_detached_envelopes() ->
 def test_no_ai_key_is_needed_for_first_audio() -> None:
     html = _html()
     assert "Those studio recordings play without a key." in html
-    assert "No key is needed to keep listening" in html
+    assert 'id="firstListenKeepListeningBtn"' in html
     assert "Hear the studio voices" in html
     assert "Hear the free voices" in html
     ai_body = re.search(r'<div class="first-listen-body"[^>]*id="firstListenAiBody"[^>]*>', html)
