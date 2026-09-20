@@ -11,7 +11,7 @@
 #      workspace to integrate main, re-review changed code, and push;
 #   2. blocks unresolved Major/Critical bot review threads on the PR head;
 #   3. checks release-cut admission and arms GitHub auto-merge pinned to the exact head it verified:
-#      gh pr merge --squash --auto --match-head-commit <sha>.
+#      gh pr merge --squash --auto --delete-branch --match-head-commit <sha>.
 #
 # GitHub then merges only when required checks pass on the integrated state
 # AND the head is still the one verified here. If anything pushes to the
@@ -47,9 +47,14 @@ LAND_GATES_LABEL="land-pr"
 command -v gh >/dev/null 2>&1 || die "gh CLI not found. Install GitHub CLI, then re-run."
 command -v jq >/dev/null 2>&1 || die "jq not found. Install jq, then re-run."
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
+LAND_REPO="$(_repo_slug)" || die "could not resolve repository identity; check gh auth, then re-run."
+export GH_REPO="$LAND_REPO"
 # The head pin is the core safety guarantee — refuse to run on a gh too old
 # to support it rather than silently landing without the pin.
-gh pr merge --help 2>/dev/null | grep -- '--match-head-commit' >/dev/null \
+# Both the probe and merge carry the safety guard's repository/cleanup flags.
+merge_help="$(gh pr merge --help --delete-branch --repo "$LAND_REPO")" \
+  || die "could not inspect gh merge options; check the error above, then re-run."
+printf '%s\n' "$merge_help" | grep -- '--match-head-commit' >/dev/null \
   || die "this gh CLI does not support --match-head-commit (needs gh >= 2.49). Upgrade gh, then re-run."
 
 [ "$#" -ge 1 ] || die "usage: scripts/land-pr.sh <pr-number> [<pr-number>...]"
@@ -102,13 +107,11 @@ land_one() {
 
   # A stable-version change must not race an earlier Dependabot arming run.
   # This is read-only admission; freeze/thaw remain explicit release actions.
-  local slug
-  slug="$(_repo_slug)" || return 1
-  GH_REPO="$slug" bash "$SCRIPT_DIR/dependabot-window-hold.sh" check-cut "$base" "$head" || return 1
+  GH_REPO="$LAND_REPO" bash "$SCRIPT_DIR/dependabot-window-hold.sh" check-cut "$base" "$head" || return 1
 
   # Pin the merge to the exact head verified above. If anything pushes to the
   # branch after this, GitHub refuses the merge instead of landing unseen code.
-  gh pr merge "$pr" --squash --auto --match-head-commit "$head" \
+  gh pr merge "$pr" --squash --auto --match-head-commit "$head" --delete-branch --repo "$LAND_REPO" \
     || die "arming auto-merge for PR #$pr failed — see gh output above, fix, and re-run."
   say "land-pr: PR #$pr armed — GitHub merges it once required checks pass on head ${head:0:12}."
   say "         If the head changes before then, the merge will not fire; re-run this script."
