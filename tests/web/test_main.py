@@ -1745,7 +1745,8 @@ async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_
 
 
 @pytest.mark.asyncio
-async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(tmp_path):
+@pytest.mark.parametrize("env_choice", [None, False])
+async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(tmp_path, env_choice):
     """An off boot clears stale disk buckets in memory even when disk remains
     unwritable, so a later in-process enable cannot resurrect private events."""
     from mammamiradio.core.models import Track
@@ -1774,7 +1775,7 @@ async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(t
 
     with (
         patch(f"{MODULE}.load_config", return_value=config),
-        patch(f"{MODULE}._explicit_bool_env", return_value=False),
+        patch(f"{MODULE}._explicit_bool_env", return_value=env_choice),
         patch(f"{MODULE}.read_persisted_source", return_value=None),
         patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
@@ -1786,6 +1787,7 @@ async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(t
         await startup()
         await app.state.home_context_off_ledger_persist_task
 
+    assert app.state.home_context_choice_explicit is True
     ledger = app.state.station_state.evening_ledger
     assert ledger.buckets == {}
     # The no-op save models the prior persistence failure: stale data really
