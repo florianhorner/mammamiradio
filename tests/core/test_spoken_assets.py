@@ -353,6 +353,8 @@ def _ad_entry(path, payload, *, mode="normal", language="en", duration=30.0, **o
     entry = _entry(path, payload, language=language, transcript="A finished thirty-second spot for a fictional brand.")
     entry["mode"] = mode
     entry["duration_seconds"] = duration
+    entry["title"] = "The Studio B Parcel Desk"
+    entry["cast"] = ["Announcer", "Parcel clerk"]
     entry.update(overrides)
     return entry
 
@@ -375,6 +377,27 @@ def test_a_packaged_ad_of_ordinary_length_is_admitted(tmp_path):
     entries = approved_spoken_asset_entries("ads", assets_root=root)
     assert [entry.relative_path for entry in entries] == ["ads/spot.mp3"]
     assert entries[0].duration_seconds == 30.0
+    assert entries[0].title == "The Studio B Parcel Desk"
+    assert entries[0].cast == ("Announcer", "Parcel clerk")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"title": ""}, "must declare a title"),
+        ({"title": "x" * 81}, "title exceeds 80 characters"),
+        ({"cast": []}, "must declare a cast"),
+        ({"cast": ["x" * 41]}, "cast members must be 1-40 characters"),
+        ({"cast": "Announcer"}, "cast must be a list of strings"),
+    ],
+)
+def test_packaged_ad_title_and_cast_are_bounded(tmp_path, overrides, expected):
+    root = _ad_root(tmp_path, **overrides)
+
+    errors = validate_spoken_asset_manifest(assets_root=root)
+
+    assert any(expected in error for error in errors), errors
+    assert approved_spoken_asset_entries("ads", assets_root=root) == []
 
 
 @pytest.mark.parametrize("duration", [2.0, 24.9, 40.1, 90.0])

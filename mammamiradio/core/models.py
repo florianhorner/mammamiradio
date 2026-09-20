@@ -891,8 +891,10 @@ class Segment:
     # Provider-owned single-use resources are released only through this hook;
     # queue mutation and playback finalizers call ``release()`` exactly once.
     playback_start_callback: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    audible_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     release_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     _playback_started: bool = field(default=False, init=False, repr=False, compare=False)
+    _audible_committed: bool = field(default=False, init=False, repr=False, compare=False)
     _released: bool = field(default=False, init=False, repr=False, compare=False)
 
     @property
@@ -932,12 +934,29 @@ class Segment:
         self.playback_start_callback = None
         return True
 
+    def mark_audible(self) -> None:
+        """Run listener-audible bookkeeping at most once without risking audio."""
+        if self._released or self._audible_committed:
+            return
+        self._audible_committed = True
+        callback = self.audible_callback
+        self.audible_callback = None
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            # Bookkeeping is subordinate to the live stream. The callback owns
+            # any domain-specific logging or retry state it needs.
+            logger.debug("Segment audible callback failed for %s", self.path, exc_info=True)
+
     def release(self) -> None:
         """Idempotently release any provider-owned resource carried by this segment."""
         if self._released:
             return
         self._released = True
         self.playback_start_callback = None
+        self.audible_callback = None
         callback = self.release_callback
         self.release_callback = None
         if callback is None:
@@ -1340,6 +1359,10 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
+    # Queue reservations keep an owed ad break from filling lookahead with
+    # duplicates while pacing/history wait for listener-audible truth.
+    ad_break_reservations: dict[str, str] = field(default_factory=dict)
+    packaged_ad_history: deque[str] = field(default_factory=lambda: deque(maxlen=8))
     # Session-only ad receipts for completed breaks. Stores aggregate counts
     # in memory and resets with the process.
     ad_experiment_completed_breaks: int = 0
@@ -2927,6 +2950,7 @@ class StationState:
         self.audible_playback_epoch = self.playback_epoch
         self.current_stream_audible = True
         self.force_recovery_active = False
+        segment.mark_audible()
         now = time.time()
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         try:
@@ -3522,6 +3546,27 @@ class StationState:
         self.segments_produced += 1
         label = ", ".join(brands) if brands else "Ad break"
         self._log("ad", f"Ad: {label}")
+
+    def reserve_ad_break(self, reservation_id: str, identity: str = "") -> bool:
+        """Reserve one queued break without crediting it as aired."""
+        token = reservation_id.strip()
+        if not token or token in self.ad_break_reservations:
+            return False
+        self.ad_break_reservations[token] = identity.strip()
+        return True
+
+    def release_ad_break(self, reservation_id: str) -> None:
+        """Release a queued break that left the timeline before audibility."""
+        self.ad_break_reservations.pop(reservation_id, None)
+
+    def commit_ad_break(self, reservation_id: str) -> str | None:
+        """Commit one reserved break at the first listener-audible chunk."""
+        identity = self.ad_break_reservations.pop(reservation_id, None)
+        if identity is None:
+            return None
+        if identity:
+            self.packaged_ad_history.append(identity)
+        return identity
 
     def after_station_id(self) -> None:
         """Advance counters after a station ID stinger."""

@@ -246,8 +246,8 @@ omitting `airtime_approved` now means `false`. Set it explicitly to `true` only
 for a character with existing provider and human approval; leave every other row
 `false`. A legacy role pin can keep serving its campaign while a replacement
 waits for approval. Otherwise an unapproved direct character's campaign is
-excluded, another safe campaign is tried, and an ad break with no safe campaign
-is skipped rather than recasting the character.
+excluded and another safe campaign is tried. With no safe live campaign, the
+station tries an approved packaged ad before continuity; it never recasts the character.
 
 ```bash
 ./.venv/bin/python scripts/audition_tts_voices.py --config radio.toml --providers elevenlabs --strict

@@ -86,6 +86,7 @@ from mammamiradio.core.song_identity import normalize_song_identity_key, song_id
 from mammamiradio.core.spoken_assets import (
     PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
     SpokenAssetEntry,
+    approved_spoken_asset_entry,
     declared_spoken_asset_entries,
     is_approved_packaged_audio_asset,
     is_approved_spoken_asset,
@@ -272,9 +273,8 @@ def _reset_due_counters_after_tts_failure(state: StationState, seg_type: Segment
     on the very next cycle would create a tight failure loop.
     """
 
-    if seg_type == SegmentType.AD:
-        state.songs_since_ad = 0
-    elif seg_type == SegmentType.NEWS_FLASH:
+    # Ads retain their owed break; the producer defers retries until music.
+    if seg_type == SegmentType.NEWS_FLASH:
         state.songs_since_news = 0
         state.songs_since_banter = 0
     elif seg_type == SegmentType.BANTER:
@@ -3247,7 +3247,7 @@ async def _enqueue_with_egress(
     egressed_owned = False
     try:
         egress_started = time.monotonic()
-        if not _is_direct_attributed_music(segment):
+        if not _is_direct_attributed_music(segment) and not _is_packaged_ad_segment(segment):
             segment = await _apply_egress(segment, config)
             egressed_owned = True
         state.add_render_stage_timing("egress", (time.monotonic() - egress_started) * 1000)
@@ -3998,6 +3998,7 @@ _recently_played_clips: deque[str] = deque(maxlen=50)
 
 # Cache validated manifest entries for demo clips (avoid repeated inventory work).
 _canned_clip_cache: dict[str, list[SpokenAssetEntry]] = {}
+_known_invalid_packaged_ads: set[str] = set()
 
 SHAREWARE_CANNED_LIMIT = 21
 PACKAGED_BANTER_SPECIAL_CHANCE = 0.1
@@ -4130,11 +4131,34 @@ def _pick_canned_clip(
 AdProgrammeBlock = Literal["no_ad_brands", "no_ad_route", "no_ai_key"]
 
 
-def ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
-    """Name what stops the station making a real advertisement, or ``None``."""
+def _active_spoken_mode(config: StationConfig) -> Literal["normal", "super_italian"]:
+    return "super_italian" if config.super_italian_mode else "normal"
 
-    # A brand that fails its voice-cast check never airs (``safe_brands`` in
-    # ``hosts/ad_creative.py``), so a list of only those is as empty as no list.
+
+def _packaged_ad_entries(config: StationConfig) -> list[SpokenAssetEntry]:
+    """Return cheap, policy-valid candidates for the active language mode."""
+
+    if "ads" not in _canned_clip_cache:
+        _canned_clip_cache["ads"] = declared_spoken_asset_entries("ads", assets_root=_DEMO_ASSETS_DIR)
+    mode = _active_spoken_mode(config)
+    return [
+        entry
+        for entry in _canned_clip_cache["ads"]
+        if entry.mode == mode
+        and entry.relative_path not in _known_invalid_packaged_ads
+        and _clip_is_serviceable(_DEMO_ASSETS_DIR / entry.relative_path)
+    ]
+
+
+def packaged_ad_programme_available(config: StationConfig) -> bool:
+    """Whether an active-mode packaged bank has at least one usable declaration."""
+
+    return bool(_packaged_ad_entries(config))
+
+
+def _live_ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
+    """Name what stops live ad writing without considering packaged audio."""
+
     if not any(brand.cast_eligible for brand in config.ads.brands):
         return "no_ad_brands"
     if not config.anthropic_api_key and not config.openai_api_key:
@@ -4144,6 +4168,128 @@ def ad_programme_block(config: StationConfig, state: StationState | None = None)
     if state is not None and _every_writing_key_refused(config, state):
         return "no_ai_key"
     return None
+
+
+def _packaged_ad_fingerprint(path: Path) -> tuple[tuple[int, ...], ...] | None:
+    try:
+        return tuple(
+            (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            for s in (path.stat(), (_DEMO_ASSETS_DIR / "spoken_assets.json").stat())
+        )
+    except OSError:
+        return None
+
+
+async def _select_packaged_ad_entry(
+    config: StationConfig,
+    state: StationState,
+) -> tuple[SpokenAssetEntry, tuple[tuple[int, ...], ...]] | None:
+    """Hash candidates off-loop and return one non-repeating active-mode spot."""
+
+    mode = _active_spoken_mode(config)
+    reserved = set(state.ad_break_reservations.values())
+    candidates = [entry for entry in _packaged_ad_entries(config) if entry.relative_path not in reserved]
+    if not candidates:
+        return None
+    most_recent = state.packaged_ad_history[-1] if state.packaged_ad_history else ""
+    fresh = [entry for entry in candidates if entry.relative_path != most_recent]
+    if fresh:
+        candidates = fresh
+    random.shuffle(candidates)
+    for entry in candidates:
+        path = _DEMO_ASSETS_DIR / entry.relative_path
+        fingerprint = _packaged_ad_fingerprint(path)
+        approved = await asyncio.to_thread(approved_spoken_asset_entry, path, assets_root=_DEMO_ASSETS_DIR)
+        if approved != entry or fingerprint is None or _packaged_ad_fingerprint(path) != fingerprint:
+            _known_invalid_packaged_ads.add(entry.relative_path)
+            logger.warning("Rejecting packaged ad after manifest/hash admission failed: %s", path)
+            continue
+        if _active_spoken_mode(config) != mode:
+            return None
+        return approved, fingerprint
+    return None
+
+
+async def _packaged_ad_segment(config: StationConfig, state: StationState) -> Segment | None:
+    """Build a direct, zero-render segment from the reviewed active-mode bank."""
+
+    selected = await _select_packaged_ad_entry(config, state)
+    if selected is None:
+        return None
+    entry, fingerprint = selected
+    path = _DEMO_ASSETS_DIR / entry.relative_path
+    mode = entry.mode
+    segment = Segment(
+        type=SegmentType.AD,
+        path=path,
+        duration_sec=entry.duration_seconds,
+        ephemeral=False,
+        metadata={
+            "type": "ad_break",
+            "brands": [entry.title],
+            "spots": 1,
+            "title": entry.title,
+            "cast": list(entry.cast),
+            "roles_used": list(entry.cast),
+            "transcript": entry.transcript,
+            "packaged": True,
+            "provenance": "packaged",
+            "generation_cost_usd": 0.0,
+            "mode": entry.mode,
+            "language": entry.language,
+            "duration_seconds": entry.duration_seconds,
+            "duration_ms": round(entry.duration_seconds * 1000),
+            "packaged_ad_id": entry.relative_path,
+            "has_music_tail": False,
+            "transition_track_ref": "",
+            "clip_audio_class": _CLIP_AUDIO_CLASS_SPEECH,
+        },
+    )
+    # Hash off-loop, then reject any file/approval change before playback.
+    segment.playback_start_callback = lambda: (
+        _active_spoken_mode(config) == mode and _packaged_ad_fingerprint(path) == fingerprint
+    )
+    state.last_ad_script = {
+        "brands": list(segment.metadata["brands"]),
+        "texts": [entry.transcript],
+        "summaries": [entry.transcript],
+        "formats": ["packaged"],
+        "spots": 1,
+        "sonic_worlds": [],
+        "roles_used": [list(entry.cast)],
+        "packaged": True,
+    }
+    return segment
+
+
+def _packaged_ad_aired_callback(state: StationState, segment: Segment) -> Callable[[], None]:
+    """Build the history/pacing commit for one packaged spot."""
+
+    metadata = segment.metadata
+    title = str(metadata.get("title") or "Packaged advertisement")
+    transcript = str(metadata.get("transcript") or "")
+
+    def _commit() -> None:
+        state.after_ad(brands=[title])
+        state.record_ad_spot(brand=title, summary=transcript)
+
+    return _commit
+
+
+def _is_packaged_ad_segment(segment: Segment) -> bool:
+    return segment.type is SegmentType.AD and bool(segment.metadata.get("packaged"))
+
+
+def _packaged_ad_mode_is_current(config: StationConfig, segment: Segment) -> bool:
+    return not _is_packaged_ad_segment(segment) or segment.metadata.get("mode") == _active_spoken_mode(config)
+
+
+def ad_programme_block(config: StationConfig, state: StationState | None = None) -> AdProgrammeBlock | None:
+    """Name what stops the station making a real advertisement, or ``None``."""
+
+    if packaged_ad_programme_available(config):
+        return None
+    return _live_ad_programme_block(config, state)
 
 
 def _every_writing_key_refused(config: StationConfig, state: StationState) -> bool:
@@ -4169,6 +4315,15 @@ def next_segment_type_for(state: StationState, config: StationConfig) -> Segment
     state.ad_programme_available = ad_programme_available(config, state)
     if not state.ad_programme_available:
         state.songs_since_ad = min(state.songs_since_ad, config.pacing.songs_between_ads)
+    if state.ad_break_reservations and state.force_next is not SegmentType.AD:
+        # Keep the counter owed while preventing the same natural break from
+        # filling every lookahead slot before its first listener-audible chunk.
+        owed = state.songs_since_ad
+        state.songs_since_ad = min(owed, max(config.pacing.songs_between_ads - 1, 0))
+        try:
+            return next_segment_type(state, config.pacing)
+        finally:
+            state.songs_since_ad = owed
     return next_segment_type(state, config.pacing)
 
 
@@ -8401,6 +8556,18 @@ async def _run_producer_inner(
                 )
                 success_callback = state.after_time_check
 
+            elif seg_type == SegmentType.AD and _live_ad_programme_block(config, state) is not None:
+                segment = await _packaged_ad_segment(config, state)
+                if segment is None:
+                    state.ad_programme_available = ad_programme_available(config, state)
+                    _defer_natural_ad_until_music = True
+                    if is_operator_forced:
+                        state.operator_force_pending = None
+                    state.finish_render_timing("discarded", reason="packaged_ad_unavailable")
+                    continue
+                success_callback = _packaged_ad_aired_callback(state, segment)
+                logger.info("Using approved packaged ad: %s", segment.metadata["title"])
+
             elif seg_type == SegmentType.AD:
                 if not config.ads.brands:
                     logger.warning("No brands configured — skipping ad, resetting ad pacing counter")
@@ -8415,6 +8582,7 @@ async def _run_producer_inner(
                 break_summaries: list[str] = []
                 break_texts: list[str] = []
                 break_sonic_worlds: list[str] = []
+                break_history: list[dict[str, str]] = []
                 loop = asyncio.get_running_loop()
                 imaging_lib = _make_imaging_lib(config)
                 reserved_recipe_foreground_sources = set(imaging_lib.core_break_foreground_source_ids())
@@ -8484,10 +8652,7 @@ async def _run_producer_inner(
                     spot_params.append((brand, ad_format, render_sonic, voice_map, recipe))
 
                 if not spot_params:
-                    logger.warning("No safe ad campaigns configured — skipping ad break")
-                    state.songs_since_ad = 0
-                    state.finish_render_timing("discarded", reason="no_safe_ad_campaigns")
-                    continue
+                    raise _sw.AdGenerationUnavailableError("No safe ad campaigns configured")
                 # A single invalid direct campaign must not kill the preceding
                 # safe spots in this break. Downstream fan-out and metadata
                 # reflect the actual number of slots we will air.
@@ -8781,14 +8946,16 @@ async def _run_producer_inner(
                     break_roles.append(script.roles_used or [])
                     full_text = " ".join(p.text for p in script.parts if p.type == "voice" and p.text)
                     break_texts.append(full_text)
-                    state.record_ad_spot(
-                        brand=brand.name,
-                        summary=script.summary,
-                        format=script.format,
-                        sonic_signature=brand.campaign.sonic_signature if brand.campaign else "",
-                        environment=script.sonic.environment if script.sonic else "",
-                        music_bed=script.mood or (script.sonic.music_bed if script.sonic else ""),
-                        transition_motif=script.sonic.transition_motif if script.sonic else "",
+                    break_history.append(
+                        {
+                            "brand": brand.name,
+                            "summary": script.summary,
+                            "format": script.format,
+                            "sonic_signature": brand.campaign.sonic_signature if brand.campaign else "",
+                            "environment": script.sonic.environment if script.sonic else "",
+                            "music_bed": script.mood or (script.sonic.music_bed if script.sonic else ""),
+                            "transition_motif": script.sonic.transition_motif if script.sonic else "",
+                        }
                     )
                     if spot_idx < num_spots - 1 and spot_idx < len(mid_bumpers):
                         common_break_parts.append(mid_bumpers[spot_idx])
@@ -8932,10 +9099,7 @@ async def _run_producer_inner(
                             _discard_prepared_handoff(prepared_handoff)
                             prepared_handoff = None
                         rendered_handoff_tail = False
-                        # Prevent scheduler lock on AD if we reject a full break.
-                        state.songs_since_ad = 0
-                        state.finish_render_timing("discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT)
-                        continue
+                        raise
 
                 # Dashboard display: show all brands in the break
                 state.last_ad_script = {
@@ -8967,11 +9131,19 @@ async def _run_producer_inner(
                     fallback_segment = replace(segment, path=fallback_audio_path, ephemeral=True)
                 _bound_brands = break_brands
 
-                def _ad_callback(_b=_bound_brands, _gag=_cb_gag, _vledger=state.verbal_gag_ledger) -> None:
+                def _ad_callback(
+                    _b=_bound_brands,
+                    _history=tuple(break_history),
+                    _gag=_cb_gag,
+                    _vledger=state.verbal_gag_ledger,
+                    _landed=state.pending_callback_landed,
+                ) -> None:
                     state.after_ad(brands=_b)
+                    for history_entry in _history:
+                        state.record_ad_spot(**history_entry)
                     # Retire the verbal gag ONLY if the model reported it landed
-                    # (queue-time != used) — a discarded break never reaches here.
-                    if _gag is not None and _vledger is not None and state.pending_callback_landed:
+                    # — a discarded or unheard break never reaches here.
+                    if _gag is not None and _vledger is not None and _landed:
                         _vledger.mark_spoken(_gag[0], now=time.time())
 
                 success_callback = _ad_callback
@@ -8982,10 +9154,6 @@ async def _run_producer_inner(
             continue
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
-            if isinstance(e, TTSUnavailableError):
-                _reset_due_counters_after_tts_failure(state, seg_type)
-            if isinstance(e, _sw.AdGenerationUnavailableError):
-                _defer_natural_ad_until_music = True
             _unlink_render_scratch(render_failure_scratch)
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # A recovery segment must not inherit queue/playback accounting from
@@ -9001,29 +9169,40 @@ async def _run_producer_inner(
             )
             _discard_uncommitted_handoff_artifacts()
             attempt_owner.discard()
-            state.finish_render_timing("failed", reason="render_failure")
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
             # unpacked), so restore any begun-but-unqueued beat by ledger status.
             _release_campaign_abandon_in_flight(state)
-            state.failed_segments += 1
-            # Backoff on persistent failures to avoid CPU-burning tight loop
-            consecutive = state.failed_segments
-            if consecutive > 1:
-                post_failure_backoff = min(30.0, 2.0 ** min(consecutive, 5))
-                logger.warning(
-                    "Consecutive failures: %d — backing off %.0fs after recovery audio queues",
-                    consecutive,
-                    post_failure_backoff,
-                )
-            segment = await _producer_error_recovery_segment(state, config)
-            if segment is None:
-                state.take_runtime_provider_observations(generation_provider_token)
-                await asyncio.sleep(0.5)
-                await _sleep_post_failure_backoff(post_failure_backoff)
-                continue
-            attempt_owner.begin()
-            # Do NOT advance state counters — failed segment doesn't count
+            packaged_fallback = await _packaged_ad_segment(config, state) if seg_type is SegmentType.AD else None
+            if packaged_fallback is not None:
+                segment = packaged_fallback
+                success_callback = _packaged_ad_aired_callback(state, segment)
+                attempt_owner.begin()
+                logger.info("Live ad generation failed; using approved packaged ad: %s", segment.metadata["title"])
+            else:
+                if isinstance(e, TTSUnavailableError):
+                    _reset_due_counters_after_tts_failure(state, seg_type)
+                if seg_type is SegmentType.AD:
+                    _defer_natural_ad_until_music = True
+                state.finish_render_timing("failed", reason="render_failure")
+                state.failed_segments += 1
+                # Backoff on persistent failures to avoid CPU-burning tight loop
+                consecutive = state.failed_segments
+                if consecutive > 1:
+                    post_failure_backoff = min(30.0, 2.0 ** min(consecutive, 5))
+                    logger.warning(
+                        "Consecutive failures: %d — backing off %.0fs after recovery audio queues",
+                        consecutive,
+                        post_failure_backoff,
+                    )
+                segment = await _producer_error_recovery_segment(state, config)
+                if segment is None:
+                    state.take_runtime_provider_observations(generation_provider_token)
+                    await asyncio.sleep(0.5)
+                    await _sleep_post_failure_backoff(post_failure_backoff)
+                    continue
+                attempt_owner.begin()
+                # Do NOT advance state counters — failed segment doesn't count
         except BaseException:
             # Cancellation is not recoverable audio work, but all-settled
             # fan-outs have finished their executor-backed siblings by here.
@@ -9050,7 +9229,7 @@ async def _run_producer_inner(
                 segment.metadata["home_context_generation"] = generation_home_context
             _attach_runtime_provider_observations(segment, state, generation_provider_token)
             attempt_owner.own_segment(segment)
-            if not _is_direct_attributed_music(segment):
+            if not _is_direct_attributed_music(segment) and not _is_packaged_ad_segment(segment):
                 segment = await _maybe_add_transition_sting(
                     segment,
                     prev_seg_type,
@@ -9084,6 +9263,9 @@ async def _run_producer_inner(
                     (segment.metadata or {}).get("title") or "the song",
                 )
                 stale_reason = GenerationWasteReason.STALE_PLAYLIST
+            elif not _packaged_ad_mode_is_current(config, segment):
+                logger.info("Discarding packaged ad after spoken mode changed")
+                stale_reason = GenerationWasteReason.EGRESS_STALE
             if stale_reason is not None:
                 state.record_discard(segment, reason=stale_reason)
                 _drop_segment_moment_receipts(state, segment, str(stale_reason), "stale-discard")
@@ -9167,6 +9349,8 @@ async def _run_producer_inner(
                     return listener_request_stale
                 if not _home_context_generation_is_current(state, config, captured_segment):
                     return GenerationWasteReason.OPERATOR_PURGE
+                if not _packaged_ad_mode_is_current(config, captured_segment):
+                    return GenerationWasteReason.EGRESS_STALE
                 return _companionship_admission_stale_reason(state, captured_segment)
 
             # Stable per-segment id: the shared queue publication helper stamps
@@ -9207,8 +9391,14 @@ async def _run_producer_inner(
             _music_track_for_admission = music_admission_track
             _companionship_admission = segment.metadata.get("listener_session_cue") == "companionship"
             _listener_handoff_admission = bool(segment.metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY))
+            _ad_air_callback = success_callback if segment.type is SegmentType.AD else None
             _segment_admission_callback: Callable[[Segment], None] | None = None
-            if _music_track_for_admission is not None or _companionship_admission or _listener_handoff_admission:
+            if (
+                _music_track_for_admission is not None
+                or _companionship_admission
+                or _listener_handoff_admission
+                or _ad_air_callback is not None
+            ):
 
                 def _admit_queued_segment(
                     queued_segment: Segment,
@@ -9216,6 +9406,7 @@ async def _run_producer_inner(
                     _track: Track | None = _music_track_for_admission,
                     _companionship: bool = _companionship_admission,
                     _listener_handoff: bool = _listener_handoff_admission,
+                    _ad_commit: Callable[[], None] | None = _ad_air_callback,
                 ) -> None:
                     if _track is not None:
                         _reserve_music_segment(state, _track, queued_segment)
@@ -9226,6 +9417,39 @@ async def _run_producer_inner(
                         state.admit_listener_request_handoff(queued_segment)
                     if _companionship:
                         _mark_companionship_segment_queued(state, queued_segment)
+                    if _ad_commit is not None:
+                        metadata = queued_segment.metadata
+                        reservation_id = str(metadata.get("queue_id") or "")
+                        identity = str(metadata.get("packaged_ad_id") or "")
+                        if not state.reserve_ad_break(reservation_id, identity):
+                            raise RuntimeError("ad break reservation rejected")
+                        prior_release = queued_segment.release_callback
+
+                        def _release_ad_reservation(
+                            _reservation_id: str = reservation_id,
+                            _prior_release: Callable[[], None] | None = prior_release,
+                        ) -> None:
+                            state.release_ad_break(_reservation_id)
+                            if _prior_release is not None:
+                                _prior_release()
+
+                        def _commit_ad_on_air(
+                            _reservation_id: str = reservation_id,
+                            _callback: Callable[[], None] = _ad_commit,
+                        ) -> None:
+                            if state.commit_ad_break(_reservation_id) is not None:
+                                _callback()
+                                # Music queued behind this ad already advanced pacing.
+                                state.songs_since_ad = sum(
+                                    item.type is SegmentType.MUSIC
+                                    and not item.released
+                                    and "error" not in item.metadata
+                                    and not item.metadata.get("rescue")
+                                    for item in list(getattr(queue, "_queue", ()))
+                                )
+
+                        queued_segment.release_callback = _release_ad_reservation
+                        queued_segment.audible_callback = _commit_ad_on_air
 
                 _segment_admission_callback = _admit_queued_segment
 
@@ -9259,11 +9483,9 @@ async def _run_producer_inner(
                     prepared_handoff = None
                     handoff_committed = True
                     prev_seg_type = _adjacency_type_for(segment)
-                    # The pair commit bypasses _queue_segment's admission
-                    # callback, so a companionship cue must record its QUEUED
-                    # transition here or the loop-top settle would abandon it.
-                    if _companionship_admission:
-                        _mark_companionship_segment_queued(state, segment)
+                    # Pair admission has the same no-await bookkeeping boundary.
+                    if _segment_admission_callback is not None:
+                        _segment_admission_callback(segment)
                 else:
                     # The song remained whole; queue the pre-rendered dry path
                     # with the ordinary sting rather than emitting a stale tail.
@@ -9410,7 +9632,7 @@ async def _run_producer_inner(
             if "error" not in segment.metadata and not segment.metadata.get("rescue"):
                 if segment.type is SegmentType.MUSIC:
                     _defer_natural_ad_until_music = False
-                if success_callback:
+                if success_callback and segment.type is not SegmentType.AD:
                     success_callback()
                 if (
                     segment.type == SegmentType.BANTER

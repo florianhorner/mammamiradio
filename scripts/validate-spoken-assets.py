@@ -129,6 +129,27 @@ DEMO_BANTER_MIN_LUFS = -19.5
 DEMO_BANTER_MAX_LUFS = -14.0
 DEMO_BANTER_MAX_TRUE_PEAK_DBTP = -1.0
 DEMO_BANTER_MAX_BYTES = 40 * 1024 * 1024
+DEMO_AD_MIN_DURATION_SECONDS = 25.0
+DEMO_AD_MAX_DURATION_SECONDS = 40.0
+DEMO_AD_MIN_LUFS = -16.0
+DEMO_AD_MAX_LUFS = -14.0
+DEMO_AD_MAX_TRUE_PEAK_DBTP = -1.0
+DEMO_AD_MAX_SILENCE_RATIO = 0.25
+DEMO_AD_MAX_SILENCE_SPAN_SECONDS = 2.5
+DEMO_AD_PACK_MAX_BYTES = 12 * 1024 * 1024
+DEMO_AD_PATHS = (
+    "ads/01-normal-prezzoforte-discount-complaint.mp3",
+    "ads/03-normal-telecuore-emotionally-unlimited.mp3",
+    "ads/04-normal-caffe-turbino-emergency-lever.mp3",
+    "ads/05-italian-pastaforte-colosseo.mp3",
+    "ads/06-italian-motoretto-parcheggiabile.mp3",
+    "ads/07-italian-sacchettino-sconto.mp3",
+    "ads/08-italian-prontissimo-prima-o-poi.mp3",
+    "ads/09-normal-pastaforte-national-heritage.mp3",
+    "ads/10-normal-motoretto-parkable.mp3",
+    "ads/11-normal-sacchettino-unexpected-discount.mp3",
+    "ads/12-normal-prontissimo-eventually.mp3",
+)
 ADMIN_STATION_OPENING_PATH = "first_listen/first_listen_admin_show.mp3"
 # Independent inventory: partial renders must not bless missing retained audio.
 DEMO_SPOKEN_PATHS = (
@@ -156,6 +177,7 @@ DEMO_SPOKEN_PATHS = (
     "banter/19-special-other-side.mp3",
     "banter/20-special-third-chair.mp3",
     "banter/21-special-not-a-test.mp3",
+    *DEMO_AD_PATHS,
     "first_listen/first_listen_admin_show.mp3",
 )
 
@@ -379,6 +401,41 @@ def _measure_loudness(path: Path, *, ffmpeg: str) -> tuple[tuple[float, float] |
     return (float(integrated_matches[-1]), float(peak_matches[-1])), None
 
 
+def _measure_silence(path: Path, *, ffmpeg: str) -> tuple[tuple[float, float] | None, str | None]:
+    """Measure total and longest silence with the runtime ad-gate threshold."""
+
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-nostats",
+                "-i",
+                str(path),
+                "-af",
+                "silencedetect=n=-38dB:d=0.8",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "ffmpeg silence measurement timed out"
+    except OSError as exc:
+        return None, f"ffmpeg silence measurement could not run: {exc}"
+    if result.returncode != 0:
+        detail = result.stderr.strip()[-240:] or result.stdout.strip()[-240:] or f"exit {result.returncode}"
+        return None, f"ffmpeg silence measurement failed ({detail})"
+    durations = [float(value) for value in re.findall(r"silence_duration:\s*([0-9.]+)", result.stderr)]
+    if not durations:
+        return (0.0, 0.0), None
+    return (sum(durations), max(durations)), None
+
+
 def _number(value: object) -> float | None:
     if isinstance(value, bool):
         return None
@@ -403,7 +460,7 @@ def validate_demo_spoken_assets(
     package_assets_root: Any = None,
     include_admin_opening: bool = True,
 ) -> list[str]:
-    """Validate packaged banter; exclude the old opening only before replacing it."""
+    """Validate every release-gated packaged demo speech asset."""
 
     root = Path(assets_root)
     errors = validate_spoken_asset_manifest(assets_root=root)
@@ -421,6 +478,24 @@ def validate_demo_spoken_assets(
     if not banter_entries:
         errors.append("demo banter inventory is empty")
         return errors
+    ad_entries = [
+        entry
+        for entry in raw_assets
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and str(entry["path"]).startswith("ads/")
+    ]
+    if _is_demo_assets_root(root):
+        declared_ad_paths = {str(entry["path"]) for entry in ad_entries}
+        expected_ad_paths = set(DEMO_AD_PATHS)
+        missing_ads = sorted(expected_ad_paths - declared_ad_paths)
+        unexpected_ads = sorted(declared_ad_paths - expected_ad_paths)
+        if missing_ads:
+            errors.append(f"demo ad inventory is missing: {', '.join(missing_ads)}")
+        if unexpected_ads:
+            errors.append(f"demo ad inventory has unexpected spots: {', '.join(unexpected_ads)}")
+        normal_count = sum(entry.get("mode") == "normal" for entry in ad_entries)
+        italian_count = sum(entry.get("mode") == "super_italian" for entry in ad_entries)
+        if normal_count != 7 or italian_count != 4:
+            errors.append("demo ad inventory must contain seven normal and four super_italian spots")
     openings = [
         entry
         for entry in raw_assets
@@ -442,7 +517,7 @@ def validate_demo_spoken_assets(
         else:
             if entry.get("canonical_render_receipt") != expected_receipt:
                 errors.append("Admin station opening canonical_render_receipt does not match radio.toml")
-    banter_entries.extend(openings)
+    media_entries = [*banter_entries, *ad_entries, *openings]
 
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
@@ -457,13 +532,19 @@ def validate_demo_spoken_assets(
         except (ModuleNotFoundError, TypeError) as exc:
             errors.append(f"cannot resolve packaged demo assets: {exc}")
 
-    total_bytes = 0
-    for entry in banter_entries:
+    banter_bytes = 0
+    ad_bytes = 0
+    for entry in media_entries:
         relative_path = str(entry["path"])
         asset_path = root / relative_path
+        is_ad = relative_path.startswith("ads/")
         declared_sha256 = entry.get("sha256")
         try:
-            total_bytes += asset_path.stat().st_size
+            asset_bytes = asset_path.stat().st_size
+            if is_ad:
+                ad_bytes += asset_bytes
+            else:
+                banter_bytes += asset_bytes
         except OSError:
             pass
 
@@ -506,8 +587,8 @@ def validate_demo_spoken_assets(
                 errors.append(f"{relative_path} {field} must be {expected!r}; got {actual!r}")
         duration = _number(format_data.get("duration"))
         is_opening = relative_path == ADMIN_STATION_OPENING_PATH
-        minimum = 15.0 if is_opening else DEMO_BANTER_MIN_DURATION_SECONDS
-        maximum = 20.0 if is_opening else DEMO_BANTER_MAX_DURATION_SECONDS
+        minimum = DEMO_AD_MIN_DURATION_SECONDS if is_ad else 15.0 if is_opening else DEMO_BANTER_MIN_DURATION_SECONDS
+        maximum = DEMO_AD_MAX_DURATION_SECONDS if is_ad else 20.0 if is_opening else DEMO_BANTER_MAX_DURATION_SECONDS
         if duration is None:
             errors.append(f"{relative_path} ffprobe duration is missing or invalid")
         elif not minimum <= duration <= maximum:
@@ -527,18 +608,36 @@ def validate_demo_spoken_assets(
             else:
                 assert loudness is not None
                 integrated_lufs, true_peak_dbtp = loudness
-                if not DEMO_BANTER_MIN_LUFS <= integrated_lufs <= DEMO_BANTER_MAX_LUFS:
+                min_lufs = DEMO_AD_MIN_LUFS if is_ad else DEMO_BANTER_MIN_LUFS
+                max_lufs = DEMO_AD_MAX_LUFS if is_ad else DEMO_BANTER_MAX_LUFS
+                max_peak = DEMO_AD_MAX_TRUE_PEAK_DBTP if is_ad else DEMO_BANTER_MAX_TRUE_PEAK_DBTP
+                if not min_lufs <= integrated_lufs <= max_lufs:
                     errors.append(
                         f"{relative_path} integrated loudness {integrated_lufs:.1f} LUFS is outside "
-                        f"{DEMO_BANTER_MIN_LUFS:.1f} to {DEMO_BANTER_MAX_LUFS:.1f} LUFS"
+                        f"{min_lufs:.1f} to {max_lufs:.1f} LUFS"
                     )
-                if true_peak_dbtp > DEMO_BANTER_MAX_TRUE_PEAK_DBTP:
-                    errors.append(
-                        f"{relative_path} true peak {true_peak_dbtp:.1f} dBTP exceeds "
-                        f"{DEMO_BANTER_MAX_TRUE_PEAK_DBTP:.1f} dBTP"
-                    )
-    if total_bytes > DEMO_BANTER_MAX_BYTES:
-        errors.append(f"demo banter bundle is {total_bytes} bytes; maximum is {DEMO_BANTER_MAX_BYTES} bytes (40 MiB)")
+                if true_peak_dbtp > max_peak:
+                    errors.append(f"{relative_path} true peak {true_peak_dbtp:.1f} dBTP exceeds {max_peak:.1f} dBTP")
+            if is_ad and duration is not None:
+                silence, silence_error = _measure_silence(asset_path, ffmpeg=ffmpeg)
+                if silence_error is not None:
+                    errors.append(f"{relative_path} {silence_error}")
+                elif silence is not None:
+                    silence_total, longest_silence = silence
+                    if silence_total / duration > DEMO_AD_MAX_SILENCE_RATIO:
+                        errors.append(
+                            f"{relative_path} silence ratio {silence_total / duration:.0%} exceeds "
+                            f"{DEMO_AD_MAX_SILENCE_RATIO:.0%}"
+                        )
+                    if longest_silence > DEMO_AD_MAX_SILENCE_SPAN_SECONDS:
+                        errors.append(
+                            f"{relative_path} silent gap {longest_silence:.2f}s exceeds "
+                            f"{DEMO_AD_MAX_SILENCE_SPAN_SECONDS:.2f}s"
+                        )
+    if banter_bytes > DEMO_BANTER_MAX_BYTES:
+        errors.append(f"demo banter bundle is {banter_bytes} bytes; maximum is {DEMO_BANTER_MAX_BYTES} bytes (40 MiB)")
+    if ad_bytes > DEMO_AD_PACK_MAX_BYTES:
+        errors.append(f"demo ad pack is {ad_bytes} bytes; maximum is {DEMO_AD_PACK_MAX_BYTES} bytes (12 MiB)")
     return errors
 
 

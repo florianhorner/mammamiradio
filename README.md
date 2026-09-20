@@ -144,7 +144,7 @@ macOS users can run `./setup-mac.sh`; venv installs can run `./start.sh`.
 
 | You add | The station adds |
 |---------|------------------|
-| Nothing | Twelve packaged, credited tracks, station imaging, the 15-second First Listen opening, and 21 prerecorded Demo Radio breaks. Those assets make no provider call; other stock copy can use keyless online Edge TTS |
+| Nothing | Twelve packaged, credited tracks, station imaging, the 15-second First Listen opening, 21 prerecorded Demo Radio breaks, and 11 finished fictional ads. Those assets make no provider call; other stock copy can use keyless online Edge TTS |
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Written-on-the-fly banter, news flashes, and ad breaks for forty fictional brands. Billed to you; the control room shows a running estimate |
 | ElevenLabs voice credentials | The cast Marco and Giulia voices used in the public demos, with keyless online Edge TTS as the fallback |
 | OpenAI or Azure Speech credentials | Alternative cloud voices where you explicitly select them |

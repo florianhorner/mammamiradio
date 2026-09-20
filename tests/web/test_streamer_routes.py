@@ -6786,8 +6786,33 @@ def _keyless_ad_app(**overrides):
     return app
 
 
+@pytest.fixture
+def no_packaged_ads(monkeypatch):
+    """Exercise refusals only when the second ad source is also unavailable."""
+    monkeypatch.setattr("mammamiradio.scheduling.producer.packaged_ad_programme_available", lambda _config: False)
+
+
 @pytest.mark.asyncio
-async def test_ad_break_button_refuses_an_ad_the_station_cannot_write():
+@pytest.mark.parametrize("super_italian", [False, True])
+async def test_packaged_bank_enables_ad_button_and_status_without_live_config(monkeypatch, super_italian):
+    app = _keyless_ad_app()
+    app.state.config.ads.brands = []
+    app.state.config.super_italian_mode = super_italian
+    monkeypatch.setattr(
+        "mammamiradio.scheduling.producer.packaged_ad_programme_available",
+        lambda config: config.super_italian_mode == super_italian,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        status = (await client.get("/status")).json()
+        trigger = (await client.post("/api/trigger", json={"type": "ad"})).json()
+    assert status["pacing"]["ad_block"] is None
+    assert trigger == {"ok": True, "triggered": "ad"}
+    assert app.state.station_state.operator_force_pending is SegmentType.AD
+
+
+@pytest.mark.asyncio
+async def test_ad_break_button_refuses_an_ad_the_station_cannot_write(no_packaged_ads):
     """A forced ad needs the same model-route guard as natural scheduling."""
     app = _make_test_app()
     app.state.config.anthropic_api_key = "test-key"
@@ -6806,7 +6831,7 @@ async def test_ad_break_button_refuses_an_ad_the_station_cannot_write():
 
 
 @pytest.mark.asyncio
-async def test_ad_break_button_names_brands_when_brands_are_what_is_missing():
+async def test_ad_break_button_names_brands_when_brands_are_what_is_missing(no_packaged_ads):
     app = _make_test_app()
     app.state.config.anthropic_api_key = "test-key"
     app.state.config.ads.brands = []
@@ -6822,7 +6847,7 @@ async def test_ad_break_button_names_brands_when_brands_are_what_is_missing():
 
 
 @pytest.mark.asyncio
-async def test_ad_break_button_refuses_when_the_provider_refused_the_key():
+async def test_ad_break_button_refuses_when_the_provider_refused_the_key(no_packaged_ads):
     app = _make_test_app()
     app.state.config.anthropic_api_key = "test-key"
     app.state.config.openai_api_key = ""
@@ -6839,7 +6864,7 @@ async def test_ad_break_button_refuses_when_the_provider_refused_the_key():
 
 
 @pytest.mark.asyncio
-async def test_a_missing_key_is_named_even_while_another_pick_is_pending():
+async def test_a_missing_key_is_named_even_while_another_pick_is_pending(no_packaged_ads):
     app = _keyless_ad_app(operator_force_pending=SegmentType.BANTER)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -6884,7 +6909,7 @@ async def test_banter_and_news_triggers_are_unaffected_without_a_key():
         (True, True, False, "no_ad_route"),
     ],
 )
-async def test_status_names_why_ads_cannot_air(key, brands, route, expected):
+async def test_status_names_why_ads_cannot_air(key, brands, route, expected, no_packaged_ads):
     app = _make_test_app()
     app.state.config.anthropic_api_key = "test-key" if key else ""
     app.state.config.openai_api_key = ""

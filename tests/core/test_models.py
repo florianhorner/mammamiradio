@@ -1088,6 +1088,45 @@ def test_segment_release_callback_runs_exactly_once():
     assert events == ["started", "released"]
 
 
+def test_segment_audible_callback_runs_once_and_pre_air_release_cancels_it():
+    events: list[str] = []
+    aired = Segment(
+        type=SegmentType.AD,
+        path=Path("/tmp/aired-ad.mp3"),
+        audible_callback=lambda: events.append("aired"),
+        release_callback=lambda: events.append("released-aired"),
+    )
+    dropped = Segment(
+        type=SegmentType.AD,
+        path=Path("/tmp/dropped-ad.mp3"),
+        audible_callback=lambda: events.append("should-not-air"),
+        release_callback=lambda: events.append("released-dropped"),
+    )
+
+    aired.mark_audible()
+    aired.mark_audible()
+    aired.release()
+    dropped.release()
+    dropped.mark_audible()
+
+    assert events == ["aired", "released-aired", "released-dropped"]
+
+
+def test_ad_break_reservation_commits_or_releases_without_duplicate_credit():
+    state = StationState()
+
+    assert state.reserve_ad_break("queued-a", "ads/normal-a.mp3") is True
+    assert state.reserve_ad_break("queued-a", "ads/normal-a.mp3") is False
+    assert state.commit_ad_break("queued-a") == "ads/normal-a.mp3"
+    assert state.commit_ad_break("queued-a") is None
+    assert list(state.packaged_ad_history) == ["ads/normal-a.mp3"]
+
+    assert state.reserve_ad_break("queued-b", "ads/normal-b.mp3") is True
+    state.release_ad_break("queued-b")
+    assert state.commit_ad_break("queued-b") is None
+    assert list(state.packaged_ad_history) == ["ads/normal-a.mp3"]
+
+
 def test_segment_denied_playback_releases_provider_resource():
     events: list[str] = []
 
