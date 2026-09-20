@@ -4924,6 +4924,9 @@ async def _fire_interrupt(
         except Exception:
             logger.error("Interrupt could not retract a residual queued segment", exc_info=True)
             removed = False
+        # Retraction can also remove a handoff successor from this snapshot.
+        if not any(item is residual_item for item in getattr(queue, "_queue", ())):
+            residual_item.release()
         if not removed:
             continue
         try:
@@ -9444,7 +9447,11 @@ async def _run_producer_inner(
                                     item.type is SegmentType.MUSIC
                                     and not item.released
                                     and "error" not in item.metadata
-                                    and not item.metadata.get("rescue")
+                                    and (
+                                        not item.metadata.get("rescue")
+                                        or item.metadata.get("music_reservation_id")
+                                        in state.music_admission_reservations
+                                    )
                                     for item in list(getattr(queue, "_queue", ()))
                                 )
 

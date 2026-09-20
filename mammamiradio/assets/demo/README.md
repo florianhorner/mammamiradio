@@ -58,7 +58,7 @@ accepted substitute for the reviewed cast.
 
 `scripts/validate-spoken-assets.py` gates 25–40 second ads at 48 kHz, stereo,
 192 kbps MP3, -15 LUFS ±1, and at most -1 dBTP. Total silence may not exceed
-25%, nor a contiguous gap 2.5 seconds. The ad bank is capped at 12 MiB; individual
+25%, nor may a contiguous gap exceed 2.5 seconds. The ad bank is capped at 12 MiB; individual
 files at 4 MiB, separate from the existing 40 MiB banter/opening budget.
 Its package-resource checks must also run against the built
 wheel/sdist or installed image, not only this source checkout. Final archive

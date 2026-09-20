@@ -11441,7 +11441,8 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp_path):
+@pytest.mark.parametrize("residual", [False, True])
+async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp_path, monkeypatch, residual):
     """Cleanup failure cannot strand later cue work or corrupt queue accounting."""
     from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _fire_interrupt
@@ -11478,6 +11479,8 @@ async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp
         return original_unlink(path, *args, **kwargs)
 
     spec = InterruptSpec(directive="Urgent update", urgency="urgent", cooldown=60)
+    if residual:
+        monkeypatch.setattr(producer, "drop_matching_segments", lambda *_a, **_kw: 0)
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
         patch.object(Path, "unlink", new=_unlink_with_one_failure),
@@ -11491,13 +11494,17 @@ async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp
     assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
     assert state.discard_by_reason[GenerationWasteReason.INTERRUPT] == 2
     assert bad_path.exists()
+    assert bad.released and cue.released
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
+@pytest.mark.parametrize("residual", [False, True, "handoff"])
+@pytest.mark.parametrize("accounting_error", [False, True])
+async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path, monkeypatch, residual, accounting_error):
     """Interrupt queue purges must not delete packaged demo assets."""
     from mammamiradio.core.models import InterruptSpec
     from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.handoff import HandoffReservation
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     demo_root = tmp_path / "assets" / "demo"
@@ -11510,9 +11517,21 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     )
     state = _make_state()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
-    queue.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
+    segment = Segment(type=SegmentType.AD, path=packaged, metadata={"queue_id": "asset"}, ephemeral=True)
+    assert state.reserve_ad_break("asset", "packaged-ad")
+    release = MagicMock(side_effect=lambda: state.release_ad_break("asset"))
+    segment.release_callback = release
+    if residual == "handoff":
+        music = Segment(type=SegmentType.MUSIC, path=packaged, ephemeral=False)
+        state.handoff_reservations["pair"] = HandoffReservation("pair", music, segment, packaged, 30, False, packaged)
+        queue.put_nowait(music)
+    queue.put_nowait(segment)
     state.queued_segments = [{"id": "asset", "type": "banter"}]
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+    if residual:
+        monkeypatch.setattr(producer, "drop_matching_segments", lambda *_a, **_kw: 0)
+    if accounting_error:
+        monkeypatch.setattr(state, "record_discard", MagicMock(side_effect=RuntimeError("accounting failed")))
 
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
@@ -11522,6 +11541,12 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
 
     assert packaged.exists()
     assert queue.empty()
+    assert queue._unfinished_tasks == 0
+    assert segment.released and not state.ad_break_reservations
+    if residual == "handoff":
+        assert music.released and not state.handoff_reservations
+    segment.release()
+    release.assert_called_once()
     assert state.interrupt_slot == emergency_tone
 
 
@@ -11911,10 +11936,21 @@ def _ad_capable_config(*, key: bool, brands: bool):
 
 
 def _queue_music_after_ad(queue, state):
-    for metadata in ({}, {}, {"rescue": True}, {"error": ""}):
-        queue.put_nowait(Segment(type=SegmentType.MUSIC, path=_fake_path(), metadata=metadata))
-        if not metadata:
-            state.after_music(Track(title="Following song", artist="Test", duration_ms=1000))
+    from mammamiradio.scheduling.producer import _reserve_music_segment
+    from mammamiradio.web.streamer import _account_starter_runway
+
+    for index, metadata in enumerate(
+        ({}, {"rescue": True}, {"rescue": True}, {"rescue": True, "music_reservation_id": "stale"}, {"error": ""})
+    ):
+        segment = Segment(type=SegmentType.MUSIC, path=_fake_path(), metadata=metadata)
+        queue.put_nowait(segment)
+        track = Track(title="Following song", artist="Test", duration_ms=1000)
+        if index == 0:
+            state.after_music(track)
+        elif index == 1:
+            segment.metadata["queue_id"] = "resume-song"
+            _reserve_music_segment(state, track, segment)
+            _account_starter_runway(state, track)
     released = Segment(type=SegmentType.MUSIC, path=_fake_path())
     released.release()
     queue.put_nowait(released)
@@ -12033,6 +12069,63 @@ async def test_no_key_queues_mode_safe_packaged_ad_without_rendering(
         pending.release()
     assert not state.ad_break_reservations
     segment.release()
+
+
+@pytest.mark.asyncio
+async def test_post_restart_packaged_ad_reaches_listener_after_explicit_resume(tmp_path, monkeypatch):
+    """Persisted Stop survives reconnect; explicit Resume delivers a keyless ad."""
+    from mammamiradio.scheduling import producer
+    from mammamiradio.web import streamer
+
+    _write_packaged_ad_bank(tmp_path, modes=("normal",))
+    recovery = _manifest_recovery_clip(tmp_path, "continuity_1.mp3", b"recovery" * 512)
+    monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", tmp_path)
+    monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", tmp_path)
+    producer._canned_clip_cache.clear()
+    config = _ad_capable_config(key=False, brands=False)
+    config.super_italian_mode = False
+    config.cache_dir = config.tmp_dir = tmp_path
+    config.pacing.songs_between_ads = 1
+    config.pacing.songs_between_banter = 99
+    streamer._persist_session_stopped(config, True)
+    state = _make_state()  # new process state, restored from the prior process's marker
+    state.session_stopped = streamer._session_stopped_flag(config).exists()
+    state.segments_produced, state.songs_since_ad = 6, 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    hub = streamer.LiveStreamHub()
+    hub.bind_state(state)
+    app_state = SimpleNamespace(station_state=state, config=config, queue=queue, stream_hub=hub)
+    app_state.skip_event = asyncio.Event()
+    app = SimpleNamespace(state=app_state)
+    request = MagicMock(app=app, is_disconnected=AsyncMock(return_value=False))
+    stream = streamer._audio_generator(request, prelude=False)
+    first_chunk = asyncio.create_task(anext(stream))
+    tasks = [first_chunk, asyncio.create_task(run_producer(queue, state, config))]
+    try:
+        await asyncio.sleep(0.05)
+        assert state.session_stopped and streamer._session_stopped_flag(config).exists()
+        assert hub._listeners and queue.empty() and not first_chunk.done()
+        assert await streamer.resume_session(request) == {"ok": True, "recovering": False}
+        assert not state.session_stopped and not streamer._session_stopped_flag(config).exists()
+        bridge = queue.get_nowait()  # consume Resume's separately tested continuity runway
+        assert bridge.path == recovery
+        queue.task_done()
+        bridge.release()
+        ad = await asyncio.wait_for(queue.get(), timeout=3)
+        queue.task_done()
+        assert ad.type is SegmentType.AD and ad.metadata["packaged"]
+        tasks[1].cancel()
+        await asyncio.gather(tasks[1], return_exceptions=True)
+        queue.put_nowait(ad)
+        tasks.append(asyncio.create_task(streamer.run_playback_loop(app)))
+        chunk = await asyncio.wait_for(first_chunk, timeout=1)
+        assert chunk and ad.path.read_bytes().startswith(chunk)
+        assert len(state.ad_history) == 1 and state.songs_since_ad == 0
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await stream.aclose()
 
 
 @pytest.mark.asyncio
