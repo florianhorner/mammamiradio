@@ -85,8 +85,8 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Yes, sounds great" in html
     assert 'id="firstListenPrivacyHeading" tabindex="-1">Make it yours</h3>' in html
     assert "Return to “Can you hear us?”, then review your Home details." in html
-    assert "Give them something new to say." in html
-    assert "Their opening flows straight into live radio." in html
+    assert "Let them surprise you." in html
+    assert "Marco, Giulia, and a record with your name on it." in html
     assert "Mamma Mi Radio, live from Studio B." in html
     assert 'id="firstListenHomeAssistantGuide"' not in html
     assert '<p class="progress-line" id="firstListenProgressLine">Step 1 of 3. Start the station.</p>' in html
@@ -140,8 +140,8 @@ def test_last_required_step_keeps_the_rail_while_its_body_is_open() -> None:
     assert "bottom: 0;" in opened
 
 
-def test_step_three_has_one_replaceable_day_one_proof_scene() -> None:
-    """One candidate is visible while the richer reviewed scenes stay inert."""
+def test_step_three_starts_with_one_day_one_scene_and_offers_the_reviewed_pack() -> None:
+    """Evening opens the sequence; subsequent scenes remain click-to-play."""
 
     html = _html()
     moments = html[html.index('class="home-moments"') : html.index('id="firstListenConnectionInvite"')]
@@ -150,7 +150,11 @@ def test_step_three_has_one_replaceable_day_one_proof_scene() -> None:
     assert moments.count('data-reachability="home-grant"') == 3
     assert moments.count("hidden inert") == 3
     assert "const FIRST_LISTEN_HOME_PROOF_KEY='quiet';" in html
-    assert "scene.dataset.explainerScenario===FIRST_LISTEN_HOME_PROOF_KEY" in html
+    assert "FIRST_LISTEN_HOME_EXAMPLE_ORDER=Object.keys(HOUSEHOLD_EXAMPLES)" in html
+    assert "scene.dataset.explainerScenario===key" in html
+    assert 'id="firstListenExampleNextBtn"' in html
+    assert 'id="firstListenExamplePreviousBtn"' in html
+    assert "Laundry, arrivals and coffee aren’t available on new installations yet." in moments
 
 
 def test_the_day_one_scene_retains_its_truth_boundary_without_a_badge() -> None:
@@ -184,6 +188,8 @@ def test_step_three_explains_the_proof_boundary_before_asking_for_a_key() -> Non
     assert "An imagined evening. No details from your home." in proof
     assert "Nothing from your home has been read" not in proof  # saved sharing can already be on
     assert "You choose what they get to know." in invite
+    assert 'class="broadcast-comparison"' in html
+    assert "Your provider bills usage. Home permission comes next." in html
     assert html.index('id="firstListenHouseholdProof"') < html.index('id="firstListenMakeYoursBtn"')
 
 
@@ -371,7 +377,7 @@ def test_home_assistant_labels_are_added_with_text_content() -> None:
     assert ".innerHTML" not in preview_block
 
 
-def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
+def test_privacy_preview_is_explicit_and_independent_of_writing() -> None:
     html = _html()
     privacy = html.index('id="firstListenPrivacyStep"')
     ai = html.index('id="firstListenAiStep"')
@@ -384,16 +390,16 @@ def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
     assert "toggleHouseholdExample('coffee',this)" in html
     assert "home_moments" in html
     assert "We won’t request Home details unless you ask for a preview." in html
-    assert "Keep Home private and we request nothing." in html
-    assert "preview exactly what the hosts would receive, then decide." in html
+    assert "Nothing goes to a writing service until you agree." in html
+    assert "Preview the details. You decide what goes on air." in html
     assert "apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview)" in html
     assert (
         "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy)"
         in html
     )
     assert "Keep Home private" in html
-    assert "See what the hosts would receive" in html
-    assert "Let Marco and Giulia use these details" in html
+    assert "Preview my Home" in html
+    assert "Share these details" in html
 
     keep_private = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert "loadHomeContextPreview" not in keep_private
@@ -418,10 +424,7 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     assert "listenComplete?'complete':receiptRepairRequired||listenAccepted?'current':'upcoming'" in progress
     assert "privacyMilestone?'complete':existingPrivacyReview||listenComplete?'current':'upcoming'" in progress
     assert "firstListenSetStep('firstListenAiStep','optional')" in progress
-    assert (
-        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
-        in progress
-    )
+    assert "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving;" in progress
     assert "You do not need to play the station again." in progress
     assert "Your existing listening check still stands. Review your Home details next." in progress
 
@@ -613,8 +616,8 @@ def test_discovery_and_privacy_preview_require_canonical_detached_envelopes() ->
 
 def test_no_ai_key_is_needed_for_first_audio() -> None:
     html = _html()
-    assert "Those studio recordings play without a key." in html
-    assert 'id="firstListenKeepListeningBtn"' in html
+    assert "Without a writing key: music and recorded host moments." in html
+    assert "Later — keep listening" in html
     assert "Hear the studio voices" in html
     assert "Hear the free voices" in html
     ai_body = re.search(r'<div class="first-listen-body"[^>]*id="firstListenAiBody"[^>]*>', html)
@@ -623,10 +626,7 @@ def test_no_ai_key_is_needed_for_first_audio() -> None:
     assert 'aria-hidden="true"' in ai_body.group(0)
     assert "inert" in ai_body.group(0)
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    assert (
-        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
-        in progress
-    )
+    assert "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving;" in progress
     assert "filter(e=>e.key==='llm_keys')" in progress
     assert "firstListenSetStep('firstListenAiStep','optional')" in progress
     assert "renderFirstListenConnection()" in progress
@@ -639,10 +639,10 @@ def test_no_ai_key_is_needed_for_first_audio() -> None:
     save = _function("setupSaveKeys", "copySetupSnippet")
     assert "setupAnthropicKey" in fields
     assert "setupOpenaiKey" in fields
-    assert "save.disabled=_firstListenUi.keySaving||!hasInput" in update
+    assert "save.disabled=_firstListenUi.keySaving||_firstListenUi.connectionChecking||!hasInput" in update
     assert "firstListenKeyFields()" in save
     assert "apiResponse('POST','/api/setup/save-keys',payload,FIRST_LISTEN_TIMEOUTS.privacy)" in save
-    assert "Saved keys stay hidden." in html
+    assert 'type="password" placeholder="Leave blank to keep saved key"' in html
     assert "Leave a field empty to keep its current value." in html
     assert html.count('placeholder="Leave blank to keep saved key"') == 4
 

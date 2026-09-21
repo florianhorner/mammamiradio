@@ -84,7 +84,8 @@ Open the add-on Web UI. A fresh unfinished install shows one active moment:
 **Your seat's ready**. **Start my station** opens the actual
 `/stream?first_listen=1`; its Marco/Giulia opening flows into live radio on the
 same player, with no separate demo or second start. The real media `playing`
-event reveals **Can you hear us?**. Choose **Yes, sounds great** only after sound
+event reveals **Can you hear us?** inside the same studio frame; an expanded
+opening transcript remains available. Choose **Yes, sounds great** only after sound
 reaches this device, or use **Not yet** and the [this-device repair
 steps](../troubleshooting.md#first-listen-does-not-play-on-this-device). Arrival,
 sound confirmation, and **Make it yours** appear one at a time; completed choices
@@ -105,6 +106,8 @@ Music continues beneath the recorded hosts at a lower level, then returns to
 normal. The same player stays available through Make it yours, completion,
 music-source setup and station controls. **Pause music** pauses this device;
 **Continue music** resumes it without changing saved choices. If the browser
+is reloaded after sound confirmation, **Resume station** is available without
+autoplay or repeating the sound check. If the browser
 cannot mix the hosts over music, use the transcript or pause music explicitly
 before playing the recording. **Listen elsewhere** offers Music Assistant and
 AirPlay/Bluetooth guidance. Copying a stream address is offered outside
@@ -116,6 +119,9 @@ In **Motore**, **Restart First Listen** reopens the arrival and all three moment
 It preserves music and saved settings; existing Home sharing stays active until
 the operator explicitly changes it. Old receipts do not skip the repeated steps.
 The listener page uses its own familiar controls; no second player starts.
+Choosing **Start sound check** makes a new playback attempt. It joins the live
+station on completed or existing installations; the server does not replay its
+fresh-install opening after durable hearing proof.
 
 Home Assistant speakers remain optional and are no longer part of First Listen.
 The add-on has no speaker picker; the route is Home Assistant's own media
@@ -131,27 +137,36 @@ confirmation, **Hear the evening** is explicitly staged, uses only weather and
 daylight, and says no Home details were read. The station ducks for the scene
 and resumes; the listener may hear it, skip it, or finish with Home private.
 
-Hearing or skipping reveals **Now make it yours**: writing supplies fresh host
-lines, while the live station and included recordings continue without a key.
-**Connect live writing** leads through the key check and exact Home preview;
-Home remains private until explicit consent. Missing, stale, or ambient-only
-previews must not claim household personalization.
+When the scene ends, Replay and its transcript remain available; **Make it mine**
+appears without moving keyboard focus. **Skip this example** goes directly to
+writing. **Let them surprise you** compares recorded moments with fresh
+conversations, alongside one provider selector and one key field. Included
+radio keeps playing without a key. A saved but unverified key is not presented
+as connected; **Check connection again** actively checks the existing providers
+and refreshes the result, with bounded failure recovery. Unfinished key input
+must remain visible through background checks. **Later — keep listening** skips
+writing and opens the same exact Home choice. Missing, stale, or daylight-only
+previews must not claim meaningful household personalization.
 
-`FIRST_LISTEN_HOME_PROOF_KEY` selects the visible day-one `quiet` recording from
-the hash-bound four-scene pack. Laundry, arrival, and kitchen stay gated because
-a writing key grants no household details; `scripts/validate-spoken-assets.py`
-enforces that boundary.
+`FIRST_LISTEN_HOME_PROOF_KEY` selects the opening day-one `quiet` recording from
+the hash-bound four-scene pack. Completion offers laundry, arrival, then coffee
+as optional recorded examples; each waits for a click, and **Make it mine**
+remains available. Their disclosure states that these household features are
+unavailable on new installations. Playing an example grants no household
+details; `scripts/validate-spoken-assets.py` preserves the manifest's day-one
+versus Home-grant boundary.
 
-**Your ongoing show** is optional. **Hear the studio voices** and **Hear the
-free voices** play recordings. With the default setup, new conversations use
-those studio voices only after an ElevenLabs key is added under **Voice
-quality**. Without that key, new conversations use free voices. **Done with
-setup** and **Back to setup** stay on the same station.
+**Free vs studio voices · listen** is an optional drawer, not another required
+step. Both samples are recordings. New conversations use free voices with the
+default setup; a writing key alone does not buy the recorded studio voices.
+**Connect a voice service** opens existing voice settings and returns to writing.
+Writing and voice services bill separately. **Done with setup** and **Back to
+setup** stay on the same station, including after an early private completion.
 The English Admin opening is a bundled recording of the studio voices; it needs
 no key to play. The existing Italian opening for ordinary listeners is unchanged. The optional example never counts toward required progress.
 
 If saving the privacy-review receipt fails, verify that the live choice remains
-truthful and AI setup stays locked: the private path retries without a preview;
+truthful and completion stays blocked: the private path retries without a preview;
 the enabled path requires a fresh preview before saving the review again.
 
 ## Version: three files, must match

@@ -357,35 +357,53 @@ def test_resume_offers_force_start_only_after_confirmed_assetless_refusal() -> N
 
 
 def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> None:
-    block = _function_block(_read_admin_html(), "renderSetup")
-
     html = _read_admin_html()
-    assert "AI service connected" in html
-    assert "Voice service connected" in html
+    block = _function_block(html, "renderFirstListenConnection")
+    setup = _function_block(html, "renderSetup")
+    writing = _function_block(html, "firstListenConnectionEvidence")
+    voices = _function_block(html, "firstListenVoiceEvidence")
+
+    # One receipt owns both status and the edit form; setup polling must not
+    # overwrite its evidence with a second configured-means-connected banner.
     assert "Provider keys configured" not in html
-    assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
-    assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
-    assert "providerKeysConfigured=configuredKeys.length>0" in block
-    assert "aiKeysConfigured=configuredLlmKeys.length>0" in block
-    assert "providerReadiness=setupProviderReadiness(configuredKeys)" in block
-    assert "providerSetupIncomplete=providerKeysConfigured&&" in block
+    assert "stage==='voices'?firstListenVoiceEvidence():firstListenConnectionEvidence()" in block
+    for element_id in ("setupKeysLabel", "setupKeysDetail", "setupKeysConfigured", "setupKeysForm"):
+        assert f"getElementById('{element_id}')" in block
+        assert f"getElementById('{element_id}')" not in setup
+    assert "getElementById('setupKeysDetail').textContent=evidence.detail" in block
+    assert "getElementById('setupKeysConfigured').dataset.state=evidence.state" in block
+    assert "getElementById('setupKeysConfigured').style.display=evidence.state==='idle'?'none':'block'" in block
+    assert "const hasDraft=firstListenKeyValues().some(Boolean)" in block
+    assert "const showForm=voices||evidence.state!=='ready'||_keysEditMode||hasDraft" in block
+    assert "getElementById('setupKeysForm').style.display=showForm?'block':'none'" in block
     # The glyphs are load-bearing, not decoration: this banner is read by a
     # red-green colorblind operator, so every state pairs its colour with a shape.
-    assert "providerSetupIncomplete?'△ AI setup needs attention'" in block
-    assert "keysBanner.dataset.state=providerSetupIncomplete?'incomplete':'ready'" in block
-    assert "aiKeysConfigured?'✓ AI service connected':'✓ Voice service connected'" in block
-    assert "setupProviderLabels(configuredKeys).join(' · ')" in block
-    labels = _function_block(html, "setupProviderLabels")
-    for capability in (
-        "Anthropic AI hosts",
-        "OpenAI AI hosts + voices",
-        "Azure Speech voices",
-        "ElevenLabs voices",
+    assert "({ready:'✓ ',working:'○ ',blocked:'✗ ',degraded:'△ '}[evidence.state]||'')+evidence.label" in block
+
+    assert "[['ANTHROPIC_API_KEY','anthropic_key_status'],['OPENAI_API_KEY','openai_key_status']]" in writing
+    assert "caps[field]||'unverified'" in writing
+    assert "keys.has('OPENAI_API_KEY')&&caps.openai_key_status==='valid'" in writing
+    assert "keys.has('ANTHROPIC_API_KEY')&&caps.anthropic_key_status==='valid'&&!caps.anthropic_degraded" in writing
+    assert "if(workingOpenai||workingAnthropic)return{state:'ready',label:'Writing connected'" in writing
+    assert "if(_firstListenUi.connectionCheckFailed)return{state:'degraded'" in writing
+    assert "if(statuses.every(status=>status==='rejected'))return{state:'blocked'" in writing
+    assert "return{state:'working',label:'Key saved · not confirmed yet'" in writing
+    assert "if(_firstListenUi.keySaving)return{state:'working'" in writing
+    assert "if(_firstListenUi.keySaveUnconfirmed)return{state:'degraded'" in writing
+
+    for provider in (
+        "['ELEVENLABS_API_KEY','elevenlabs']",
+        "['OPENAI_API_KEY','openai_speech']",
+        "['AZURE_SPEECH_KEY','azure_speech']",
     ):
-        assert capability in labels
-    readiness = _function_block(html, "setupProviderReadiness")
-    assert "voiceReady:keys.has('OPENAI_API_KEY')" in readiness
-    assert "azureIncomplete:hasAzureKey!==hasAzureRegion" in readiness
+        assert provider in voices
+    assert "keys.has('AZURE_SPEECH_KEY')!==keys.has('AZURE_SPEECH_REGION')" in voices
+    assert "state:'degraded',label:'Azure setup is incomplete'" in voices
+    assert "_caps?.provider_health?.[name]||{}" in voices
+    assert "h.key_status==='rejected'||h.disabled||h.cooldown||h.quota_exhausted||Number(h.failed_voices)>0" in voices
+    assert "if(failed)return{state:'degraded'" in voices
+    assert "return{state:'working',label:'Voice settings saved'" in voices
+    assert "state:'ready'" not in voices
 
 
 def test_runtime_status_header_uses_shared_runtime_verdict() -> None:
@@ -644,7 +662,10 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     assert "First Listen → Review AI setup → " in block
     assert "Check the configured provider voice, model, and region settings" in block
     assert 'data-tab="setup">First Listen' in _read_admin_html()
-    assert ">Change AI services</button>" in _read_admin_html()
+    assert (
+        'id="setupKeysEditBtn" data-stopped-exempt onclick="openFirstListenKeyEditor(this)">Change key</button>'
+        in _read_admin_html()
+    )
     assert "<summary>Other voice setups</summary>" in _read_admin_html()
     assert "restart the add-on" not in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
