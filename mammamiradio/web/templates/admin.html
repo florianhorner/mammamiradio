@@ -2611,19 +2611,19 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               <section class="first-listen-step" id="firstListenVerifyStep" data-state="upcoming" aria-labelledby="firstListenVerifyHeading">
                 <div class="first-listen-head">
                   <span class="first-listen-number" aria-hidden="true">2</span>
-                  <h3 class="first-listen-heading" id="firstListenVerifyHeading" tabindex="-1">Can you hear us?</h3>
+                  <h3 class="first-listen-heading" id="firstListenVerifyHeading" tabindex="-1">The station is now playing on this device.</h3>
                   <span class="status-chip idle" id="firstListenVerifyChip" aria-label="Listening check: waiting" hidden>Waiting</span>
                   <div class="first-listen-summary" id="firstListenVerifySummary">Tell us when you hear the station on this device.</div>
                   <button type="button" class="first-listen-review" data-review-step="verify" aria-expanded="false" aria-controls="firstListenVerifyBody" onclick="toggleFirstListenReview('verify',this)" hidden>Review sound check</button>
                 </div>
                 <div class="first-listen-body" id="firstListenVerifyBody" role="region" aria-labelledby="firstListenVerifyHeading" hidden aria-hidden="true" inert>
                   <div class="first-listen-actions" id="firstListenVerifyActions" style="margin-top:0">
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>Yes, sounds great</button>
-                    <button type="button" class="btn btn-util first-listen-action" id="firstListenNotYetBtn" data-stopped-exempt onclick="verifyFirstListen(false,this)" disabled>Not yet</button>
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>I can hear it</button>
+                    <button type="button" class="btn btn-util first-listen-action" id="firstListenNotYetBtn" data-stopped-exempt onclick="verifyFirstListen(false,this)" disabled>I can’t hear you</button>
                   </div>
                   <div class="first-listen-status" id="firstListenVerifyStatus" role="status" aria-live="polite" aria-atomic="true"></div>
                   <details class="first-listen-explanation" id="firstListenSoundHelp">
-                    <summary>Need a hand with the sound?</summary>
+                    <summary>Troubleshoot audio</summary>
                     <p class="use-copy">Check your device’s volume and mute switch. Only you can confirm that the sound reached the room.</p>
                     <div class="guide-audio sound-check-help" data-guide="sound-check">
                       <button type="button" class="guide-audio-play" data-guide-key="sound-check" aria-describedby="guideSoundNote" onclick="toggleFirstListenGuide('sound-check',this)">Hear why we ask</button>
@@ -6312,7 +6312,7 @@ function renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,rec
   document.getElementById('firstListenShowNext').textContent=opening?'Marco and Giulia’s station opening':'Your live station';
   document.getElementById('firstListenShowThen').hidden=!opening;
   if(kicker)kicker.textContent='Welcome to Mamma Mi Radio';
-  if(title)title.textContent=priorInstall||projection.privacyReviewed?'Your station. Your choices.':projection.accepted?'Welcome to Studio B.':'Your seat’s ready.';
+  if(title)title.textContent=priorInstall||projection.privacyReviewed?'Your station. Your choices.':projection.accepted?'Can you hear us?':'Your seat’s ready.';
   if(!copy)return;
   if(priorInstall||projection.privacyReviewed)copy.textContent='Your saved choices stay in place until you change them.';
   else copy.innerHTML=FIRST_LISTEN_ARRIVAL_COPY;

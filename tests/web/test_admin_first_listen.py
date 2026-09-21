@@ -81,8 +81,10 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Music details" in html
     assert 'id="firstListenSourcePreview"' in html
     assert "Start my station" in html
-    assert "Can you hear us?" in html
-    assert "Yes, sounds great" in html
+    assert 'id="firstListenVerifyHeading" tabindex="-1">The station is now playing on this device.</h3>' in html
+    assert "I can hear it" in html
+    assert "I can’t hear you" in html
+    assert "Troubleshoot audio" in html
     assert 'id="firstListenPrivacyHeading" tabindex="-1">Make it yours</h3>' in html
     assert "Return to “Can you hear us?”, then review your Home details." in html
     assert "Let them surprise you." in html
@@ -347,8 +349,9 @@ def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> Non
     )
     assert "media-source://mammamiradio/live" in html
     assert "Start my station" in html
-    assert "Yes, sounds great" in html
-    assert ">Not yet<" in html
+    assert "I can hear it" in html
+    assert ">I can’t hear you<" in html
+    assert "Troubleshoot audio" in html
     audio_tag = re.search(r'<audio id="firstListenStationAudio"[^>]*>', html)
     assert audio_tag is not None
     assert 'preload="none"' in audio_tag.group(0)
