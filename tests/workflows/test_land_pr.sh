@@ -59,9 +59,19 @@ MOCK_BIN="$TMPDIR_T/bin"
 mkdir -p "$MOCK_BIN"
 cat > "$MOCK_BIN/gh" <<'MOCK'
 #!/usr/bin/env bash
+if [[ "${GH_MOCK_GUARD:-0}" == "1" && "$1 $2" == "pr merge" ]]; then
+  [[ " $* " == *" --delete-branch "* && " $* " == *" --repo test-owner/test-repo "* ]] || {
+    echo 'guard: explicit repository and branch cleanup required' >&2
+    exit 1
+  }
+fi
 # The capability probe (`pr merge --help`) is answered without logging so the
 # never-merged assertions only see real merge attempts.
 if [[ "$*" == *"--help"* ]]; then
+  if [[ "${GH_MOCK_HELP_FAIL:-0}" == "1" ]]; then
+    echo 'mock guard denied help' >&2; exit 1
+  fi
+  [[ "${GH_MOCK_OLD_HELP:-0}" != "1" ]] || exit 0
   printf '%s\n' "--match-head-commit"
   if [ -n "${GH_MOCK_HELP_LINES:-}" ]; then
     seq 1 "$GH_MOCK_HELP_LINES"
@@ -84,7 +94,7 @@ case "$1 $2" in
     ;;
   "pr merge") : ;;
   "repo view")
-    printf '{"nameWithOwner":"test-owner/test-repo"}\n'
+    printf '%s\n' 'test-owner/test-repo'
     ;;
   "api graphql")
     [[ "$*" != *"isOutdated url comments"* ]] || exit 1
@@ -138,6 +148,7 @@ run_land() {
   GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
   RUN_RC=0
   RUN_OUT="$(env PATH="$MOCK_BIN:$PATH" \
+      GH_REPO= \
       GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_HEAD="$HEAD_FULL" \
       GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
       GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" GH_MOCK_COMMENT_JSON="$EMPTY_COMMENTS" \
@@ -156,6 +167,25 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_HELP_LINES=100
 [ "$RUN_RC" -eq 0 ] || fail "large gh help output should not trip the capability probe"
 merged_with "$HEAD_FULL" || fail "large gh help output should still arm auto-merge"
 pass "capability probe drains gh help output"
+
+# The installed guard checks both the read-only probe and actual merge argv.
+run_land "$(empty_reader)" GH_MOCK_GUARD=1 GH_REPO=github.com/test-owner/test-repo
+[ "$RUN_RC" -eq 0 ] || fail "guard-compatible help and pinned merge must work: $RUN_OUT"
+merged_with "$HEAD_FULL" || fail "guard-compatible invocation must retain the exact head pin"
+pass "help and merge retain explicit repository and branch cleanup"
+
+run_land "$(empty_reader)" GH_MOCK_HELP_FAIL=1
+[ "$RUN_RC" -ne 0 ] || fail "failed help probe must stop"
+never_merged || fail "failed help probe must never merge"
+printf '%s' "$RUN_OUT" | grep -q 'mock guard denied help' || fail "preserve the real probe error"
+! printf '%s' "$RUN_OUT" | grep -q 'Upgrade gh' || fail "probe denial is not an obsolete CLI"
+pass "help failure reports the actual error without merging"
+
+run_land "$(empty_reader)" GH_MOCK_OLD_HELP=1
+[ "$RUN_RC" -ne 0 ] || fail "missing head-pin support must stop"
+never_merged || fail "missing head-pin support must never merge"
+printf '%s' "$RUN_OUT" | grep -q 'Upgrade gh' || fail "old CLI needs upgrade guidance"
+pass "missing head-pin support remains fail-closed"
 
 # Case 1: CLEAN PR + fresh squad entry at HEAD => arms with pinned real head
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"

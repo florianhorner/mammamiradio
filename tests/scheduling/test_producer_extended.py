@@ -91,6 +91,14 @@ def _fake_path(*_args, **_kwargs) -> Path:
     return Path("/tmp/mammamiradio_test/fake.mp3")
 
 
+@pytest.fixture
+def live_ad_config(tmp_path):
+    config = _make_config(tmp_path)
+    config.anthropic_api_key = "test-key"
+    with patch(f"{SCRIPTWRITER_MODULE}.write_transition", AsyncMock(return_value=(config.hosts[0], "Ad break", None))):
+        yield config
+
+
 class _NoArea:
     """Sentinel type: 'area not passed' (-> default Room N) vs explicit area=None."""
 
@@ -211,9 +219,9 @@ def test_pick_brand_skips_last_three():
 
 
 @pytest.mark.asyncio
-async def test_ad_break_segment_queued(tmp_path):
+async def test_ad_break_segment_queued(tmp_path, live_ad_config):
     state = _make_state()
-    config = _make_config(tmp_path)
+    config = live_ad_config
     # Need brands for ad production
     config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
     config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
@@ -247,13 +255,13 @@ async def test_ad_break_segment_queued(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ad_break_metadata_includes_transition_track_ref(tmp_path):
+async def test_ad_break_metadata_includes_transition_track_ref(tmp_path, live_ad_config):
     """The played_track_ref write_transition() returns for the ad-break intro's
     "just finished playing" claim must land on the produced AD segment's
     metadata, mirroring the banter path (see
     test_banter_metadata_includes_transition_track_ref in test_producer_coverage.py)."""
     state = _make_state()
-    config = _make_config(tmp_path)
+    config = live_ad_config
     config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
     config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
     config.pacing.ad_spots_per_break = 1
@@ -288,14 +296,14 @@ async def test_ad_break_metadata_includes_transition_track_ref(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ad_intro_crossfade_severed_when_no_adjacent_song(tmp_path):
+async def test_ad_intro_crossfade_severed_when_no_adjacent_song(tmp_path, live_ad_config):
     """The ad-break intro must not crossfade its host opener over a stale song
     when the previous segment wasn't music (prev_seg_type is None on a cold run)."""
     state = _make_state()
     stale = tmp_path / "stale_song.mp3"
     stale.write_bytes(b"music")
     state.last_music_file = stale
-    config = _make_config(tmp_path)
+    config = live_ad_config
     config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
     config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
     config.pacing.ad_spots_per_break = 1
@@ -326,7 +334,7 @@ async def test_ad_intro_crossfade_severed_when_no_adjacent_song(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ad_break_skipped_without_brands(tmp_path):
-    """When no brands configured, ad segment is skipped and producer continues."""
+    """Without live brands or a packaged bank, music continues."""
     state = _make_state()
     config = _make_config(tmp_path)
     config.ads.brands = []
@@ -343,6 +351,7 @@ async def test_ad_break_skipped_without_brands(tmp_path):
         return SegmentType.MUSIC
 
     with (
+        patch(f"{MODULE}._packaged_ad_entries", return_value=[]),
         patch(f"{MODULE}.next_segment_type", side_effect=alternating_type),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.normalize", side_effect=_fake_path),
@@ -361,9 +370,9 @@ async def test_ad_break_skipped_without_brands(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ad_break_host_fallback_voice(tmp_path):
+async def test_ad_break_host_fallback_voice(tmp_path, live_ad_config):
     state = _make_state()
-    config = _make_config(tmp_path)
+    config = live_ad_config
     config.ads.brands = [AdBrand(name="HostBrand", tagline="host-brand")]
     config.ads.voices = []  # No dedicated ad voices → use host voice
     config.pacing.ad_spots_per_break = 1
@@ -1449,10 +1458,10 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
+async def test_ad_quality_reject_preserves_owed_break_and_continues(tmp_path, live_ad_config):
     state = _make_state()
     state.songs_since_ad = 9
-    config = _make_config(tmp_path)
+    config = live_ad_config
     config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
     config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
     config.pacing.ad_spots_per_break = 1
@@ -1479,6 +1488,8 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
         return None
 
     with (
+        patch(f"{MODULE}._packaged_ad_segment", AsyncMock(return_value=None)),
+        patch(f"{MODULE}._producer_error_recovery_segment", AsyncMock(return_value=None)),
         patch(f"{MODULE}.next_segment_type", side_effect=_seg_type),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
@@ -1495,7 +1506,7 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
-    assert state.songs_since_ad == 1
+    assert state.songs_since_ad == 10, "the unheard ad stays owed after the next song"
 
 
 # ---------------------------------------------------------------------------
@@ -1660,11 +1671,11 @@ async def test_audio_tool_error_in_banter_does_not_drop_segment(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_audio_tool_error_in_ad_does_not_drop_segment(tmp_path):
+async def test_audio_tool_error_in_ad_does_not_drop_segment(tmp_path, live_ad_config):
     """If ffmpeg is absent during ad quality check, ad break should still be queued."""
     state = _make_state()
     state.songs_since_ad = 9
-    config = _make_config(tmp_path)
+    config = live_ad_config
     config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
     config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
     config.pacing.ad_spots_per_break = 1

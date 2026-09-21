@@ -30,6 +30,9 @@ PACKAGED_AD_MAX_SECONDS = 40.0
 PACKAGED_AD_DURATION_TOLERANCE_SECONDS = 0.1
 # 40 seconds at 320 kbps is about 1.6 MB; anything far beyond that is not a spot.
 PACKAGED_AD_MAX_BYTES = 4 * 1024 * 1024
+PACKAGED_AD_TITLE_MAX_CHARS = 80
+PACKAGED_AD_CAST_MAX_MEMBERS = 6
+PACKAGED_AD_CAST_MEMBER_MAX_CHARS = 40
 
 # Modes the station speaks in, and the language each one must be recorded in.
 _MODE_LANGUAGES = {"normal": "en", "super_italian": "it"}
@@ -48,6 +51,8 @@ class SpokenAssetEntry:
     required_previous_starter_id: str = ""
     special: bool = False
     duration_seconds: float = 0.0
+    title: str = ""
+    cast: tuple[str, ...] = ()
 
 
 def validate_spoken_asset_manifest(*, assets_root: Path = DEMO_ASSETS_DIR) -> list[str]:
@@ -162,6 +167,17 @@ def is_approved_spoken_asset(path: Path, *, assets_root: Path = DEMO_ASSETS_DIR)
     return entry is not None and entry.kind == "speech"
 
 
+def approved_spoken_asset_entry(
+    path: Path,
+    *,
+    assets_root: Path = DEMO_ASSETS_DIR,
+) -> SpokenAssetEntry | None:
+    """Return the hash-bound declaration for one approved speech asset."""
+
+    entry = _approved_manifest_entry(path, assets_root=assets_root)
+    return entry if entry is not None and entry.kind == "speech" else None
+
+
 def _stays_inside_root(candidate: Path, root: Path) -> bool:
     """Whether ``candidate`` is still inside ``root`` once symlinks are followed.
 
@@ -272,6 +288,16 @@ def _ad_entry_policy_errors(entry: SpokenAssetEntry) -> list[str]:
             f"{entry.relative_path} ad is {entry.duration_seconds:g}s; "
             f"a packaged ad runs {PACKAGED_AD_MIN_SECONDS:g}-{PACKAGED_AD_MAX_SECONDS:g}s"
         )
+    if not entry.title.strip():
+        errors.append(f"{entry.relative_path} ad must declare a title")
+    elif len(entry.title) > PACKAGED_AD_TITLE_MAX_CHARS:
+        errors.append(f"{entry.relative_path} ad title exceeds {PACKAGED_AD_TITLE_MAX_CHARS} characters")
+    if not entry.cast:
+        errors.append(f"{entry.relative_path} ad must declare a cast")
+    elif len(entry.cast) > PACKAGED_AD_CAST_MAX_MEMBERS:
+        errors.append(f"{entry.relative_path} ad cast exceeds {PACKAGED_AD_CAST_MAX_MEMBERS} members")
+    if any(not member.strip() or len(member) > PACKAGED_AD_CAST_MEMBER_MAX_CHARS for member in entry.cast):
+        errors.append(f"{entry.relative_path} ad cast members must be 1-{PACKAGED_AD_CAST_MEMBER_MAX_CHARS} characters")
     return errors
 
 
@@ -333,6 +359,17 @@ def _parse_entry(raw: object, *, root: Path, prefix: str) -> tuple[SpokenAssetEn
         # it existed, and a typo in it must not drop a recovery clip from the
         # rescue ladder.
         duration_seconds = 0.0
+    title = raw.get("title", "")
+    raw_cast = raw.get("cast", [])
+    if relative.parts[0] == "ads":
+        if not isinstance(title, str):
+            return None, [f"{prefix}.title must be a string"]
+        if not isinstance(raw_cast, list) or not all(isinstance(member, str) for member in raw_cast):
+            return None, [f"{prefix}.cast must be a list of strings"]
+        cast = tuple(raw_cast)
+    else:
+        title = ""
+        cast = ()
     return (
         SpokenAssetEntry(
             relative_path=relative.as_posix(),
@@ -344,6 +381,8 @@ def _parse_entry(raw: object, *, root: Path, prefix: str) -> tuple[SpokenAssetEn
             required_previous_starter_id=required_previous_starter_id,
             special=special,
             duration_seconds=duration_seconds,
+            title=title,
+            cast=cast,
         ),
         [],
     )

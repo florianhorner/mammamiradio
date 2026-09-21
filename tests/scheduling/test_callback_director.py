@@ -245,9 +245,6 @@ async def test_flash_offer_raises_is_guarded(tmp_path):
 
 def _make_ad_config(tmp_path):
     config = _make_config(tmp_path)
-    # No real API key: the ad-break intro otherwise attempts a live Anthropic
-    # transition call and the break never assembles. write_ad is mocked anyway.
-    config.anthropic_api_key = ""
     config.ads.brands = [AdBrand(name="TestBrand", tagline="Buy it")]
     config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
     config.pacing.ad_spots_per_break = 1
@@ -260,7 +257,7 @@ def _fake_ad_path(*_args, **_kwargs):
 
 @pytest.mark.asyncio
 async def test_ad_callback_lands_retires_gag(tmp_path):
-    """Ad reports it used the gag -> the gag is retired at queue time."""
+    """An ad's landed gag is retired only when its audio reaches a listener."""
     state = _make_state()
     config = _make_ad_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -287,6 +284,7 @@ async def test_ad_callback_lands_retires_gag(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", AsyncMock(return_value=(config.hosts[0], "Ad break", None))),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_ad),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_ad_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
@@ -298,7 +296,13 @@ async def test_ad_callback_lands_retires_gag(tmp_path):
     ):
         await _run_until_queued(queue, state, config)
 
-    assert state.verbal_gag_ledger.gags == {}, "a landed ad callback must retire the gag"
+    assert gid in state.verbal_gag_ledger.gags, "queue admission does not prove a gag aired"
+    segment = queue.get_nowait()
+    assert segment.type is SegmentType.AD
+    assert segment.mark_playback_started()
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment)
+    assert state.verbal_gag_ledger.gags == {}, "an audible landed ad callback must retire the gag"
 
 
 @pytest.mark.asyncio
@@ -330,6 +334,7 @@ async def test_ad_callback_ignored_does_not_retire(tmp_path):
 
     with (
         patch(f"{MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", AsyncMock(return_value=(config.hosts[0], "Ad break", None))),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_ad),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_ad_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
@@ -341,5 +346,10 @@ async def test_ad_callback_ignored_does_not_retire(tmp_path):
     ):
         await _run_until_queued(queue, state, config)
 
+    segment = queue.get_nowait()
+    assert segment.type is SegmentType.AD
+    assert segment.mark_playback_started()
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment)
     assert gid in state.verbal_gag_ledger.gags, "an ignored ad callback must not retire the gag"
     assert not state.verbal_gag_ledger.gags[gid].traveled

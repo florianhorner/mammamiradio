@@ -238,7 +238,19 @@ always remains best-effort and never blocks or delays audio.
 `scheduler.py` is the single source of truth for pacing:
 
 - the first segment is always music
-- ad breaks trigger when `songs_since_ad >= songs_between_ads`, **and only when the station can actually make one**. `ad_programme_block()` in `producer.py` names what is missing — no ad brand that passes its voice-cast check (the only brands the producer will air), no configured/accepted AI key, or no ad-specific model route — checked in that order because with nothing to advertise a key would not help — and `ad_programme_available()` is true only when none applies. The producer refreshes it at the top of every loop tick, including while it idles with a full queue or no listeners, and `next_segment_type_for()` refreshes it again before each pacing decision, so an AI key added or cleared in Motore mid-session is reflected within a second. When the answer is no, the slot becomes music and `songs_since_ad` is **held at the threshold rather than reset**: the break stays owed instead of forgiven, fires the moment a real advertisement is possible, and the counter stays bounded instead of climbing without limit on a station that has no key. `/status` reports the reason as `pacing.ad_block`, and the admin shows **Ads paused** with the fix in place of the counter, which would otherwise read "— next" forever. `prewarm_first_segment()` settles the same capability as its first step on every boot path, including a stopped session and an empty playlist. The frozen v1 integration preview retains its existing prediction semantics; changing those semantics requires the contract-window process. The manual **Ad break** control bypasses pacing, so `/api/trigger` refuses an ad it cannot make with the specific fix (add/check the AI key in Motore, repair the active ad route in `model_registry.toml`, or check the ad brands and their campaign voices), ahead of the one-at-a-time check since waiting cannot fix any of them. A key can still be cleared between the tap and the render, so the producer re-checks before consuming any forced ad (`_drop_unmakeable_forced_ad()`): it drops the pick, releases the one-at-a-time guard, and restores an operator pick the force had displaced. The ad writer has a second, render-time boundary: provider failures, unusable output, a missing required spokesperson, fine-print-only pharma copy, or a final language rejection abort the break into the normal continuity-recovery ladder. That leaves the natural break owed and never sends brand/tagline placeholder copy to synthesis. A key the provider has definitively refused is sticky until replaced, so it counts as no key and ads pause; transient quota, rate-limit, timeout, and network failures still reach the writer but now fail closed there
+- ad breaks trigger when `songs_since_ad >= songs_between_ads` and an active-mode
+  packaged bank or usable live-writing route is available. `ad_programme_block()`
+  is shared by scheduling, `/status`'s `pacing.ad_block`, and manual **Ad break**.
+  Without either source, it names the missing live brand/cast, accepted AI key,
+  or ad model route; the UI shows **Ads paused** and music continues with the
+  natural break held at its due threshold. Availability refreshes on producer
+  ticks, pacing decisions, boot/prewarm, and forced-ad admission. Healthy live
+  writing remains first choice. A key/route outage or failed live render tries
+  an approved packaged ad before continuity recovery; it never synthesizes the
+  old brand/tagline placeholder. Failed or unheard ads remain owed, with failed
+  natural attempts deferred until music. Reservations prevent duplicate pending
+  breaks; only the first listener-accepted chunk commits pacing and ad history.
+  The frozen v1 integration preview retains its existing prediction semantics.
 - banter triggers when `songs_since_banter` crosses the configured threshold, with a small random jitter outside preview mode
 - after a natural pacing decision, `producer.py` applies a runway governor to optional speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`): if the real queued audio is below 240 seconds and the bounded queue can still build more runway, that pick becomes `MUSIC`; if the queue is effectively saturated below the floor, the due speech is allowed; operator forces, chaos first-strike, release-campaign forced banter, bridges, and error recovery stay outside that gate
 
@@ -306,7 +318,7 @@ packaged or synthetic talk bed, never the outgoing song from its beginning.
 Restart-handoff spooling also ignores a shortened private head, preserving only
 ordinary full music entries for a future boot.
 
-Every finished segment then passes a final **loudness-reconciliation** step: it is
+Every newly rendered segment passes a final **loudness-reconciliation** step: it is
 measured (`measure_lufs`, EBU R128) and nudged with a single corrective `volume`
 gain so music, hosts, beds, and ads all air at one integrated-LUFS target
 (`[audio] lufs_target`, with ads at `ad_lufs_target` — 1 LU hotter). This holds
@@ -324,16 +336,16 @@ existed (which otherwise aired at their old, quieter level) one play at a time.
 
 ### Egress FX pipeline (the transmitter, applied last)
 
-Every segment reaches the playback queue through one funnel —
-`_enqueue_with_egress()` in `scheduling/producer.py` — so music, dialogue, ads, and
-bridges all leave through a single chokepoint after every mix, concat, and
+Segments reach the playback queue through `_enqueue_with_egress()` in
+`scheduling/producer.py`; direct attributed music and approved packaged ads skip
+its FX passes to preserve exact bytes. Other segments leave after every mix, concat, and
 transition-sting merge is done. The funnel runs an ordered egress FX pipeline whose
 optional final stage is the **FM broadcast chain** (`apply_broadcast_chain()` in
 `audio/normalizer.py`): one extra FFmpeg pass that colours the finished audio like an
 over-the-air FM signal — a gentle pre-emphasis HF shelf, the ~15 kHz channel band-limit,
-and a flat loudness-offset trim (no stereo swirl, no dynamics). Voice and music exit
-through the same final stage, so there is no "FM music next to studio-clean voice"
-seam. Toggle it with `[audio] broadcast_chain` (default off — studio-clean) — or, on the HA add-on,
+and a flat loudness-offset trim (no stereo swirl, no dynamics). Eligible voice and
+music use the same final stage; exact-byte packaged audio remains unchanged.
+Toggle it with `[audio] broadcast_chain` (default off — studio-clean) — or, on the HA add-on,
 the **On-Air Sound** option (`MAMMAMIRADIO_BROADCAST_CHAIN`, env > toml) so operators
 can switch to studio-clean without rebuilding the baked-in `radio.toml`. It is also
 operator-toggleable **live** from the admin Engine Room On-Air Sound dial
@@ -454,6 +466,8 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **yes** |
 | Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **yes** |
+
+The egress column excludes direct attributed music and approved packaged ads, which preserve their exact bytes.
 
 - The **main-loop** stale gate checks `source_revision` on its own axis, then treats
   `state.playlist_revision` as a cheap pre-filter: a bump only discards when
@@ -783,7 +797,7 @@ counts in memory, so they reset on restart and add no playback-path I/O.
 `/public-status.ad_experiment` exposes the payload, which `/status` reuses.
 These counts are experimental and unsuitable for advertiser analytics.
 
-**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Durable listener persona and song-cue extraction are a separate post-air path, so queue-time gag bookkeeping can still happen without treating unheard banter as long-term memory. Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
+**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Banter planting and news-flash reuse commit at queue admission; ad reuse commits only on first listener-accepted audio, so an unheard ad never burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Durable listener persona and song-cue extraction are a separate post-air path, so queue-time gag bookkeeping can still happen without treating unheard banter as long-term memory. Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
 
 **Evening running gags (HA-event callbacks).** `home/evening_memory.py`'s `EveningLedger` tallies repeated discrete home toggles across an evening and surfaces a deferred, approximate callback ("the coffee machine, on again tonight") into banter via the STASERA prompt block. Gag-candidacy is decided by device **domain** (not hardcoded entity_ids), so it works on any operator's home out of the box: `switch`/`fan`/`lock`/`vacuum`/`binary_sensor` toggles are gag-worthy, while `sensor`/`climate`/`media_player`/`weather`/`light` and `person.*` are not. Operators tune this via `[home.running_gags]` in `radio.toml` (`domain_allowlist` replaces the default domain set; `entity_allowlist` restricts to specific entity_ids; `entity_denylist` silences chatty entities) — parsed into `core/config.EveningGagsSection`, degrade-to-default on malformed input. An evening "session" ends after `EVENING_GAP_SECONDS` (3.5h) with no real home activity — `last_active` advances only on real activity (excluding numeric drift, `person.*`, device-availability flaps, and passive `weather`/`sun` changes), so neither radio-cadence polling nor passive environmental events can keep a quiet evening alive forever — or at the 4am day rollover.
 
@@ -1110,9 +1124,26 @@ The hot `write_banter` contract does not write persona memory. Instead, `scriptw
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
 
-Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/First Listen/ads MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Banter rows also declare Normal vs Super Italian Mode, an optional exact predecessor starter id, and whether the clip is a rare fourth-wall special. Ad rows declare their mode and a `duration_seconds` inside 25 to 40 seconds that must match the measured audio, and carry no adjacency or special tier. The release boundary rejects missing, unlisted, changed, malformed, truth-unsafe, undecodable, off-loudness, or oversized inventory (for ads, see the length-only caveat below); runtime admission parses the policy-valid manifest snapshot and hashes only the selected file, keeping whole-bank I/O off first-byte and recovery paths. Exact-track banter requires both a matching starter queue tail at selection and the same actual listener-audible predecessor at playback. Forced, urgent, fallback, and uncertain paths use evergreen copy, fourth-wall specials are rare natural breaks, and long packaged banter does not repeat after its mode-safe bank is exhausted. Unmanifested directory discovery remains disabled.
+Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/First Listen/ads MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Banter rows also declare Normal vs Super Italian Mode, an optional exact predecessor starter id, and whether the clip is a rare fourth-wall special. Ad rows declare their mode, title, cast, and a `duration_seconds` inside 25 to 40 seconds that must match the measured audio, and carry no adjacency or special tier. The release boundary rejects missing, unlisted, changed, malformed, truth-unsafe, undecodable, off-loudness, or oversized inventory; runtime admission parses the policy-valid manifest snapshot and hashes only the selected file, keeping whole-bank I/O off first-byte and recovery paths. Exact-track banter requires both a matching starter queue tail at selection and the same actual listener-audible predecessor at playback. Forced, urgent, fallback, and uncertain paths use evergreen copy, fourth-wall specials are rare natural breaks, and long packaged banter does not repeat after its mode-safe bank is exhausted. Unmanifested directory discovery remains disabled.
 
-Packaged advertisements are a declared category in the fail-closed spoken manifest (`mammamiradio/assets/demo/ads/`, `core/spoken_assets.py`). Like banter they are mode-bound: `normal` is recorded in English, `super_italian` in Italian. Unlike banter they carry no adjacency: an ad never depends on the song before it and has no rare-special tier. Each entry must sit directly in `ads/`, with no subfolders, and declare a `duration_seconds` of **25 to 40 seconds**, inclusive. The bound is the mechanism, not a guideline: the copy that caused this rule rendered successfully and was two sentences long, and nothing in the packaging contract could object because the contract had no opinion about how long an advertisement is. The declaration is checked against the recording itself: the manifest validator walks every MPEG Layer III frame of the MP3 (stdlib only, so the release gate can run it under Python 3.9), trims encoder priming and padding when the Info frame records them, as ffprobe does, and requires the result to match the declaration within 0.1 seconds. A missing, unreadable, undecodable, truncated, oversized (over 4 MiB) or mismatched ad fails the release boundary. Length is the only media property checked for ads so far: the loudness, true-peak and format checks in `scripts/validate-spoken-assets.py` cover banter and the Admin station opening only, so a spot padded with silence to reach the floor still passes until those checks extend to `ads/` with the recordings. Runtime admission stays hash-only, because the hash binds the file to the recording that was measured. Only ads read the duration field: other categories ignore a missing or malformed duration as before, so a typo cannot drop a recovery clip from the rescue ladder. Recording the pack is separate work, and so is the path that airs it. Nothing airs from `ads/` yet.
+Packaged advertisements live directly under `assets/demo/ads/`: seven English
+Normal spots and four Italian Super Italian spots are required by the release
+inventory. They have no song adjacency or rare-special tier. Each MP3 must be
+25–40 seconds and at most 4 MiB; the frame-measured duration must agree with its
+manifest within 0.1 seconds. The release validator additionally checks 48 kHz
+stereo/192 kbps, -15 LUFS ±1, peak at most -1 dBTP, silence at most 25%, no gap
+over 2.5 seconds, package-resource hash equality, and a 12 MiB ad-bank ceiling.
+These measurements do not replace human approval of the exact voices and mix.
+
+The producer queues the retained file directly with `ephemeral=False`, reviewed
+metadata, packaged provenance, and zero generation cost. No runtime LLM, TTS,
+wrapper, or mix is needed. Selection hashes candidates off-loop; file/manifest
+identities and the active mode are checked again before playback. A changed or
+wrong-mode queued asset cannot air. Admission reserves the spot; discard releases
+it without forgiving the break, and first-audible delivery commits history once.
+Selection avoids the most recently aired spot whenever another unreserved
+candidate exists. Only ads require duration/title/cast fields, so missing ad
+metadata cannot remove a recovery clip from the rescue ladder.
 
 Anonymous listener-session diagnostics and legacy aggregate listener counters appear only on authenticated `/status`. `/public-status` retains its existing schema and exposes neither session diagnostics, cue metadata, nor listener counters.
 
@@ -1588,9 +1619,9 @@ after the switch.
 This repo is biased toward "keep the station on air."
 
 - producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; packaged recovery clips are non-ephemeral package resources and every producer/playback segment-cleanup path guards `mammamiradio/assets/demo/` before unlinking; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
-- script generation failures fall back to OpenAI when configured, then to stock copy; a temporary Anthropic overload or rate limit briefly benches its writer (respecting a bounded `Retry-After` when present) so affected later segments go straight to OpenAI, then retry Anthropic automatically after the short cooldown
+- script generation failures fall back to OpenAI when configured, then to stock copy except for ads, which try approved packaged audio before continuity recovery; a temporary Anthropic overload or rate limit briefly benches its writer (respecting a bounded `Retry-After` when present) so affected later segments go straight to OpenAI, then retry Anthropic automatically after the short cooldown
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
-- required speech fails closed: if every configured provider and Edge fallback is unavailable, partial files are removed and `TTSUnavailableError` reaches the producer rescue ladder; owned dialogue, ID, time-check, and ad fan-outs settle before scratch cleanup, while optional promo tags may still be omitted
+- required speech fails closed: if every configured provider and Edge fallback is unavailable, partial files are removed and `TTSUnavailableError` reaches the producer, which tries approved packaged audio for ads before the rescue ladder; owned dialogue, ID, time-check, and ad fan-outs settle before scratch cleanup, while optional promo tags may still be omitted
 - missing or disabled `external-media` leaves the local-or-starter base untouched;
   external-only standalone operations report the capability boundary, and
   add-ons return the locked actionable `403` without importing or executing
@@ -1599,7 +1630,7 @@ This repo is biased toward "keep the station on air."
   cancellation, or restart failures destroy the single-use artifact/lease and
   immediately continue with local/starter music
 - missing Home Assistant context is ignored
-- missing ad brands disables ads rather than killing startup
+- missing ad brands disables live ads; an approved active-mode packaged bank can still fill the break
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
