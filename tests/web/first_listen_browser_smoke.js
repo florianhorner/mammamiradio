@@ -560,6 +560,34 @@ async (page) => {
     if(failure==='timeout'){await keyCheckGate.wait;await route.abort().catch(()=>{});return;}
     await fulfillJson(route,{ok:!failure,providers:{}},failure?503:200);
   });
+  // Home-cue progress fixtures overlay only the director block on the isolated
+  // app's real /status, so every other renderer keeps an authentic payload.
+  // null leaves /status untouched for every scenario that does not opt in.
+  let homeCueStatus = null;
+  const homeCueSideEffects = [];
+  const homeCueDirector = ({ activated = 0, reserved = 0, eligible = 0 } = {}) => ({
+    mode: 'waiting',
+    eligible_count: eligible,
+    cooling_count: 0,
+    reserved_count: reserved,
+    session_counters: { selected: activated + reserved, reserved: activated + reserved, activated, released: 0 },
+    last_outcome: 'waiting',
+    operator_message: 'Waiting for a safe home cue',
+  });
+  page.on('request', (request) => {
+    if (/\/api\/(?:trigger|setup\/home-context-(?:choice|preview))(?:\?|$)/.test(request.url())) homeCueSideEffects.push(request.url());
+  });
+  await page.route(/\/status\?playlist_limit=\d+$/, async (route) => {
+    if (homeCueStatus === null) { await route.fallback(); return; }
+    if (homeCueStatus === 'http') { await route.fulfill({ status: 503, contentType: 'text/html', body: 'Unavailable' }); return; }
+    const response = await route.fetch();
+    const body = await response.json();
+    const details = body.ha_details && typeof body.ha_details === 'object' ? { ...body.ha_details } : {};
+    if (homeCueStatus === 'missing') delete details.home_context_director;
+    else if (homeCueStatus === 'malformed') details.home_context_director = { ...homeCueDirector(), reserved_count: '1', session_counters: 'unavailable' };
+    else details.home_context_director = homeCueDirector(homeCueStatus);
+    await fulfillJson(route, { ...body, ha_details: details });
+  });
   await page.route(`${baseUrl}/admin`, async (route) => {
     const response = await route.fetch();
     const html = await response.text();
@@ -801,6 +829,30 @@ async (page) => {
       assert(destructive.length === 0, `${label} tore down the station: ${JSON.stringify(destructive)}`);
       assert(state.playing === playing, `${label} left station playing=${state.playing}`);
       return state;
+    };
+
+    const HOME_CUE_COPY = {
+      streamed: 'A Home cue reached the stream during this station session.',
+      queued: 'A Home cue is queued for a future host break.',
+      waiting: 'Waiting for a Home cue. Keep listening, or check Home Assistant and your writing connection in setup.',
+      unavailable: 'We can’t check Home-cue progress right now. Wait a moment; we’ll check again.',
+    };
+    const cueProgress = () => page.evaluate(() => {
+      const element = document.getElementById('firstListenCueProgress');
+      return {
+        visible: Boolean(element && !element.hidden && element.getClientRects().length),
+        text: element ? element.textContent : null,
+      };
+    });
+    // Progress rides the existing status poll; the smoke drives that poll by hand.
+    const pollHomeCue = async (fixture) => {
+      homeCueStatus = fixture;
+      await page.evaluate(() => refreshFast());
+      return cueProgress();
+    };
+    const assertCueHidden = async (label) => {
+      const cue = await cueProgress();
+      assert(!cue.visible && cue.text === '', `${label} exposed Home-cue progress: ${JSON.stringify(cue)}`);
     };
 
     const prepareOwnedStation = async ({ showSuccess = false, sourceOptions = {}, proof = false, privacy = false } = {}) => {
@@ -1652,6 +1704,11 @@ async (page) => {
     ));
     const afterSuccessGuide = await assertStationPreserved(privateStation, 'success narration resume');
     assert(await page.locator('#firstListenSuccess').isVisible(), 'success narration dismissed the achievement');
+    // Privacy-off: leftover session counters must never surface without consent.
+    await pollHomeCue({ activated: 3, reserved: 1, eligible: 2 });
+    await assertCueHidden('private completion');
+    await assertStationPreserved(privateStation, 'private Home-cue poll');
+    homeCueStatus = null;
     for(const [width,height,zoom] of [[320,568,false],[375,812,false],[768,1024,false],[1440,900,false],[320,568,true]]){
       await page.setViewportSize({width,height});
       await page.evaluate(zoom=>{document.documentElement.style.fontSize=zoom?'200%':'';},zoom);
@@ -1684,16 +1741,93 @@ async (page) => {
     await assertStationPreserved(failedPrivacyStation, 'failed privacy persistence');
     assert(await page.locator('#firstListenSuccess').isHidden(), 'failed privacy persistence exposed achievement');
 
+    smokeStage = 'home-cue-failed-share';
+    const failedShareStation = await startAudibleFirstListen();
+    await openHomeChoice();
+    await page.locator('#firstListenPreviewBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+    failNextPrivacyReceipt = true;
+    await page.locator('#firstListenEnableContextBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyReceiptChoice === true && !_firstListenUi.privacySaving);
+    await pollHomeCue({ activated: 2, reserved: 1 });
+    await assertCueHidden('unconfirmed Home sharing');
+    await assertStationPreserved(failedShareStation, 'unconfirmed Home sharing poll');
+    homeCueStatus = null;
+
     smokeStage = 'continuous-enabled-achievement';
     const enabledStation = await startAudibleFirstListen();
     await openHomeChoice();
     await page.locator('#firstListenPreviewBtn').click();
     await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
     rejectNextEnable = false;
+    // Pending save: positive counters stay out of sight until consent is confirmed.
+    const pendingShare = responseGate();
+    privacyResponseGate = pendingShare;
     await page.locator('#firstListenEnableContextBtn').click();
+    await pendingShare.arrived;
+    await pollHomeCue({ activated: 2, reserved: 1 });
+    await assertCueHidden('pending Home sharing');
+    pendingShare.release();
     await page.waitForFunction(() => _firstListenUi.showSuccess && !_firstListenUi.privacySaving);
     const enabledSuccess = await assertStationPreserved(enabledStation, 'enabled achievement transition');
     assert((await page.locator('#firstListenSuccessPrivacy').textContent()) === 'Home context is on', 'audible enabled path lost its choice');
+
+    smokeStage = 'home-cue-progress';
+    // Confirmed consent renders the evidence already polled, with no extra request.
+    let cue = await cueProgress();
+    assert(cue.visible && cue.text === HOME_CUE_COPY.streamed, `confirmed sharing did not show stream evidence: ${JSON.stringify(cue)}`);
+    await page.waitForFunction(() => (
+      ['playing', 'ended'].includes(document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state)
+    ));
+    await page.locator('#firstListenGuideAudio').evaluate((audio) => {
+      if (document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'playing') audio.dispatchEvent(new Event('ended'));
+    });
+    await page.waitForFunction(() => (
+      window.__firstListenStationMedia.playing
+        && document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'ended'
+    ));
+    const cueFocus = await page.evaluate(() => document.activeElement?.id || '');
+    const cueSideEffects = homeCueSideEffects.length;
+    const cueRequests = privacyRequests.length;
+    const assertCueLeftTheShowAlone = async (label) => {
+      await assertStationPreserved(enabledStation, `${label} Home-cue poll`);
+      assert(await page.evaluate(() => document.activeElement?.id || '') === cueFocus, `${label} Home-cue poll moved focus`);
+      assert(await page.locator('#firstListenListenerBtn').isEnabled(), `${label} Home-cue poll disabled the listener handoff`);
+      assert(await page.locator('#firstListenSuccess').isVisible(), `${label} Home-cue poll dismissed the achievement`);
+      assert(
+        await page.evaluate(() => document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state) === 'ended',
+        `${label} Home-cue poll replayed the celebration`,
+      );
+      assert(homeCueSideEffects.length === cueSideEffects && privacyRequests.length === cueRequests, `${label} Home-cue poll sent a generation or consent request`);
+    };
+    // A later save in flight, or a receipt still unconfirmed, closes the gate again.
+    for (const unconfirmed of [{ privacySaving: true }, { privacyReceiptChoice: true }]) {
+      await page.evaluate((state) => { Object.assign(_firstListenUi, state); renderFirstListenCueProgress(); }, unconfirmed);
+      await assertCueHidden(`unconfirmed ${Object.keys(unconfirmed)[0]}`);
+      await page.evaluate(() => { Object.assign(_firstListenUi, { privacySaving: false, privacyReceiptChoice: null }); renderFirstListenCueProgress(); });
+      cue = await cueProgress();
+      assert(cue.visible && cue.text === HOME_CUE_COPY.streamed, `confirmed consent did not restore progress: ${JSON.stringify(cue)}`);
+    }
+    // Counter reset: the stream claim is derived per poll, never latched.
+    cue = await pollHomeCue({ activated: 0, reserved: 0, eligible: 0 });
+    assert(cue.visible && cue.text === HOME_CUE_COPY.waiting, `counter reset kept a stale stream claim: ${JSON.stringify(cue)}`);
+    await assertCueLeftTheShowAlone('counter reset');
+    cue = await pollHomeCue({ eligible: 4 });
+    assert(cue.text === HOME_CUE_COPY.waiting, `eligibility alone claimed progress: ${JSON.stringify(cue)}`);
+    cue = await pollHomeCue({ reserved: 1, eligible: 2 });
+    assert(cue.text === HOME_CUE_COPY.queued, `reserved cue was not reported as queued: ${JSON.stringify(cue)}`);
+    await assertCueLeftTheShowAlone('queued');
+    cue = await pollHomeCue({ activated: 1, reserved: 2, eligible: 1 });
+    assert(cue.text === HOME_CUE_COPY.streamed, `stream evidence lost precedence over the queue: ${JSON.stringify(cue)}`);
+    // Dependency failure: a failed poll or unusable evidence says so, then recovers.
+    for (const failure of ['http', 'missing', 'malformed']) {
+      cue = await pollHomeCue(failure);
+      assert(cue.visible && cue.text === HOME_CUE_COPY.unavailable, `${failure} status kept stale Home-cue progress: ${JSON.stringify(cue)}`);
+      await assertCueLeftTheShowAlone(failure);
+      cue = await pollHomeCue({ reserved: 1 });
+      assert(cue.text === HOME_CUE_COPY.queued, `valid poll after ${failure} did not restore progress: ${JSON.stringify(cue)}`);
+    }
+    homeCueStatus = null;
     const stationControlsExit = { ...enabledStation, eventIndex: enabledSuccess.events.length };
     await page.locator('#firstListenSuccess').getByRole('button', { name: 'Open station controls' }).click();
     await assertStationPreserved(stationControlsExit, 'Station controls exit');
@@ -2161,6 +2295,20 @@ async (page) => {
     await assertStationPreserved({src:pausedBefore.src,requestCount:pausedBefore.streamRequests.length,eventIndex:pausedBefore.events.length},'paused handoff',{playing:false});
     assert(await page.frameLocator('#firstListenListenerFrame').getByRole('button',{name:'Listen now',exact:true}).first().isVisible(),'paused handoff did not offer explicit play');
     await page.evaluate(()=>openFirstListenStation());
+
+    smokeStage='home-cue-listener-handoff';
+    // A progress failure explains itself and never stands between the user and the show.
+    const cueHandoff=await prepareOwnedStation({showSuccess:true});
+    await page.evaluate(()=>{_firstListenUi.privacyChoice=true;renderFirstListenProgress();});
+    const cueDuringOutage=await pollHomeCue('http');
+    assert(cueDuringOutage.visible&&cueDuringOutage.text===HOME_CUE_COPY.unavailable,`status outage hid its Home-cue explanation: ${JSON.stringify(cueDuringOutage)}`);
+    assert(await page.locator('#firstListenListenerBtn').isEnabled(),'Home-cue outage disabled the listener handoff');
+    await page.locator('#firstListenListenerBtn').click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready);
+    await assertStationPreserved(cueHandoff,'Home-cue listener handoff');
+    await page.evaluate(()=>openFirstListenStation());
+    await pollHomeCue({reserved:1});
+    homeCueStatus=null;
 
     smokeStage='listener-load-failures';
     for(const kind of ['error-page','missing-script','late-ready']){

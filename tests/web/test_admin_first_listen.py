@@ -1043,6 +1043,72 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
     assert "_firstListenUi.showSuccess=showCelebration" in choice
 
 
+def test_home_cue_progress_is_consent_gated_and_evidence_derived() -> None:
+    """Cue progress projects the latest /status poll; it is never a receipt."""
+    html = _html()
+    element = '<p class="success-destinations" id="firstListenCueProgress" role="status" aria-live="polite" hidden></p>'
+    assert html.count('id="firstListenCueProgress"') == 1
+    surface = html[html.index('id="firstListenSuccess"') : html.index('id="firstListenLiveRegion"')]
+    assert element in surface
+    # The line sits with the listener action, not inside the collapsed receipt.
+    assert surface.index(element) < surface.index('class="success-saved"')
+
+    copy_start = html.index("const FIRST_LISTEN_CUE_PROGRESS={")
+    copy = html[copy_start : html.index("\n};", copy_start)]
+    for line in (
+        "streamed:'A Home cue reached the stream during this station session.'",
+        "queued:'A Home cue is queued for a future host break.'",
+        "waiting:'Waiting for a Home cue. Keep listening, or check Home Assistant "
+        "and your writing connection in setup.'",
+        "unavailable:'We can’t check Home-cue progress right now. Wait a moment; we’ll check again.'",
+    ):
+        assert line in copy
+    # Stream evidence is not proof that a person heard anything.
+    assert "heard" not in copy.lower()
+
+    render = _function("renderFirstListenCueProgress", "updateFirstListenSuccess")
+    gate = (
+        "const shared=Boolean(_firstListenUi.showSuccess)&&projection.privacyReviewed&&projection.privacyEnabled"
+        "&&!_firstListenUi.privacySaving&&_firstListenUi.privacyReceiptChoice===null"
+    )
+    assert gate in render
+    closed = "if(!shared){el.hidden=true;firstListenSetStatus('firstListenCueProgress','');return;}"
+    assert closed in render
+    # A closed gate returns before any counter is read, so leftovers never render.
+    assert render.index(closed) < render.index("_st?.ha_details?.home_context_director")
+    assert "const count=value=>Number.isInteger(value)&&value>=0" in render
+    precedence = (
+        "_firstListenUi.cueStatusFailed||!count(activated)||!count(reserved)?'unavailable'"
+        ":activated>0?'streamed':reserved>0?'queued':'waiting'"
+    )
+    assert precedence in render
+    assert "eligible_count" not in render
+    assert "if(typeof pollFailed==='boolean')_firstListenUi.cueStatusFailed=pollFailed" in render
+    # No latch, no request, no focus move, no audio ownership change.
+    for forbidden in (
+        "fetch(",
+        "api(",
+        "apiResponse(",
+        "focus(",
+        "localStorage",
+        "sessionStorage",
+        "stopFirstListenStationAudio()",
+        "FIRST_LISTEN_STREAM",
+        "/api/trigger",
+    ):
+        assert forbidden not in render, forbidden
+    assert html.count("cueStatusFailed") == 3
+
+    update = _function("updateFirstListenSuccess", "reviewFirstListenChoices")
+    assert update.index("renderFirstListenCueProgress();") < update.index("if(!show){")
+
+    polling = html[html.index("async function refreshFast(){") : html.index("const SLOW_POLL_DEADLINE_MS")]
+    assert "markFastStatusStale();\n    renderFirstListenCueProgress(true);" in polling
+    assert "_st=nextStatus;\n  markFastStatusFresh();\n  renderFirstListenCueProgress(false);" in polling
+    assert polling.index("renderFirstListenCueProgress(false);") < polling.index("renderProduction(_st);")
+    assert polling.count("fetchAdminJson(") == 3
+
+
 def test_setup_alert_uses_canonical_onboarding_requirement_not_optional_ai_todos() -> None:
     setup = _function("renderSetup", "setupRecheck")
     decision_start = setup.index("renderFirstListen(setup,modeLabel,stationLabel)")

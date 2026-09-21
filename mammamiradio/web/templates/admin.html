@@ -2890,6 +2890,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="btn btn-util first-listen-action" onclick="openFirstListenStation()">Open station controls</button>
                 </div>
                 <p class="success-destinations">The show, or behind the scenes.</p>
+                <p class="success-destinations" id="firstListenCueProgress" role="status" aria-live="polite" hidden></p>
                 <button type="button" class="btn btn-util connection-back" id="firstListenSetupReturnBtn" data-stopped-exempt onclick="returnToFirstListenSetup()">Back to setup</button>
                 <p id="firstListenHandoffStatus" role="status" aria-live="polite"></p>
                 <button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Check music sources</button>
@@ -3051,6 +3052,7 @@ const _firstListenUi={
   optionalStep:'',
   reviewTrigger:null,
   showSuccess:false,
+  cueStatusFailed:false,
   successAnnounced:false,
   restarting:false,
   connectionStage:'invite',
@@ -5878,6 +5880,37 @@ function renderFirstListenConnection(){
   done.disabled=busy;
   updateFirstListenKeySaveState();
 }
+// Home-cue progress is a projection of the latest /status poll, never a receipt:
+// the director's counters are process-local and belong to no consent or listener.
+const FIRST_LISTEN_CUE_PROGRESS={
+  streamed:'A Home cue reached the stream during this station session.',
+  queued:'A Home cue is queued for a future host break.',
+  waiting:'Waiting for a Home cue. Keep listening, or check Home Assistant and your writing connection in setup.',
+  unavailable:'We can’t check Home-cue progress right now. Wait a moment; we’ll check again.',
+};
+function renderFirstListenCueProgress(pollFailed){
+  if(typeof pollFailed==='boolean')_firstListenUi.cueStatusFailed=pollFailed;
+  const el=document.getElementById('firstListenCueProgress');
+  if(!el)return;
+  // Called from the status poll: a fault here must never cost the desk its refresh.
+  try{
+    const projection=firstListenProjection();
+    const shared=Boolean(_firstListenUi.showSuccess)&&projection.privacyReviewed&&projection.privacyEnabled&&!_firstListenUi.privacySaving&&_firstListenUi.privacyReceiptChoice===null;
+    if(!shared){el.hidden=true;firstListenSetStatus('firstListenCueProgress','');return;}
+    const director=_st?.ha_details?.home_context_director;
+    const counters=director&&typeof director==='object'?director.session_counters:null;
+    const activated=counters&&typeof counters==='object'?counters.activated:undefined;
+    const reserved=director&&typeof director==='object'?director.reserved_count:undefined;
+    const count=value=>Number.isInteger(value)&&value>=0;
+    const state=_firstListenUi.cueStatusFailed||!count(activated)||!count(reserved)?'unavailable':activated>0?'streamed':reserved>0?'queued':'waiting';
+    firstListenSetStatus('firstListenCueProgress',FIRST_LISTEN_CUE_PROGRESS[state]);
+    el.hidden=false;
+  }catch(error){
+    console.error('first_listen_cue_progress',error);
+    el.hidden=true;
+    el.textContent='';
+  }
+}
 function updateFirstListenSuccess(){
   const journey=document.getElementById('journeySurface');
   const success=document.getElementById('firstListenSuccess');
@@ -5892,6 +5925,7 @@ function updateFirstListenSuccess(){
   success.hidden=!show;
   success.setAttribute('aria-hidden',show?'false':'true');
   success.toggleAttribute('inert',!show);
+  renderFirstListenCueProgress();
   if(!show){success.classList.remove('is-celebrating');return}
   const projection=firstListenProjection();
   const sourceState=firstListenSourceState(projection);
@@ -9215,6 +9249,7 @@ async function refreshFast(){
     if(generation!==_fastPollGeneration)return;
     console.error('refreshFast status',e);
     markFastStatusStale();
+    renderFirstListenCueProgress(true);
     const _oa=document.getElementById('on-air');
     if(_oa)_oa.classList.remove('is-idle');
     renderProductionUnavailable();
@@ -9225,6 +9260,7 @@ async function refreshFast(){
   adoptAuthoritativePlaylistRevision(nextStatus?.playlist_page?.revision);
   _st=nextStatus;
   markFastStatusFresh();
+  renderFirstListenCueProgress(false);
   let productionRendered=false;
   try{
     // Paint the authoritative production state before unrelated widgets. A
