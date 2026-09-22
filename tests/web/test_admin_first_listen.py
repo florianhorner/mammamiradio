@@ -1309,6 +1309,10 @@ def test_pausing_a_loading_guide_invalidates_pending_playback_before_pause() -> 
 
 def test_first_listen_navigation_keeps_one_visible_local_player() -> None:
     html = _html()
+    assert 'id="listener-view-link" href="/listen" onclick="openListenerView(event)"' in html
+    assert re.search(r"\.producer-listener-link\s*\{[^}]*min-height:\s*44px", html)
+    assert "if(_firstListenPlayback.phase==='idle')return;" in html
+    assert "event.preventDefault();\n  openFirstListenListener();" in html
     assert html.index('id="firstListenPlayer"') < html.index('id="firstListenStationAudio"') < html.index("</main>")
     assert html.index("/mmr-tabpanels") < html.index('id="firstListenPlayer"')
     for owner, successor in (
@@ -1323,6 +1327,7 @@ def test_first_listen_navigation_keeps_one_visible_local_player() -> None:
     assert "frame.hidden=true" in listener
     bridge = _function("mmrConnectListener", "openFirstListenStation")
     assert "subscribe:notify" in bridge
+    assert "openAdmin:()=>{if(!active())return false;openFirstListenStation();return true;}" in bridge
     assert "view.document.getElementById('content')?.focus()" in bridge
 
 

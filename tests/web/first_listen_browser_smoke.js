@@ -1937,6 +1937,16 @@ async (page) => {
     assert(await listenerFrame.locator('#dediche').isVisible(),'listener anchor navigation broke the reused page');
     await page.evaluate(()=>history.back());
     await page.waitForFunction(()=>_firstListenHandoff.ready&&_firstListenHandoff.frame.contentWindow.location.hash!=='#dediche');
+    smokeStage='listener-admin-shortcuts';
+    listenerFrame=page.frameLocator('#firstListenListenerFrame');
+    await listenerFrame.locator('#admin-view-link').click();
+    await page.waitForFunction(()=>!_firstListenHandoff.frame&&location.pathname.endsWith('/admin'));
+    assert(await page.locator('#listener-view-link').isVisible(),'listener shortcut did not restore Admin');
+    await assertStationPreserved(resumedCheckpoint,'listener shortcut to Admin');
+    await page.locator('#listener-view-link').click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready&&location.pathname.endsWith('/listen'));
+    assert(await page.frameLocator('#firstListenListenerFrame').locator('#admin-view-link').isVisible(),'Admin shortcut did not open the listener view');
+    await assertStationPreserved(resumedCheckpoint,'Admin shortcut to listener');
     await page.evaluate(()=>openFirstListenStation());
     await assertStationPreserved(resumedCheckpoint,'repeated listener return');
     await page.evaluate(()=>history.back());

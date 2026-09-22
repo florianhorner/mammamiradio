@@ -60,6 +60,7 @@
       <a href="#dediche" lang="it">Dediche</a>
       <a href="#about">About</a>
     </nav>
+    <a class="mmr-admin-link" id="admin-view-link" href="{{ ingress_prefix }}/admin">{{ copy.get('admin_view', 'Admin') }}</a>
     <button class="mmr-live-pill{% if session_stopped %} is-stopped{% endif %}" id="nav-cta" type="button" aria-pressed="false" aria-label="{% if session_stopped %}{{ copy.get('listen_paused_aria', 'Station paused') }}{% else %}{{ copy.get('listen_now_aria', 'Listen now') }}{% endif %}"{% if session_stopped %} disabled{% endif %}>
       <span class="dot"></span><span aria-hidden="true">{% if session_stopped %}&#9208;{% else %}&#9654;{% endif %}</span> {% if session_stopped %}{{ copy.get('listen_stopped', 'Station paused') }}{% else %}{{ copy.get('listen_now', 'Listen Now') }}{% endif %}{% if brand.frequency %} · {{ brand.frequency }}{% endif %}
     </button>

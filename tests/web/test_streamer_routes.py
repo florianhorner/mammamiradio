@@ -10477,6 +10477,39 @@ async def test_admin_panel_with_basic_auth_returns_html():
     assert "text/html" in resp.headers["content-type"]
 
 
+@pytest.mark.asyncio
+async def test_listener_admin_shortcuts_do_not_change_admin_access():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        listener = await client.get("/")
+        blocked = await client.get("/admin")
+        admin = await client.get("/admin", auth=("admin", "secret"))
+        app.state.config.super_italian_mode = True
+        italian_listener = await client.get("/listen")
+
+    assert listener.status_code == 200
+    assert 'id="admin-view-link" href="/admin">Admin</a>' in listener.text
+    assert blocked.status_code == 401
+    assert admin.status_code == 200
+    assert 'id="listener-view-link" href="/listen"' in admin.text
+    assert 'id="admin-view-link" href="/admin">Regia</a>' in italian_listener.text
+
+
+@pytest.mark.asyncio
+async def test_listener_admin_shortcuts_keep_ha_ingress_prefix():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    headers = {"X-Ingress-Path": "/api/hassio_ingress/test-token"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        listener = await client.get("/listen", headers=headers)
+        admin = await client.get("/admin", headers=headers)
+
+    assert listener.status_code == admin.status_code == 200
+    assert 'id="admin-view-link" href="/api/hassio_ingress/test-token/admin"' in listener.text
+    assert 'id="listener-view-link" href="/api/hassio_ingress/test-token/listen"' in admin.text
+
+
 # ---------------------------------------------------------------------------
 # HA add-on mode: LAN trust without admin_token configured
 # ---------------------------------------------------------------------------
