@@ -123,12 +123,10 @@ is_same_or_descendant() {
   esac
 }
 
-validate_target() {
+validate_target_safety() {
   local label="$1"
   local path="$2"
   local key="$3"
-  local expected_leaf="$4"
-  local leaf_key
 
   [ -n "$path" ] || die "$label path is empty"
   case "$key" in
@@ -147,10 +145,6 @@ validate_target() {
   }; then
     die "refusing unsafe $label target: $path"
   fi
-  leaf_key="$(comparison_key "$(basename "$path")")" || die "cannot normalize $label target name: $path"
-  if [ "$leaf_key" != "$expected_leaf" ]; then
-    die "$label target must end in /$expected_leaf: $path"
-  fi
   if [ -L "$path" ]; then
     die "refusing symlink $label target: $path"
   fi
@@ -158,6 +152,27 @@ validate_target() {
     die "$label target is not a directory: $path"
   fi
 }
+
+validate_target() {
+  local label="$1"
+  local path="$2"
+  local key="$3"
+  local expected_leaf="$4"
+  local leaf_key
+
+  validate_target_safety "$label" "$path" "$key"
+  leaf_key="$(comparison_key "$(basename "$path")")" || die "cannot normalize $label target name: $path"
+  if [ "$leaf_key" != "$expected_leaf" ]; then
+    die "$label target must end in /$expected_leaf: $path"
+  fi
+}
+
+validate_target_safety "cache" "$CACHE_DIR" "$CACHE_KEY"
+validate_target_safety "temp" "$TMP_DIR" "$TMP_KEY"
+
+if is_same_or_descendant "$CACHE_KEY" "$TMP_KEY" || is_same_or_descendant "$TMP_KEY" "$CACHE_KEY"; then
+  die "cache and temp targets overlap: $CACHE_DIR / $TMP_DIR"
+fi
 
 validate_port() {
   case "$PORT" in
@@ -169,10 +184,6 @@ validate_port() {
 validate_target "cache" "$CACHE_DIR" "$CACHE_KEY" "cache"
 validate_target "temp" "$TMP_DIR" "$TMP_KEY" "tmp"
 validate_port
-
-if is_same_or_descendant "$CACHE_KEY" "$TMP_KEY" || is_same_or_descendant "$TMP_KEY" "$CACHE_KEY"; then
-  die "cache and temp targets overlap: $CACHE_DIR / $TMP_DIR"
-fi
 
 CACHE_PARENT="$(dirname "$CACHE_DIR")"
 TMP_PARENT="$(dirname "$TMP_DIR")"
