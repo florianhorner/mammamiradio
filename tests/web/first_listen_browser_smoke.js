@@ -1846,8 +1846,8 @@ async (page) => {
     assert((await page.locator('#householdQuietNote').innerText()).includes('An imagined evening. No details from your home.'),'proof lost its invented-context disclosure');
     const eveningArt=page.locator('.evening-scene img');
     await eveningArt.evaluate(image=>image.decode());
-    assert(await eveningArt.getAttribute('alt')==='A golden radio waveform becomes a warmly lit home beneath a crescent moon.','evening artwork lost its accessible description');
-    assert(await eveningArt.evaluate(image=>image.naturalWidth===1280&&image.naturalHeight===1300),'evening artwork did not load from the packaged asset');
+    assert(await eveningArt.getAttribute('alt')==='A small radio sends golden sound toward a lit home beneath an evening moon.','evening artwork lost its accessible description');
+    assert(await eveningArt.evaluate(image=>image.naturalWidth===1280&&image.naturalHeight===640),'evening artwork did not load from the packaged asset');
     assert(await page.locator('#firstListenProgressLine').innerText()==='Step 3 of 3 · Make it yours','evening step lost its approved progress label');
     await page.locator('[data-household-example="quiet"]').click();
     await page.waitForFunction(()=>_firstListenUi.guideKey==='quiet'&&!firstListenGuideAudio().paused);
