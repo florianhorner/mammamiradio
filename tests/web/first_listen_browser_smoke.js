@@ -2578,6 +2578,14 @@ async (page) => {
       Object.assign(_firstListenPlayback,__realFirstListenAudio.playback,{intent:false,phase:'idle'});
     });
 
+    smokeStage = 'ordinary-listener-admin-shortcuts';
+    await page.locator('#listener-view-link').click();
+    await page.waitForFunction(() => location.pathname === '/listen');
+    assert(await page.locator('#admin-view-link').isVisible(), 'idle Admin shortcut did not open the listener page');
+    await page.locator('#admin-view-link').click();
+    await page.waitForFunction(() => location.pathname === '/admin');
+    assert(await page.locator('#listener-view-link').isVisible(), 'standalone listener shortcut did not open Admin');
+
     smokeStage = 'ingress-guide-audio';
     await page.route(`${baseUrl}${ingressPrefix}/admin`, async (route) => {
       const response = await route.fetch({ url: `${baseUrl}/admin` });
