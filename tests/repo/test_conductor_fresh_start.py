@@ -36,6 +36,11 @@ def script_repo(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
   printf 'p%s\\nfcwd\\nn%s\\n' "${FAKE_PROCESS_PID:-4242}" "$FAKE_PROCESS_CWD"
   exit 0
 fi
+if [ -n "${FAKE_ACTIVE_PORT:-}" ]; then
+  case " $* " in
+    *" -iTCP:${FAKE_ACTIVE_PORT} "*) exit 0 ;;
+  esac
+fi
 exit "${FAKE_LSOF_STATUS:-1}"
 """,
     )
@@ -48,7 +53,7 @@ if [ -n "${FAKE_PS_OUTPUT:-}" ]; then
   printf '%s\\n' "$FAKE_PS_OUTPUT"
   exit 0
 fi
-exec /bin/ps "$@"
+exit 0
 """,
     )
 
@@ -118,6 +123,101 @@ def test_without_yes_is_a_side_effect_free_dry_run(script_repo: tuple[Path, Path
     assert str(repo / ".context/conductor/cache") in result.stdout
     assert str(repo / ".context/conductor/tmp") in result.stdout
     assert not (repo / ".context").exists()
+
+
+def test_fake_ps_has_no_host_process_fallback(script_repo: tuple[Path, Path, dict[str, str]]) -> None:
+    _, _, env = script_repo
+
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_repo_dotenv_overrides_home_dotenv_for_reset_targets_and_port(
+    script_repo: tuple[Path, Path, dict[str, str]],
+) -> None:
+    repo, script, env = script_repo
+    home_runtime = repo.parent / "home-runtime"
+    repo_runtime = repo.parent / "repo-runtime"
+    for runtime, payload in ((home_runtime, "home"), (repo_runtime, "repo")):
+        (runtime / "cache").mkdir(parents=True)
+        (runtime / "tmp").mkdir()
+        (runtime / "cache" / "state.db").write_text(payload)
+        (runtime / "tmp" / "rendered.mp3").write_text(payload)
+
+    home_env = Path(env["HOME"]) / ".config/mammamiradio/.env"
+    home_env.parent.mkdir(parents=True)
+    home_env.write_text(
+        f"MAMMAMIRADIO_CACHE_DIR={home_runtime / 'cache'}\n"
+        f"MAMMAMIRADIO_TMP_DIR={home_runtime / 'tmp'}\n"
+        "MAMMAMIRADIO_PORT=43124\n"
+    )
+    (repo / ".env").write_text(
+        f"MAMMAMIRADIO_CACHE_DIR={repo_runtime / 'cache'}\n"
+        f"MAMMAMIRADIO_TMP_DIR={repo_runtime / 'tmp'}\n"
+        "MAMMAMIRADIO_PORT=43125\n"
+    )
+
+    dry_run = _run(script, repo, env)
+    assert dry_run.returncode == 0, dry_run.stderr
+    assert f"  cache: {repo_runtime / 'cache'}" in dry_run.stdout
+    assert f"  temp:  {repo_runtime / 'tmp'}" in dry_run.stdout
+    assert "  port:  43125" in dry_run.stdout
+    assert (home_runtime / "cache/state.db").read_text() == "home"
+    assert (repo_runtime / "cache/state.db").read_text() == "repo"
+
+    env["FAKE_ACTIVE_PORT"] = "43125"
+    blocked = _run(script, repo, env, "--yes")
+    assert blocked.returncode != 0
+    assert "port 43125 is active" in blocked.stderr
+    assert (repo_runtime / "cache/state.db").read_text() == "repo"
+    assert (repo_runtime / "tmp/rendered.mp3").read_text() == "repo"
+
+    env.pop("FAKE_ACTIVE_PORT")
+    reset = _run(script, repo, env, "--yes")
+    assert reset.returncode == 0, reset.stderr
+    assert (home_runtime / "cache/state.db").read_text() == "home"
+    assert (home_runtime / "tmp/rendered.mp3").read_text() == "home"
+    assert not list((repo_runtime / "cache").iterdir())
+    assert not list((repo_runtime / "tmp").iterdir())
+    archives = list((repo_runtime / "fresh-start-archives").glob("*"))
+    assert len(archives) == 1
+    assert (archives[0] / "cache/state.db").read_text() == "repo"
+    assert (archives[0] / "tmp/rendered.mp3").read_text() == "repo"
+
+
+@pytest.mark.parametrize("home_env_present", [True, False])
+def test_conditional_repo_dotenv_matches_run_load_order(
+    script_repo: tuple[Path, Path, dict[str, str]],
+    home_env_present: bool,
+) -> None:
+    repo, script, env = script_repo
+    if home_env_present:
+        home_env = Path(env["HOME"]) / ".config/mammamiradio/.env"
+        home_env.parent.mkdir(parents=True)
+        home_env.write_text("MAMMAMIRADIO_TEST_SECRET=preserve\n")
+    (repo / ".env").write_text(
+        'MAMMAMIRADIO_CACHE_DIR="${MAMMAMIRADIO_CACHE_DIR:-alternate/cache}"\n'
+        'MAMMAMIRADIO_TMP_DIR="${MAMMAMIRADIO_TMP_DIR:-alternate/tmp}"\n'
+        'MAMMAMIRADIO_PORT="${MAMMAMIRADIO_PORT:-43210}"\n'
+    )
+
+    result = _run(script, repo, env)
+
+    assert result.returncode == 0, result.stderr
+    runtime = repo / (".context/conductor" if home_env_present else "alternate")
+    assert f"  cache: {runtime / 'cache'}" in result.stdout
+    assert f"  temp:  {runtime / 'tmp'}" in result.stdout
+    assert f"  port:  {43123 if home_env_present else 43210}" in result.stdout
+    assert not (repo / ".context").exists()
+    assert not (repo / "alternate").exists()
 
 
 def test_yes_archives_and_recreates_only_the_radio_runtime(

@@ -35,9 +35,10 @@ case "${1:-}" in
   *) usage >&2; exit 2 ;;
 esac
 
-# Keep path and credential precedence aligned with conductor-run.sh. Sourcing
-# the same optional files also honors an explicitly configured external slot
-# runtime rather than silently resetting this workspace's default cache.
+# Match the effective Run environment: conductor-run.sh loads the home file or
+# falls back to the repository file, then fills runtime defaults; start.sh
+# always loads the repository file again. Do not create runtime directories
+# during a dry run.
 HOME_DIR="${HOME:-}"
 ENV_SAFE="${HOME_DIR:+$HOME_DIR/.config/mammamiradio/.env}"
 if [ -n "$ENV_SAFE" ] && [ -f "$ENV_SAFE" ]; then
@@ -51,8 +52,17 @@ elif [ -f "$ROOT/.env" ]; then
   source "$ROOT/.env"
   set +a
 fi
-
 RUNTIME_ROOT="$ROOT/.context/conductor"
+export MAMMAMIRADIO_PORT="${MAMMAMIRADIO_PORT:-${CONDUCTOR_PORT:-8000}}"
+export MAMMAMIRADIO_TMP_DIR="${MAMMAMIRADIO_TMP_DIR:-$RUNTIME_ROOT/tmp}"
+export MAMMAMIRADIO_CACHE_DIR="${MAMMAMIRADIO_CACHE_DIR:-$RUNTIME_ROOT/cache}"
+if [ -f "$ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+
 PORT="${MAMMAMIRADIO_PORT:-${CONDUCTOR_PORT:-8000}}"
 RAW_CACHE_DIR="${MAMMAMIRADIO_CACHE_DIR:-$RUNTIME_ROOT/cache}"
 RAW_TMP_DIR="${MAMMAMIRADIO_TMP_DIR:-$RUNTIME_ROOT/tmp}"
