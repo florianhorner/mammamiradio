@@ -84,9 +84,9 @@ Open the add-on Web UI. A fresh unfinished install shows one active moment:
 **Your seat's ready**. **Start my station** opens the actual
 `/stream?first_listen=1`; its Marco/Giulia opening flows into live radio on the
 same player, with no separate demo or second start. The real media `playing`
-event reveals **Can you hear us?** inside the same studio frame; an expanded
-opening transcript remains available. Choose **Yes, sounds great** only after sound
-reaches this device, or use **Not yet** and the [this-device repair
+event reveals the sound check inside the same studio frame; an expanded
+opening transcript remains available. Choose **I can hear it** only after sound
+reaches this device, or use **I can’t hear you** and the [this-device repair
 steps](../troubleshooting.md#first-listen-does-not-play-on-this-device). Arrival,
 sound confirmation, and **Make it yours** appear one at a time; completed choices
 become compact Setup review rows, not a checklist.
