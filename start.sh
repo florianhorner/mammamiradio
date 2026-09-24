@@ -3,9 +3,18 @@
 
 set -e
 cd "$(dirname "$0")"
+
+# Keep an explicit runtime profile selected by conductor-run.sh or the caller
+# when loading the optional dotenv file.  This lets the Conductor safe and
+# yt-dlp buttons override a developer-local dotenv default deliberately.
+_MAMMAMIRADIO_YTDLP_WAS_SET="${MAMMAMIRADIO_ALLOW_YTDLP+x}"
+_MAMMAMIRADIO_YTDLP_REQUESTED="${MAMMAMIRADIO_ALLOW_YTDLP-}"
 set -a
 [ -f .env ] && source .env
 set +a
+if [ "$_MAMMAMIRADIO_YTDLP_WAS_SET" = x ]; then
+    export MAMMAMIRADIO_ALLOW_YTDLP="$_MAMMAMIRADIO_YTDLP_REQUESTED"
+fi
 
 PYTHON_BIN=".venv/bin/python"
 if [ ! -x "$PYTHON_BIN" ]; then
