@@ -16,6 +16,7 @@ document owns the interaction and state contract for `/` and `/listen`.
 | `#np-play` | Compact play/pause toggle | Play icon and **Play** label | Pause icon, blue playing state, `aria-pressed="true"` |
 | `#hero-play` | Hero play/pause affordance | Mode-aware listen copy, `aria-pressed="false"` | Visible mode-aware pause copy, `aria-pressed="true"`, and the same audio element as the other play controls |
 | `#hero-palinsesto` | Navigation | Scrolls to the schedule | Never starts audio |
+| `#admin-view-link` | Navigation | Visible **Admin** (English) or **Regia** (Italian), including on phones | Opens `/admin` in the same tab; never starts audio |
 | `#share-clip-btn` | Clip action | Saves and shares the current clip | Never starts audio; every failure gives a retry path |
 | `#pwa-install-btn` | Install action | Opens the captured browser install prompt | Never starts audio |
 
@@ -23,6 +24,11 @@ Only the three explicit playback controls may call the playback toggle. There
 is no document-level click or touch listener that unlocks audio. A dedication,
 anchor link, share action, or install action must never surprise the listener
 with sound.
+
+The Admin shortcut is visible to every listener; `/admin` retains its existing
+access check. Ordinary navigation unloads the listener player. When First
+Listen embeds `/listen`, the shortcut uses the existing parent handoff to show
+Admin without loading it inside the iframe or replacing the parent-owned player.
 
 All three playback controls share the same pending/playing state. While a play
 request or bounded reconnect is pending, their next action is Pause and cancels

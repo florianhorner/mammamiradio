@@ -84,6 +84,9 @@ html, body {
 .mmr-nav nav a { font-size: 13px; font-weight: 500; color: rgba(245,237,216,0.7); text-decoration: none; letter-spacing: 0.01em; transition: color 180ms; padding: 12px 8px; min-height: 44px; display: inline-flex; align-items: center; }
 .mmr-nav nav a:hover { color: var(--cream); }
 .mmr-nav nav a.active { color: var(--brand-primary, var(--sun)); }
+.mmr-admin-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--cream); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.mmr-admin-link:hover { border-color: var(--sun); color: var(--sun); }
+.mmr-admin-link:focus-visible { outline: 2px solid var(--sun); outline-offset: 3px; }
 .mmr-live-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; min-height: 44px; border: 1px solid rgba(184,44,32,0.4); background: rgba(160,32,24,0.15); color: var(--cream); border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--font-body); cursor: pointer; text-decoration: none; }
 .mmr-live-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-accent, var(--lancia2)); box-shadow: 0 0 8px var(--brand-accent, var(--lancia2)); animation: live-pulse 1.4s ease-in-out infinite; }
 .mmr-live-pill.is-stopped, .mmr-live.is-stopped {
@@ -636,7 +639,24 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
   .mmr-stage-header { flex-wrap: wrap; gap: 10px; }
   .mmr-np-progress { display: none; }
 }
+@media (max-width: 850px) {
+  html { scroll-padding-top: 132px; }
+  .mmr-stage, .mmr-section, .mmr-dedica-form, #request-form, #req-name, #req-msg, .mmr-schedule { scroll-margin-top: 132px; }
+  .mmr-nav-inner { flex-wrap: wrap; column-gap: 16px; row-gap: 4px; }
+  .mmr-brand { order: 1; min-width: 0; flex: 1 1 auto; }
+  .mmr-brand > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .mmr-live-pill { order: 2; margin-left: 0; }
+  .mmr-admin-link { order: 3; }
+  .mmr-nav nav { order: 4; flex: 1 0 100%; justify-content: center; margin-left: 0; }
+}
 @media (max-width: 600px) {
+  html { scroll-padding-top: 144px; }
+  .mmr-stage, .mmr-section, .mmr-dedica-form, #request-form, #req-name, #req-msg, .mmr-schedule { scroll-margin-top: 144px; }
+  .mmr-nav-inner { flex-wrap: wrap; gap: 10px; }
+  .mmr-brand { order: 1; flex: 1 1 0; }
+  .mmr-brand > span { font-size: 16px; }
+  .mmr-live-pill { order: 2; width: 150px; min-width: 150px; flex: 0 0 150px; justify-content: center; white-space: normal; gap: 4px; padding: 7px; font-size: 9px; letter-spacing: 0.06em; line-height: 1.15; }
+  .mmr-admin-link { order: 3; flex: 1 0 100%; justify-content: flex-end; }
   .mmr-about-grid { grid-template-columns: 1fr; }
   .mmr-stats { flex-direction: column; gap: 12px; }
   .mmr-h1 { font-size: 36px; }
@@ -678,9 +698,9 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 @media (max-width: 360px) {
   /* Keep the brand and the primary station-status action fully visible on
      the smallest supported phone width. The anchor links are already hidden
-     above 600px, so this space belongs to the two remaining header items. */
+     on phones, so the first row belongs to the brand and play control. */
   .mmr-nav-inner { gap: 10px; padding-left: 12px; padding-right: 12px; }
-  .mmr-brand { min-width: 0; flex: 0 1 auto; gap: 7px; }
+  .mmr-brand { min-width: 0; flex: 1 1 0; gap: 7px; }
   .mmr-brand > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 15px; letter-spacing: -0.02em; }
   .mmr-live-pill { width: 120px; min-width: 120px; flex: 0 0 120px; justify-content: center; overflow: hidden; white-space: normal; gap: 4px; padding: 7px; font-size: 8px; letter-spacing: 0.06em; line-height: 1.15; }
 }

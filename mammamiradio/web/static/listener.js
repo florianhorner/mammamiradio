@@ -1941,6 +1941,10 @@
 
     if (playBtn) playBtn.addEventListener('click', (e) => { e.preventDefault(); togglePlay(); });
     if (playBtnSmall) playBtnSmall.addEventListener('click', togglePlay);
+    const adminLink = $('admin-view-link');
+    if (adminLink && playbackHost) adminLink.addEventListener('click', (event) => {
+      if (playbackHost.openAdmin?.()) event.preventDefault();
+    });
 
     // Hero secondary buttons
     const heroPal = $('hero-palinsesto');
