@@ -4042,6 +4042,7 @@ async def test_openai_script_breaker_blocks_retries_and_recovers(config, state, 
                 prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
             )
         assert 0 < state.openai_disabled_until - scriptwriter_module.time.time() <= max_cooldown
+        assert state.openai_blocked_key_hash and state.openai_blocked_key_hash != config.openai_api_key
         assert state.openai_key_status == "valid"
         with pytest.raises(RuntimeError, match="temporarily unavailable"):
             await scriptwriter_module._generate_json_response(
@@ -4055,7 +4056,7 @@ async def test_openai_script_breaker_blocks_retries_and_recovers(config, state, 
 
     assert result == {"ok": True}
     assert state.openai_last_error == ""
-    assert state.openai_blocked_key == ""
+    assert state.openai_blocked_key_hash == ""
     assert client.chat.completions.create.call_count == 2
 
 
@@ -4080,7 +4081,7 @@ async def test_openai_script_breaker_ignores_stale_key_failure(config, state):
             prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
         )
     assert state.openai_disabled_until == 0.0
-    assert state.openai_blocked_key == ""
+    assert state.openai_blocked_key_hash == ""
 
 
 @pytest.mark.asyncio

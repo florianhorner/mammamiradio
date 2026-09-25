@@ -147,7 +147,7 @@ def _apply_live_credentials(state: StationState, config, updates: dict[str, str]
         state.openai_key_checked_at = 0.0
         state.openai_disabled_until = 0.0
         state.openai_last_error = ""
-        state.openai_blocked_key = ""
+        state.openai_blocked_key_hash = ""
         _rearm_cloud_voice_engine(state, "openai")
     if "AZURE_SPEECH_KEY" in updates:
         config.azure_speech_key = updates["AZURE_SPEECH_KEY"]

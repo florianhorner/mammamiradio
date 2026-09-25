@@ -1699,8 +1699,8 @@ class StationState:
     openai_disabled_until: float = 0.0
     openai_last_error: str = ""
     openai_last_error_at: float = 0.0
-    openai_blocked_key: str = field(default="", repr=False)
-    openai_script_attempt_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    openai_blocked_key_hash: str = field(default="", repr=False)
+    openai_script_attempt_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     # Active key-validation verdict (set by a startup/on-save/on-demand auth ping;
     # distinct from the time-based suspend above). "rejected" means the provider
     # actively refused the key (401) — a persistent "replace the key" condition the

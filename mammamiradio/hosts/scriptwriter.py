@@ -1061,14 +1061,16 @@ def _trip_openai_script_circuit(state: StationState, key: str, exc: Exception) -
         seconds = _anthropic_transient_backoff_seconds(exc)
     else:
         seconds = 20 if transient else 600
-    state.openai_blocked_key = key
+    state.openai_blocked_key_hash = hashlib.sha256(key.encode()).hexdigest()
     state.openai_disabled_until = time.time() + seconds
     state.openai_last_error_at = time.time()
     state.openai_last_error = f"{type(exc).__name__}: HTTP {status}" if status else type(exc).__name__
 
 
 def _openai_script_blocked(state: StationState, key: str) -> bool:
-    return state.openai_blocked_key == key and state.openai_disabled_until > time.time()
+    return state.openai_blocked_key_hash == hashlib.sha256(key.encode()).hexdigest() and (
+        state.openai_disabled_until > time.time()
+    )
 
 
 async def _generate_json_response(
@@ -1379,10 +1381,13 @@ async def _generate_json_response(
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
         raise RuntimeError("No LLM API key configured for script generation")
-    if state.openai_blocked_key and state.openai_blocked_key != openai_key:
+    if (
+        state.openai_blocked_key_hash
+        and state.openai_blocked_key_hash != hashlib.sha256(openai_key.encode()).hexdigest()
+    ):
         state.openai_disabled_until = 0.0
         state.openai_last_error = ""
-        state.openai_blocked_key = ""
+        state.openai_blocked_key_hash = ""
     if _openai_script_blocked(state, openai_key):
         raise RuntimeError("OpenAI script provider is temporarily unavailable")
 
@@ -1467,7 +1472,7 @@ async def _generate_json_response(
             if (config.openai_api_key or os.getenv("OPENAI_API_KEY", "")) == openai_key:
                 state.openai_disabled_until = 0.0
                 state.openai_last_error = ""
-                state.openai_blocked_key = ""
+                state.openai_blocked_key_hash = ""
         latency_ms = int((time.perf_counter() - t_start) * 1000)
         prompt_tokens = 0
         completion_tokens = 0

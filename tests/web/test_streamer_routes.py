@@ -6364,24 +6364,26 @@ async def test_setup_status_and_recheck_share_projection():
 
 
 @pytest.mark.asyncio
-async def test_setup_recheck_runs_shared_provider_probe():
-    """A manual setup recheck must refresh the AI verdict through the shared probe."""
+@pytest.mark.parametrize("outcome", ["ok", "exception", "quota", "network"])
+async def test_setup_recheck_reports_shared_probe_result(outcome: str):
     app = _make_test_app()
-    app.state.config.anthropic_api_key = "sk-ant-test"
-    probe_payload = _probe_payload(anthropic="ok")
+    app.state.config.anthropic_api_key = "test-key"
+    probe = (
+        AsyncMock(side_effect=RuntimeError("probe failed"))
+        if outcome == "exception"
+        else AsyncMock(return_value=_probe_payload(anthropic=outcome))
+    )
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-
-    with patch(
-        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe_payload)
-    ) as probe:
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=probe):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
 
     assert response.status_code == 200
     probe.assert_awaited_once_with(app.state.config)
-    assert app.state.station_state.anthropic_key_status == "valid"
+    assert app.state.station_state.anthropic_key_status == ("valid" if outcome == "ok" else "unverified")
     assert response.json()["provider_check_pending"] is False
-    assert response.json()["provider_check_failed"] is False
+    assert response.json()["provider_check_failed"] is (outcome != "ok")
+    assert app.state._setup_recheck_provider_task.done()
 
 
 @pytest.mark.asyncio
@@ -6538,42 +6540,6 @@ async def test_setup_recheck_returns_while_slow_provider_probe_finishes_in_backg
             await app.state._setup_recheck_provider_task
 
     assert app.state.station_state.anthropic_key_status == "valid"
-
-
-@pytest.mark.asyncio
-async def test_setup_recheck_reports_provider_probe_failure():
-    app = _make_test_app()
-    app.state.config.anthropic_api_key = "test-key"
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch(
-        "mammamiradio.web.provider_verdict.check_provider_keys",
-        new=AsyncMock(side_effect=RuntimeError("probe failed")),
-    ):
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
-
-    assert response.status_code == 200
-    assert response.json()["provider_check_pending"] is False
-    assert response.json()["provider_check_failed"] is True
-    assert app.state.station_state.anthropic_key_status == "unverified"
-    assert app.state._setup_recheck_provider_task.done()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["quota", "network"])
-async def test_setup_recheck_reports_inconclusive_provider_result(outcome: str):
-    app = _make_test_app()
-    app.state.config.anthropic_api_key = "test-key"
-    payload = _probe_payload(anthropic=outcome)
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=payload)):
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
-
-    assert response.status_code == 200
-    assert response.json()["provider_check_pending"] is False
-    assert response.json()["provider_check_failed"] is True
-    assert app.state.station_state.anthropic_key_status == "unverified"
 
 
 @pytest.mark.asyncio
