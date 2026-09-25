@@ -460,6 +460,7 @@ def test_dotenv_switch_blocks_a_planted_env_file(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("MAMMAMIRADIO_TEST_LEAK_PROBE=leaked\n", encoding="utf-8")
 
     inherited = dict(os.environ)
+    inherited.pop("MAMMAMIRADIO_TEST_LEAK_PROBE", None)
     assert inherited.get("PYTHON_DOTENV_DISABLED") == "1"
     assert _import_config_in_subprocess(tmp_path, inherited) == "None", (
         "core/config.py loaded a .env despite PYTHON_DOTENV_DISABLED=1. "
@@ -467,7 +468,7 @@ def test_dotenv_switch_blocks_a_planted_env_file(tmp_path: Path) -> None:
         ".venv/bin/pip install -U 'python-dotenv>=1.2' and re-run."
     )
 
-    without_switch = {k: v for k, v in os.environ.items() if k != "PYTHON_DOTENV_DISABLED"}
+    without_switch = {k: v for k, v in inherited.items() if k != "PYTHON_DOTENV_DISABLED"}
     assert _import_config_in_subprocess(tmp_path, without_switch) == "leaked", (
         "The probe .env was not loaded without the switch, so this test cannot "
         "detect a leak. Check find_dotenv() behaviour or the probe file."
