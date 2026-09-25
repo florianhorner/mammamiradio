@@ -14,6 +14,32 @@ startup render or network dependency. Because it never enters
 producer remain untouched. Completed and pre-feature installs go straight to
 the live hub.
 
+The Admin's single **Start my station** action opens that real stream, waits for
+its media `playing` event, then reveals sound confirmation and a staged
+weather/daylight proof. Natural completion leaves the scene and Replay in place
+and offers the next recorded example: laundry, arrival, then coffee. Each next
+recording starts only from its own click. The setup action remains available
+after the first example; the listener need not complete the pack. Previous
+examples can be revisited without autoplay. Selection and completed recordings
+belong to the current browser journey and reset for a new sound check. The
+shared narration player retains ownership of playback, interruption and music
+ducking. The richer recordings explicitly disclose that their household
+features are unavailable on new installations; they do not widen the narrow
+weather/daylight authorization. All scenes retain their reviewed transcripts,
+audio hashes and manifest reachability.
+Skipping or continuing opens a compact recorded-versus-fresh writing comparison.
+Writing depends on sound confirmation, not Home consent. Voice auditions are
+optional, and the existing exact Home preview/consent boundary remains separate;
+the staged proof reads no Home state and grants no authorization.
+
+Saved sound proof is not current playback: a reload exposes **Resume station**
+without autoplay, rejoining the live stream without repeating confirmation.
+An explicit new sound check renews the stream; it does not force the packaged
+opening after the server has durable heard proof. Connection status has one UI
+owner, distinguishes saved/unverified from working keys, preserves unfinished
+input during polling, and uses the existing bounded provider-check endpoint for
+an explicit retry. No new backend, Home grant, or Home Profile policy is added.
+
 ## Runtime overview
 
 ```text
@@ -124,6 +150,12 @@ the shared audio queue:
   fresh install without audible proof. The `/stream` generator sends it directly
   to that client before joining `LiveStreamHub`; it never becomes a `Segment` or
   changes shared now-playing state.
+
+`FIRST_LISTEN_HOME_PROOF_KEY` selects one day-one scene from the hash-bound
+`HOUSEHOLD_EXAMPLES` map. It is `quiet` while fresh installs expose only weather
+and daylight; a later Home Profile grant can replace the scene without changing
+the arrival, sound-check, key, or consent progression. Validation rejects a
+selected scene that is not day-one reachable.
 
 `StationState.source_readiness` is event evidence, not a filesystem scan on each
 status request. The `golden_path.source_readiness` object from `/status` and the

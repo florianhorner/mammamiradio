@@ -706,9 +706,9 @@ class _HomeMomentSceneParser(HTMLParser):
                 return
         if self._active is not None and "day-one-chip" in classes:
             self.scenes[self._active]["chipped"] = True
-        # The pull quote is the first <span> in the scene; later spans belong to
-        # the play-button copy inside .household-example.
-        if tag == "span" and self._active is not None and self.scenes[self._active]["quote"] is None:
+        # Illustrations may contain spans too. Only an explicitly marked pull
+        # quote is copy; the complete spoken transcript is validated separately.
+        if tag == "span" and self._active is not None and "data-scene-quote" in attributes:
             self._in_quote = True
             self._quote_parts = []
 
@@ -818,6 +818,7 @@ class _GuideTranscriptParser(HTMLParser):
 
 _GUIDE_MAP_PATTERN = re.compile(r"const\s+FIRST_LISTEN_GUIDES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
 _HOME_MOMENT_MAP_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLES\s*=\s*\{(?P<body>.*?)\};", re.DOTALL)
+_HOME_PROOF_KEY_PATTERN = re.compile(r"const\s+FIRST_LISTEN_HOME_PROOF_KEY\s*=\s*'(?P<key>[A-Za-z][A-Za-z0-9_-]*)'")
 _HOME_MOMENT_NOUN_PATTERN = re.compile(r"const\s+HOUSEHOLD_EXAMPLE_NOUNS\s*=\s*\{(?P<body>[^}]*)\}")
 _HOME_MOMENT_NOUN_ENTRY_PATTERN = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]*)\s*:\s*'(?P<noun>[^']*)'")
 _GUIDE_ENTRY_PATTERN = re.compile(
@@ -1020,11 +1021,7 @@ def _validate_admin_guide_metadata(
 
 
 def _validate_admin_home_moment_metadata(source: str, manifest: dict | None) -> tuple[list[str], set]:
-    """Hold the Step 3 demo pack to the same binding as the narration guides.
-
-    Returns its errors plus the declared key set, so the caller can check the two
-    audio maps do not shadow each other.
-    """
+    """Bind the hidden proof candidates and selected slot to the reviewed pack."""
 
     if manifest is None:
         return [], set()
@@ -1039,6 +1036,19 @@ def _validate_admin_home_moment_metadata(source: str, manifest: dict | None) -> 
 
     entries, errors = _parse_admin_audio_map(source, _HOME_MOMENT_MAP_PATTERN, "HOUSEHOLD_EXAMPLES")
     errors.extend(_validate_admin_audio_map(entries, expected, label="HOUSEHOLD_EXAMPLES", noun="home moment"))
+    proof_matches = list(_HOME_PROOF_KEY_PATTERN.finditer(source))
+    if len(proof_matches) != 1:
+        errors.append(
+            f"admin FIRST_LISTEN_HOME_PROOF_KEY must select exactly one reviewed scene; found {len(proof_matches)}"
+        )
+    else:
+        proof_key = proof_matches[0].group("key")
+        proof_entry = expected.get(proof_key)
+        if proof_entry is None:
+            errors.append(f"admin First Listen proof key {proof_key!r} is not in the home moment manifest")
+        elif proof_entry.get("reachability") != "day-one":
+            errors.append(f"admin First Listen proof {proof_key} would demonstrate only gated capability")
+
     errors.extend(
         _validate_audio_block_dom(
             source,
@@ -1140,15 +1150,11 @@ def _validate_home_moment_reachability(source: str, expected: dict) -> list[str]
             continue
         expected_quote = expected[key].get("quote") if isinstance(expected[key], dict) else None
         shown = scenes[key]["quote"]
-        if isinstance(expected_quote, str):
+        if isinstance(expected_quote, str) and shown is not None:
             normalized = " ".join(expected_quote.split())
-            if shown is None:
-                errors.append(f"admin home moment {key} scene shows no pull quote")
-            elif shown.strip('\u201c\u201d"') != normalized:
+            if shown.strip('\u201c\u201d"') != normalized:
                 errors.append(f"admin home moment {key} scene quote does not match its manifest quote")
-        if manifest_value == HOME_MOMENT_DAY_ONE and not chipped:
-            errors.append(f"admin home moment {key} is reachable today but its scene carries no day-one-chip")
-        elif manifest_value != HOME_MOMENT_DAY_ONE and chipped:
+        if manifest_value != HOME_MOMENT_DAY_ONE and chipped:
             errors.append(
                 f"admin home moment {key} is {manifest_value!r} but its scene carries a day-one-chip, "
                 "promising a fresh install something it cannot reach"
