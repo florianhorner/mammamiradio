@@ -2474,6 +2474,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
       </div>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
+          <button type="button" class="btn btn-util" id="pipelineAiCheck" data-stopped-exempt onclick="checkAiConnection(this)" hidden>Check AI connection</button>
 
     <!-- ── MOTORE PANEL ── -->
     <section class="drawer-section" id="engine">
@@ -4766,7 +4767,7 @@ function pipelineHostStatus(c){
   const anthropicStatus=anthropicConfigured?c.anthropic_key_status:null;
   const openaiStatus=openaiConfigured?c.openai_key_status:null;
   const statuses=[anthropicStatus,openaiStatus].filter(Boolean);
-  const usableOpenAi=openaiConfigured&&openaiStatus==='valid';
+  const usableOpenAi=openaiConfigured&&openaiStatus==='valid'&&!c.openai_degraded;
   const usableAnthropic=anthropicConfigured&&anthropicStatus==='valid'&&!c.anthropic_degraded;
   if(usableOpenAi||usableAnthropic){
     return{state:'ready',label:'AI hosts · ready',detail:'New conversations are available.'};
@@ -4775,11 +4776,11 @@ function pipelineHostStatus(c){
   // actually airing right now) must win outright before any pending-probe check below —
   // otherwise an UNRELATED provider's own still-resolving probe (e.g. OpenAI sitting at
   // 'unverified' because it hasn't been checked yet) masks a fact we already know.
-  if(anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected'){
+  if((anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected')||(openaiConfigured&&c.openai_degraded&&openaiStatus!=='rejected')){
     return{
       state:'degraded',
       label:'AI hosts · backup active',
-      detail:'Included host clips keep the show moving while the AI service recovers.',
+      detail:'Included host clips keep the show moving. Check the AI connection again in Settings.',
     };
   }
   // A provider's own probe still pending (never resolved to valid/rejected) means the
@@ -4790,7 +4791,7 @@ function pipelineHostStatus(c){
   // That known fact must not be masked by a status that never really resolves.
   const anthropicPendingUnresolved=anthropicStatus==='unverified'&&!c.anthropic_degraded;
   const openaiPendingUnresolved=openaiStatus==='unverified';
-  if(anthropicPendingUnresolved||openaiPendingUnresolved){
+  if(c.provider_probe_in_flight&&(anthropicPendingUnresolved||openaiPendingUnresolved)){
     return checkingAiHosts;
   }
   if(statuses.includes('rejected')&&!statuses.includes('valid')){
@@ -4800,12 +4801,18 @@ function pipelineHostStatus(c){
       detail:'Open Settings and replace the key to restore new conversations.',
     };
   }
-  return checkingAiHosts;
+  return{
+    state:'degraded',
+    label:'AI connection needs a check',
+    detail:'Open Settings and check the AI connection again.',
+  };
 }
 function updatePipelineStatus(caps,st){
   const el=document.getElementById('pipelineStatus');
   if(!el)return;
   const c=caps?.capabilities||{};
+  const check=document.getElementById('pipelineAiCheck');
+  if(check)check.hidden=!(c.anthropic_key||c.openai);
   const stream=pipelineStreamStatus(st,caps);
 
   let html='<div class="srow">';
@@ -5794,12 +5801,13 @@ function firstListenConnectionEvidence(){
     .filter(([key])=>keys.has(key)).map(([,field])=>caps[field]||'unverified');
   if(!statuses.length)return{state:'idle',label:'Not connected',detail:'Connect a writing service for fresh conversations between songs.'};
   if(_firstListenUi.connectionChecking)return{state:'working',label:'Saved · checking',detail:'We’re checking the connection. You can keep listening.'};
-  const workingOpenai=keys.has('OPENAI_API_KEY')&&caps.openai_key_status==='valid';
+  const workingOpenai=keys.has('OPENAI_API_KEY')&&caps.openai_key_status==='valid'&&!caps.openai_degraded;
   const workingAnthropic=keys.has('ANTHROPIC_API_KEY')&&caps.anthropic_key_status==='valid'&&!caps.anthropic_degraded;
   if(workingOpenai||workingAnthropic)return{state:'ready',label:'Writing connected',detail:`${workingAnthropic?'Anthropic':'OpenAI'} · Fresh conversations between records.`};
   if(_firstListenUi.connectionCheckFailed)return{state:'degraded',label:'Couldn’t check the connection',detail:'Your saved key is unchanged. Try again, or skip AI for now and choose your Home details.'};
   if(statuses.every(status=>status==='rejected'))return{state:'blocked',label:'Check your writing key',detail:'The service did not accept the key. Replace it below, or keep listening.'};
-  return{state:'working',label:'Key saved · not confirmed yet',detail:'Check the connection again, or skip AI for now and choose your Home details.'};
+  if(caps.provider_probe_in_flight)return{state:'working',label:'Checking connection',detail:'We’re checking your saved key. You can keep listening.'};
+  return{state:'degraded',label:'Key saved · not confirmed yet',detail:'Check the connection again, or skip AI for now and choose your Home details.'};
 }
 function firstListenVoiceEvidence(){
   if(_firstListenUi.keySaving||_firstListenUi.keySaveUnconfirmed)return firstListenConnectionEvidence();
@@ -7422,6 +7430,22 @@ async function setupRecheck(el){
     else toast('Configuration re-check complete');
   }catch(_){
     toast('We couldn’t finish the check. Check your connection, then try again.');
+  }finally{
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');}
+  }
+}
+async function checkAiConnection(el){
+  if(el?.disabled)return;
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');}
+  try{
+    const {response,payload}=await apiResponse('POST','/api/setup/provider-check',{},FIRST_LISTEN_TIMEOUTS.play);
+    if(!response.ok||!payload?.providers||typeof payload.providers!=='object')throw new Error('check_unconfirmed');
+    await refreshSlow();
+    const hosts=pipelineHostStatus(_caps?.capabilities||{});
+    if(hosts.state==='ready')toast('AI connection confirmed.');
+    else toast('We couldn’t confirm the AI connection. Check your key and try again.');
+  }catch(_){
+    toast('We couldn’t finish the AI check. Check your connection, then try again.');
   }finally{
     if(el){el.disabled=false;el.removeAttribute('aria-busy');}
   }
@@ -9092,6 +9116,8 @@ function updateEngineRoom(st,caps){
       const secs=Math.max(0,c.anthropic_retry_after_s||0);
       const retry=secs>0?' · retry in '+(secs>=60?Math.ceil(secs/60)+'m':secs+'s'):'';
       anthropicLine=statusInline('degraded','suspended'+retry,'Temporarily unavailable; OpenAI fallback');
+    }else if(c.anthropic_key_status==='unverified'){
+      anthropicLine=c.provider_probe_in_flight?statusInline('working','checking'):statusInline('degraded','not confirmed','Check the AI connection again');
     }else{
       anthropicLine=statusInline('ready','connected');
     }
@@ -9101,8 +9127,14 @@ function updateEngineRoom(st,caps){
       openaiLine=statusInline('idle','not configured');
     }else if(c.openai_key_status==='rejected'){
       openaiLine=statusInline('blocked','key not working','Replace key in Settings');
+    }else if(c.openai_degraded){
+      const secs=Math.max(0,c.openai_retry_after_s||0);
+      const retry=secs>0?' · retry in '+(secs>=60?Math.ceil(secs/60)+'m':secs+'s'):'';
+      openaiLine=statusInline('degraded','temporarily unavailable'+retry,'Included host clips keep the show going');
+    }else if(c.openai_key_status==='unverified'){
+      openaiLine=c.provider_probe_in_flight?statusInline('working','checking'):statusInline('degraded','not confirmed','Check the AI connection again');
     }else{
-      openaiLine=statusInline('ready','available');
+      openaiLine=statusInline('ready','connected');
     }
     // Voices use breaker evidence. A configured key alone is not connectivity proof.
     // openai_speech is the TTS breaker (LLM OpenAI key status stays on the OpenAI line).

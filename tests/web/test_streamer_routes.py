@@ -6371,7 +6371,9 @@ async def test_setup_recheck_runs_shared_provider_probe():
     probe_payload = _probe_payload(anthropic="ok")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe_payload)
+    ) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
 
@@ -6393,7 +6395,9 @@ async def test_setup_recheck_probes_key_saved_during_cache_window():
         patch.dict(os.environ, {}, clear=False),
         patch("mammamiradio.web.streamer._save_dotenv"),
         patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()),
-        patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=probe_results)) as probe,
+        patch(
+            "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=probe_results)
+        ) as probe,
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
@@ -6412,6 +6416,50 @@ async def test_setup_recheck_probes_key_saved_during_cache_window():
     assert recheck.json()["provider_check_pending"] is False
     assert app.state.station_state.anthropic_key_status == "valid"
     assert probe.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_saved_key_probe_and_recheck_share_one_in_flight_probe():
+    app = _make_test_app()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_probe(_config):
+        started.set()
+        await release.wait()
+        return _probe_payload(anthropic="ok")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._SETUP_RECHECK_PROVIDER_WAIT_SECONDS", 0.01),
+        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            saved = await client.post(
+                "/api/setup/save-keys", headers=ACTIVE_SETUP_HEADERS, json={"ANTHROPIC_API_KEY": "test-key"}
+            )
+            assert saved.status_code == 200
+            await started.wait()
+            pending = (await client.get("/api/capabilities")).json()
+            assert pending["capabilities"]["provider_probe_in_flight"] is True
+            assert pending["provider_health"]["probe_in_flight"] is True
+            recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+            assert recheck.json()["provider_check_pending"] is True
+            probe.assert_awaited_once()
+            release.set()
+            await app.state.provider_verdict_task
+            await app.state._setup_recheck_provider_task
+            completed_recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+            assert completed_recheck.json()["provider_check_pending"] is False
+            settled = (await client.get("/api/capabilities")).json()
+            status = (await client.get("/status")).json()
+
+    assert settled["capabilities"]["provider_probe_in_flight"] is False
+    assert settled["capabilities"]["anthropic_key_status"] == "valid"
+    assert status["provider_health"]["probe_in_flight"] is False
+    probe.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -6436,7 +6484,7 @@ async def test_setup_recheck_starts_new_probe_when_old_key_probe_is_in_flight():
         patch.dict(os.environ, {}, clear=False),
         patch("mammamiradio.web.streamer._save_dotenv"),
         patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()),
-        patch("mammamiradio.web.streamer.check_provider_keys", new=probe),
+        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=probe),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             old_request = asyncio.create_task(
@@ -6474,7 +6522,7 @@ async def test_setup_recheck_returns_while_slow_provider_probe_finishes_in_backg
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with (
         patch("mammamiradio.web.streamer._SETUP_RECHECK_PROVIDER_WAIT_SECONDS", 0.01),
-        patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe,
+        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe,
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await asyncio.wait_for(
@@ -6498,7 +6546,7 @@ async def test_setup_recheck_reports_provider_probe_failure():
     app.state.config.anthropic_api_key = "test-key"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch(
-        "mammamiradio.web.streamer.check_provider_keys",
+        "mammamiradio.web.provider_verdict.check_provider_keys",
         new=AsyncMock(side_effect=RuntimeError("probe failed")),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -6508,6 +6556,7 @@ async def test_setup_recheck_reports_provider_probe_failure():
     assert response.json()["provider_check_pending"] is False
     assert response.json()["provider_check_failed"] is True
     assert app.state.station_state.anthropic_key_status == "unverified"
+    assert app.state._setup_recheck_provider_task.done()
 
 
 @pytest.mark.asyncio
@@ -6517,7 +6566,7 @@ async def test_setup_recheck_reports_inconclusive_provider_result(outcome: str):
     app.state.config.anthropic_api_key = "test-key"
     payload = _probe_payload(anthropic=outcome)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=payload)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
 
@@ -6539,7 +6588,7 @@ async def test_setup_recheck_returns_failed_when_shared_probe_is_cancelled():
         return _probe_payload(anthropic="ok")
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=slow_probe):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=slow_probe):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             request_task = asyncio.create_task(client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={}))
             await started.wait()
@@ -6549,6 +6598,7 @@ async def test_setup_recheck_returns_failed_when_shared_probe_is_cancelled():
     assert response.status_code == 200
     assert response.json()["provider_check_pending"] is False
     assert response.json()["provider_check_failed"] is True
+    assert app.state._setup_recheck_provider_task.cancelled()
 
 
 @pytest.mark.asyncio
@@ -7206,7 +7256,9 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
         },
     }
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe_payload)
+    ) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
 
@@ -7222,7 +7274,7 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
 async def test_setup_provider_check_requires_exact_empty_json():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock()) as probe:
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock()) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             missing = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS)
             extra = await client.post(
@@ -7252,7 +7304,7 @@ async def test_setup_provider_check_shares_in_flight_probe():
         return probe_payload
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             first = asyncio.create_task(client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={}))
             await started.wait()
@@ -7276,7 +7328,9 @@ async def test_setup_provider_check_returns_cached_result_within_debounce_window
     app = _make_test_app()
     probe_payload = {"ok": True, "providers": {}}
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe_payload)
+    ) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             first = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
             second = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
@@ -7296,7 +7350,7 @@ async def test_setup_provider_check_clears_task_on_exception():
     # than propagating them, so we can inspect app state after the failure.
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
     with patch(
-        "mammamiradio.web.streamer.check_provider_keys",
+        "mammamiradio.web.provider_verdict.check_provider_keys",
         new=AsyncMock(side_effect=RuntimeError("probe failed")),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -7317,7 +7371,7 @@ async def test_setup_provider_check_clears_task_on_cancel():
         await asyncio.sleep(10)
         return {"anthropic": True}
 
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=slow_probe):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=slow_probe):
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             check_coro = client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
@@ -7334,6 +7388,36 @@ async def test_setup_provider_check_clears_task_on_cancel():
                 pass
 
     assert getattr(app.state, "_provider_check_task", None) is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_provider_check_waiter_keeps_shared_probe_for_verdict():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_probe(_config):
+        started.set()
+        await release.wait()
+        return _probe_payload(anthropic="ok")
+
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=slow_probe):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request_task = asyncio.create_task(
+                client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
+            )
+            await started.wait()
+            shared_task = app.state._provider_check_task
+            request_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request_task
+            assert not shared_task.done()
+            release.set()
+            await shared_task
+
+    assert app.state.station_state.anthropic_key_status == "valid"
 
 
 @pytest.mark.asyncio
@@ -10891,6 +10975,23 @@ async def test_capabilities_openai_only_marks_ai_as_available():
 
 
 @pytest.mark.asyncio
+async def test_capabilities_openai_breaker_does_not_claim_ai_hosts_ready():
+    app = _make_test_app()
+    app.state.config.openai_api_key = "openai-key"
+    app.state.station_state.openai_key_status = "valid"
+    app.state.station_state.openai_disabled_until = time.time() + 30
+    app.state.station_state.openai_last_error = "AuthenticationError: HTTP 401"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/api/capabilities")).json()
+
+    assert body["capabilities"]["openai_degraded"] is True
+    assert 0 < body["capabilities"]["openai_retry_after_s"] <= 30
+    assert body["provider_health"]["openai"]["degraded"] is True
+    assert body["guided_setup"]["ai_hosts"]["status"] == "degraded"
+
+
+@pytest.mark.asyncio
 async def test_setup_status_and_capabilities_share_guided_setup_projection():
     app = _make_test_app()
     app.state.config.openai_api_key = "openai-key"
@@ -12191,7 +12292,7 @@ async def test_provider_check_route_persists_rejected_verdict():
     app.state.config.anthropic_api_key = "anthropic-secret"
     payload = _probe_payload(anthropic="auth")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=payload)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
     assert resp.status_code == 200
@@ -12319,7 +12420,7 @@ async def test_provider_check_cached_result_does_not_clear_verdict():
     app.state.config.anthropic_api_key = "anthropic-secret"
     payload = _probe_payload(anthropic="auth")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=payload)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
             assert app.state.station_state.anthropic_key_status == "rejected"
@@ -12365,7 +12466,7 @@ async def test_provider_check_stale_shared_task_not_recorded_after_key_swap():
         return _probe_payload(anthropic="auth")  # old key 401
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=_gated_old_probe)):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=_gated_old_probe)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             req = asyncio.create_task(client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={}))
             await started.wait()  # task created with the "sk-ant-old" snapshot

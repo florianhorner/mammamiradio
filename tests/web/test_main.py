@@ -2469,7 +2469,16 @@ async def test_shutdown_cancels_background_tasks():
     # must cancel it too.
     verdict_task = AsyncMock()
     verdict_task.cancel = MagicMock()
+    verdict_task.done = MagicMock(return_value=False)
+    recheck_task = AsyncMock()
+    recheck_task.cancel = MagicMock()
+    recheck_task.done = MagicMock(return_value=False)
+    probe_task = AsyncMock()
+    probe_task.cancel = MagicMock()
+    probe_task.done = MagicMock(return_value=False)
     main_mod.app.state.provider_verdict_task = verdict_task
+    main_mod.app.state._setup_recheck_provider_task = recheck_task
+    main_mod.app.state._provider_check_task = probe_task
     main_mod.app.state.background_tasks = {bg_task}
     main_mod.app.state.stream_hub = MagicMock()
     if hasattr(main_mod.app.state, "local_library_task"):
@@ -2480,14 +2489,20 @@ async def test_shutdown_cancels_background_tasks():
 
     bg_task.cancel.assert_called_once()
     verdict_task.cancel.assert_called_once()
+    recheck_task.cancel.assert_called_once()
+    probe_task.cancel.assert_called_once()
     _args, _kwargs = mock_gather.call_args
     assert bg_task in _args
     assert verdict_task in _args
+    assert recheck_task in _args
+    assert probe_task in _args
     assert _kwargs.get("return_exceptions") is True
 
     # Cleanup
     main_mod.app.state.background_tasks = set()
     main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state._setup_recheck_provider_task = None
+    main_mod.app.state._provider_check_task = None
 
 
 @pytest.mark.asyncio

@@ -12,10 +12,21 @@ verdict, and run that probe non-blockingly at startup / on key-save / on demand.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from mammamiradio.core.models import KeyStatus, StationState
 from mammamiradio.core.provider_checks import check_provider_keys
+
+
+def _provider_check_keys(config) -> tuple[str, str, str, str, str]:
+    return (
+        config.anthropic_api_key,
+        config.openai_api_key,
+        config.azure_speech_key,
+        config.azure_speech_region,
+        config.elevenlabs_api_key,
+    )
 
 
 def _verdict_from_probe_entry(entry: dict) -> KeyStatus | None:
@@ -58,27 +69,92 @@ def _record_provider_verdict(state: StationState, probe_result: dict) -> None:
         state.openai_key_checked_at = now
 
 
-async def _run_provider_verdict(app_state) -> None:
-    """Probe configured AI keys and persist the verdict onto StationState.
-
-    Non-blocking by contract: callers schedule this via ``asyncio.create_task`` and
-    never await it, so it can never delay boot or the first audio (Leadership
-    Principle #2). All exceptions are swallowed — a flaky network must never crash
-    startup or a key-save; the status simply stays "unverified".
-    """
+async def _probe_provider_keys(app_state) -> dict:
+    """Share one current-key probe across boot, save, and operator checks."""
     config = app_state.config
-    state = app_state.station_state
+    lock = getattr(app_state, "_provider_check_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app_state._provider_check_lock = lock
+
+    async with lock:
+        keys = _provider_check_keys(config)
+        cached = getattr(app_state, "_provider_check_cached_result", None)
+        if (
+            cached is not None
+            and getattr(app_state, "_provider_check_cached_keys", None) == keys
+            and time.time() - getattr(app_state, "_provider_check_cached_at", 0.0) < 2.0
+        ):
+            return cached
+
+        task = getattr(app_state, "_provider_check_task", None)
+        if getattr(app_state, "_provider_check_task_keys", None) != keys:
+            task = None
+        if task is not None and task.done():
+            try:
+                result = task.result()
+            except BaseException:
+                if getattr(app_state, "_provider_check_task", None) is task:
+                    app_state._provider_check_task = None
+            else:
+                app_state._provider_check_cached_result = result
+                app_state._provider_check_cached_keys = keys
+                app_state._provider_check_cached_at = time.time()
+                app_state._provider_check_task = None
+                return result
+            task = None
+        if task is None:
+            app_state._provider_check_task_keys = keys
+            task = asyncio.create_task(_perform_provider_probe(app_state, keys))
+            app_state._provider_check_task = task
+
+    try:
+        result = await asyncio.shield(task)
+    except BaseException:
+        # A cancelled HTTP waiter must not cancel or orphan the shared probe.
+        if task.done():
+            async with lock:
+                if getattr(app_state, "_provider_check_task", None) is task:
+                    app_state._provider_check_task = None
+        raise
+
+    async with lock:
+        if getattr(app_state, "_provider_check_task", None) is task:
+            app_state._provider_check_cached_result = result
+            app_state._provider_check_cached_keys = keys
+            app_state._provider_check_cached_at = time.time()
+            app_state._provider_check_task = None
+    return result
+
+
+async def _perform_provider_probe(app_state, keys: tuple[str, ...]) -> dict:
+    if keys != _provider_check_keys(app_state.config):
+        # A save can replace the key before this scheduled worker gets CPU time.
+        # The new-key task will do the real check; do not send a second call for it.
+        return {"ok": False, "providers": {}}
+    result = await check_provider_keys(app_state.config)
+    if keys == _provider_check_keys(app_state.config):
+        _record_provider_verdict(app_state.station_state, result)
+    return result
+
+
+def _provider_probe_in_flight(app_state) -> bool:
+    return any(
+        task is not None and not task.done()
+        for task in (
+            getattr(app_state, "provider_verdict_task", None),
+            getattr(app_state, "_provider_check_task", None),
+            getattr(app_state, "_setup_recheck_provider_task", None),
+        )
+    )
+
+
+async def _run_provider_verdict(app_state) -> None:
+    """Schedule a non-blocking shared probe at boot or after a credential save."""
+    config = app_state.config
     if not config.anthropic_api_key and not config.openai_api_key:
         return
-    # Snapshot the keys we're validating. If a concurrent save_keys swaps a key
-    # mid-probe, a late-finishing stale probe must not clobber the fresh verdict —
-    # its sibling save-scheduled probe already owns the new key's result.
-    anthropic_key = config.anthropic_api_key
-    openai_key = config.openai_api_key
     try:
-        result = await check_provider_keys(config)
-    except BaseException:
+        await _probe_provider_keys(app_state)
+    except Exception:
         return
-    if config.anthropic_api_key != anthropic_key or config.openai_api_key != openai_key:
-        return  # key changed mid-flight; the save-scheduled probe owns the verdict now
-    _record_provider_verdict(state, result)

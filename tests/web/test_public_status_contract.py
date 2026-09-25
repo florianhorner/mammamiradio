@@ -164,6 +164,9 @@ async def test_public_status_returns_capabilities():
     for flag in ("llm", "anthropic_key", "openai", "ha", "anthropic_degraded"):
         assert flag in caps, f"capabilities missing flag: {flag}"
         assert isinstance(caps[flag], bool), f"capability {flag} must be bool"
+    assert "openai_degraded" not in caps
+    assert "provider_probe_in_flight" not in caps
+    assert "provider_health" not in body
 
 
 @pytest.mark.asyncio

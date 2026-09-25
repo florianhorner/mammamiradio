@@ -1182,13 +1182,14 @@ async def shutdown():
     if jamendo_start_task:
         jamendo_start_task.cancel()
         tasks_to_cancel.append(jamendo_start_task)
-    # The provider-verdict probe is created outside the producer/playback set
-    # (startup + credential saves); cancel it so it can't mutate station_state
-    # after teardown begins — same write-after-shutdown race as the downloads.
-    verdict_task = getattr(app.state, "provider_verdict_task", None)
-    if verdict_task:
-        verdict_task.cancel()
-        tasks_to_cancel.append(verdict_task)
+    # Boot/save, direct checks, and setup rechecks share one underlying probe.
+    # Cancel every owner on shutdown so the shielded probe cannot write a verdict
+    # after teardown even when an HTTP waiter has already gone away.
+    for task_name in ("provider_verdict_task", "_setup_recheck_provider_task", "_provider_check_task"):
+        provider_task = getattr(app.state, task_name, None)
+        if provider_task and not provider_task.done():
+            provider_task.cancel()
+            tasks_to_cancel.append(provider_task)
     # Resume leaves a slow starter verification running rather than cancelling
     # it mid-request. Teardown is the one place that must, so its late result
     # cannot run eligibility bookkeeping against a station that is shutting down.

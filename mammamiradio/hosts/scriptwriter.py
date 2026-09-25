@@ -25,6 +25,7 @@ from itertools import cycle, pairwise
 from typing import TYPE_CHECKING, Any
 
 import anthropic
+import openai
 
 from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, effort_for, resolve_model
@@ -1049,6 +1050,27 @@ def _get_anthropic_attempt_lock() -> asyncio.Lock:
     return _anthropic_attempt_lock
 
 
+def _trip_openai_script_circuit(state: StationState, key: str, exc: Exception) -> None:
+    """Record a bounded script-provider outage without exposing response text."""
+    status = getattr(exc, "status_code", None)
+    quota = "insufficient_quota" in str(exc).lower() or "billing" in str(exc).lower()
+    transient = status in (429, 500, 502, 503, 504) or isinstance(exc, (openai.APIConnectionError, TimeoutError))
+    if quota:
+        seconds = 600
+    elif status == 429:
+        seconds = _anthropic_transient_backoff_seconds(exc)
+    else:
+        seconds = 20 if transient else 600
+    state.openai_blocked_key = key
+    state.openai_disabled_until = time.time() + seconds
+    state.openai_last_error_at = time.time()
+    state.openai_last_error = f"{type(exc).__name__}: HTTP {status}" if status else type(exc).__name__
+
+
+def _openai_script_blocked(state: StationState, key: str) -> bool:
+    return state.openai_blocked_key == key and state.openai_disabled_until > time.time()
+
+
 async def _generate_json_response(
     *,
     prompt: str,
@@ -1357,12 +1379,20 @@ async def _generate_json_response(
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
         raise RuntimeError("No LLM API key configured for script generation")
+    if state.openai_blocked_key and state.openai_blocked_key != openai_key:
+        state.openai_disabled_until = 0.0
+        state.openai_last_error = ""
+        state.openai_blocked_key = ""
+    if _openai_script_blocked(state, openai_key):
+        raise RuntimeError("OpenAI script provider is temporarily unavailable")
 
     # Resolve the OpenAI model for THIS task's role (not one fixed fallback model),
     # so a transition falls back to the fast OpenAI model and banter to the creative one.
     openai_model = resolve_model(config.models, caller, "openai")
     if not openai_model:
-        raise RuntimeError("No configured OpenAI script model; check model_registry.toml")
+        error = RuntimeError("No configured OpenAI script model; check model_registry.toml")
+        _trip_openai_script_circuit(state, openai_key, error)
+        raise error
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
@@ -1422,7 +1452,22 @@ async def _generate_json_response(
                 return client.chat.completions.create(**kwargs)
 
         t_start = time.perf_counter()
-        resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=oa_timeout)
+        async with state.openai_script_attempt_lock:
+            if _openai_script_blocked(state, openai_key):
+                raise RuntimeError("OpenAI script provider is temporarily unavailable")
+            try:
+                resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=oa_timeout)
+            except Exception as exc:
+                if (
+                    isinstance(exc, (openai.APIStatusError, openai.APIConnectionError, TimeoutError))
+                    and (config.openai_api_key or os.getenv("OPENAI_API_KEY", "")) == openai_key
+                ):
+                    _trip_openai_script_circuit(state, openai_key, exc)
+                raise
+            if (config.openai_api_key or os.getenv("OPENAI_API_KEY", "")) == openai_key:
+                state.openai_disabled_until = 0.0
+                state.openai_last_error = ""
+                state.openai_blocked_key = ""
         latency_ms = int((time.perf_counter() - t_start) * 1000)
         prompt_tokens = 0
         completion_tokens = 0

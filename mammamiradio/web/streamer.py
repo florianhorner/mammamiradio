@@ -118,7 +118,6 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
-from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import (
     addon_options_snippet,
     build_setup_status,
@@ -277,7 +276,10 @@ from mammamiradio.web.persistence import (
     _save_dotenv,
 )
 from mammamiradio.web.provider_verdict import (
-    _record_provider_verdict,
+    _probe_provider_keys,
+    _provider_check_keys,
+    _provider_probe_in_flight,
+    _record_provider_verdict,  # noqa: F401  facade re-export used by route tests
     _run_provider_verdict,
     _verdict_from_probe_entry,
 )
@@ -4970,6 +4972,7 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
     state = request.app.state.station_state
     golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
     provider_health = _provider_health_snapshot(config, state)
+    provider_health["probe_in_flight"] = _provider_probe_in_flight(request.app.state)
     origin = getattr(request.app.state, "first_listen_install_origin", None)
     origin_status = getattr(getattr(origin, "status", None), "value", None) or "unknown"
     setup = build_setup_status(
@@ -5116,6 +5119,8 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
     anthropic_configured = bool(config.anthropic_api_key)
     anthropic_degraded = anthropic_configured and state.anthropic_disabled_until > now
     retry_after = max(0, int(state.anthropic_disabled_until - now)) if anthropic_degraded else 0
+    openai_degraded = bool(config.openai_api_key) and state.openai_disabled_until > now
+    openai_retry_after = max(0, int(state.openai_disabled_until - now)) if openai_degraded else 0
     return {
         "anthropic": {
             "configured": anthropic_configured,
@@ -5128,6 +5133,9 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
         # Keep OpenAI script-key and speech-breaker verdicts separate.
         "openai": {
             "configured": bool(config.openai_api_key),
+            "degraded": openai_degraded,
+            "retry_after_s": openai_retry_after,
+            "last_error": state.openai_last_error if openai_degraded else "",
             "key_status": state.openai_key_status,
         },
         "openai_speech": _voice_provider_health(
@@ -7649,7 +7657,7 @@ async def _run_setup_recheck_provider_check(request: Request) -> bool:
         if configured
     ]
     try:
-        result = await setup_provider_check(request, None)
+        result = await _probe_provider_keys(request.app.state)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # provider I/O must not block setup
@@ -8039,16 +8047,6 @@ async def setup_home_context_choice(request: Request, _: None = Depends(_require
         }
 
 
-def _provider_check_keys(config) -> tuple[str, str, str, str, str]:
-    return (
-        config.anthropic_api_key,
-        config.openai_api_key,
-        config.azure_speech_key,
-        config.azure_speech_region,
-        config.elevenlabs_api_key,
-    )
-
-
 @router.post("/api/setup/provider-check")
 async def setup_provider_check(request: Request, _: None = Depends(_require_active_setup_access)):
     """Run active, secret-safe Anthropic/OpenAI connectivity checks.
@@ -8059,74 +8057,7 @@ async def setup_provider_check(request: Request, _: None = Depends(_require_acti
     _body, error = await _strict_setup_json(request, {})
     if error is not None:
         return error
-    config = request.app.state.config
-
-    def _record_if_task_keys_match(probe_result: dict, task_keys: tuple[str, ...]) -> None:
-        # The verdict must reflect the keys the SHARED in-flight task actually probed,
-        # not this waiter's snapshot. A later request joining an old task after a
-        # concurrent save swapped a key must NOT accept that task's stale 401. Compare
-        # current config to the keys captured when the task was created.
-        if task_keys == _provider_check_keys(config):
-            _record_provider_verdict(request.app.state.station_state, probe_result)
-
-    lock = getattr(request.app.state, "_provider_check_lock", None)
-    if lock is None:
-        lock = asyncio.Lock()
-        request.app.state._provider_check_lock = lock
-
-    async with lock:
-        current_keys = _provider_check_keys(config)
-        cached_at = getattr(request.app.state, "_provider_check_cached_at", 0.0)
-        cached_result = getattr(request.app.state, "_provider_check_cached_result", None)
-        cached_keys = getattr(request.app.state, "_provider_check_cached_keys", None)
-        if cached_result is not None and cached_keys == current_keys and time.time() - cached_at < 2.0:
-            return cached_result
-
-        task = getattr(request.app.state, "_provider_check_task", None)
-        task_keys = current_keys
-        if getattr(request.app.state, "_provider_check_task_keys", None) != current_keys:
-            # A credential save may replace a key while the old probe is active.
-            # Keep its waiter alive, but start a check for the new key below.
-            task = None
-        if task is not None and task.done():
-            # Task finished but result wasn't cached yet (done-but-uncached window).
-            # Cache it now to close the race instead of spawning a second probe.
-            try:
-                result = task.result()
-            except BaseException:
-                request.app.state._provider_check_task = None
-            else:
-                request.app.state._provider_check_cached_result = result
-                request.app.state._provider_check_cached_keys = task_keys
-                request.app.state._provider_check_cached_at = time.time()
-                request.app.state._provider_check_task = None
-                _record_if_task_keys_match(result, task_keys)
-                return result
-            task = None
-        if task is None:
-            # Capture the keys this task probes so the verdict can't be misattributed
-            # to a later config (Codex: snapshot travels with the task, not the waiter).
-            task_keys = current_keys
-            request.app.state._provider_check_task_keys = task_keys
-            task = asyncio.create_task(check_provider_keys(config))
-            request.app.state._provider_check_task = task
-
-    try:
-        result = await task
-    except BaseException:
-        async with lock:
-            if getattr(request.app.state, "_provider_check_task", None) is task:
-                request.app.state._provider_check_task = None
-        raise
-
-    async with lock:
-        if getattr(request.app.state, "_provider_check_task", None) is task:
-            request.app.state._provider_check_cached_result = result
-            request.app.state._provider_check_cached_keys = task_keys
-            request.app.state._provider_check_cached_at = time.time()
-            request.app.state._provider_check_task = None
-    _record_if_task_keys_match(result, task_keys)
-    return result
+    return await _probe_provider_keys(request.app.state)
 
 
 @router.post("/api/setup/save-keys")
@@ -8220,8 +8151,11 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     capabilities["anthropic_key"] = bool(config.anthropic_api_key)
     capabilities["openai"] = bool(config.openai_api_key)
     provider_health = setup_projection["provider_health"]
+    capabilities["provider_probe_in_flight"] = provider_health["probe_in_flight"]
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
+    capabilities["openai_degraded"] = provider_health["openai"]["degraded"]
+    capabilities["openai_retry_after_s"] = provider_health["openai"]["retry_after_s"]
     # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
     # from the time-based `anthropic_degraded`. Lets the admin show a persistent
     # "key not working" state WITHOUT waiting for a banter segment to 401.
@@ -8234,12 +8168,18 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         provider_health["anthropic"]["key_status"] if config.anthropic_api_key else None,
         provider_health["openai"]["key_status"] if config.openai_api_key else None,
     ]
-    # Only steer once the probes have settled: an "unverified" key is still in flight,
-    # so don't nudge "replace your key" while a configured key might yet come back valid.
+    # A completed inconclusive probe needs a retry action; only a definitive
+    # rejection should steer the operator toward replacing a key.
     if "rejected" in statuses and "valid" not in statuses and "unverified" not in statuses:
         result["next_step"] = {
             "key": "fix_llm_key",
             "message": "An AI key isn't working — replace it in Settings to restore AI hosts",
+            "action": "open_settings",
+        }
+    elif "unverified" in statuses and "valid" not in statuses and not provider_health["probe_in_flight"]:
+        result["next_step"] = {
+            "key": "check_ai_connection",
+            "message": "We couldn't confirm the AI connection. Check it again in Settings.",
             "action": "open_settings",
         }
 
@@ -12647,6 +12587,7 @@ async def status(
     payload = _public_status_payload(request)
     runtime_health = _runtime_health_snapshot(request)
     provider_health = _provider_health_snapshot(config, state)
+    provider_health["probe_in_flight"] = _provider_probe_in_flight(request.app.state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     ad_cast = _ad_cast_status_payload(config)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
