@@ -1473,20 +1473,15 @@ def test_admin_home_moment_metadata_rejects_a_stale_cache_bust_token() -> None:
     assert any("does not match manifest sha256 prefix" in error for error in errors), errors
 
 
-def test_admin_home_moment_metadata_rejects_a_chip_on_a_gated_scene() -> None:
-    """Presence alone is not proof.
-
-    An earlier version of this guard asked only whether *a* day-one scene wore
-    the chip. A gated scene wearing one tells a fresh install the laundry works
-    today, which narrow ambient context can never deliver.
-    """
+def test_admin_home_moment_metadata_rejects_a_gated_selected_proof() -> None:
+    """The replaceable slot may only select a scene reachable on day one."""
 
     source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
-        "<h5>The laundry finished. Nobody noticed.</h5>",
-        '<h5>The laundry finished. Nobody noticed. <em class="day-one-chip">day one</em></h5>',
+        "const FIRST_LISTEN_HOME_PROOF_KEY='quiet'",
+        "const FIRST_LISTEN_HOME_PROOF_KEY='laundry'",
     )
     errors = _admin_home_moment_errors(source)
-    assert any("carries a day-one-chip" in error for error in errors), errors
+    assert any("demonstrate only gated capability" in error for error in errors), errors
 
 
 def test_admin_home_moment_metadata_rejects_reachability_swapped_against_the_manifest() -> None:
@@ -1494,35 +1489,19 @@ def test_admin_home_moment_metadata_rejects_reachability_swapped_against_the_man
     source = source.replace(
         'data-explainer-scenario="quiet" data-reachability="day-one"',
         'data-explainer-scenario="quiet" data-reachability="home-grant"',
-    ).replace(
-        'data-explainer-scenario="laundry" data-reachability="home-grant"',
-        'data-explainer-scenario="laundry" data-reachability="day-one"',
     )
     errors = _admin_home_moment_errors(source)
     assert any("scene quiet declares data-reachability 'home-grant'" in e for e in errors), errors
-    assert any("scene laundry declares data-reachability 'day-one'" in e for e in errors), errors
 
 
-def test_admin_home_moment_metadata_rejects_a_chip_outside_the_heading() -> None:
-    """The chip is styled by class alone, so it renders anywhere in the scene.
-
-    An h5-bounded check passed while a reader still saw "day one" on a gated
-    moment; this pins the subtree walk that replaced it.
-    """
-
-    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    for mutation in (
-        (
-            "<h5>The laundry finished. Nobody noticed.</h5>",
-            '<h5>The laundry finished. Nobody noticed.</h5><em class="day-one-chip">day one</em>',
-        ),
-        (
-            '<p class="scene-caption">Washing machine · finished</p>',
-            '<p class="scene-caption">Washing machine · finished <em class="day-one-chip">day one</em></p>',
-        ),
-    ):
-        errors = _admin_home_moment_errors(template.replace(*mutation))
-        assert any("laundry is 'home-grant' but its scene carries a day-one-chip" in e for e in errors), mutation
+def test_admin_home_moment_metadata_requires_one_replaceable_proof_key() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    source = source.replace(
+        "const FIRST_LISTEN_HOME_PROOF_KEY='quiet';",
+        "const FIRST_LISTEN_HOME_PROOF_KEY='quiet';\nconst FIRST_LISTEN_HOME_PROOF_KEY='quiet';",
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("must select exactly one reviewed scene; found 2" in error for error in errors), errors
 
 
 def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
@@ -1536,8 +1515,8 @@ def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
     template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
     errors = _admin_home_moment_errors(
         template.replace(
-            "Sunset was twenty minutes ago, eleven degrees and clear.",
-            "Sunset was ten minutes ago, nine degrees and cloudy.",
+            "Breaking news from the laundry room: it’s done.",
+            "Breaking news from the laundry room: it’s on fire.",
         )
     )
     assert any("quote does not match its manifest quote" in error for error in errors), errors
@@ -1571,16 +1550,13 @@ def test_admin_home_moment_metadata_rejects_an_empty_spoken_noun() -> None:
     assert any("quiet is empty" in error for error in errors), errors
 
 
-def test_admin_home_moment_metadata_rejects_a_missing_chip_and_a_missing_scene() -> None:
+def test_admin_home_moment_metadata_allows_illustration_without_quote_but_requires_scene() -> None:
     template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    stripped = template.replace(' <em class="day-one-chip">day one</em>', "")
-    assert any("carries no day-one-chip" in error for error in _admin_home_moment_errors(stripped))
+    assert 'class="evening-scene"' in template
+    assert _admin_home_moment_errors(template) == []
 
-    start = template.index('<div class="listening-invitation household-scene" data-explainer-scenario="quiet"')
-    end = template.rindex(
-        '<div class="listening-invitation household-scene"', 0, template.index('data-explainer-scenario="laundry"')
-    )
-    errors = _admin_home_moment_errors(template[:start] + template[end:])
+    missing = template.replace('data-explainer-scenario="quiet"', 'data-explainer-scenario="extra"', 1)
+    errors = _admin_home_moment_errors(missing)
     assert any("scenes are missing: quiet" in error for error in errors), errors
 
 

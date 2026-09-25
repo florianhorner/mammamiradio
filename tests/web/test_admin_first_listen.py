@@ -52,8 +52,8 @@ def _ui_first_listen_error_codes() -> set[str]:
 def test_first_listen_is_one_vertical_progressive_path_before_advanced_details() -> None:
     html = _html()
     stages = [
-        'id="firstListenSourceStep"',
         'id="firstListenSpeakerStep"',
+        'id="firstListenSourceStep"',
         'id="firstListenVerifyStep"',
         'id="firstListenPrivacyStep"',
         'id="firstListenAiStep"',
@@ -62,10 +62,12 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
 
     positions = [html.index(stage) for stage in stages]
     assert positions == sorted(positions)
-    assert html.count('class="first-listen-step"') == 4
+    # Three required ritual moments live in the path; the completed Setup view
+    # keeps writing as a fourth, optional step outside that path.
+    assert html.count('class="first-listen-step') == 4
     assert 'id="firstListenPath"' in html
     path = html[html.index('id="firstListenPath"') : html.index('id="firstListenOptional"')]
-    assert path.count('class="first-listen-step"') == 3
+    assert path.count('class="first-listen-step') == 3
     assert 'id="firstListenAiStep"' not in path
     assert "Your ongoing show" in html
     assert (
@@ -78,25 +80,22 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert 'aria-label="Music readiness"' in html
     assert "Music details" in html
     assert 'id="firstListenSourcePreview"' in html
-    assert "Play it here" in html
-    assert "Play my station" in html
-    assert "Can you hear us?" in html
-    assert "I hear you" in html
+    assert "Start my station" in html
+    assert 'id="firstListenVerifyHeading" tabindex="-1">The station is now playing on this device.</h3>' in html
+    assert "I can hear it" in html
+    assert "I can’t hear you" in html
+    assert "Troubleshoot audio" in html
     assert 'id="firstListenPrivacyHeading" tabindex="-1">Make it yours</h3>' in html
     assert "Return to “Can you hear us?”, then review your Home details." in html
-    assert "Give them something new to say." in html
-    assert "Hearing it here is enough to finish setup." in html
-    assert 'id="firstListenHomeAssistantGuide"' in html
-    assert "Home Assistant Community Store (HACS)" in html
-    assert "optional Mamma Mi Radio connection" in html
-    assert "Custom repositories" in html
-    assert "choose Integration as the category" in html
-    assert "github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md" in html
-    assert "Restart Home Assistant" in html
-    assert "Settings → Devices &amp; Services → Add Integration → Mamma Mi Radio" in html
-    assert "Media → Mamma Mi Radio → Mamma Mi Radio Live" in html
-    assert '<p class="progress-line" id="firstListenProgressLine">Step 1 of 3. Next: play it here.</p>' in html
+    assert "Let them surprise you." in html
+    assert "Marco, Giulia, and a record with your name on it." in html
+    assert "Mamma Mi Radio, live from Studio B." in html
+    assert 'id="firstListenHomeAssistantGuide"' not in html
+    assert '<p class="progress-line" id="firstListenProgressLine">Step 1 of 3. Start the station.</p>' in html
     assert "first-listen-current-meta" not in html
+
+    css = _css()
+    assert '#firstListenPath > .first-listen-step:is([data-state="upcoming"], [data-state="complete"])' in css
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
     assert "const current=state==='current'" in step
@@ -143,95 +142,79 @@ def test_last_required_step_keeps_the_rail_while_its_body_is_open() -> None:
     assert "bottom: 0;" in opened
 
 
-def test_step_three_leads_with_a_day_one_moment_and_marks_the_gated_ones() -> None:
-    """Step 3 must demonstrate something a fresh install can actually reach.
-
-    Three of the four scenes need household details narrow mode does not grant
-    (mammamiradio/home/authorization.py), so a stack of only those tells a cold
-    install its setup is unfinished. docs/explainer refuses to build a page in
-    that state; this is the same refusal for the admin journey.
-    """
+def test_step_three_starts_with_one_day_one_scene_and_offers_the_reviewed_pack() -> None:
+    """Evening opens the sequence; subsequent scenes remain click-to-play."""
 
     html = _html()
-    moments = html[html.index('class="home-moments"') : html.index('<div class="guide-audio" data-guide="privacy"')]
+    moments = html[html.index('class="home-moments"') : html.index('id="firstListenConnectionInvite"')]
     assert moments.count("household-scene") == 4
-    # The reachable one leads, so it is read before ~97s of gated demos.
-    assert moments.index('data-explainer-scenario="quiet"') < moments.index('data-explainer-scenario="laundry"')
     assert moments.count('data-reachability="day-one"') == 1
     assert moments.count('data-reachability="home-grant"') == 3
+    assert moments.count("hidden inert") == 3
+    assert "const FIRST_LISTEN_HOME_PROOF_KEY='quiet';" in html
+    assert "FIRST_LISTEN_HOME_EXAMPLE_ORDER=Object.keys(HOUSEHOLD_EXAMPLES)" in html
+    assert "scene.dataset.explainerScenario===key" in html
+    assert 'id="firstListenExampleNextBtn"' in html
+    assert 'id="firstListenExamplePreviousBtn"' in html
+    assert "Laundry, arrivals and coffee aren’t available on new installations yet." in moments
 
 
-def test_the_day_one_marking_lands_on_the_scene_that_is_actually_reachable() -> None:
-    """Counting the markings is not the same as checking which scene wears them.
-
-    A swap that moves `day-one` onto the laundry while quiet still leads would
-    satisfy the counts above and promise a fresh install something narrow ambient
-    context cannot deliver. validate-spoken-assets.py binds these to the manifest;
-    this pins the pairing in the template itself.
-    """
+def test_the_day_one_scene_retains_its_truth_boundary_without_a_badge() -> None:
+    """Reachability is data, not a promotional badge above a staged recording."""
 
     html = _html()
     scenes = dict(
         re.findall(
-            r'data-explainer-scenario="([a-z]+)" data-reachability="([a-z-]+)">\s*<h5>(?:.*?)</h5>',
+            r'data-explainer-scenario="([a-z]+)" data-reachability="([a-z-]+)"[^>]*>\s*<h5[^>]*>(?:.*?)</h5>',
             html,
             re.DOTALL,
         )
     )
     assert scenes == {"quiet": "day-one", "laundry": "home-grant", "arrival": "home-grant", "coffee": "home-grant"}
 
-    # Split on scene boundaries rather than bounding at </h5>: the chip is styled
-    # by class alone, so it renders from anywhere inside the scene.
-    block = html[html.index('class="home-moments"') : html.index('<div class="guide-audio" data-guide="privacy"')]
+    block = html[html.index('class="home-moments"') : html.index('id="firstListenConnectionInvite"')]
     chunks = re.split(r'(?=<div class="listening-invitation household-scene")', block)[1:]
-    chipped = []
-    for chunk in chunks:
-        key = re.search(r'data-explainer-scenario="([a-z]+)"', chunk)
-        assert key is not None, chunk[:120]
-        if "day-one-chip" in chunk:
-            chipped.append(key.group(1))
-    assert chipped == ["quiet"]
     assert len(chunks) == 4
+    assert "day-one-chip" not in block
+    assert "An imagined evening. No details from your home." in chunks[0]
+    assert "Recorded example" in chunks[0]
 
 
-def test_step_three_names_both_gates_before_the_decision_not_after_the_demos() -> None:
-    """A writing key alone does not unlock the household moments.
+def test_step_three_explains_the_proof_boundary_before_asking_for_a_key() -> None:
+    """The staged proof is truthful before the conversion action appears."""
 
-    A fresh install resolves to narrow ambient context, so laundry/arrival/kitchen
-    are out of reach whatever the operator pays for. The copy that qualifies the
-    choice has to precede the choice, or an assistive-tech user commits first and
-    reads the caveat afterwards.
-    """
+    html = _html()
+    proof = html[html.index('id="firstListenHouseholdProof"') : html.index('id="firstListenConnectionInvite"')]
+    invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
+    assert "Your home gives them something to talk about." in proof
+    assert "An imagined evening. No details from your home." in proof
+    assert "Nothing from your home has been read" not in proof  # saved sharing can already be on
+    assert "You choose what they get to know." in invite
+    assert 'class="broadcast-comparison"' in html
+    assert "Your provider bills usage. Home permission comes next." in html
+    assert html.index('id="firstListenHouseholdProof"') < html.index('id="firstListenMakeYoursBtn"')
+
+
+def test_step_three_decision_follows_the_proof_and_is_named_by_outcome() -> None:
+    """The proof earns the key request; privacy remains a direct escape."""
 
     html = _html()
     invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
-    note_start = invite.index("On day one your station knows the sky")
-    note = invite[note_start : invite.index("</p>", note_start)]
-    assert "weather and daylight" in note
-    assert "does not have yet" in note
-    assert "writing service" in note
-    assert invite.index("On day one your station knows the sky") < invite.index("first-listen-decision")
-    assert "isn\u2019t available in this setup yet" not in html
-
-
-def test_step_three_decision_precedes_the_demos_and_is_named_by_outcome() -> None:
-    """Finishing is the primary action and sits above the demo stack.
-
-    "Keep listening" read as a playback control while it committed the Home
-    privacy choice to the server, and it sat under ~2.5 minutes of audio.
-    """
-
-    html = _html()
-    invite = html[html.index('id="firstListenConnectionInvite"') : html.index('id="firstListenHomeChoice"')]
-    assert invite.index('id="firstListenKeepListeningBtn"') < invite.index('class="home-moments"')
-    assert invite.index('id="firstListenMakeYoursBtn"') < invite.index('class="home-moments"')
-    # Finishing needs nothing else, so it carries the primary tone.
-    keep_at = invite.index('id="firstListenKeepListeningBtn"')
-    assert "btn-trigger" in invite[keep_at - 200 : keep_at]
-    assert ">Finish with Home private<" in invite
-    assert ">Add live host writing<" in invite
+    assert html.index('id="firstListenHouseholdProof"') < html.index('id="firstListenConnectionInvite"')
+    assert invite.index('id="firstListenMakeYoursBtn"') < invite.index('id="firstListenKeepListeningBtn"')
+    writing_at = invite.index('id="firstListenMakeYoursBtn"')
+    assert "btn-trigger" in invite[writing_at - 200 : writing_at]
+    assert ">Keep Home private<" in invite
+    assert ">Set up AI and Home<" in invite
     assert ">Keep listening<" not in invite
-    assert ">Make the show yours<" not in invite
+    # One spelling for the private choice, matching the Home-choice button and setup_status.
+    assert "Keep my home private" not in html
+    # Each button names where it goes; the labels that did not must not return.
+    assert "Make it mine" not in html
+    assert "Later — keep listening" not in html
+    assert "choose Later" not in html
+    assert 'id="firstListenProofPrivateBtn"' in html
+    assert 'id="firstListenProofSkipBtn"' in html
 
 
 def test_staged_scene_group_does_not_reuse_the_moment_receipts_label() -> None:
@@ -242,7 +225,7 @@ def test_staged_scene_group_does_not_reuse_the_moment_receipts_label() -> None:
     """
 
     html = _html()
-    assert 'aria-label="Staged example scenes, not your home"' in html
+    assert 'aria-label="Staged household proof, not your home"' in html
     assert html.count('aria-label="Home moments') == 0
 
 
@@ -338,7 +321,7 @@ def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None
     assert "Backup audio is available while music needs attention." in html
     assert "Backup audio can keep the station playing while primary music is repaired." in html
     assert "Backup music" not in html
-    assert "The welcome is ready, but music cannot continue afterward yet." in html
+    assert "The station opening is ready, but music cannot continue afterward yet." in html
     assert "source.transport_audible" not in html
     cue = _function("firstListenListeningCue", "renderFirstListenProgress")
     assert "if(healthy)" in cue
@@ -371,9 +354,10 @@ def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> Non
         "{heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)" in html
     )
     assert "media-source://mammamiradio/live" in html
-    assert "Play my station" in html
-    assert "I hear you" in html
-    assert "No sound yet" in html
+    assert "Start my station" in html
+    assert "I can hear it" in html
+    assert ">I can’t hear you<" in html
+    assert "Troubleshoot audio" in html
     audio_tag = re.search(r'<audio id="firstListenStationAudio"[^>]*>', html)
     assert audio_tag is not None
     assert 'preload="none"' in audio_tag.group(0)
@@ -402,7 +386,7 @@ def test_home_assistant_labels_are_added_with_text_content() -> None:
     assert ".innerHTML" not in preview_block
 
 
-def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
+def test_privacy_preview_is_explicit_and_independent_of_writing() -> None:
     html = _html()
     privacy = html.index('id="firstListenPrivacyStep"')
     ai = html.index('id="firstListenAiStep"')
@@ -415,16 +399,16 @@ def test_privacy_preview_is_explicit_and_precedes_optional_ai() -> None:
     assert "toggleHouseholdExample('coffee',this)" in html
     assert "home_moments" in html
     assert "We won’t request Home details unless you ask for a preview." in html
-    assert "Keep Home private and we request nothing." in html
-    assert "preview exactly what the hosts would receive, then decide." in html
+    assert "Nothing goes to a writing service until you agree." in html
+    assert "Preview the details. You decide what goes on air." in html
     assert "apiResponse('POST','/api/setup/home-context-preview',{},FIRST_LISTEN_TIMEOUTS.preview)" in html
     assert (
         "apiResponse('PATCH','/api/setup/home-context-choice',{enabled:requestedEnabled},FIRST_LISTEN_TIMEOUTS.privacy)"
         in html
     )
     assert "Keep Home private" in html
-    assert "See what the hosts would receive" in html
-    assert "Let Marco and Giulia use these details" in html
+    assert "Preview my Home" in html
+    assert "Share these details" in html
 
     keep_private = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert "loadHomeContextPreview" not in keep_private
@@ -449,10 +433,7 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     assert "listenComplete?'complete':receiptRepairRequired||listenAccepted?'current':'upcoming'" in progress
     assert "privacyMilestone?'complete':existingPrivacyReview||listenComplete?'current':'upcoming'" in progress
     assert "firstListenSetStep('firstListenAiStep','optional')" in progress
-    assert (
-        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
-        in progress
-    )
+    assert "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving;" in progress
     assert "You do not need to play the station again." in progress
     assert "Your existing listening check still stands. Review your Home details next." in progress
 
@@ -644,8 +625,8 @@ def test_discovery_and_privacy_preview_require_canonical_detached_envelopes() ->
 
 def test_no_ai_key_is_needed_for_first_audio() -> None:
     html = _html()
-    assert "Those studio recordings play without a key." in html
-    assert "No keys needed to start listening" in html
+    assert "Without a writing key: music and recorded host moments." in html
+    assert "Skip AI, choose Home details" in html
     assert "Hear the studio voices" in html
     assert "Hear the free voices" in html
     ai_body = re.search(r'<div class="first-listen-body"[^>]*id="firstListenAiBody"[^>]*>', html)
@@ -654,10 +635,7 @@ def test_no_ai_key_is_needed_for_first_audio() -> None:
     assert 'aria-hidden="true"' in ai_body.group(0)
     assert "inert" in ai_body.group(0)
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    assert (
-        "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving||(!privacyMilestone&&projection.haAccess)"
-        in progress
-    )
+    assert "aiFieldset.disabled=!projection.showAi||_firstListenUi.keySaving;" in progress
     assert "filter(e=>e.key==='llm_keys')" in progress
     assert "firstListenSetStep('firstListenAiStep','optional')" in progress
     assert "renderFirstListenConnection()" in progress
@@ -670,10 +648,10 @@ def test_no_ai_key_is_needed_for_first_audio() -> None:
     save = _function("setupSaveKeys", "copySetupSnippet")
     assert "setupAnthropicKey" in fields
     assert "setupOpenaiKey" in fields
-    assert "save.disabled=_firstListenUi.keySaving||!hasInput" in update
+    assert "save.disabled=_firstListenUi.keySaving||_firstListenUi.connectionChecking||!hasInput" in update
     assert "firstListenKeyFields()" in save
     assert "apiResponse('POST','/api/setup/save-keys',payload,FIRST_LISTEN_TIMEOUTS.privacy)" in save
-    assert "Saved keys stay hidden." in html
+    assert 'type="password" placeholder="Leave blank to keep saved key"' in html
     assert "Leave a field empty to keep its current value." in html
     assert html.count('placeholder="Leave blank to keep saved key"') == 4
 
@@ -839,11 +817,11 @@ def test_first_listen_controls_have_accessible_busy_and_mobile_contracts() -> No
 def test_first_listen_uses_truthful_action_copy() -> None:
     html = _html()
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    for copy in ("Take your seat", "Play my station", "Music details", "Review playback",
+    for copy in ("Start my station", "Music details", "Review playback",
                  "Review sound check", "Review privacy choice", "Review AI setup"):  # fmt: skip
         assert copy in html
-    for copy in ("Play my station again", "firstListenSetChip('firstListenSpeakerChip','idle','Your turn')",
-                 "Tap Play my station to hear it on this device."):  # fmt: skip
+    for copy in ("Start my station again", "firstListenSetChip('firstListenSpeakerChip','idle','Your turn')",
+                 "Start the station here. Marco and Giulia’s opening flows straight into live radio."):  # fmt: skip
         assert copy in progress
     assert "Play the station" not in html
 
@@ -1072,6 +1050,72 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
     assert "const reviewingPrivacy=_firstListenUi.reviewStep==='privacy'" in choice
     assert "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy" in choice
     assert "_firstListenUi.showSuccess=showCelebration" in choice
+
+
+def test_home_cue_progress_is_consent_gated_and_evidence_derived() -> None:
+    """Cue progress projects the latest /status poll; it is never a receipt."""
+    html = _html()
+    element = '<p class="success-destinations" id="firstListenCueProgress" role="status" aria-live="polite" hidden></p>'
+    assert html.count('id="firstListenCueProgress"') == 1
+    surface = html[html.index('id="firstListenSuccess"') : html.index('id="firstListenLiveRegion"')]
+    assert element in surface
+    # The line sits with the listener action, not inside the collapsed receipt.
+    assert surface.index(element) < surface.index('class="success-saved"')
+
+    copy_start = html.index("const FIRST_LISTEN_CUE_PROGRESS={")
+    copy = html[copy_start : html.index("\n};", copy_start)]
+    for line in (
+        "streamed:'A Home cue reached the stream during this station session.'",
+        "queued:'A Home cue is queued for a future host break.'",
+        "waiting:'Waiting for a Home cue. Keep listening, or check Home Assistant "
+        "and your writing connection in setup.'",
+        "unavailable:'We can’t check Home-cue progress right now. Wait a moment; we’ll check again.'",
+    ):
+        assert line in copy
+    # Stream evidence is not proof that a person heard anything.
+    assert "heard" not in copy.lower()
+
+    render = _function("renderFirstListenCueProgress", "updateFirstListenSuccess")
+    gate = (
+        "const shared=Boolean(_firstListenUi.showSuccess)&&projection.privacyReviewed&&projection.privacyEnabled"
+        "&&!_firstListenUi.privacySaving&&_firstListenUi.privacyReceiptChoice===null"
+    )
+    assert gate in render
+    closed = "if(!shared){el.hidden=true;firstListenSetStatus('firstListenCueProgress','');return;}"
+    assert closed in render
+    # A closed gate returns before any counter is read, so leftovers never render.
+    assert render.index(closed) < render.index("_st?.ha_details?.home_context_director")
+    assert "const count=value=>Number.isInteger(value)&&value>=0" in render
+    precedence = (
+        "_firstListenUi.cueStatusFailed||!count(activated)||!count(reserved)?'unavailable'"
+        ":activated>0?'streamed':reserved>0?'queued':'waiting'"
+    )
+    assert precedence in render
+    assert "eligible_count" not in render
+    assert "if(typeof pollFailed==='boolean')_firstListenUi.cueStatusFailed=pollFailed" in render
+    # No latch, no request, no focus move, no audio ownership change.
+    for forbidden in (
+        "fetch(",
+        "api(",
+        "apiResponse(",
+        "focus(",
+        "localStorage",
+        "sessionStorage",
+        "stopFirstListenStationAudio()",
+        "FIRST_LISTEN_STREAM",
+        "/api/trigger",
+    ):
+        assert forbidden not in render, forbidden
+    assert html.count("cueStatusFailed") == 3
+
+    update = _function("updateFirstListenSuccess", "reviewFirstListenChoices")
+    assert update.index("renderFirstListenCueProgress();") < update.index("if(!show){")
+
+    polling = html[html.index("async function refreshFast(){") : html.index("const SLOW_POLL_DEADLINE_MS")]
+    assert "markFastStatusStale();\n    renderFirstListenCueProgress(true);" in polling
+    assert "_st=nextStatus;\n  markFastStatusFresh();\n  renderFirstListenCueProgress(false);" in polling
+    assert polling.index("renderFirstListenCueProgress(false);") < polling.index("renderProduction(_st);")
+    assert polling.count("fetchAdminJson(") == 3
 
 
 def test_setup_alert_uses_canonical_onboarding_requirement_not_optional_ai_todos() -> None:
