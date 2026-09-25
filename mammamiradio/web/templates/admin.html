@@ -7407,13 +7407,24 @@ function renderSetup(setup){
   _lastSetupJson=_json;
 }
 async function setupRecheck(el){
+  if(el?.disabled)return;
   flash(el);
   const focusSource=document.body.dataset.firstListenFocus==='source';
   delete document.body.dataset.firstListenFocus;
-  const data=await api('POST','/api/setup/recheck',{});
-  renderSetup(data);
-  if(focusSource)setTimeout(()=>focusFirstListenStep('source'),50);
-  toast('Configuration re-check complete');
+  if(el){el.disabled=true;el.setAttribute('aria-busy','true');}
+  try{
+    const {response,payload:data}=await apiResponse('POST','/api/setup/recheck',{},FIRST_LISTEN_TIMEOUTS.verify);
+    if(!response.ok||!data?.guided_setup)throw new Error('recheck_unconfirmed');
+    renderSetup(data);
+    if(focusSource)setTimeout(()=>focusFirstListenStep('source'),50);
+    if(data.provider_check_pending)toast('Music checked. AI connection check continues; the result will appear here.');
+    else if(data.provider_check_failed)toast('Music checked. We couldn’t confirm the AI connection. Try again.');
+    else toast('Configuration re-check complete');
+  }catch(_){
+    toast('We couldn’t finish the check. Check your connection, then try again.');
+  }finally{
+    if(el){el.disabled=false;el.removeAttribute('aria-busy');}
+  }
 }
 async function checkFirstListenConnection(){
   if(_firstListenUi.keySaving||_firstListenUi.connectionChecking||firstListenKeyValues().some(Boolean))return;

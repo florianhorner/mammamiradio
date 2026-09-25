@@ -7608,16 +7608,38 @@ async def setup_recheck(request: Request, _: None = Depends(_require_active_setu
     _body, error = await _strict_setup_json(request, {})
     if error is not None:
         return error
+    app_state = request.app.state
+    keys = _provider_check_keys(app_state.config)
+    task = getattr(app_state, "_setup_recheck_provider_task", None)
+    if task is None or task.done() or getattr(app_state, "_setup_recheck_provider_task_keys", None) != keys:
+        task = asyncio.create_task(_run_setup_recheck_provider_check(request))
+        app_state._setup_recheck_provider_task = task
+        app_state._setup_recheck_provider_task_keys = keys
     try:
-        # Reuse the shared provider-check coordinator so a manual recheck cannot
-        # launch a second probe beside the visible "Check AI connection" action.
+        await asyncio.wait_for(asyncio.shield(task), timeout=_SETUP_RECHECK_PROVIDER_WAIT_SECONDS)
+    except TimeoutError:
+        pass
+    await _wait_for_first_listen_bootstrap(app_state)
+    setup = _setup_projection(request, force_refresh=True)["setup"]
+    setup["provider_check_pending"] = not task.done()
+    setup["provider_check_failed"] = task.done() and not task.result()
+    return setup
+
+
+_SETUP_RECHECK_PROVIDER_WAIT_SECONDS = 2.0
+
+
+async def _run_setup_recheck_provider_check(request: Request) -> bool:
+    # The shared coordinator owns the outbound probe. Keep this waiter alive after
+    # the short response budget so its eventual result still updates the verdict.
+    try:
         await setup_provider_check(request, None)
     except asyncio.CancelledError:
         raise
-    except Exception as exc:  # pragma: no cover - setup refresh must not block on provider I/O
+    except Exception as exc:  # provider I/O must not block setup
         logger.debug("Setup recheck provider probe failed: %s", exc)
-    await _wait_for_first_listen_bootstrap(request.app.state)
-    return _setup_projection(request, force_refresh=True)["setup"]
+        return False
+    return True
 
 
 @router.post("/api/setup/first-listen/players")
@@ -8000,6 +8022,16 @@ async def setup_home_context_choice(request: Request, _: None = Depends(_require
         }
 
 
+def _provider_check_keys(config) -> tuple[str, str, str, str, str]:
+    return (
+        config.anthropic_api_key,
+        config.openai_api_key,
+        config.azure_speech_key,
+        config.azure_speech_region,
+        config.elevenlabs_api_key,
+    )
+
+
 @router.post("/api/setup/provider-check")
 async def setup_provider_check(request: Request, _: None = Depends(_require_active_setup_access)):
     """Run active, secret-safe Anthropic/OpenAI connectivity checks.
@@ -8012,19 +8044,12 @@ async def setup_provider_check(request: Request, _: None = Depends(_require_acti
         return error
     config = request.app.state.config
 
-    def _record_if_task_keys_match(probe_result: dict) -> None:
+    def _record_if_task_keys_match(probe_result: dict, task_keys: tuple[str, ...]) -> None:
         # The verdict must reflect the keys the SHARED in-flight task actually probed,
         # not this waiter's snapshot. A later request joining an old task after a
         # concurrent save swapped a key must NOT accept that task's stale 401. Compare
         # current config to the keys captured when the task was created.
-        snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
-        if snapshot == (
-            config.anthropic_api_key,
-            config.openai_api_key,
-            config.azure_speech_key,
-            config.azure_speech_region,
-            config.elevenlabs_api_key,
-        ):
+        if task_keys == _provider_check_keys(config):
             _record_provider_verdict(request.app.state.station_state, probe_result)
 
     lock = getattr(request.app.state, "_provider_check_lock", None)
@@ -8033,12 +8058,19 @@ async def setup_provider_check(request: Request, _: None = Depends(_require_acti
         request.app.state._provider_check_lock = lock
 
     async with lock:
+        current_keys = _provider_check_keys(config)
         cached_at = getattr(request.app.state, "_provider_check_cached_at", 0.0)
         cached_result = getattr(request.app.state, "_provider_check_cached_result", None)
-        if cached_result is not None and time.time() - cached_at < 2.0:
+        cached_keys = getattr(request.app.state, "_provider_check_cached_keys", None)
+        if cached_result is not None and cached_keys == current_keys and time.time() - cached_at < 2.0:
             return cached_result
 
         task = getattr(request.app.state, "_provider_check_task", None)
+        task_keys = current_keys
+        if getattr(request.app.state, "_provider_check_task_keys", None) != current_keys:
+            # A credential save may replace a key while the old probe is active.
+            # Keep its waiter alive, but start a check for the new key below.
+            task = None
         if task is not None and task.done():
             # Task finished but result wasn't cached yet (done-but-uncached window).
             # Cache it now to close the race instead of spawning a second probe.
@@ -8048,21 +8080,17 @@ async def setup_provider_check(request: Request, _: None = Depends(_require_acti
                 request.app.state._provider_check_task = None
             else:
                 request.app.state._provider_check_cached_result = result
+                request.app.state._provider_check_cached_keys = task_keys
                 request.app.state._provider_check_cached_at = time.time()
                 request.app.state._provider_check_task = None
-                _record_if_task_keys_match(result)
+                _record_if_task_keys_match(result, task_keys)
                 return result
             task = None
         if task is None:
             # Capture the keys this task probes so the verdict can't be misattributed
             # to a later config (Codex: snapshot travels with the task, not the waiter).
-            request.app.state._provider_check_task_keys = (
-                config.anthropic_api_key,
-                config.openai_api_key,
-                config.azure_speech_key,
-                config.azure_speech_region,
-                config.elevenlabs_api_key,
-            )
+            task_keys = current_keys
+            request.app.state._provider_check_task_keys = task_keys
             task = asyncio.create_task(check_provider_keys(config))
             request.app.state._provider_check_task = task
 
@@ -8077,9 +8105,10 @@ async def setup_provider_check(request: Request, _: None = Depends(_require_acti
     async with lock:
         if getattr(request.app.state, "_provider_check_task", None) is task:
             request.app.state._provider_check_cached_result = result
+            request.app.state._provider_check_cached_keys = task_keys
             request.app.state._provider_check_cached_at = time.time()
             request.app.state._provider_check_task = None
-    _record_if_task_keys_match(result)
+    _record_if_task_keys_match(result, task_keys)
     return result
 
 
@@ -8137,6 +8166,9 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
         await loop.run_in_executor(None, _save_dotenv, updates)
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
+    # Even saving the same key resets its verdict, so a previous probe result
+    # must not short-circuit the next explicit connection check.
+    request.app.state._provider_check_cached_result = None
 
     # Re-validate the freshly-saved key in the background so the admin reflects a bogus
     # key WITHOUT waiting for a banter segment to fail. Applies to EVERY credential-save

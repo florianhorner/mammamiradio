@@ -6378,6 +6378,136 @@ async def test_setup_recheck_runs_shared_provider_probe():
     assert response.status_code == 200
     probe.assert_awaited_once_with(app.state.config)
     assert app.state.station_state.anthropic_key_status == "valid"
+    assert response.json()["provider_check_pending"] is False
+    assert response.json()["provider_check_failed"] is False
+
+
+@pytest.mark.asyncio
+async def test_setup_recheck_probes_key_saved_during_cache_window():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "old-test-key"
+    probe_results = [_probe_payload(anthropic="auth"), _probe_payload(anthropic="ok")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()),
+        patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=probe_results)) as probe,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
+            assert app.state.station_state.anthropic_key_status == "rejected"
+            saved = await client.post(
+                "/api/setup/save-keys",
+                headers=ACTIVE_SETUP_HEADERS,
+                json={"ANTHROPIC_API_KEY": "new-test-key"},
+            )
+            assert saved.status_code == 200
+            assert app.state.station_state.anthropic_key_status == "unverified"
+            recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+            await app.state.provider_verdict_task
+
+    assert recheck.status_code == 200
+    assert recheck.json()["provider_check_pending"] is False
+    assert app.state.station_state.anthropic_key_status == "valid"
+    assert probe.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_setup_recheck_starts_new_probe_when_old_key_probe_is_in_flight():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "old-test-key"
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def probe(_config):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            return _probe_payload(anthropic="auth")
+        return _probe_payload(anthropic="ok")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()),
+        patch("mammamiradio.web.streamer.check_provider_keys", new=probe),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            old_request = asyncio.create_task(
+                client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
+            )
+            await started.wait()
+            await client.post(
+                "/api/setup/save-keys",
+                headers=ACTIVE_SETUP_HEADERS,
+                json={"ANTHROPIC_API_KEY": "new-test-key"},
+            )
+            recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+            assert recheck.status_code == 200
+            assert app.state.station_state.anthropic_key_status == "valid"
+            release.set()
+            await old_request
+            await app.state.provider_verdict_task
+
+    assert calls == 2
+    assert app.state.station_state.anthropic_key_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_setup_recheck_returns_while_slow_provider_probe_finishes_in_background():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_probe(_config):
+        started.set()
+        await release.wait()
+        return _probe_payload(anthropic="ok")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._SETUP_RECHECK_PROVIDER_WAIT_SECONDS", 0.01),
+        patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await asyncio.wait_for(
+                client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={}), timeout=1
+            )
+            assert started.is_set()
+            assert response.status_code == 200
+            assert response.json()["provider_check_pending"] is True
+            repeated = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+            assert repeated.json()["provider_check_pending"] is True
+            probe.assert_awaited_once()
+            release.set()
+            await app.state._setup_recheck_provider_task
+
+    assert app.state.station_state.anthropic_key_status == "valid"
+
+
+@pytest.mark.asyncio
+async def test_setup_recheck_reports_provider_probe_failure():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.web.streamer.check_provider_keys",
+        new=AsyncMock(side_effect=RuntimeError("probe failed")),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+
+    assert response.status_code == 200
+    assert response.json()["provider_check_pending"] is False
+    assert response.json()["provider_check_failed"] is True
+    assert app.state.station_state.anthropic_key_status == "unverified"
 
 
 @pytest.mark.asyncio
