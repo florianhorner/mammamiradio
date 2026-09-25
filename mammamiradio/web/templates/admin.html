@@ -1509,6 +1509,10 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
 .producer-header .a-brand img { width: 36px; height: 36px; }
 .producer-header .a-brand .wm { font-size: 30px; }
 .producer-header .a-brand .sub { color: var(--muted); }
+.producer-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.producer-listener-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--cream); font-size: 13px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.producer-listener-link:hover { border-color: var(--sun); color: var(--sun); }
+.producer-listener-link:focus-visible { outline: 2px solid var(--sun); outline-offset: 3px; }
 .producer-clock {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1783,6 +1787,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
 @media (max-width: 600px) {
   .producer-header { flex-direction: column; align-items: flex-start; }
+  .producer-header-actions { margin-left: 0; flex-wrap: wrap; }
   .producer-clock { text-align: left; }
   .producer-header .a-brand .wm { font-size: 25px; }
   .producer-sticky-strip { top: 0; }
@@ -2016,7 +2021,10 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
         </div>
         <span class="sr-only">Regia — Control Room · Producer Desk</span>
       </div>
-      <button type="button" class="first-listen-station-controls" onclick="openFirstListenStation()">Station controls</button>
+      <div class="producer-header-actions">
+        <button type="button" class="first-listen-station-controls" onclick="openFirstListenStation()">Station controls</button>
+        <a class="producer-listener-link" id="listener-view-link" href="/listen" onclick="openListenerView(event)">Listener view</a>
+      </div>
       <div class="producer-clock">
         <div id="contentClock">—</div>
         <div>active for <b id="sidebarUptime">—</b></div>
@@ -5086,6 +5094,11 @@ function setupRow(label, detail, status){
 function openListener(){
   window.open((_base||'')+'/listen','_blank','noopener');
 }
+function openListenerView(event){
+  if(_firstListenPlayback.phase==='idle')return;
+  event.preventDefault();
+  openFirstListenListener();
+}
 let _lastJamendoAnnouncementKey='';
 let _jamendoFormDirty=false;
 let _jamendoReplaceMode=false;
@@ -6028,6 +6041,7 @@ function mmrConnectListener(view){
   return {
     play:()=>{if(active()&&(!_firstListenPlayback.intent||_firstListenPlayback.phase==='interrupted'))return toggleFirstListenStation();},
     pause:()=>{if(active()&&(_firstListenPlayback.intent||!firstListenStationAudio().paused))stopFirstListenStationAudio();},
+    openAdmin:()=>{if(!active())return false;openFirstListenStation();return true;},
     metadata:data=>{if(active()&&'mediaSession' in navigator)try{navigator.mediaSession.metadata=new MediaMetadata(data);}catch(_){}},
     subscribe:notify=>{
       if(!active())return()=>{};
