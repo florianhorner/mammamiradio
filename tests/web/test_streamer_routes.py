@@ -6364,6 +6364,23 @@ async def test_setup_status_and_recheck_share_projection():
 
 
 @pytest.mark.asyncio
+async def test_setup_recheck_runs_shared_provider_probe():
+    """A manual setup recheck must refresh the AI verdict through the shared probe."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "sk-ant-test"
+    probe_payload = _probe_payload(anthropic="ok")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+
+    assert response.status_code == 200
+    probe.assert_awaited_once_with(app.state.config)
+    assert app.state.station_state.anthropic_key_status == "valid"
+
+
+@pytest.mark.asyncio
 async def test_active_setup_recheck_requires_csrf_and_exact_empty_json_on_loopback():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

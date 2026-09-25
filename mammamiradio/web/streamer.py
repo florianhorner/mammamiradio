@@ -7604,10 +7604,18 @@ async def setup_status(request: Request, _: None = Depends(_require_active_setup
 
 @router.post("/api/setup/recheck")
 async def setup_recheck(request: Request, _: None = Depends(_require_active_setup_access)):
-    """Force a fresh setup snapshot."""
+    """Force a fresh setup snapshot and refresh configured AI-key verdicts."""
     _body, error = await _strict_setup_json(request, {})
     if error is not None:
         return error
+    try:
+        # Reuse the shared provider-check coordinator so a manual recheck cannot
+        # launch a second probe beside the visible "Check AI connection" action.
+        await setup_provider_check(request, None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pragma: no cover - setup refresh must not block on provider I/O
+        logger.debug("Setup recheck provider probe failed: %s", exc)
     await _wait_for_first_listen_bootstrap(request.app.state)
     return _setup_projection(request, force_refresh=True)["setup"]
 
