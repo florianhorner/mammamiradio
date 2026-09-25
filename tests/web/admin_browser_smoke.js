@@ -796,6 +796,14 @@ async (page) => {
         openai_key_status: 'unverified',
         provider_probe_in_flight: true,
       },
+      rejectedInconclusive: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'rejected',
+        openai: true,
+        openai_key_status: 'unverified',
+        provider_probe_in_flight: false,
+      },
       backupWithRejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: true, openai_key_status: 'rejected' },
       degradedUnverified: {
         script_llm: true,
@@ -842,6 +850,7 @@ async (page) => {
   assert(hostPipelineStates.rejected.state === 'blocked', `rejected AI provider was not blocked: ${JSON.stringify(hostPipelineStates.rejected)}`);
   assert(hostPipelineStates.rejectedDegraded.state === 'blocked', `rejected AI provider was masked by cooldown: ${JSON.stringify(hostPipelineStates.rejectedDegraded)}`);
   assert(hostPipelineStates.rejectedChecking.state === 'working', `unverified fallback provider was masked by rejection: ${JSON.stringify(hostPipelineStates.rejectedChecking)}`);
+  assert(hostPipelineStates.rejectedInconclusive.state === 'degraded', `inconclusive second provider was treated as another rejected key: ${JSON.stringify(hostPipelineStates.rejectedInconclusive)}`);
   assert(hostPipelineStates.backupWithRejected.state === 'degraded', `valid provider cooldown was masked by rejected fallback: ${JSON.stringify(hostPipelineStates.backupWithRejected)}`);
   assert(
     hostPipelineStates.degradedUnverified.state === 'degraded',

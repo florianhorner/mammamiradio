@@ -240,7 +240,7 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         "label:'AI key needs attention'",
     ):
         assert expected in hosts
-    assert "statuses.includes('rejected')&&!statuses.includes('valid')" in hosts
+    assert "statuses.length&&statuses.every(status=>status==='rejected')" in hosts
     # A known-degraded, non-rejected Anthropic must win outright before any pending-probe
     # check — otherwise an UNRELATED provider's own still-resolving probe (e.g. OpenAI
     # sitting at 'unverified' because it hasn't been checked yet) masks a fact we already
@@ -259,7 +259,7 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         "anthropicPendingUnresolved||openaiPendingUnresolved"
     )
     assert hosts.index("anthropicPendingUnresolved||openaiPendingUnresolved") < hosts.index(
-        "statuses.includes('rejected')"
+        "statuses.length&&statuses.every(status=>status==='rejected')"
     )
     assert "usableOpenAi||usableAnthropic" in hosts
     assert "openaiStatus==='valid'&&!c.openai_degraded" in hosts

@@ -309,6 +309,22 @@ def test_guided_setup_valid_second_key_wins_over_rejected_key():
     assert guided["ai_hosts"]["status"] == "ready"
 
 
+def test_guided_setup_rejected_and_inconclusive_keys_request_another_check():
+    config = load_config()
+    config.anthropic_api_key = "sk-ant"
+    config.openai_api_key = "sk-openai"
+    provider_health = {
+        "probe_in_flight": False,
+        "anthropic": {"key_status": "rejected"},
+        "openai": {"key_status": "unverified"},
+    }
+
+    guided = build_guided_setup(config, _real_state(), provider_health=provider_health)
+
+    assert guided["ai_hosts"]["status"] == "degraded"
+    assert guided["ai_hosts"]["action"] == "check_ai_connection"
+
+
 def test_guided_setup_connected_home_requires_safe_context():
     config = load_config()
     config.anthropic_api_key = "sk-ant"

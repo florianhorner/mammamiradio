@@ -4794,7 +4794,7 @@ function pipelineHostStatus(c){
   if(c.provider_probe_in_flight&&(anthropicPendingUnresolved||openaiPendingUnresolved)){
     return checkingAiHosts;
   }
-  if(statuses.includes('rejected')&&!statuses.includes('valid')){
+  if(statuses.length&&statuses.every(status=>status==='rejected')){
     return{
       state:'blocked',
       label:'AI key needs attention',
