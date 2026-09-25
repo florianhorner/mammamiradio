@@ -277,7 +277,7 @@ from mammamiradio.web.persistence import (
 )
 from mammamiradio.web.provider_verdict import (
     _probe_provider_keys,
-    _provider_check_keys,
+    _provider_check_identity,
     _provider_probe_in_flight,
     _record_provider_verdict,  # noqa: F401  facade re-export used by route tests
     _run_provider_verdict,
@@ -7618,7 +7618,7 @@ async def setup_recheck(request: Request, _: None = Depends(_require_active_setu
     if error is not None:
         return error
     app_state = request.app.state
-    keys = _provider_check_keys(app_state.config)
+    keys = _provider_check_identity(app_state)
     task = getattr(app_state, "_setup_recheck_provider_task", None)
     if task is None or task.done() or getattr(app_state, "_setup_recheck_provider_task_keys", None) != keys:
         task = asyncio.create_task(_run_setup_recheck_provider_check(request))
@@ -7650,9 +7650,6 @@ async def _run_setup_recheck_provider_check(request: Request) -> bool:
         for provider, configured in (
             ("anthropic", config.anthropic_api_key),
             ("openai_chat", config.openai_api_key),
-            ("openai_tts", config.openai_api_key),
-            ("azure_speech", config.azure_speech_key and config.azure_speech_region),
-            ("elevenlabs_tts", config.elevenlabs_api_key),
         )
         if configured
     ]
@@ -8114,8 +8111,8 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
         await loop.run_in_executor(None, _save_dotenv, updates)
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
-    # Even saving the same key resets its verdict, so a previous probe result
-    # must not short-circuit the next explicit connection check.
+    request.app.state._provider_check_generation = getattr(request.app.state, "_provider_check_generation", 0) + 1
+    # A save invalidates cached results, even when the key is unchanged.
     request.app.state._provider_check_cached_result = None
 
     # Re-validate the freshly-saved key in the background so the admin reflects a bogus

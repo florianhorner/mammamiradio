@@ -293,6 +293,8 @@ def test_guided_setup_openai_breaker_overrides_old_valid_key():
     guided = build_guided_setup(config, _real_state(), provider_health=provider_health)
 
     assert guided["ai_hosts"]["status"] == "degraded"
+    assert guided["ai_hosts"]["action"] == "review"
+    assert "reconnect" in guided["ai_hosts"]["detail"]
 
 
 def test_guided_setup_valid_second_key_wins_over_rejected_key():

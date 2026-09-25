@@ -420,6 +420,9 @@ def build_guided_setup(
     home_ready = home_availability.home_context_ready
     stream_status = _stream_status(config, state, golden_path)
     ai_status = _llm_key_status(config, provider_health)
+    ai_retrying = ai_status == "degraded" and any(
+        (provider_health or {}).get(provider, {}).get("degraded") for provider in ("anthropic", "openai")
+    )
     home_status = _legacy_home_context_status(has_llm, home_availability)
 
     source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
@@ -454,7 +457,7 @@ def build_guided_setup(
             "missing": "Add one AI host key.",
             "checking": "Checking the AI connection.",
             "rejected": "The AI key needs replacing.",
-            "degraded": "The AI connection needs a check.",
+            "degraded": "AI hosts are taking a break." if ai_retrying else "The AI connection needs a check.",
         }[ai_status],
         "detail": (
             "Anthropic or OpenAI can generate live host breaks."
@@ -465,6 +468,8 @@ def build_guided_setup(
             if ai_status == "checking"
             else "Open Settings and replace the key. Included host clips keep the show going."
             if ai_status == "rejected"
+            else "Included host clips keep the show going while AI hosts reconnect. Check Settings if this continues."
+            if ai_retrying
             else "Open Settings and check the AI connection again. Included host clips keep the show going."
         ),
         "action": {
@@ -472,7 +477,7 @@ def build_guided_setup(
             "missing": "add_ai_key",
             "checking": "review",
             "rejected": "replace_ai_key",
-            "degraded": "check_ai_connection",
+            "degraded": "review" if ai_retrying else "check_ai_connection",
         }[ai_status],
     }
     home_headline, home_detail = _home_context_copy(config, home_status)

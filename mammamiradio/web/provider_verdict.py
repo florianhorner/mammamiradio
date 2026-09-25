@@ -29,6 +29,10 @@ def _provider_check_keys(config) -> tuple[str, str, str, str, str]:
     )
 
 
+def _provider_check_identity(app_state) -> tuple:
+    return (*_provider_check_keys(app_state.config), getattr(app_state, "_provider_check_generation", 0))
+
+
 def _verdict_from_probe_entry(entry: dict) -> KeyStatus | None:
     """Map a single ``check_provider_keys`` provider entry to a key-status verdict.
 
@@ -71,14 +75,15 @@ def _record_provider_verdict(state: StationState, probe_result: dict) -> None:
 
 async def _probe_provider_keys(app_state) -> dict:
     """Share one current-key probe across boot, save, and operator checks."""
-    config = app_state.config
     lock = getattr(app_state, "_provider_check_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         app_state._provider_check_lock = lock
 
     async with lock:
-        keys = _provider_check_keys(config)
+        if getattr(app_state, "_provider_checks_shutting_down", False):
+            raise RuntimeError("Provider checks are shutting down")
+        keys = _provider_check_identity(app_state)
         cached = getattr(app_state, "_provider_check_cached_result", None)
         if (
             cached is not None
@@ -91,9 +96,7 @@ async def _probe_provider_keys(app_state) -> dict:
         if getattr(app_state, "_provider_check_task_keys", None) != keys:
             task = None
         if task is not None and task.done():
-            # A disconnected caller can leave a completed task with no waiter.
-            # Its result was cached at completion by the worker; once that cache
-            # expires, the task must not make an old result appear newly checked.
+            # Do not reuse a completed task after its completion-time cache expires.
             try:
                 task.result()
             except BaseException:
@@ -105,6 +108,17 @@ async def _probe_provider_keys(app_state) -> dict:
             app_state._provider_check_task_keys = keys
             task = asyncio.create_task(_perform_provider_probe(app_state, keys))
             app_state._provider_check_task = task
+            active = getattr(app_state, "background_tasks", None)
+            if active is None:
+                active = app_state.background_tasks = set()
+            active.add(task)
+
+            def forget(finished):
+                active.discard(finished)
+                if not finished.cancelled():
+                    finished.exception()
+
+            task.add_done_callback(forget)
 
     try:
         result = await asyncio.shield(task)
@@ -126,12 +140,11 @@ async def _probe_provider_keys(app_state) -> dict:
 
 
 async def _perform_provider_probe(app_state, keys: tuple[str, ...]) -> dict:
-    if keys != _provider_check_keys(app_state.config):
-        # A save can replace the key before this scheduled worker gets CPU time.
-        # The new-key task will do the real check; do not send a second call for it.
-        return {"ok": False, "providers": {}}
+    if keys != _provider_check_identity(app_state) or getattr(app_state, "_provider_checks_shutting_down", False):
+        # A later save owns validation for its generation.
+        raise RuntimeError("Provider credentials changed before the check started")
     result = await check_provider_keys(app_state.config)
-    if keys == _provider_check_keys(app_state.config):
+    if keys == _provider_check_identity(app_state) and not getattr(app_state, "_provider_checks_shutting_down", False):
         _record_provider_verdict(app_state.station_state, result)
         if getattr(app_state, "_provider_check_task", None) is asyncio.current_task():
             app_state._provider_check_cached_result = result
@@ -141,12 +154,16 @@ async def _perform_provider_probe(app_state, keys: tuple[str, ...]) -> dict:
 
 
 def _provider_probe_in_flight(app_state) -> bool:
+    keys = _provider_check_identity(app_state)
     return any(
-        task is not None and not task.done()
-        for task in (
-            getattr(app_state, "provider_verdict_task", None),
-            getattr(app_state, "_provider_check_task", None),
-            getattr(app_state, "_setup_recheck_provider_task", None),
+        task is not None and not task.done() and (task_keys is None or task_keys == keys)
+        for task, task_keys in (
+            (getattr(app_state, "provider_verdict_task", None), None),
+            (getattr(app_state, "_provider_check_task", None), getattr(app_state, "_provider_check_task_keys", None)),
+            (
+                getattr(app_state, "_setup_recheck_provider_task", None),
+                getattr(app_state, "_setup_recheck_provider_task_keys", None),
+            ),
         )
     )
 

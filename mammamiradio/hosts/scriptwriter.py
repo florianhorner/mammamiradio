@@ -1395,9 +1395,7 @@ async def _generate_json_response(
     # so a transition falls back to the fast OpenAI model and banter to the creative one.
     openai_model = resolve_model(config.models, caller, "openai")
     if not openai_model:
-        error = RuntimeError("No configured OpenAI script model; check model_registry.toml")
-        _trip_openai_script_circuit(state, openai_key, error)
-        raise error
+        raise RuntimeError("No configured OpenAI script model; check model_registry.toml")
     client = _get_openai_client(openai_key)
     loop = asyncio.get_running_loop()
 
@@ -1457,22 +1455,21 @@ async def _generate_json_response(
                 return client.chat.completions.create(**kwargs)
 
         t_start = time.perf_counter()
-        async with state.openai_script_attempt_lock:
-            if _openai_script_blocked(state, openai_key):
-                raise RuntimeError("OpenAI script provider is temporarily unavailable")
-            try:
-                resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=oa_timeout)
-            except Exception as exc:
-                if (
-                    isinstance(exc, (openai.APIStatusError, openai.APIConnectionError, TimeoutError))
-                    and (config.openai_api_key or os.getenv("OPENAI_API_KEY", "")) == openai_key
-                ):
-                    _trip_openai_script_circuit(state, openai_key, exc)
-                raise
-            if (config.openai_api_key or os.getenv("OPENAI_API_KEY", "")) == openai_key:
-                state.openai_disabled_until = 0.0
-                state.openai_last_error = ""
-                state.openai_blocked_key_hash = ""
+        if _openai_script_blocked(state, openai_key):
+            raise RuntimeError("OpenAI script provider is temporarily unavailable")
+        try:
+            resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=oa_timeout)
+        except Exception as exc:
+            if (
+                isinstance(exc, (openai.APIStatusError, openai.APIConnectionError, TimeoutError))
+                and (config.openai_api_key or os.getenv("OPENAI_API_KEY", "")) == openai_key
+            ):
+                _trip_openai_script_circuit(state, openai_key, exc)
+            raise
+        if (config.openai_api_key or os.getenv("OPENAI_API_KEY", "")) == openai_key:
+            state.openai_disabled_until = 0.0
+            state.openai_last_error = ""
+            state.openai_blocked_key_hash = ""
         latency_ms = int((time.perf_counter() - t_start) * 1000)
         prompt_tokens = 0
         completion_tokens = 0

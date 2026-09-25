@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import textwrap
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4114,7 +4115,33 @@ async def test_openai_script_breaker_classifies_other_provider_failures(config, 
                     prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
                 )
     remaining = state.openai_disabled_until - scriptwriter_module.time.time()
-    assert 0 < remaining <= (600 if failure in {"quota", "routing"} else 20)
+    if failure == "routing":
+        assert remaining <= 0  # A missing local model route is not a provider outage.
+    else:
+        assert 0 < remaining <= (600 if failure == "quota" else 20)
+
+
+@pytest.mark.asyncio
+async def test_healthy_openai_script_calls_do_not_queue_behind_each_other(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    barrier = threading.Barrier(2)
+    client = _mock_openai_response('{"ok": true}')
+
+    def simultaneous(**_kwargs):
+        barrier.wait(timeout=2)
+        return _openai_completion('{"ok": true}')
+
+    client.chat.completions.create.side_effect = simultaneous
+    with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
+
+        async def generate():
+            return await scriptwriter_module._generate_json_response(
+                prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
+            )
+
+        result = await asyncio.wait_for(asyncio.gather(generate(), generate()), timeout=3)
+    assert result == [{"ok": True}, {"ok": True}]
 
 
 @pytest.mark.asyncio

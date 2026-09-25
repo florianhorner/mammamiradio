@@ -4780,7 +4780,7 @@ function pipelineHostStatus(c){
     return{
       state:'degraded',
       label:'AI hosts · backup active',
-      detail:'Included host clips keep the show moving. Check the AI connection again in Settings.',
+      detail:'Included host clips keep the show moving while the AI service recovers. Check Settings if this continues.',
     };
   }
   // A provider's own probe still pending (never resolved to valid/rejected) means the
@@ -7442,7 +7442,7 @@ async function checkAiConnection(el){
     if(!response.ok||!payload?.providers||typeof payload.providers!=='object')throw new Error('check_unconfirmed');
     await refreshSlow();
     const hosts=pipelineHostStatus(_caps?.capabilities||{});
-    if(hosts.state==='ready')toast('AI connection confirmed.');
+    if(hosts.state==='ready')toast(['anthropic_key_status','openai_key_status'].some(key=>_caps?.capabilities?.[key]==='rejected')?'One AI connection works. Check the key marked not working.':'AI connection confirmed.');
     else toast('We couldn’t confirm the AI connection. Check your key and try again.');
   }catch(_){
     toast('We couldn’t finish the AI check. Check your connection, then try again.');

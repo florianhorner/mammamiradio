@@ -6364,14 +6364,17 @@ async def test_setup_status_and_recheck_share_projection():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["ok", "exception", "quota", "network"])
+@pytest.mark.parametrize("outcome", ["ok", "exception", "quota", "network", "voice"])
 async def test_setup_recheck_reports_shared_probe_result(outcome: str):
     app = _make_test_app()
     app.state.config.anthropic_api_key = "test-key"
+    if outcome == "voice":
+        app.state.config.azure_speech_key = "voice-key"
+        app.state.config.azure_speech_region = "westeurope"
     probe = (
         AsyncMock(side_effect=RuntimeError("probe failed"))
         if outcome == "exception"
-        else AsyncMock(return_value=_probe_payload(anthropic=outcome))
+        else AsyncMock(return_value=_probe_payload(anthropic="ok" if outcome == "voice" else outcome))
     )
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=probe):
@@ -6380,49 +6383,18 @@ async def test_setup_recheck_reports_shared_probe_result(outcome: str):
 
     assert response.status_code == 200
     probe.assert_awaited_once_with(app.state.config)
-    assert app.state.station_state.anthropic_key_status == ("valid" if outcome == "ok" else "unverified")
+    assert app.state.station_state.anthropic_key_status == ("valid" if outcome in {"ok", "voice"} else "unverified")
     assert response.json()["provider_check_pending"] is False
-    assert response.json()["provider_check_failed"] is (outcome != "ok")
+    assert response.json()["provider_check_failed"] is (outcome not in {"ok", "voice"})
     assert app.state._setup_recheck_provider_task.done()
 
 
 @pytest.mark.asyncio
-async def test_setup_recheck_probes_key_saved_during_cache_window():
+@pytest.mark.parametrize("save_first", [False, True])
+async def test_recheck_joins_in_flight_probe_without_waiting_for_completion(save_first: bool):
     app = _make_test_app()
-    app.state.config.anthropic_api_key = "old-test-key"
-    probe_results = [_probe_payload(anthropic="auth"), _probe_payload(anthropic="ok")]
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-
-    with (
-        patch.dict(os.environ, {}, clear=False),
-        patch("mammamiradio.web.streamer._save_dotenv"),
-        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()),
-        patch(
-            "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=probe_results)
-        ) as probe,
-    ):
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
-            assert app.state.station_state.anthropic_key_status == "rejected"
-            saved = await client.post(
-                "/api/setup/save-keys",
-                headers=ACTIVE_SETUP_HEADERS,
-                json={"ANTHROPIC_API_KEY": "new-test-key"},
-            )
-            assert saved.status_code == 200
-            assert app.state.station_state.anthropic_key_status == "unverified"
-            recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
-            await app.state.provider_verdict_task
-
-    assert recheck.status_code == 200
-    assert recheck.json()["provider_check_pending"] is False
-    assert app.state.station_state.anthropic_key_status == "valid"
-    assert probe.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_saved_key_probe_and_recheck_share_one_in_flight_probe():
-    app = _make_test_app()
+    if not save_first:
+        app.state.config.anthropic_api_key = "test-key"
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -6439,19 +6411,26 @@ async def test_saved_key_probe_and_recheck_share_one_in_flight_probe():
         patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe,
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            saved = await client.post(
-                "/api/setup/save-keys", headers=ACTIVE_SETUP_HEADERS, json={"ANTHROPIC_API_KEY": "test-key"}
+            if save_first:
+                saved = await client.post(
+                    "/api/setup/save-keys", headers=ACTIVE_SETUP_HEADERS, json={"ANTHROPIC_API_KEY": "test-key"}
+                )
+                assert saved.status_code == 200
+                await started.wait()
+            recheck = await asyncio.wait_for(
+                client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={}), timeout=1
             )
-            assert saved.status_code == 200
-            await started.wait()
+            assert started.is_set()
             pending = (await client.get("/api/capabilities")).json()
             assert pending["capabilities"]["provider_probe_in_flight"] is True
             assert pending["provider_health"]["probe_in_flight"] is True
-            recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
             assert recheck.json()["provider_check_pending"] is True
+            repeated = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+            assert repeated.json()["provider_check_pending"] is True
             probe.assert_awaited_once()
             release.set()
-            await app.state.provider_verdict_task
+            if save_first:
+                await app.state.provider_verdict_task
             await app.state._setup_recheck_provider_task
             completed_recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
             assert completed_recheck.json()["provider_check_pending"] is False
@@ -6465,7 +6444,7 @@ async def test_saved_key_probe_and_recheck_share_one_in_flight_probe():
 
 
 @pytest.mark.asyncio
-async def test_setup_recheck_starts_new_probe_when_old_key_probe_is_in_flight():
+async def test_setup_recheck_fences_old_probe_across_key_cycle():
     app = _make_test_app()
     app.state.config.anthropic_api_key = "old-test-key"
     started = asyncio.Event()
@@ -6493,6 +6472,7 @@ async def test_setup_recheck_starts_new_probe_when_old_key_probe_is_in_flight():
                 client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
             )
             await started.wait()
+            old_worker = app.state._provider_check_task
             await client.post(
                 "/api/setup/save-keys",
                 headers=ACTIVE_SETUP_HEADERS,
@@ -6501,44 +6481,28 @@ async def test_setup_recheck_starts_new_probe_when_old_key_probe_is_in_flight():
             recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
             assert recheck.status_code == 200
             assert app.state.station_state.anthropic_key_status == "valid"
+            await client.post(
+                "/api/setup/save-keys",
+                headers=ACTIVE_SETUP_HEADERS,
+                json={"ANTHROPIC_API_KEY": "old-test-key"},
+            )
+            recheck = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+            assert recheck.status_code == 200
+            assert app.state._provider_check_generation == 2
+            assert (await client.get("/api/capabilities")).json()["capabilities"]["provider_probe_in_flight"] is False
+            assert old_worker in app.state.background_tasks
             release.set()
             await old_request
             await app.state.provider_verdict_task
-
-    assert calls == 2
-    assert app.state.station_state.anthropic_key_status == "valid"
-
-
-@pytest.mark.asyncio
-async def test_setup_recheck_returns_while_slow_provider_probe_finishes_in_background():
-    app = _make_test_app()
-    app.state.config.anthropic_api_key = "test-key"
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def slow_probe(_config):
-        started.set()
-        await release.wait()
-        return _probe_payload(anthropic="ok")
-
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with (
-        patch("mammamiradio.web.streamer._SETUP_RECHECK_PROVIDER_WAIT_SECONDS", 0.01),
-        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe,
-    ):
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            response = await asyncio.wait_for(
-                client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={}), timeout=1
+            assert app.state._provider_check_cached_result is not None
+            await client.post(
+                "/api/setup/save-keys", headers=ACTIVE_SETUP_HEADERS, json={"ANTHROPIC_API_KEY": "new-test-key"}
             )
-            assert started.is_set()
-            assert response.status_code == 200
-            assert response.json()["provider_check_pending"] is True
-            repeated = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
-            assert repeated.json()["provider_check_pending"] is True
-            probe.assert_awaited_once()
-            release.set()
-            await app.state._setup_recheck_provider_task
+            assert app.state._provider_check_cached_result is None
+            assert app.state.station_state.anthropic_key_status == "unverified"
+            await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
 
+    assert calls == 4
     assert app.state.station_state.anthropic_key_status == "valid"
 
 
