@@ -1876,7 +1876,7 @@ async (page) => {
     assert(await page.locator('#firstListenConnectionInvite').isVisible(),'proof completion did not reveal the key explanation');
     assert((await page.locator('#householdQuietNote').innerText()).includes('Recorded example'),'key request blurred staged proof with the listener home');
     assert(await page.locator('#firstListenConnectionPromise').innerText()==='You choose what they get to know.','proof completion overwrote the approved choice note');
-    assert(await page.locator('#firstListenKeepListeningBtn').innerText()==='Keep my home private','proof completion overwrote the private choice');
+    assert(await page.locator('#firstListenKeepListeningBtn').innerText()==='Keep Home private','proof completion overwrote the private choice');
     assert((await page.locator('#firstListenPrivacyHeading').innerText())==='Make it yours','privacy step lost its polished heading');
     assert(await page.locator('[data-guide="free-voices"]').isHidden(),'free audition appeared before voice choice');
     assert(await page.locator('#firstListenSetupDoneBtn').count()===1,'Done with setup is missing');

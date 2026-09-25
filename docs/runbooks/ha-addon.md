@@ -137,20 +137,20 @@ confirmation, **Hear the evening** is explicitly staged, uses only weather and
 daylight, and says no Home details were read. The station ducks for the scene
 and resumes; the listener may hear it, skip it, or finish with Home private.
 
-When the scene ends, Replay and its transcript remain available; **Make it mine**
+When the scene ends, Replay and its transcript remain available; **Set up AI and Home**
 appears without moving keyboard focus. **Skip this example** goes directly to
 writing. **Let them surprise you** compares recorded moments with fresh
 conversations, alongside one provider selector and one key field. Included
 radio keeps playing without a key. A saved but unverified key is not presented
 as connected; **Check connection again** actively checks the existing providers
 and refreshes the result, with bounded failure recovery. Unfinished key input
-must remain visible through background checks. **Later — keep listening** skips
+must remain visible through background checks. **Skip AI, choose Home details** skips
 writing and opens the same exact Home choice. Missing, stale, or daylight-only
 previews must not claim meaningful household personalization.
 
 `FIRST_LISTEN_HOME_PROOF_KEY` selects the opening day-one `quiet` recording from
 the hash-bound four-scene pack. Completion offers laundry, arrival, then coffee
-as optional recorded examples; each waits for a click, and **Make it mine**
+as optional recorded examples; each waits for a click, and **Set up AI and Home**
 remains available. Their disclosure states that these household features are
 unavailable on new installations. Playing an example grants no household
 details; `scripts/validate-spoken-assets.py` preserves the manifest's day-one

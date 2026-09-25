@@ -204,9 +204,15 @@ def test_step_three_decision_follows_the_proof_and_is_named_by_outcome() -> None
     assert invite.index('id="firstListenMakeYoursBtn"') < invite.index('id="firstListenKeepListeningBtn"')
     writing_at = invite.index('id="firstListenMakeYoursBtn"')
     assert "btn-trigger" in invite[writing_at - 200 : writing_at]
-    assert ">Keep my home private<" in invite
-    assert ">Make it mine<" in invite
+    assert ">Keep Home private<" in invite
+    assert ">Set up AI and Home<" in invite
     assert ">Keep listening<" not in invite
+    # One spelling for the private choice, matching the Home-choice button and setup_status.
+    assert "Keep my home private" not in html
+    # Each button names where it goes; the labels that did not must not return.
+    assert "Make it mine" not in html
+    assert "Later — keep listening" not in html
+    assert "choose Later" not in html
     assert 'id="firstListenProofPrivateBtn"' in html
     assert 'id="firstListenProofSkipBtn"' in html
 
@@ -620,7 +626,7 @@ def test_discovery_and_privacy_preview_require_canonical_detached_envelopes() ->
 def test_no_ai_key_is_needed_for_first_audio() -> None:
     html = _html()
     assert "Without a writing key: music and recorded host moments." in html
-    assert "Later — keep listening" in html
+    assert "Skip AI, choose Home details" in html
     assert "Hear the studio voices" in html
     assert "Hear the free voices" in html
     ai_body = re.search(r'<div class="first-listen-body"[^>]*id="firstListenAiBody"[^>]*>', html)

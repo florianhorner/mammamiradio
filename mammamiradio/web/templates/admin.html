@@ -2734,15 +2734,15 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     </nav>
                     <div class="first-listen-actions proof-escape-actions">
                       <button type="button" class="btn btn-util first-listen-action" id="firstListenProofSkipBtn" data-stopped-exempt onclick="completeFirstListenHouseholdProof('skipped')">Skip this example</button>
-                      <button type="button" class="btn btn-util first-listen-action" id="firstListenProofPrivateBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Keep my home private</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenProofPrivateBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Keep Home private</button>
                     </div>
                   </div>
                   <div class="show-invitation" id="firstListenConnectionInvite" hidden>
                     <h4 class="sr-only" id="firstListenConnectionHeading" tabindex="-1">Make it yours.</h4>
                     <p class="setup-note" id="firstListenConnectionPromise">You choose what they get to know.</p>
                     <div class="first-listen-actions first-listen-decision">
-                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Make it mine</button>
-                      <button type="button" class="btn btn-util first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Keep my home private</button>
+                      <button type="button" class="btn btn-trigger first-listen-action" id="firstListenMakeYoursBtn" data-stopped-exempt onclick="showFirstListenConnection('writing')">Set up AI and Home</button>
+                      <button type="button" class="btn btn-util first-listen-action" id="firstListenKeepListeningBtn" data-stopped-exempt onclick="keepFirstListenSettings(this)">Keep Home private</button>
                     </div>
                   </div>
                   <div id="firstListenHomeChoice" hidden>
@@ -2849,7 +2849,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <div class="first-listen-actions connection-navigation">
                     <button type="button" class="btn btn-trigger" id="firstListenConnectionNext" data-stopped-exempt onclick="showFirstListenConnection(_firstListenUi.connectionStage==='voices'?'writing':'home')">Choose my Home details</button>
                     <button type="button" class="btn btn-util" id="firstListenConnectionCheck" data-stopped-exempt onclick="checkFirstListenConnection(this)" hidden>Check connection again</button>
-                    <button type="button" class="btn btn-util" id="firstListenConnectionSkip" data-stopped-exempt onclick="showFirstListenConnection('home')">Later — keep listening</button>
+                    <button type="button" class="btn btn-util" id="firstListenConnectionSkip" data-stopped-exempt onclick="showFirstListenConnection('home')">Skip AI, choose Home details</button>
                     <button type="button" class="btn btn-util" id="firstListenConnectionBack" data-stopped-exempt onclick="showFirstListenConnection(_firstListenUi.connectionStage==='voices'?'writing':'invite')">Back</button>
                   </div>
                 </div>
@@ -5797,9 +5797,9 @@ function firstListenConnectionEvidence(){
   const workingOpenai=keys.has('OPENAI_API_KEY')&&caps.openai_key_status==='valid';
   const workingAnthropic=keys.has('ANTHROPIC_API_KEY')&&caps.anthropic_key_status==='valid'&&!caps.anthropic_degraded;
   if(workingOpenai||workingAnthropic)return{state:'ready',label:'Writing connected',detail:`${workingAnthropic?'Anthropic':'OpenAI'} · Fresh conversations between records.`};
-  if(_firstListenUi.connectionCheckFailed)return{state:'degraded',label:'Couldn’t check the connection',detail:'Your saved key is unchanged. Try again, or choose Later to keep listening.'};
+  if(_firstListenUi.connectionCheckFailed)return{state:'degraded',label:'Couldn’t check the connection',detail:'Your saved key is unchanged. Try again, or skip AI for now and choose your Home details.'};
   if(statuses.every(status=>status==='rejected'))return{state:'blocked',label:'Check your writing key',detail:'The service did not accept the key. Replace it below, or keep listening.'};
-  return{state:'working',label:'Key saved · not confirmed yet',detail:'Check the connection again, or choose Later to keep listening.'};
+  return{state:'working',label:'Key saved · not confirmed yet',detail:'Check the connection again, or skip AI for now and choose your Home details.'};
 }
 function firstListenVoiceEvidence(){
   if(_firstListenUi.keySaving||_firstListenUi.keySaveUnconfirmed)return firstListenConnectionEvidence();
@@ -5833,13 +5833,13 @@ function renderFirstListenConnection(){
   const promise=document.getElementById('firstListenConnectionPromise');
   promise.textContent=p.privacyEnabled?'Your saved Home sharing is still on.':'You choose what they get to know.';
   const keep=document.getElementById('firstListenKeepListeningBtn');
-  keep.textContent=p.privacyEnabled?'Review my Home choice':'Keep my home private';
+  keep.textContent=p.privacyEnabled?'Review my Home choice':'Keep Home private';
   keep.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;
   document.getElementById('firstListenMakeYoursBtn').disabled=!p.privacyUnlocked||!proofComplete;
   const proofSkip=document.getElementById('firstListenProofSkipBtn');
   const proofPrivate=document.getElementById('firstListenProofPrivateBtn');
   if(proofSkip){proofSkip.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;proofSkip.hidden=proofComplete;}
-  if(proofPrivate){proofPrivate.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;proofPrivate.hidden=proofComplete;proofPrivate.textContent=p.privacyEnabled?'Review my Home choice':'Keep my home private';}
+  if(proofPrivate){proofPrivate.disabled=!p.privacyUnlocked||_firstListenUi.privacySaving;proofPrivate.hidden=proofComplete;proofPrivate.textContent=p.privacyEnabled?'Review my Home choice':'Keep Home private';}
   document.getElementById('firstListenHomeUnavailable').hidden=p.haAccess;
   document.getElementById('firstListenExistingHomeNotice').hidden=!p.privacyEnabled;
   document.getElementById('firstListenPrivacyStep').hidden=Boolean(_firstListenUi.optionalStep);
