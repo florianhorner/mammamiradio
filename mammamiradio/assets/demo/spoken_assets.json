@@ -277,6 +277,160 @@
           }
         ]
       }
+    },
+    {
+      "path": "ads/01-normal-prezzoforte-discount-complaint.mp3",
+      "sha256": "d6dad21960b455ae3a42d5f73b28d47cacea49be0dd3fd0ac24d3b0a4b7f9122",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "This week at Prezzoforte, prices are down and the staff have taken it personally. Olive oil: three ninety-nine. Pasta, tomatoes, and one suspiciously confident aubergine: all reduced. The store manager has issued one official statement. The discount started it. Bring a basket. Bring two. Do not make eye contact with aisle four; the cheese is negotiating. Prezzoforte. Convenient. Always. Probably. A fictional supermarket with professionally offended staff.",
+      "mode": "normal",
+      "duration_seconds": 32.784,
+      "title": "The Discount That Filed a Complaint",
+      "cast": [
+        "L'Annunciatore",
+        "Nonno Aldo"
+      ]
+    },
+    {
+      "path": "ads/03-normal-telecuore-emotionally-unlimited.mp3",
+      "sha256": "63b0a9222c84b9188dc1502e3fc73f2c915f29a3c1236dac4d78b275f333172d",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "At two in the morning, when everyone else has stopped replying, TeleCuore is still there. Ask whether your plan is unlimited and the network answers personally. I prefer emotionally boundless. Calls, messages, and enough data for one family argument in high definition. The signal follows you to the balcony, then waits outside the bathroom. TeleCuore. The signal that loves you. Fictional, and learning boundaries.",
+      "mode": "normal",
+      "duration_seconds": 28.944,
+      "title": "Unlimited Means Emotionally Unlimited",
+      "cast": [
+        "L'Annunciatore",
+        "Nonno Aldo"
+      ]
+    },
+    {
+      "path": "ads/04-normal-caffe-turbino-emergency-lever.mp3",
+      "sha256": "f0a1e77e43e2800584b56f61bfb0dd7923feeef5908d7d86e9cfcd505f4233f5",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Nine fourteen. The meeting has started. Paolo has not. Then the barista pulls the emergency lever on one tiny Caffè Turbino. Password remembered. Forecast recovered. Apology from nineteen ninety-eight: drafted. Paolo has a brief update. I can hear colours, and the spreadsheet has forgiven me. Caffè Turbino. The coffee that gets you back on your feet—enthusiastically. Fictional coffee, professionally overacted.",
+      "mode": "normal",
+      "duration_seconds": 30.576,
+      "title": "Coffee With an Emergency Lever",
+      "cast": [
+        "L'Annunciatore",
+        "Nonno Aldo"
+      ]
+    },
+    {
+      "path": "ads/05-italian-pastaforte-colosseo.mp3",
+      "sha256": "df039ca2dd207d9f9d94c5a31a9e1dcaa1a2d4a7114279f7b9fded6092dbb94e",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "A tavola arriva Pastaforte Forme d’Italia: la pasta che trasforma il pranzo in patrimonio nazionale. C’è il Vesuvio ripieno, la Torre di Pisa che non resta nel piatto e la Sardegna che pretende un tegame tutto suo. Il nonno emette il verdetto. Finalmente, una pasta con carattere. Nove minuti di cottura, tre discussioni regionali. Pastaforte. La pasta che ti vuole bene. Marchio immaginario, famiglia professionalmente polemica.",
+      "mode": "super_italian",
+      "duration_seconds": 30.168,
+      "title": "Il Colosseo nel piatto",
+      "cast": [
+        "L'Annunciatore",
+        "Don Carmelo"
+      ]
+    },
+    {
+      "path": "ads/06-italian-motoretto-parcheggiabile.mp3",
+      "sha256": "9e77e96c5a9f13701fe6bd2fe9e1b08047a0da55a7b6d5b461e902f3b6de4d36",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Quel parcheggio è troppo piccolo. Per un’auto normale. Motoretto entra dove gli altri lasciano un biglietto di scuse: tre porte, quattro ruote e l’autostima di un fuoristrada davanti al bar. Il navigatore annuncia il risultato. Operazione completata. Restano undici centimetri di gloria. Motoretto. Piccolo. Feroce. Parcheggiabile. Auto immaginaria; il parcheggio, purtroppo, no.",
+      "mode": "super_italian",
+      "duration_seconds": 28.2,
+      "title": "Piccolo, feroce, parcheggiabile",
+      "cast": [
+        "L'Annunciatore",
+        "Don Carmelo"
+      ]
+    },
+    {
+      "path": "ads/07-italian-sacchettino-sconto.mp3",
+      "sha256": "272ff79e0788b8dc3a42350daec792e1ed5ef895ee677ece2ab58259a654e942",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Da Sacchettino il risparmio arriva quando hai già smesso di cercarlo. Nel primo sacchetto c’è uno sconto per il secondo; nel secondo, un buono per il terzo. Il cassiere conferma che è tutto semplicissimo. Sì. Finché nessuno fa domande. Questa settimana, offerte a sorpresa su pasta, pomodori e cose che non ricordi di aver comprato. Sacchettino. Il risparmio che non ti aspetti. Tutto rigorosamente immaginario.",
+      "mode": "super_italian",
+      "duration_seconds": 28.08,
+      "title": "Lo sconto che non ti aspettavi",
+      "cast": [
+        "L'Annunciatore",
+        "Don Carmelo"
+      ]
+    },
+    {
+      "path": "ads/08-italian-prontissimo-prima-o-poi.mp3",
+      "sha256": "688b19d14c134e4c639dbbcb4cab1cb7631ebe5f72f90b154c0e85f074e1e9e8",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Prontissimo Mobile presenta l’assistenza istantanea, appena possibile. Con il piano Quasi Subito hai minuti, giga e una notifica che assicura che qualcuno, da qualche parte, sta pensando al tuo problema. L’operatore ha un aggiornamento. Siamo in anticipo sulla chiamata di domani. Presto riceverai una stima dei tempi della stima. Prontissimo Mobile. Arriviamo. Prima o poi. Servizio completamente immaginario.",
+      "mode": "super_italian",
+      "duration_seconds": 29.88,
+      "title": "Arriviamo. Prima o poi.",
+      "cast": [
+        "L'Annunciatore",
+        "Don Carmelo"
+      ]
+    },
+    {
+      "path": "ads/09-normal-pastaforte-national-heritage.mp3",
+      "sha256": "21f025549fdba8f5e5a5f7da7f0ca1f7f9d586dd216bf55385a9c7e528f1fbfa",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Pastaforte Shapes of Italy turns lunch into national heritage. There is stuffed Vesuvius, a Leaning Tower that refuses to stay on the plate, and Sardinia demanding its own pan. Grandpa has reviewed the evidence. Finally, pasta with character. Nine minutes to cook, three regional arguments included. Pastaforte. Pasta that loves you. A fictional brand with a professionally opinionated family.",
+      "mode": "normal",
+      "duration_seconds": 28.752,
+      "title": "National Heritage for Lunch",
+      "cast": [
+        "L'Annunciatore",
+        "Nonno Aldo"
+      ]
+    },
+    {
+      "path": "ads/10-normal-motoretto-parkable.mp3",
+      "sha256": "b83afdec256a375e6758304770b4af7d90a73599ab78482b154df6f8319fc0f5",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "That parking space is too small—for a normal car. Motoretto fits where others leave apology notes: three doors, four wheels, and the confidence of an off-roader parked outside the café. Navigation has the final measurement. Operation complete. Eleven centimetres of glory remain. Motoretto. Small. Fierce. Parkable. A fictional car with tragically real parking.",
+      "mode": "normal",
+      "duration_seconds": 28.056,
+      "title": "Small, Fierce, Parkable",
+      "cast": [
+        "L'Annunciatore",
+        "Nonno Aldo"
+      ]
+    },
+    {
+      "path": "ads/11-normal-sacchettino-unexpected-discount.mp3",
+      "sha256": "bedf7622be55e68c12d7e9225f145df4c0223aa443d626e656d656abec20a06d",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "At Sacchettino, savings arrive after you have stopped looking. The first bag holds a discount for the second; the second has a voucher for the third. The cashier assures us this is very simple. Yes. Until somebody asks a question. Surprise deals on pasta, tomatoes, and things you do not remember buying. Sacchettino. The discount you never expected. Entirely fictional.",
+      "mode": "normal",
+      "duration_seconds": 26.4,
+      "title": "The Discount You Never Expected",
+      "cast": [
+        "L'Annunciatore",
+        "Nonno Aldo"
+      ]
+    },
+    {
+      "path": "ads/12-normal-prontissimo-eventually.mp3",
+      "sha256": "d836deb3ec64ce0cb89a9bb70164658570d6d58c37670b5a8d25f8ebf872fb95",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Prontissimo Mobile presents instant support, as soon as possible. The Almost Now plan brings minutes, data, and a notification confirming that somebody, somewhere, is thinking about your problem. The operator has an update. We are early for tomorrow’s call. Soon you will receive an estimate for the estimate. Prontissimo Mobile. We arrive. Eventually. Entirely fictional.",
+      "mode": "normal",
+      "duration_seconds": 27.528,
+      "title": "We Arrive. Eventually.",
+      "cast": [
+        "L'Annunciatore",
+        "Nonno Aldo"
+      ]
     }
   ]
 }

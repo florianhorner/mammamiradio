@@ -1019,17 +1019,18 @@ async def test_humanity_event_fires_only_once(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Gap 4 — Ad break quality reject resets songs_since_ad
+# Gap 4 — An unavailable or rejected ad leaves its break owed
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
-    """An all-unsafe cast resets pacing without rendering or queuing an ad."""
+    """An all-unsafe cast leaves pacing owed without rendering or queuing an ad."""
     state = _make_run_state()
     state.force_next = SegmentType.AD
     state.songs_since_ad = 5
     config = _make_run_config()
+    config.anthropic_api_key = "test-key"
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
@@ -1040,9 +1041,8 @@ async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
         return None
 
     with (
-        # The AD render path is under test, so the station must be able to make an ad;
-        # without a key the producer now drops a forced ad before it renders.
-        patch(f"{PRODUCER_MODULE}.ad_programme_available", return_value=True),
+        patch(f"{PRODUCER_MODULE}._packaged_ad_segment", AsyncMock(return_value=None)),
+        patch(f"{PRODUCER_MODULE}._producer_error_recovery_segment", AsyncMock(return_value=None)),
         patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_no_safe_campaign) as select_spot,
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock) as write_ad,
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
@@ -1068,22 +1068,23 @@ async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
     synthesize_ad.assert_not_called()
     assert queue.empty()
     assert state.queued_segments == []
-    assert state.songs_since_ad == 0
+    assert state.songs_since_ad == 5
     timing = state.render_timings[0]
     assert timing["kind"] == SegmentType.AD.value
-    assert timing["outcome"] == "discarded"
-    assert timing["reason"] == "no_safe_ad_campaigns"
+    assert timing["outcome"] == "failed"
+    assert timing["reason"] == "render_failure"
 
 
 @pytest.mark.asyncio
-async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
-    """When quality gate rejects an ad break, songs_since_ad is reset to 0."""
+async def test_ad_break_quality_reject_preserves_songs_since_ad(tmp_path):
+    """A quality-rejected ad is not credited as heard."""
     import os
 
     state = _make_run_state()
     state.force_next = SegmentType.AD
     state.songs_since_ad = 5  # high value so scheduler wants an AD
     config = _make_run_config()
+    config.anthropic_api_key = "test-key"
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
@@ -1101,6 +1102,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
 
     def _validate_side_effect(path, seg_type):
         if seg_type == SegmentType.AD:
+            state.listeners_active = 0
             raise AudioQualityError("ad break too short")
 
     def _slow_bumper(*_args, **_kwargs):
@@ -1115,9 +1117,8 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     os.environ.pop("MAMMAMIRADIO_SKIP_QUALITY_GATE", None)
 
     with (
-        # The AD render path is under test, so the station must be able to make an ad;
-        # without a key the producer now drops a forced ad before it renders.
-        patch(f"{PRODUCER_MODULE}.ad_programme_available", return_value=True),
+        patch(f"{PRODUCER_MODULE}._packaged_ad_segment", AsyncMock(return_value=None)),
+        patch(f"{PRODUCER_MODULE}._producer_error_recovery_segment", AsyncMock(return_value=None)),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
@@ -1139,7 +1140,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         try:
             # Give enough time for one full AD production cycle to complete and be rejected
             deadline = asyncio.get_event_loop().time() + 15.0
-            while state.songs_since_ad != 0 and asyncio.get_event_loop().time() < deadline:
+            while not state.render_timings and asyncio.get_event_loop().time() < deadline:
                 await asyncio.sleep(0.05)
         finally:
             task.cancel()
@@ -1148,8 +1149,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
             except asyncio.CancelledError:
                 pass
 
-    # songs_since_ad must have been reset to 0 to prevent scheduler lock on AD
-    assert state.songs_since_ad == 0
+    assert state.songs_since_ad == 5
     # The rejected ad break is recorded as generation waste (#397).
     assert state.discard_by_reason.get("quality_gate_reject", 0) >= 1
     assert state.discard_by_type.get("ad", 0) >= 1

@@ -86,6 +86,9 @@ def _mock_all(monkeypatch):
     """Patch every external dependency used by tts.py."""
     import mammamiradio.audio.tts as tts_mod
 
+    # Contention binds a semaphore to its loop; each async test owns a new loop.
+    monkeypatch.setattr(tts_mod, "_HEAVY_SEM", asyncio.Semaphore(2))
+
     def _reset_provider_clients() -> None:
         tts_mod._openai_client = None
         tts_mod._openai_client_key = ""

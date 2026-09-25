@@ -140,17 +140,18 @@ This lab remains the way to exercise the optional Home Assistant speaker path.
 
 Then, in **First Listen** (the automatic fresh-install landing):
 
-1. Confirm the welcome leads into the recorded English opening, then live music.
-   Neither recording uses an AI key or Home context. **Music details** shows ready
-   local music and optional setup choices; unavailable or idle sources stay in
+1. Select **Start my station** and confirm the recorded English opening flows into
+   live music on the same player. Neither audio source uses an AI key or Home
+   context. **Music details** shows ready local music and optional setup choices;
+   unavailable or idle sources stay in
    **Technical details**. Recovery alone must not imply primary music is ready.
    The repair action must open **Music sources** once capabilities are checked.
-2. Mute the machine before confirming, select **Play my station**, then **No sound
-   yet**, and check that the repair guidance names this device's volume and mute
-   and offers to try again here.
+2. For a separate repair pass, use `replay`, mute the machine before selecting
+   **Start my station**, then choose **I can’t hear you**. Check that the repair
+   guidance names this device's volume and mute and offers to try again here.
 3. Unmute, select **Play on this device again**, and listen for the music bed,
    Mamma Mi Radio identity, and the Marco/Giulia exchange.
-4. Only after hearing the opening, select **I hear you**.
+4. Only after hearing the opening, select **I can hear it**.
 5. Separately, exercise the optional speaker route outside First Listen: in
    Home Assistant, **Media → Mamma Mi Radio → Mamma Mi Radio Live** to **Mac Lab
    Speaker**, and confirm the room by ear.

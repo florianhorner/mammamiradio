@@ -29,8 +29,17 @@ def _clean_producer_globals():
     yield
     producer._last_music_file = None
     producer._canned_clip_cache.clear()
+    producer._known_invalid_packaged_ads.clear()
     producer._recently_played_clips.clear()
     producer.RUNWAY_FLOOR_SECONDS = old_runway_floor
+
+
+@pytest.fixture(autouse=True)
+def _exercise_failure_without_packaged_ads(monkeypatch):
+    """These regressions cover the final recovery rung after both ad sources fail."""
+
+    monkeypatch.setattr(producer, "packaged_ad_programme_available", lambda _config: False)
+    monkeypatch.setattr(producer, "_packaged_ad_segment", AsyncMock(return_value=None))
 
 
 def _make_state() -> StationState:
@@ -48,6 +57,7 @@ def _make_config(tmp_path: Path):
     config.homeassistant.enabled = False
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
     return config
 
 
@@ -83,7 +93,7 @@ async def _cancel(task: asyncio.Task[None]) -> None:
 @pytest.mark.parametrize(
     ("seg_type", "expected"),
     [
-        (SegmentType.AD, {"songs_since_ad": 0}),
+        (SegmentType.AD, {"songs_since_ad": 9}),
         (SegmentType.NEWS_FLASH, {"songs_since_news": 0, "songs_since_banter": 0}),
         (SegmentType.BANTER, {"songs_since_banter": 0}),
         (SegmentType.STATION_ID, {"segments_since_station_id": 0}),
@@ -554,12 +564,17 @@ async def test_optional_promo_tts_failure_does_not_drop_complete_ad(tmp_path: Pa
 
     queued = queue.get_nowait()
     assert queued.type == SegmentType.AD
+    assert state.songs_since_ad == 9, "queue admission must not credit an unheard ad"
+    assert queued.mark_playback_started() is True
+    state.on_stream_segment_selected(queued)
+    assert state.on_stream_segment_audible(queued) is True
     assert state.songs_since_ad == 0
+    queued.release()
     assert not list(tmp_path.glob("promo_tag_*.mp3"))
 
 
 @pytest.mark.asyncio
-async def test_required_ad_voice_failure_uses_recovery_and_resets_due_counter(tmp_path: Path) -> None:
+async def test_required_ad_voice_failure_uses_recovery_and_preserves_owed_break(tmp_path: Path) -> None:
     state = _make_state()
     state.songs_since_ad = 9
     config = _make_config(tmp_path)
@@ -602,7 +617,7 @@ async def test_required_ad_voice_failure_uses_recovery_and_resets_due_counter(tm
         await _cancel(task)
 
     assert queue.get_nowait() is recovery
-    assert state.songs_since_ad == 0
+    assert state.songs_since_ad == 9
     assert state.segments_produced == 0
     assert not list(tmp_path.glob("ad_intro_*.mp3"))
     assert not list(tmp_path.glob("promo_tag_*.mp3"))
@@ -662,7 +677,7 @@ async def test_multi_spot_ad_partial_success_then_failure_cleans_up_first_spot(t
 
     assert call_count == 2
     assert queue.get_nowait() is recovery
-    assert state.songs_since_ad == 0
+    assert state.songs_since_ad == 9
     assert not first_spot_path.exists(), "the successfully-rendered first spot must be cleaned up too"
     assert not list(tmp_path.glob("ad_intro_*.mp3"))
     assert not list(tmp_path.glob("promo_tag_*.mp3"))
@@ -871,7 +886,7 @@ async def _run_ad_wrapper_failure(
 
 
 @pytest.mark.asyncio
-async def test_required_ad_intro_tts_failure_uses_recovery_and_resets_due_counter(tmp_path: Path) -> None:
+async def test_required_ad_intro_tts_failure_uses_recovery_and_preserves_owed_break(tmp_path: Path) -> None:
     async def _voice(text: str, _voice: str, path: Path, **_kwargs) -> None:
         path.write_bytes(text.encode())
         if path.name.startswith("ad_intro_"):
@@ -880,14 +895,14 @@ async def test_required_ad_intro_tts_failure_uses_recovery_and_resets_due_counte
     state, queued = await _run_ad_wrapper_failure(tmp_path, voice_side_effect=_voice)
 
     assert queued.metadata["error_recovery"] is True
-    assert state.songs_since_ad == 0
+    assert state.songs_since_ad == 9
     assert state.segments_produced == 0
     assert not list(tmp_path.glob("ad_intro_*.mp3"))
     assert not list(tmp_path.glob("bumper_in_*.mp3"))
 
 
 @pytest.mark.asyncio
-async def test_required_ad_outro_tts_failure_uses_recovery_and_resets_due_counter(tmp_path: Path) -> None:
+async def test_required_ad_outro_tts_failure_uses_recovery_and_preserves_owed_break(tmp_path: Path) -> None:
     async def _voice(text: str, _voice: str, path: Path, **_kwargs) -> None:
         path.write_bytes(text.encode())
         if path.name.startswith("ad_outro_"):
@@ -896,14 +911,14 @@ async def test_required_ad_outro_tts_failure_uses_recovery_and_resets_due_counte
     state, queued = await _run_ad_wrapper_failure(tmp_path, voice_side_effect=_voice)
 
     assert queued.metadata["error_recovery"] is True
-    assert state.songs_since_ad == 0
+    assert state.songs_since_ad == 9
     assert state.segments_produced == 0
     assert not list(tmp_path.glob("ad_outro_*.mp3"))
     assert not list(tmp_path.glob("bumper_out_*.mp3"))
 
 
 @pytest.mark.asyncio
-async def test_ad_closing_failures_prioritize_tts_unavailable_and_reset_due_counter(tmp_path: Path) -> None:
+async def test_ad_closing_failures_prioritize_tts_unavailable_and_preserve_owed_break(tmp_path: Path) -> None:
     async def _voice(text: str, _voice: str, path: Path, **_kwargs) -> None:
         path.write_bytes(text.encode())
         if path.name.startswith("ad_outro_"):
@@ -922,7 +937,7 @@ async def test_ad_closing_failures_prioritize_tts_unavailable_and_reset_due_coun
     )
 
     assert queued.metadata["error_recovery"] is True
-    assert state.songs_since_ad == 0
+    assert state.songs_since_ad == 9
     assert not list(tmp_path.glob("ad_outro_*.mp3"))
     assert not list(tmp_path.glob("bumper_out_*.mp3"))
 

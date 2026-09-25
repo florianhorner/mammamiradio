@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import textwrap
+import zipfile
 from pathlib import Path
 from types import ModuleType
 
@@ -107,6 +108,22 @@ def test_shipped_demo_banter_is_package_reachable_and_playable() -> None:
     assert VALIDATOR.validate_demo_spoken_assets() == []
 
 
+def test_packaged_ad_bank_matches_human_approved_inventory() -> None:
+    root = ROOT / "mammamiradio/assets/demo"
+    manifest = json.loads((root / "spoken_assets.json").read_text())
+    ads = [entry for entry in manifest["assets"] if entry["path"].startswith("ads/")]
+    assert len(ads) == 11
+    assert {Path(entry["path"]).name[:2] for entry in ads} == {"01", *[f"{i:02}" for i in range(3, 13)]}
+    assert {entry["path"] for entry in ads} == set(VALIDATOR.DEMO_AD_PATHS)
+    assert sum(entry["mode"] == "normal" for entry in ads) == 7
+    assert sum(entry["mode"] == "super_italian" for entry in ads) == 4
+    approval = (root / "README.md").read_text()
+    for entry in ads:
+        assert entry["sha256"] in approval
+        assert hashlib.sha256((root / entry["path"]).read_bytes()).hexdigest() == entry["sha256"]
+    assert not (root / "ads/02-normal-velocino-needs-compliments.mp3").exists()
+
+
 def test_demo_banter_validator_enforces_media_loudness_and_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -163,6 +180,92 @@ def test_demo_banter_validator_enforces_media_loudness_and_size(
     assert any("integrated loudness -20.0 LUFS is outside" in error for error in errors)
     assert any("true peak -0.5 dBTP exceeds -1.0 dBTP" in error for error in errors)
     assert any("demo banter bundle is" in error and "maximum is 1 bytes" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("defect", "expected"),
+    [
+        (None, ""),
+        ("format", "sample_rate must be"),
+        ("duration", "outside 25.0-40.0s"),
+        ("loudness", "integrated loudness"),
+        ("peak", "true peak"),
+        ("silence", "silence ratio"),
+        ("gap", "silent gap"),
+        ("missing", "not reachable"),
+        ("changed", "packaged resource sha256"),
+        ("size", "demo ad pack is"),
+        ("independent_budget", ""),
+    ],
+)
+def test_ad_release_gate_checks_media_and_wheel_resources(tmp_path, monkeypatch, defect, expected):
+    root = tmp_path / "assets"
+    entries = []
+    for category in ("banter", "ads"):
+        path = root / category / "spot.mp3"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"mocked media probe input" * 100)
+        entries.append({"path": f"{category}/spot.mp3", "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    (root / "spoken_assets.json").write_text(json.dumps({"assets": entries}))
+    # Policy/frame parsing has separate real-byte tests; this isolates the media/resource boundary.
+    monkeypatch.setattr(VALIDATOR, "validate_spoken_asset_manifest", lambda **kwargs: [])
+    monkeypatch.setattr(VALIDATOR.shutil, "which", lambda command: command)
+
+    def probe(path, **kwargs):
+        ad = path.parent.name == "ads"
+        return (
+            {
+                "stream": {
+                    "codec_type": "audio",
+                    "codec_name": "mp3",
+                    "channels": 2,
+                    "channel_layout": "stereo",
+                    "bit_rate": "192000",
+                    "sample_rate": "44100" if ad and defect == "format" else "48000",
+                },
+                "format": {"duration": (41 if defect == "duration" else 30) if ad else 60},
+            },
+            None,
+        )
+
+    monkeypatch.setattr(VALIDATOR, "_probe_audio", probe)
+    monkeypatch.setattr(
+        VALIDATOR,
+        "_measure_loudness",
+        lambda path, **kwargs: (
+            ((-20 if defect == "loudness" else -15, 0 if defect == "peak" else -2), None)
+            if path.parent.name == "ads"
+            else ((-16, -2), None)
+        ),
+    )
+    monkeypatch.setattr(
+        VALIDATOR,
+        "_measure_silence",
+        lambda path, **kwargs: ((8 if defect == "silence" else 3, 3 if defect == "gap" else 1), None),
+    )
+    if defect == "size":
+        monkeypatch.setattr(VALIDATOR, "DEMO_AD_PACK_MAX_BYTES", 1)
+    elif defect == "independent_budget":
+        monkeypatch.setattr(VALIDATOR, "DEMO_BANTER_MAX_BYTES", (root / "banter/spot.mp3").stat().st_size)
+        monkeypatch.setattr(VALIDATOR, "DEMO_AD_PACK_MAX_BYTES", (root / "ads/spot.mp3").stat().st_size)
+    wheel = tmp_path / "fixture.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for entry in entries:
+            relative = entry["path"]
+            if relative.startswith("ads/") and defect == "missing":
+                continue
+            payload = (root / relative).read_bytes()
+            if relative.startswith("ads/") and defect == "changed":
+                payload += b"changed"
+            archive.writestr(f"mammamiradio/assets/demo/{relative}", payload)
+    with zipfile.ZipFile(wheel) as archive:
+        errors = VALIDATOR.validate_demo_spoken_assets(
+            assets_root=root, package_assets_root=zipfile.Path(archive, "mammamiradio/assets/demo/")
+        )
+    if expected:
+        assert any(expected in error for error in errors), errors
+    else:
+        assert errors == []
 
 
 def test_shipped_canonical_receipt_matches_generator_and_current_radio_config() -> None:
@@ -1366,20 +1469,15 @@ def test_admin_home_moment_metadata_rejects_a_stale_cache_bust_token() -> None:
     assert any("does not match manifest sha256 prefix" in error for error in errors), errors
 
 
-def test_admin_home_moment_metadata_rejects_a_chip_on_a_gated_scene() -> None:
-    """Presence alone is not proof.
-
-    An earlier version of this guard asked only whether *a* day-one scene wore
-    the chip. A gated scene wearing one tells a fresh install the laundry works
-    today, which narrow ambient context can never deliver.
-    """
+def test_admin_home_moment_metadata_rejects_a_gated_selected_proof() -> None:
+    """The replaceable slot may only select a scene reachable on day one."""
 
     source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8").replace(
-        "<h5>The laundry finished. Nobody noticed.</h5>",
-        '<h5>The laundry finished. Nobody noticed. <em class="day-one-chip">day one</em></h5>',
+        "const FIRST_LISTEN_HOME_PROOF_KEY='quiet'",
+        "const FIRST_LISTEN_HOME_PROOF_KEY='laundry'",
     )
     errors = _admin_home_moment_errors(source)
-    assert any("carries a day-one-chip" in error for error in errors), errors
+    assert any("demonstrate only gated capability" in error for error in errors), errors
 
 
 def test_admin_home_moment_metadata_rejects_reachability_swapped_against_the_manifest() -> None:
@@ -1387,35 +1485,19 @@ def test_admin_home_moment_metadata_rejects_reachability_swapped_against_the_man
     source = source.replace(
         'data-explainer-scenario="quiet" data-reachability="day-one"',
         'data-explainer-scenario="quiet" data-reachability="home-grant"',
-    ).replace(
-        'data-explainer-scenario="laundry" data-reachability="home-grant"',
-        'data-explainer-scenario="laundry" data-reachability="day-one"',
     )
     errors = _admin_home_moment_errors(source)
     assert any("scene quiet declares data-reachability 'home-grant'" in e for e in errors), errors
-    assert any("scene laundry declares data-reachability 'day-one'" in e for e in errors), errors
 
 
-def test_admin_home_moment_metadata_rejects_a_chip_outside_the_heading() -> None:
-    """The chip is styled by class alone, so it renders anywhere in the scene.
-
-    An h5-bounded check passed while a reader still saw "day one" on a gated
-    moment; this pins the subtree walk that replaced it.
-    """
-
-    template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    for mutation in (
-        (
-            "<h5>The laundry finished. Nobody noticed.</h5>",
-            '<h5>The laundry finished. Nobody noticed.</h5><em class="day-one-chip">day one</em>',
-        ),
-        (
-            '<p class="scene-caption">Washing machine · finished</p>',
-            '<p class="scene-caption">Washing machine · finished <em class="day-one-chip">day one</em></p>',
-        ),
-    ):
-        errors = _admin_home_moment_errors(template.replace(*mutation))
-        assert any("laundry is 'home-grant' but its scene carries a day-one-chip" in e for e in errors), mutation
+def test_admin_home_moment_metadata_requires_one_replaceable_proof_key() -> None:
+    source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+    source = source.replace(
+        "const FIRST_LISTEN_HOME_PROOF_KEY='quiet';",
+        "const FIRST_LISTEN_HOME_PROOF_KEY='quiet';\nconst FIRST_LISTEN_HOME_PROOF_KEY='quiet';",
+    )
+    errors = _admin_home_moment_errors(source)
+    assert any("must select exactly one reviewed scene; found 2" in error for error in errors), errors
 
 
 def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
@@ -1429,8 +1511,8 @@ def test_admin_home_moment_metadata_rejects_a_reworded_pull_quote() -> None:
     template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
     errors = _admin_home_moment_errors(
         template.replace(
-            "Sunset was twenty minutes ago, eleven degrees and clear.",
-            "Sunset was ten minutes ago, nine degrees and cloudy.",
+            "Breaking news from the laundry room: it’s done.",
+            "Breaking news from the laundry room: it’s on fire.",
         )
     )
     assert any("quote does not match its manifest quote" in error for error in errors), errors
@@ -1464,16 +1546,13 @@ def test_admin_home_moment_metadata_rejects_an_empty_spoken_noun() -> None:
     assert any("quiet is empty" in error for error in errors), errors
 
 
-def test_admin_home_moment_metadata_rejects_a_missing_chip_and_a_missing_scene() -> None:
+def test_admin_home_moment_metadata_allows_illustration_without_quote_but_requires_scene() -> None:
     template = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    stripped = template.replace(' <em class="day-one-chip">day one</em>', "")
-    assert any("carries no day-one-chip" in error for error in _admin_home_moment_errors(stripped))
+    assert 'class="evening-scene"' in template
+    assert _admin_home_moment_errors(template) == []
 
-    start = template.index('<div class="listening-invitation household-scene" data-explainer-scenario="quiet"')
-    end = template.rindex(
-        '<div class="listening-invitation household-scene"', 0, template.index('data-explainer-scenario="laundry"')
-    )
-    errors = _admin_home_moment_errors(template[:start] + template[end:])
+    missing = template.replace('data-explainer-scenario="quiet"', 'data-explainer-scenario="extra"', 1)
+    errors = _admin_home_moment_errors(missing)
     assert any("scenes are missing: quiet" in error for error in errors), errors
 
 

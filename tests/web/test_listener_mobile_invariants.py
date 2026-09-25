@@ -74,6 +74,27 @@ def test_phone_breakpoint_collapses_or_hides_nav_anchor_links() -> None:
     )
 
 
+def test_admin_shortcut_stays_visible_and_tappable_on_phones() -> None:
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    css = _read_listener_css()
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    assert '<a class="mmr-admin-link" id="admin-view-link" href="{{ ingress_prefix }}/admin">' in html
+    assert html.index('id="admin-view-link"') > html.index("</nav>")
+    assert "copy.get('admin_view', 'Admin')" in html
+    copy = UI_COPY.read_text(encoding="utf-8")
+    assert '"admin_view": "Admin"' in copy
+    assert '"admin_view": "Regia"' in copy
+    assert any("min-height: 44px" in body for body in _rule_bodies_for_selector(css, ".mmr-admin-link"))
+    phone_blocks = [body for width, body in _MEDIA_BLOCK_RE.findall(css) if int(width) <= 600]
+    assert any(re.search(r"\.mmr-admin-link\s*\{[^}]*order:\s*3", body) for body in phone_blocks)
+    assert any(".mmr-nav-inner { flex-wrap: wrap;" in body for body in phone_blocks)
+    assert any("scroll-padding-top: 144px" in body for body in phone_blocks)
+    tablet_blocks = [body for width, body in _MEDIA_BLOCK_RE.findall(css) if 600 < int(width) <= 850]
+    assert any(re.search(r"\.mmr-nav nav\s*\{[^}]*flex:\s*1 0 100%", body) for body in tablet_blocks)
+    assert not any(re.search(r"\.mmr-nav nav\s*\{[^}]*display:\s*none", body) for body in tablet_blocks)
+    assert "playbackHost.openAdmin?.()" in js
+
+
 def test_form_inputs_avoid_ios_auto_zoom() -> None:
     """All Volare-namespace input/textarea rules in listener.css must declare
     font-size >= 16px.

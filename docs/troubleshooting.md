@@ -284,7 +284,7 @@ The current ownership chain marks the initial claim with `song_pinned`, reserves
 
 ## The stream works but banter or ads are bland
 
-That usually means script generation failed and the app fell back to stock copy.
+Banter may use stock copy when script generation fails. Failed live ads instead try an approved packaged recording, then continuity audio if no recording is usable.
 
 Chaos recovery copy follows the spoken mode too: Normal Mode uses English-led
 stock, while Italian stock is used only when Super Italian Mode is enabled and
@@ -401,10 +401,11 @@ Voice validation now runs at config load, not at synthesis time:
 ## First Listen does not play on this device
 
 Required First Listen proof is hearing the station in the add-on Web UI on this
-device. If **Play my station** is quiet, check mute and volume on this tab,
-confirm the sound is coming from this browser and not another app, then try
-**Play my station again**. Technical details under the journey name the stream
-URL. Home Assistant speakers are an optional later route, not this step.
+device. If **Start my station** is quiet, check mute and volume on this tab,
+confirm the sound is coming from this browser and not another app, then choose
+**I can’t hear you** and **Play on this device again**. Technical details under
+the journey name the stream URL. Home Assistant speakers are an optional later
+route, not this step.
 
 ## First Listen: the optional Home Assistant speaker route is quiet
 

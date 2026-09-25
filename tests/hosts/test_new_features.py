@@ -90,6 +90,7 @@ async def test_write_news_flash_each_category(category):
 
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "test-key"
+    config.openai_api_key = ""
     # The assertion is about category routing and response shape; preserve the
     # pre-policy exact fixture while opting this test into the explicit Italian mode.
     config.super_italian_mode = True
@@ -102,6 +103,7 @@ async def test_write_news_flash_each_category(category):
 
     with (
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_auth_blocked_key", ""),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
         host, text, cat = await write_news_flash(state, config, category=category)
@@ -118,6 +120,7 @@ async def test_write_news_flash_sports_does_not_force_most_energetic_host():
 
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "test-key"
+    config.openai_api_key = ""
     config.hosts = [
         HostPersonality(
             name="Calm",
@@ -146,6 +149,7 @@ async def test_write_news_flash_sports_does_not_force_most_energetic_host():
 
     with (
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_auth_blocked_key", ""),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
         host, _text, _cat = await write_news_flash(state, config, category="sports")

@@ -445,7 +445,7 @@ run_landing() {
 no_merge() { ! grep -q '^pr merge .*--auto' <<< "$LOG" || fail "blocked landing attempted merge"; }
 run_landing "$ORDINARY_COMMIT"; succeeded
 ! grep -q 'built-in: git fetch' "$TMP/git.trace" || fail "complete history must not fetch"
-grep -q "^pr merge 7 --squash --auto --match-head-commit $ORDINARY_COMMIT$" <<< "$LOG" || fail "ordinary PR must still land"
+grep -q "^pr merge 7 --squash --auto --match-head-commit $ORDINARY_COMMIT --delete-branch --repo florianhorner/mammamiradio$" <<< "$LOG" || fail "ordinary PR must still land"
 ! grep -q '/actions/' <<< "$LOG" || fail "ordinary config change must not read freeze state"
 run_landing "$CUT_COMMIT"; failed; no_merge
 WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; succeeded
@@ -454,7 +454,7 @@ import pathlib, sys
 calls = pathlib.Path(sys.argv[1]).read_text().splitlines()
 assert not any(s.startswith('evidence ') for s in calls)
 admission = next(i for i, s in enumerate(calls) if '/actions/workflows/dependabot-automerge.yml' in s)
-merge = calls.index(f'pr merge 7 --squash --auto --match-head-commit {sys.argv[2]}')
+merge = calls.index(f'pr merge 7 --squash --auto --match-head-commit {sys.argv[2]} --delete-branch --repo florianhorner/mammamiradio')
 assert admission < merge
 PYEOF
 EVIDENCE_RC=1 WF_STATE=disabled_manually ARMED=false run_landing "$CUT_COMMIT"; succeeded
@@ -488,7 +488,7 @@ for kind in ordinary cut; do
   ! git -C "$FIXTURE" cat-file -e "${BASE_COMMIT}^{commit}" 2>/dev/null || fail "base must start missing"
   head="$CUT_COMMIT"; [ "$kind" != ordinary ] || head="$ORDINARY_COMMIT"
   WF_STATE=disabled_manually ARMED=false run_landing "$head"; succeeded
-  grep -q "^pr merge 7 --squash --auto --match-head-commit $head$" <<< "$LOG" || fail "shallow $kind must recover"
+  grep -q "^pr merge 7 --squash --auto --match-head-commit $head --delete-branch --repo florianhorner/mammamiradio$" <<< "$LOG" || fail "shallow $kind must recover"
 done
 shallow_fixture base-present cut
 git -C "$FIXTURE" fetch -q origin "$BASE_COMMIT"

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
@@ -88,9 +89,12 @@ def _clean_producer_globals():
 
     old_runway_floor = producer.RUNWAY_FLOOR_SECONDS
     producer.RUNWAY_FLOOR_SECONDS = 0
+    # Unit scenarios default to no ad bank; packaged tests load their own manifest.
+    producer._canned_clip_cache["ads"] = []
     yield
     producer._last_music_file = None
     producer._canned_clip_cache.clear()
+    producer._known_invalid_packaged_ads.clear()
     producer._recently_played_clips.clear()
     producer.RUNWAY_FLOOR_SECONDS = old_runway_floor
 
@@ -124,6 +128,9 @@ def _make_config():
     # special mode explicitly.  Keep them deterministic when another test or
     # the invoking environment leaves the persisted festival flag enabled.
     config.party_mode = None
+    # Most producer-unit scenarios exercise the live generation pipeline. Tests
+    # for the no-key branch clear this explicitly through _ad_capable_config.
+    config.anthropic_api_key = "test-key"
     config.pacing.lookahead_segments = 1
     config.homeassistant.enabled = False
     config.tmp_dir = Path("/tmp/mammamiradio_test")
@@ -1317,10 +1324,23 @@ async def test_time_check_uses_host_engine_for_tts():
 
 
 @pytest.mark.asyncio
-async def test_ad_promo_tag_uses_configured_ad_voice_engine():
+@pytest.mark.parametrize(("handoff", "quality_failure"), [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("lookahead", [False, True])
+async def test_ad_promo_tag_uses_configured_ad_voice_engine(tmp_path, monkeypatch, handoff, quality_failure, lookahead):
     """The promo tag must not pass a cloud ad voice ID to edge-tts."""
     state = _make_state()
     config = _make_config()
+    config.tmp_dir = config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2 if handoff else 1
+    state.songs_since_ad = 7
+    state.verbal_gag_ledger = MagicMock()
+    state.verbal_gag_ledger.offer.return_value = ("gag-id", SimpleNamespace(text="The running joke."))
+    if quality_failure:
+        from mammamiradio.scheduling import producer
+
+        _write_packaged_ad_bank(tmp_path)
+        monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", tmp_path)
+        producer._canned_clip_cache.clear()
     config.pacing.ad_spots_per_break = 1
     config.ads.voices = [
         AdVoice(
@@ -1342,6 +1362,9 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         roles_used=["hammer"],
     )
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path) if handoff else None
+    if prepared:
+        queue.put_nowait(prepared.music_segment)
     imaging = MagicMock()
     imaging.pick_ad_bumper.side_effect = _fake_path
     packaged_sfx = Path("/tmp/night-drive/sfx")
@@ -1350,19 +1373,31 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
     imaging.ad_beds_dir.return_value = packaged_beds
 
     async def _same_intro_path(path, *_args, **_kwargs):
+        if handoff:
+            _args[1].write_bytes(b"crossfaded")
+            return _args[1]
         return path
+
+    async def _write_ad(*_args, **_kwargs):
+        state.pending_callback_landed = True
+        return script
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Pubblicita.", None)
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script) as mock_write_ad,
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_write_ad) as mock_write_ad,
         patch(
             f"{PRODUCER_MODULE}._select_ad_creative",
             return_value=("classic_pitch", SonicWorld(), ["hammer"]),
         ),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=prepared),
+        patch(
+            f"{PRODUCER_MODULE}.validate_segment_audio",
+            side_effect=AudioQualityError("rejected live mix") if quality_failure else None,
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
         patch(
             f"{PRODUCER_MODULE}.synthesize_ad",
@@ -1373,10 +1408,24 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
-        await _run_until_queued(queue, state, config)
+        await _run_until_queue_depth(queue, state, config, 2 if handoff else 1)
 
+    if handoff:
+        assert queue.get_nowait() is prepared.music_segment
     seg = queue.get_nowait()
     assert seg.type == SegmentType.AD
+    assert bool(seg.metadata.get("packaged")) is quality_failure
+    assert bool(state.handoff_reservations) is handoff
+    assert state.ad_break_reservations
+    assert state.songs_since_ad == 7 and not state.ad_history
+    if lookahead:
+        _queue_music_after_ad(queue, state)
+    state.pending_callback_landed = False  # a later producer turn must not erase this ad's claim
+    state.on_stream_segment_selected(seg)
+    assert state.on_stream_segment_audible(seg) is True
+    assert state.songs_since_ad == (2 if lookahead else 0) and len(state.ad_history) == 1
+    assert not state.ad_break_reservations
+    assert state.verbal_gag_ledger.mark_spoken.call_count == (0 if quality_failure else 1)
     # Normal Mode is English-led even though this station's identity language
     # is Italian.  The promo tag is selected through the shared fallback seam.
     promo_call = next(
@@ -11392,7 +11441,8 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp_path):
+@pytest.mark.parametrize("residual", [False, True])
+async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp_path, monkeypatch, residual):
     """Cleanup failure cannot strand later cue work or corrupt queue accounting."""
     from mammamiradio.scheduling import producer
     from mammamiradio.scheduling.producer import _fire_interrupt
@@ -11429,6 +11479,8 @@ async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp
         return original_unlink(path, *args, **kwargs)
 
     spec = InterruptSpec(directive="Urgent update", urgency="urgent", cooldown=60)
+    if residual:
+        monkeypatch.setattr(producer, "drop_matching_segments", lambda *_a, **_kw: 0)
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
         patch.object(Path, "unlink", new=_unlink_with_one_failure),
@@ -11442,13 +11494,17 @@ async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp
     assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
     assert state.discard_by_reason[GenerationWasteReason.INTERRUPT] == 2
     assert bad_path.exists()
+    assert bad.released and cue.released
 
 
 @pytest.mark.asyncio
-async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
+@pytest.mark.parametrize("residual", [False, True, "handoff"])
+@pytest.mark.parametrize("accounting_error", [False, True])
+async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path, monkeypatch, residual, accounting_error):
     """Interrupt queue purges must not delete packaged demo assets."""
     from mammamiradio.core.models import InterruptSpec
     from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.handoff import HandoffReservation
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     demo_root = tmp_path / "assets" / "demo"
@@ -11461,9 +11517,21 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     )
     state = _make_state()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
-    queue.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
+    segment = Segment(type=SegmentType.AD, path=packaged, metadata={"queue_id": "asset"}, ephemeral=True)
+    assert state.reserve_ad_break("asset", "packaged-ad")
+    release = MagicMock(side_effect=lambda: state.release_ad_break("asset"))
+    segment.release_callback = release
+    if residual == "handoff":
+        music = Segment(type=SegmentType.MUSIC, path=packaged, ephemeral=False)
+        state.handoff_reservations["pair"] = HandoffReservation("pair", music, segment, packaged, 30, False, packaged)
+        queue.put_nowait(music)
+    queue.put_nowait(segment)
     state.queued_segments = [{"id": "asset", "type": "banter"}]
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+    if residual:
+        monkeypatch.setattr(producer, "drop_matching_segments", lambda *_a, **_kw: 0)
+    if accounting_error:
+        monkeypatch.setattr(state, "record_discard", MagicMock(side_effect=RuntimeError("accounting failed")))
 
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
@@ -11473,6 +11541,12 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
 
     assert packaged.exists()
     assert queue.empty()
+    assert queue._unfinished_tasks == 0
+    assert segment.released and not state.ad_break_reservations
+    if residual == "handoff":
+        assert music.released and not state.handoff_reservations
+    segment.release()
+    release.assert_called_once()
     assert state.interrupt_slot == emergency_tone
 
 
@@ -11861,6 +11935,332 @@ def _ad_capable_config(*, key: bool, brands: bool):
     return config
 
 
+def _queue_music_after_ad(queue, state):
+    from mammamiradio.scheduling.producer import _reserve_music_segment
+    from mammamiradio.web.streamer import _account_starter_runway
+
+    for index, metadata in enumerate(
+        ({}, {"rescue": True}, {"rescue": True}, {"rescue": True, "music_reservation_id": "stale"}, {"error": ""})
+    ):
+        segment = Segment(type=SegmentType.MUSIC, path=_fake_path(), metadata=metadata)
+        queue.put_nowait(segment)
+        track = Track(title="Following song", artist="Test", duration_ms=1000)
+        if index == 0:
+            state.after_music(track)
+        elif index == 1:
+            segment.metadata["queue_id"] = "resume-song"
+            _reserve_music_segment(state, track, segment)
+            _account_starter_runway(state, track)
+    released = Segment(type=SegmentType.MUSIC, path=_fake_path())
+    released.release()
+    queue.put_nowait(released)
+
+
+def _write_packaged_ad_bank(root: Path, *, modes=("normal", "super_italian")) -> dict[str, Path]:
+    ads = root / "ads"
+    ads.mkdir(parents=True, exist_ok=True)
+    entries = []
+    paths: dict[str, Path] = {}
+    for index, mode in enumerate(modes, start=1):
+        language = "it" if mode == "super_italian" else "en"
+        filename = f"{index:02d}-{mode}.mp3"
+        payload = (f"reviewed-{mode}".encode() * 200)[:2200]
+        path = ads / filename
+        path.write_bytes(payload)
+        paths[mode] = path
+        entries.append(
+            {
+                "path": f"ads/{filename}",
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "kind": "speech",
+                "language": language,
+                "transcript": f"A complete fictional {language} advertisement.",
+                "mode": mode,
+                "duration_seconds": 30.0,
+                "title": f"Studio B {mode} spot",
+                "cast": ["Announcer", "Customer"],
+            }
+        )
+    (root / "spoken_assets.json").write_text(
+        json.dumps({"schema_version": 1, "assets": entries}),
+        encoding="utf-8",
+    )
+    return paths
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("super_italian", "expected_mode", "expected_language"),
+    [(False, "normal", "en"), (True, "super_italian", "it")],
+)
+@pytest.mark.parametrize("lookahead", [0, 1, 2])
+async def test_no_key_queues_mode_safe_packaged_ad_without_rendering(
+    tmp_path,
+    monkeypatch,
+    super_italian,
+    expected_mode,
+    expected_language,
+    lookahead,
+):
+    from mammamiradio.scheduling import producer
+
+    _write_packaged_ad_bank(tmp_path, modes=("normal", "normal", "super_italian", "super_italian"))
+    monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", tmp_path)
+    producer._canned_clip_cache.clear()
+    config = _ad_capable_config(key=False, brands=False)
+    config.super_italian_mode = super_italian
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.songs_between_ads = 1
+    config.pacing.songs_between_banter = 99
+    state = _make_state()
+    state.segments_produced = 6
+    state.songs_since_ad = 1
+    state.songs_since_banter = 0
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock) as write_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock) as synthesize,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.concat_files") as concat_files,
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+        segment = queue.get_nowait()
+        pending = None
+        if lookahead == 2:
+            pending = segment
+            state.set_force_next(SegmentType.AD)
+            await _run_until_queued(queue, state, config)
+            segment = queue.get_nowait()  # the newer forced ad airs first
+
+    assert segment.type is SegmentType.AD
+    assert segment.ephemeral is False
+    assert segment.metadata["packaged"] is True
+    assert segment.metadata["provenance"] == "packaged"
+    assert segment.metadata["generation_cost_usd"] == 0.0
+    assert segment.metadata["mode"] == expected_mode
+    assert segment.metadata["language"] == expected_language
+    assert segment.metadata["cast"] == ["Announcer", "Customer"]
+    assert segment.metadata["duration_seconds"] == 30.0
+    assert state.songs_since_ad == 1
+    assert not state.ad_history
+    assert state.ad_break_reservations
+    write_ad.assert_not_awaited()
+    synthesize.assert_not_awaited()
+    synthesize_ad.assert_not_awaited()
+    concat_files.assert_not_called()
+
+    if lookahead:
+        _queue_music_after_ad(queue, state)
+    assert segment.mark_playback_started() is True
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment) is True
+    assert state.on_stream_segment_audible(segment) is False
+    assert state.songs_since_ad == (2 if lookahead else 0)
+    assert len(state.ad_history) == 1
+    if pending is not None:
+        queue.get_nowait()  # one of the two following songs has now left lookahead
+        assert pending.mark_playback_started() is True
+        state.on_stream_segment_selected(pending)
+        assert state.on_stream_segment_audible(pending) is True
+        assert state.songs_since_ad == 1 and len(state.ad_history) == 2
+        pending.release()
+    assert not state.ad_break_reservations
+    segment.release()
+
+
+@pytest.mark.asyncio
+async def test_post_restart_packaged_ad_reaches_listener_after_explicit_resume(tmp_path, monkeypatch):
+    """Persisted Stop survives reconnect; explicit Resume delivers a keyless ad."""
+    from mammamiradio.scheduling import producer
+    from mammamiradio.web import streamer
+
+    _write_packaged_ad_bank(tmp_path, modes=("normal",))
+    recovery = _manifest_recovery_clip(tmp_path, "continuity_1.mp3", b"recovery" * 512)
+    monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", tmp_path)
+    monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", tmp_path)
+    producer._canned_clip_cache.clear()
+    config = _ad_capable_config(key=False, brands=False)
+    config.super_italian_mode = False
+    config.cache_dir = config.tmp_dir = tmp_path
+    config.pacing.songs_between_ads = 1
+    config.pacing.songs_between_banter = 99
+    streamer._persist_session_stopped(config, True)
+    state = _make_state()  # new process state, restored from the prior process's marker
+    state.session_stopped = streamer._session_stopped_flag(config).exists()
+    state.segments_produced, state.songs_since_ad = 6, 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    hub = streamer.LiveStreamHub()
+    hub.bind_state(state)
+    app_state = SimpleNamespace(station_state=state, config=config, queue=queue, stream_hub=hub)
+    app_state.skip_event = asyncio.Event()
+    app = SimpleNamespace(state=app_state)
+    request = MagicMock(app=app, is_disconnected=AsyncMock(return_value=False))
+    stream = streamer._audio_generator(request, prelude=False)
+    first_chunk = asyncio.create_task(anext(stream))
+    tasks = [first_chunk, asyncio.create_task(run_producer(queue, state, config))]
+    try:
+        await asyncio.sleep(0.05)
+        assert state.session_stopped and streamer._session_stopped_flag(config).exists()
+        assert hub._listeners and queue.empty() and not first_chunk.done()
+        assert await streamer.resume_session(request) == {"ok": True, "recovering": False}
+        assert not state.session_stopped and not streamer._session_stopped_flag(config).exists()
+        bridge = queue.get_nowait()  # consume Resume's separately tested continuity runway
+        assert bridge.path == recovery
+        queue.task_done()
+        bridge.release()
+        ad = await asyncio.wait_for(queue.get(), timeout=3)
+        queue.task_done()
+        assert ad.type is SegmentType.AD and ad.metadata["packaged"]
+        tasks[1].cancel()
+        await asyncio.gather(tasks[1], return_exceptions=True)
+        queue.put_nowait(ad)
+        tasks.append(asyncio.create_task(streamer.run_playback_loop(app)))
+        chunk = await asyncio.wait_for(first_chunk, timeout=1)
+        assert chunk and ad.path.read_bytes().startswith(chunk)
+        assert len(state.ad_history) == 1 and state.songs_since_ad == 0
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["writer", "no_campaign"])
+async def test_live_ad_failure_falls_back_to_packaged_without_double_commit(tmp_path, monkeypatch, failure):
+    from mammamiradio.scheduling import producer
+
+    _write_packaged_ad_bank(tmp_path, modes=("normal",))
+    monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", tmp_path)
+    producer._canned_clip_cache.clear()
+    config = _ad_capable_config(key=True, brands=True)
+    config.super_italian_mode = False
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    state = _make_state()
+    state.songs_since_ad = 7
+    state.last_ad_script = {"brands": ["Stale previous ad"]}
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    if failure == "no_campaign":
+        monkeypatch.setattr(producer, "_select_safe_ad_spot", lambda *_a, **_kw: None)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=[]),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_ad",
+            new_callable=AsyncMock,
+            side_effect=producer._sw.AdGenerationUnavailableError("writer offline"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock) as synthesize,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.concat_files") as concat_files,
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.metadata["packaged"] is True
+    assert state.last_ad_script["packaged"] is True
+    assert state.last_ad_script["brands"] == segment.metadata["brands"]
+    assert state.last_ad_script["texts"] == [segment.metadata["transcript"]]
+    assert state.songs_since_ad == 7
+    assert not state.ad_history
+    assert synthesize.await_count <= 2, "only the abandoned live intro/promo may have reached TTS"
+    synthesize_ad.assert_not_awaited()
+    concat_files.assert_not_called()
+
+    assert segment.mark_playback_started() is True
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment) is True
+    assert state.songs_since_ad == 0
+    assert len(state.ad_history) == 1
+    assert state.on_stream_segment_audible(segment) is False
+    assert len(state.ad_history) == 1
+    segment.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["mode", "file", "manifest"])
+async def test_packaged_ad_change_rejects_playback_and_releases_reservation(tmp_path, monkeypatch, change):
+    from mammamiradio.scheduling import producer
+
+    _write_packaged_ad_bank(tmp_path)
+    monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", tmp_path)
+    producer._canned_clip_cache.clear()
+    config = _ad_capable_config(key=False, brands=False)
+    config.super_italian_mode = False
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    state = _make_state()
+    state.songs_since_ad = 7
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert state.ad_break_reservations
+    if change == "mode":
+        config.super_italian_mode = True
+    elif change == "file":
+        segment.path.write_bytes(b"unapproved" * 300)
+    else:
+        (tmp_path / "spoken_assets.json").write_text('{"schema_version": 1, "assets": []}')
+
+    assert segment.mark_playback_started() is False
+    assert not state.ad_break_reservations
+    assert state.songs_since_ad == 7
+    assert not state.ad_history
+
+
+@pytest.mark.asyncio
+async def test_packaged_ad_selection_skips_corrupt_candidate_and_avoids_immediate_repeat(tmp_path, monkeypatch):
+    from mammamiradio.scheduling import producer
+
+    paths = _write_packaged_ad_bank(tmp_path, modes=("normal",))
+    first = paths["normal"]
+    second_payload = b"second-reviewed" * 200
+    second = tmp_path / "ads" / "02-normal.mp3"
+    second.write_bytes(second_payload)
+    manifest = json.loads((tmp_path / "spoken_assets.json").read_text(encoding="utf-8"))
+    manifest["assets"].append(
+        {
+            "path": "ads/02-normal.mp3",
+            "sha256": hashlib.sha256(second_payload).hexdigest(),
+            "kind": "speech",
+            "language": "en",
+            "transcript": "A second complete fictional advertisement.",
+            "mode": "normal",
+            "duration_seconds": 30.0,
+            "title": "Studio B second spot",
+            "cast": ["Announcer"],
+        }
+    )
+    (tmp_path / "spoken_assets.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", tmp_path)
+    monkeypatch.setattr(producer.random, "shuffle", lambda values: None)
+    producer._canned_clip_cache.clear()
+    config = _ad_capable_config(key=False, brands=False)
+    config.super_italian_mode = False
+    state = _make_state()
+
+    first.write_bytes(b"tampered" * 300)
+    selected = await producer._select_packaged_ad_entry(config, state)
+    assert selected is not None
+    assert selected[0].relative_path == "ads/02-normal.mp3"
+
+    state.packaged_ad_history.append("ads/02-normal.mp3")
+    producer._known_invalid_packaged_ads.clear()
+    first.write_bytes((b"reviewed-normal" * 200)[:2200])
+    selected = await producer._select_packaged_ad_entry(config, state)
+    assert selected is not None
+    assert selected[0].relative_path == "ads/01-normal.mp3"
+
+
 def test_a_station_with_an_ai_key_and_brands_can_advertise():
     from mammamiradio.scheduling.producer import ad_programme_available, ad_programme_block
 
@@ -11869,12 +12269,8 @@ def test_a_station_with_an_ai_key_and_brands_can_advertise():
     assert ad_programme_available(config) is True
 
 
-def test_a_fresh_install_without_an_ai_key_cannot_advertise():
-    """The default first-run state: brands are configured, nothing can write them.
-
-    This is the configuration that aired "Scarpe Volanti. Perché te lo meriti."
-    as an advertisement on every ad break.
-    """
+def test_a_station_without_an_ai_key_or_packaged_bank_cannot_advertise():
+    """Without either complete ad source, brand/tagline placeholders must not air."""
     from mammamiradio.scheduling.producer import ad_programme_available, ad_programme_block
 
     config = _ad_capable_config(key=False, brands=True)
