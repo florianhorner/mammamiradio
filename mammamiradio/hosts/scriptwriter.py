@@ -1065,6 +1065,9 @@ def _trip_openai_script_circuit(state: StationState, key: str, exc: Exception) -
     state.openai_disabled_until = time.time() + seconds
     state.openai_last_error_at = time.time()
     state.openai_last_error = f"{type(exc).__name__}: HTTP {status}" if status else type(exc).__name__
+    if status == 401:
+        state.openai_key_status = "rejected"
+        state.openai_key_checked_at = time.time()
 
 
 def _openai_script_blocked(state: StationState, key: str) -> bool:
@@ -1470,6 +1473,8 @@ async def _generate_json_response(
             state.openai_disabled_until = 0.0
             state.openai_last_error = ""
             state.openai_blocked_key_hash = ""
+            state.openai_key_status = "valid"
+            state.openai_key_checked_at = time.time()
         latency_ms = int((time.perf_counter() - t_start) * 1000)
         prompt_tokens = 0
         completion_tokens = 0

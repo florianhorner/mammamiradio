@@ -7654,7 +7654,7 @@ async def _run_setup_recheck_provider_check(request: Request) -> bool:
         if configured
     ]
     try:
-        result = await _probe_provider_keys(request.app.state)
+        result = await _probe_provider_keys(request.app.state, ai_only=True)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # provider I/O must not block setup

@@ -796,14 +796,7 @@ async (page) => {
         openai_key_status: 'unverified',
         provider_probe_in_flight: true,
       },
-      rejectedInconclusive: {
-        script_llm: true,
-        anthropic_key: true,
-        anthropic_key_status: 'rejected',
-        openai: true,
-        openai_key_status: 'unverified',
-        provider_probe_in_flight: false,
-      },
+      rejectedInconclusive: { script_llm: true, anthropic_key: true, anthropic_key_status: 'rejected', openai: true, openai_key_status: 'unverified', provider_probe_in_flight: false },
       backupWithRejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: true, openai_key_status: 'rejected' },
       degradedUnverified: {
         script_llm: true,
@@ -831,11 +824,7 @@ async (page) => {
     return Object.fromEntries(Object.entries(cases).map(([name, capabilities]) => {
       updatePipelineStatus({ capabilities, golden_path: status.golden_path }, status);
       const chip = document.querySelector('#pipelineStatus .srow:first-child .status-chip');
-      return [name, {
-        state: chip?.classList[1] || '',
-        text: chip?.textContent.trim() || '',
-        checkVisible: !document.getElementById('pipelineAiCheck').hidden,
-      }];
+      return [name, { state: chip?.classList[1] || '', text: chip?.textContent.trim() || '', checkVisible: !document.getElementById('pipelineAiCheck').hidden }];
     }));
   });
   assert(
@@ -863,23 +852,12 @@ async (page) => {
   assert(hostPipelineStates.fallback.state === 'ready', `valid fallback provider did not keep AI hosts ready: ${JSON.stringify(hostPipelineStates.fallback)}`);
 
   const aiCheckAction = await page.evaluate(async () => {
-    const oldApi = apiResponse, oldRefresh = refreshSlow, oldCaps = _caps;
-    const button = document.getElementById('pipelineAiCheck');
-    let calls = 0, busy = false;
+    const oldApi = apiResponse, oldRefresh = refreshSlow, oldCaps = _caps, button = document.getElementById('pipelineAiCheck'); let calls = 0, busy = false;
     try {
-      _caps = { capabilities: { openai: true, openai_key_status: 'unverified' } };
-      apiResponse = async (method, path, body) => {
-        calls += 1;
-        busy = button.disabled && button.getAttribute('aria-busy') === 'true';
-        if (method !== 'POST' || path !== '/api/setup/provider-check' || Object.keys(body).length) throw new Error('wrong check route');
-        return { response: { ok: true }, payload: { providers: { openai_chat: { ok: true } } } };
-      };
+      _caps = { capabilities: { openai: true, openai_key_status: 'unverified' } }; apiResponse = async (method, path, body) => { calls += 1; busy = button.disabled && button.getAttribute('aria-busy') === 'true'; if (method !== 'POST' || path !== '/api/setup/provider-check' || Object.keys(body).length) throw new Error('wrong check route'); return { response: { ok: true }, payload: { providers: { openai_chat: { ok: true } } } }; };
       refreshSlow = async () => { _caps.capabilities.openai_key_status = 'valid'; };
-      await checkAiConnection(button);
-      return { calls, busy, restored: !button.disabled && !button.hasAttribute('aria-busy') };
-    } finally {
-      apiResponse = oldApi; refreshSlow = oldRefresh; _caps = oldCaps;
-    }
+      await checkAiConnection(button); return { calls, busy, restored: !button.disabled && !button.hasAttribute('aria-busy') };
+    } finally { apiResponse = oldApi; refreshSlow = oldRefresh; _caps = oldCaps; }
   });
   assert(aiCheckAction.calls === 1 && aiCheckAction.busy && aiCheckAction.restored,
     `AI connection action did not use the shared probe or recover its button: ${JSON.stringify(aiCheckAction)}`);

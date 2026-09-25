@@ -1197,6 +1197,12 @@ async def test_write_banter_open_guest_gate_accepts_case_insensitive_hans_tag(co
     assert [host.name for host, _ in result] == [regulars[0].name, _LOCAL_BALLOON_GUEST_HOST, regulars[1].name]
 
 
+async def _call_openai_script(config, state):
+    return await scriptwriter_module._generate_json_response(
+        prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "lines",
@@ -4039,25 +4045,20 @@ async def test_openai_script_breaker_blocks_retries_and_recovers(config, state, 
 
     with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
         with pytest.raises(error_class):
-            await scriptwriter_module._generate_json_response(
-                prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
-            )
+            await _call_openai_script(config, state)
         assert 0 < state.openai_disabled_until - scriptwriter_module.time.time() <= max_cooldown
         assert state.openai_blocked_key_hash and state.openai_blocked_key_hash != config.openai_api_key
-        assert state.openai_key_status == "valid"
+        assert state.openai_key_status == ("rejected" if status_code == 401 else "valid")
         with pytest.raises(RuntimeError, match="temporarily unavailable"):
-            await scriptwriter_module._generate_json_response(
-                prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
-            )
+            await _call_openai_script(config, state)
         assert client.chat.completions.create.call_count == 1
         state.openai_disabled_until = 0.0
-        result = await scriptwriter_module._generate_json_response(
-            prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
-        )
+        result = await _call_openai_script(config, state)
 
     assert result == {"ok": True}
     assert state.openai_last_error == ""
     assert state.openai_blocked_key_hash == ""
+    assert state.openai_key_status == "valid"
     assert client.chat.completions.create.call_count == 2
 
 
@@ -4078,9 +4079,7 @@ async def test_openai_script_breaker_ignores_stale_key_failure(config, state):
         patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client),
         pytest.raises(openai.AuthenticationError),
     ):
-        await scriptwriter_module._generate_json_response(
-            prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
-        )
+        await _call_openai_script(config, state)
     assert state.openai_disabled_until == 0.0
     assert state.openai_blocked_key_hash == ""
 
@@ -4105,15 +4104,11 @@ async def test_openai_script_breaker_classifies_other_provider_failures(config, 
                 patch("mammamiradio.hosts.scriptwriter.resolve_model", return_value=None),
                 pytest.raises(RuntimeError, match="No configured OpenAI script model"),
             ):
-                await scriptwriter_module._generate_json_response(
-                    prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
-                )
+                await _call_openai_script(config, state)
             client.chat.completions.create.assert_not_called()
         else:
             with pytest.raises(type(error)):
-                await scriptwriter_module._generate_json_response(
-                    prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
-                )
+                await _call_openai_script(config, state)
     remaining = state.openai_disabled_until - scriptwriter_module.time.time()
     if failure == "routing":
         assert remaining <= 0  # A missing local model route is not a provider outage.
@@ -4134,13 +4129,9 @@ async def test_healthy_openai_script_calls_do_not_queue_behind_each_other(config
 
     client.chat.completions.create.side_effect = simultaneous
     with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
-
-        async def generate():
-            return await scriptwriter_module._generate_json_response(
-                prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
-            )
-
-        result = await asyncio.wait_for(asyncio.gather(generate(), generate()), timeout=3)
+        result = await asyncio.wait_for(
+            asyncio.gather(_call_openai_script(config, state), _call_openai_script(config, state)), timeout=3
+        )
     assert result == [{"ok": True}, {"ok": True}]
 
 

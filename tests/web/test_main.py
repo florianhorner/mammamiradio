@@ -2470,12 +2470,10 @@ async def test_shutdown_cancels_background_tasks():
     verdict_task = AsyncMock()
     verdict_task.cancel = MagicMock()
     verdict_task.done = MagicMock(return_value=False)
-    recheck_task = AsyncMock()
-    recheck_task.cancel = MagicMock()
-    recheck_task.done = MagicMock(return_value=False)
-    probe_task = AsyncMock()
-    probe_task.cancel = MagicMock()
-    probe_task.done = MagicMock(return_value=False)
+    recheck_task, probe_task = AsyncMock(), AsyncMock()
+    for task in (recheck_task, probe_task):
+        task.cancel = MagicMock()
+        task.done = MagicMock(return_value=False)
     main_mod.app.state.provider_verdict_task = verdict_task
     main_mod.app.state._setup_recheck_provider_task = recheck_task
     main_mod.app.state._provider_check_task = probe_task
@@ -2489,13 +2487,12 @@ async def test_shutdown_cancels_background_tasks():
 
     bg_task.cancel.assert_called_once()
     verdict_task.cancel.assert_called_once()
-    recheck_task.cancel.assert_called_once()
-    probe_task.cancel.assert_called_once()
     _args, _kwargs = mock_gather.call_args
     assert bg_task in _args
     assert verdict_task in _args
-    assert recheck_task in _args
-    assert probe_task in _args
+    for task in (recheck_task, probe_task):
+        task.cancel.assert_called_once()
+        assert task in _args
     assert _kwargs.get("return_exceptions") is True
 
     # Cleanup

@@ -257,44 +257,29 @@ def test_guided_setup_rejected_single_key_marks_ai_hosts_rejected():
     assert guided["ai_hosts"]["status"] == "rejected"
 
 
-def test_guided_setup_completed_inconclusive_probe_needs_check():
+@pytest.mark.parametrize(
+    ("anthropic", "openai", "checking", "degraded", "status", "action"),
+    [
+        ("quota", None, False, False, "degraded", "check_ai_connection"),
+        ("unverified", None, True, False, "checking", "review"),
+        (None, "valid", False, True, "degraded", "review"),
+        (None, "rejected", False, True, "rejected", "replace_ai_key"),
+        ("rejected", "unverified", False, False, "degraded", "check_ai_connection"),
+    ],
+)
+def test_guided_setup_provider_verdicts(anthropic, openai, checking, degraded, status, action):
     config = load_config()
-    config.anthropic_api_key = "sk-ant"
+    config.anthropic_api_key = "sk-ant" if anthropic else ""
+    config.openai_api_key = "sk-openai" if openai else ""
     provider_health = {
-        "anthropic": {"key_status": "quota"},
-        "openai": {"key_status": "unverified"},
+        "probe_in_flight": checking,
+        "anthropic": {"key_status": anthropic},
+        "openai": {"key_status": openai, "degraded": degraded},
     }
-
-    guided = build_guided_setup(config, _real_state(), provider_health=provider_health)
-
-    assert guided["ai_hosts"]["status"] == "degraded"
-    assert guided["ai_hosts"]["action"] == "check_ai_connection"
-
-
-def test_guided_setup_in_flight_probe_is_checking():
-    config = load_config()
-    config.anthropic_api_key = "sk-ant"
-    provider_health = {
-        "probe_in_flight": True,
-        "anthropic": {"key_status": "unverified"},
-    }
-
-    guided = build_guided_setup(config, _real_state(), provider_health=provider_health)
-
-    assert guided["ai_hosts"]["status"] == "checking"
-
-
-def test_guided_setup_openai_breaker_overrides_old_valid_key():
-    config = load_config()
-    config.anthropic_api_key = ""
-    config.openai_api_key = "sk-openai"
-    provider_health = {"openai": {"key_status": "valid", "degraded": True}}
-
-    guided = build_guided_setup(config, _real_state(), provider_health=provider_health)
-
-    assert guided["ai_hosts"]["status"] == "degraded"
-    assert guided["ai_hosts"]["action"] == "review"
-    assert "reconnect" in guided["ai_hosts"]["detail"]
+    ai = build_guided_setup(config, _real_state(), provider_health=provider_health)["ai_hosts"]
+    assert (ai["status"], ai["action"]) == (status, action)
+    if openai == "valid" and degraded:
+        assert "reconnect" in ai["detail"]
 
 
 def test_guided_setup_valid_second_key_wins_over_rejected_key():
@@ -309,22 +294,6 @@ def test_guided_setup_valid_second_key_wins_over_rejected_key():
     guided = build_guided_setup(config, _real_state(), provider_health=provider_health)
 
     assert guided["ai_hosts"]["status"] == "ready"
-
-
-def test_guided_setup_rejected_and_inconclusive_keys_request_another_check():
-    config = load_config()
-    config.anthropic_api_key = "sk-ant"
-    config.openai_api_key = "sk-openai"
-    provider_health = {
-        "probe_in_flight": False,
-        "anthropic": {"key_status": "rejected"},
-        "openai": {"key_status": "unverified"},
-    }
-
-    guided = build_guided_setup(config, _real_state(), provider_health=provider_health)
-
-    assert guided["ai_hosts"]["status"] == "degraded"
-    assert guided["ai_hosts"]["action"] == "check_ai_connection"
 
 
 def test_guided_setup_connected_home_requires_safe_context():

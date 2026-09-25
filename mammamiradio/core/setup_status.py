@@ -146,13 +146,13 @@ def _llm_key_status(config: StationConfig, provider_health: dict | None = None) 
         for provider, configured in (("anthropic", has_anthropic), ("openai", has_openai))
     ):
         return "ready"
+    configured_statuses = [status for status in statuses if status is not None]
+    if configured_statuses and all(status == "rejected" for status in configured_statuses):
+        return "rejected"
     if any(provider_health.get(provider, {}).get("degraded") for provider in ("anthropic", "openai")):
         return "degraded"
     if "unverified" in statuses and provider_health.get("probe_in_flight"):
         return "checking"
-    configured_statuses = [status for status in statuses if status is not None]
-    if configured_statuses and all(status == "rejected" for status in configured_statuses):
-        return "rejected"
     return "degraded"
 
 

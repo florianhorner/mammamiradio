@@ -73,7 +73,7 @@ def _record_provider_verdict(state: StationState, probe_result: dict) -> None:
         state.openai_key_checked_at = now
 
 
-async def _probe_provider_keys(app_state) -> dict:
+async def _probe_provider_keys(app_state, *, ai_only: bool = False) -> dict:
     """Share one current-key probe across boot, save, and operator checks."""
     lock = getattr(app_state, "_provider_check_lock", None)
     if lock is None:
@@ -97,16 +97,13 @@ async def _probe_provider_keys(app_state) -> dict:
             task = None
         if task is not None and task.done():
             # Do not reuse a completed task after its completion-time cache expires.
-            try:
-                task.result()
-            except BaseException:
-                pass
-            if getattr(app_state, "_provider_check_task", None) is task:
-                app_state._provider_check_task = None
+            app_state._provider_check_task = None
             task = None
         if task is None:
             app_state._provider_check_task_keys = keys
-            task = asyncio.create_task(_perform_provider_probe(app_state, keys))
+            ai_result = asyncio.get_running_loop().create_future()
+            app_state._provider_check_ai_result = ai_result
+            task = asyncio.create_task(_perform_provider_probe(app_state, keys, ai_result))
             app_state._provider_check_task = task
             active = getattr(app_state, "background_tasks", None)
             if active is None:
@@ -115,55 +112,68 @@ async def _probe_provider_keys(app_state) -> dict:
 
             def forget(finished):
                 active.discard(finished)
+                if not ai_result.done():
+                    ai_result.set_result({"ok": False, "providers": {}})
                 if not finished.cancelled():
                     finished.exception()
 
             task.add_done_callback(forget)
 
+        else:
+            ai_result = app_state._provider_check_ai_result
+
     try:
-        result = await asyncio.shield(task)
+        result = await asyncio.shield(ai_result if ai_only else task)
     except BaseException:
         # A cancelled HTTP waiter must not cancel or orphan the shared probe.
-        if task.done():
-            async with lock:
-                if getattr(app_state, "_provider_check_task", None) is task:
-                    app_state._provider_check_task = None
+        async with lock:
+            if not task.done() or getattr(app_state, "_provider_check_task", None) is not task:
+                raise
+            app_state._provider_check_task = None
         raise
 
-    async with lock:
-        if getattr(app_state, "_provider_check_task", None) is task:
-            app_state._provider_check_cached_result = result
-            app_state._provider_check_cached_keys = keys
-            app_state._provider_check_cached_at = time.time()
-            app_state._provider_check_task = None
     return result
 
 
-async def _perform_provider_probe(app_state, keys: tuple[str, ...]) -> dict:
+async def _perform_provider_probe(app_state, keys: tuple[str, ...], ai_result: asyncio.Future) -> dict:
     if keys != _provider_check_identity(app_state) or getattr(app_state, "_provider_checks_shutting_down", False):
         # A later save owns validation for its generation.
         raise RuntimeError("Provider credentials changed before the check started")
-    result = await check_provider_keys(app_state.config)
-    if keys == _provider_check_identity(app_state) and not getattr(app_state, "_provider_checks_shutting_down", False):
-        _record_provider_verdict(app_state.station_state, result)
-        if getattr(app_state, "_provider_check_task", None) is asyncio.current_task():
-            app_state._provider_check_cached_result = result
-            app_state._provider_check_cached_keys = keys
-            app_state._provider_check_cached_at = time.time()
+
+    def ai_checked(result: dict) -> None:
+        if keys == _provider_check_identity(app_state) and not getattr(
+            app_state, "_provider_checks_shutting_down", False
+        ):
+            _record_provider_verdict(app_state.station_state, result)
+        ai_result.set_result(result)
+
+    result = await check_provider_keys(app_state.config, on_ai_checked=ai_checked)
+    if not ai_result.done():
+        ai_checked(result)  # Also settle mocks and checks with no configured AI key.
+    if (
+        keys == _provider_check_identity(app_state)
+        and not getattr(app_state, "_provider_checks_shutting_down", False)
+        and getattr(app_state, "_provider_check_task", None) is asyncio.current_task()
+    ):
+        app_state._provider_check_cached_result = result
+        app_state._provider_check_cached_keys = keys
+        app_state._provider_check_cached_at = time.time()
     return result
 
 
 def _provider_probe_in_flight(app_state) -> bool:
     keys = _provider_check_identity(app_state)
+    ai_result = getattr(app_state, "_provider_check_ai_result", None)
+    if getattr(app_state, "_provider_check_task_keys", None) == keys and ai_result is not None:
+        return not ai_result.done()
     return any(
-        task is not None and not task.done() and (task_keys is None or task_keys == keys)
-        for task, task_keys in (
-            (getattr(app_state, "provider_verdict_task", None), None),
-            (getattr(app_state, "_provider_check_task", None), getattr(app_state, "_provider_check_task_keys", None)),
-            (
-                getattr(app_state, "_setup_recheck_provider_task", None),
-                getattr(app_state, "_setup_recheck_provider_task_keys", None),
-            ),
+        (task := getattr(app_state, name, None)) is not None
+        and not task.done()
+        and (key_name is None or getattr(app_state, key_name, None) == keys)
+        for name, key_name in (
+            ("provider_verdict_task", None),
+            ("_provider_check_task", "_provider_check_task_keys"),
+            ("_setup_recheck_provider_task", "_setup_recheck_provider_task_keys"),
         )
     )
 
@@ -174,6 +184,6 @@ async def _run_provider_verdict(app_state) -> None:
     if not config.anthropic_api_key and not config.openai_api_key:
         return
     try:
-        await _probe_provider_keys(app_state)
+        await _probe_provider_keys(app_state, ai_only=True)
     except Exception:
         return
