@@ -9,6 +9,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# core/config.py:37 runs a bare load_dotenv() at import time, which is during
+# pytest collection, before any fixture. The workspace .env would leak keys such
+# as HA_URL and HA_ENABLED into every test and fail six of them locally while CI
+# (no .env) stays green. python-dotenv honours this switch inside load_dotenv();
+# it needs python-dotenv >= 1.2 and must be a direct assignment: an inherited
+# "0" is a truthy-looking value that python-dotenv treats as "not disabled".
+# Keep this at module level. A fixture runs too late, and the spawned HA
+# projection worker (home/ha_context.py) inherits whatever this process holds.
+# tests/core/test_config_env_overrides.py asserts both the site and the effect.
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+
 
 @pytest.fixture
 def external_media_installed(monkeypatch):
@@ -40,7 +51,12 @@ def external_media_missing(monkeypatch):
 
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_env():
-    """Prevent real operator settings from leaking into tests via load_dotenv."""
+    """Keep a developer's exported provider credentials out of the session.
+
+    The workspace ``.env`` is already blocked at collection time by the
+    ``PYTHON_DOTENV_DISABLED`` assignment at the top of this file; this fixture
+    covers keys the developer exported in their shell instead.
+    """
     sensitive = [
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",

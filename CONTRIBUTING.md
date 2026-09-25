@@ -130,6 +130,7 @@ still makes the final repository-wide decision.
 
 Notes:
 
+- The suite never reads your workspace `.env`. `tests/conftest.py` sets `PYTHON_DOTENV_DISABLED=1` at module level, because `core/config.py` loads `.env` at import time, which is during collection; without the switch a local `.env` with `HA_URL` or `HA_ENABLED` fails tests that CI (no `.env`) passes. This needs `python-dotenv>=1.2`; the guard in `tests/core/test_config_env_overrides.py` tells you if yours is older. Keys you exported in your shell are still stripped by the `_isolate_env` fixture. The one test that loads a dotenv file on purpose (the guide generator's `--env-file` test) lifts the switch for itself.
 - `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes. On PRs that job runs when audio, scheduling, streamer, startup/core configuration, launch-smoke, Python package/runtime/development dependencies, radio/model configuration, the changed-lanes classifier, or the shared Python CI setup change; every push to `main` still runs it.
 - Home Assistant add-on changes must also pass the local add-on build check:
 
