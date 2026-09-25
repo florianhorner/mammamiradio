@@ -279,6 +279,7 @@ from mammamiradio.web.persistence import (
 from mammamiradio.web.provider_verdict import (
     _record_provider_verdict,
     _run_provider_verdict,
+    _verdict_from_probe_entry,
 )
 from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
     PUBLIC_STATUS_CACHE_CONTROL,
@@ -7619,10 +7620,13 @@ async def setup_recheck(request: Request, _: None = Depends(_require_active_setu
         await asyncio.wait_for(asyncio.shield(task), timeout=_SETUP_RECHECK_PROVIDER_WAIT_SECONDS)
     except TimeoutError:
         pass
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise
     await _wait_for_first_listen_bootstrap(app_state)
     setup = _setup_projection(request, force_refresh=True)["setup"]
     setup["provider_check_pending"] = not task.done()
-    setup["provider_check_failed"] = task.done() and not task.result()
+    setup["provider_check_failed"] = task.cancelled() or (task.done() and not task.result())
     return setup
 
 
@@ -7632,14 +7636,27 @@ _SETUP_RECHECK_PROVIDER_WAIT_SECONDS = 2.0
 async def _run_setup_recheck_provider_check(request: Request) -> bool:
     # The shared coordinator owns the outbound probe. Keep this waiter alive after
     # the short response budget so its eventual result still updates the verdict.
+    config = request.app.state.config
+    expected_providers = [
+        provider
+        for provider, configured in (
+            ("anthropic", config.anthropic_api_key),
+            ("openai_chat", config.openai_api_key),
+            ("openai_tts", config.openai_api_key),
+            ("azure_speech", config.azure_speech_key and config.azure_speech_region),
+            ("elevenlabs_tts", config.elevenlabs_api_key),
+        )
+        if configured
+    ]
     try:
-        await setup_provider_check(request, None)
+        result = await setup_provider_check(request, None)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # provider I/O must not block setup
         logger.debug("Setup recheck provider probe failed: %s", exc)
         return False
-    return True
+    providers = result.get("providers", {}) if isinstance(result, dict) else {}
+    return all(_verdict_from_probe_entry(providers.get(name, {})) is not None for name in expected_providers)
 
 
 @router.post("/api/setup/first-listen/players")

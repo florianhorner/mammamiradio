@@ -6511,6 +6511,47 @@ async def test_setup_recheck_reports_provider_probe_failure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["quota", "network"])
+async def test_setup_recheck_reports_inconclusive_provider_result(outcome: str):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    payload = _probe_payload(anthropic=outcome)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={})
+
+    assert response.status_code == 200
+    assert response.json()["provider_check_pending"] is False
+    assert response.json()["provider_check_failed"] is True
+    assert app.state.station_state.anthropic_key_status == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_setup_recheck_returns_failed_when_shared_probe_is_cancelled():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    started = asyncio.Event()
+
+    async def slow_probe(_config):
+        started.set()
+        await asyncio.sleep(10)
+        return _probe_payload(anthropic="ok")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.check_provider_keys", new=slow_probe):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request_task = asyncio.create_task(client.post("/api/setup/recheck", headers=ACTIVE_SETUP_HEADERS, json={}))
+            await started.wait()
+            app.state._setup_recheck_provider_task.cancel()
+            response = await request_task
+
+    assert response.status_code == 200
+    assert response.json()["provider_check_pending"] is False
+    assert response.json()["provider_check_failed"] is True
+
+
+@pytest.mark.asyncio
 async def test_active_setup_recheck_requires_csrf_and_exact_empty_json_on_loopback():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -12051,7 +12092,12 @@ def _probe_entry(provider: str, outcome: str | None) -> dict:
             "error_type": "",
             "detail": "",
         }
-    mapping = {"auth": (401, "authentication_error"), "quota": (403, "insufficient_quota"), "rate": (429, "rate_limit")}
+    mapping = {
+        "auth": (401, "authentication_error"),
+        "quota": (403, "insufficient_quota"),
+        "rate": (429, "rate_limit"),
+        "network": (None, "network_error"),
+    }
     status_code, error_type = mapping[outcome]
     return {
         "provider": provider,
