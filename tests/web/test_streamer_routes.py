@@ -7402,7 +7402,7 @@ async def test_cancelled_provider_check_waiter_keeps_shared_probe_for_verdict():
         await release.wait()
         return _probe_payload(anthropic="ok")
 
-    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=slow_probe):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             request_task = asyncio.create_task(
@@ -7416,8 +7416,14 @@ async def test_cancelled_provider_check_waiter_keeps_shared_probe_for_verdict():
             assert not shared_task.done()
             release.set()
             await shared_task
+            # The disconnected waiter did not cache the result. Once the
+            # worker's completion-time cache expires, another click must probe.
+            app.state._provider_check_cached_at -= 3
+            renewed = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
 
     assert app.state.station_state.anthropic_key_status == "valid"
+    assert renewed.status_code == 200
+    assert probe.await_count == 2
 
 
 @pytest.mark.asyncio

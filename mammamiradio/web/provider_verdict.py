@@ -91,17 +91,15 @@ async def _probe_provider_keys(app_state) -> dict:
         if getattr(app_state, "_provider_check_task_keys", None) != keys:
             task = None
         if task is not None and task.done():
+            # A disconnected caller can leave a completed task with no waiter.
+            # Its result was cached at completion by the worker; once that cache
+            # expires, the task must not make an old result appear newly checked.
             try:
-                result = task.result()
+                task.result()
             except BaseException:
-                if getattr(app_state, "_provider_check_task", None) is task:
-                    app_state._provider_check_task = None
-            else:
-                app_state._provider_check_cached_result = result
-                app_state._provider_check_cached_keys = keys
-                app_state._provider_check_cached_at = time.time()
+                pass
+            if getattr(app_state, "_provider_check_task", None) is task:
                 app_state._provider_check_task = None
-                return result
             task = None
         if task is None:
             app_state._provider_check_task_keys = keys
@@ -135,6 +133,10 @@ async def _perform_provider_probe(app_state, keys: tuple[str, ...]) -> dict:
     result = await check_provider_keys(app_state.config)
     if keys == _provider_check_keys(app_state.config):
         _record_provider_verdict(app_state.station_state, result)
+        if getattr(app_state, "_provider_check_task", None) is asyncio.current_task():
+            app_state._provider_check_cached_result = result
+            app_state._provider_check_cached_keys = keys
+            app_state._provider_check_cached_at = time.time()
     return result
 
 
