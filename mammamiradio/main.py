@@ -378,6 +378,7 @@ def _runtime_build_label() -> str:
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
     global _producer_task, _playback_task, _prewarm_task
+    app.state._provider_checks_shutting_down = False
 
     config = load_config()
     # A bundled/default ``context_enabled = true`` must not let a fresh
@@ -1164,6 +1165,7 @@ async def startup():
 
 async def shutdown():
     """Stop background workers and close shared streaming resources."""
+    app.state._provider_checks_shutting_down = True
     tasks_to_cancel = []
     if _prewarm_task:
         _prewarm_task.cancel()
@@ -1182,13 +1184,12 @@ async def shutdown():
     if jamendo_start_task:
         jamendo_start_task.cancel()
         tasks_to_cancel.append(jamendo_start_task)
-    # The provider-verdict probe is created outside the producer/playback set
-    # (startup + credential saves); cancel it so it can't mutate station_state
-    # after teardown begins — same write-after-shutdown race as the downloads.
-    verdict_task = getattr(app.state, "provider_verdict_task", None)
-    if verdict_task:
-        verdict_task.cancel()
-        tasks_to_cancel.append(verdict_task)
+    # Superseded probes remain in background_tasks for cancellation below.
+    for task_name in ("provider_verdict_task", "_setup_recheck_provider_task", "_provider_check_task"):
+        provider_task = getattr(app.state, task_name, None)
+        if provider_task and not provider_task.done():
+            provider_task.cancel()
+            tasks_to_cancel.append(provider_task)
     # Resume leaves a slow starter verification running rather than cancelling
     # it mid-request. Teardown is the one place that must, so its late result
     # cannot run eligibility bookkeeping against a station that is shutting down.

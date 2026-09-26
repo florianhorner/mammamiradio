@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -145,7 +146,12 @@ def _result(provider: str, status_code: int | None, body: str, *, secrets: tuple
     }
 
 
-async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0) -> dict[str, Any]:
+async def check_provider_keys(
+    config: StationConfig,
+    *,
+    timeout_s: float = 12.0,
+    on_ai_checked: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Probe configured AI keys without returning or logging secret values."""
     results: dict[str, Any] = {
         "anthropic": _missing_result("anthropic"),
@@ -231,6 +237,10 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
                         break
                 results["openai_chat"] = openai_result
 
+        if on_ai_checked is not None:
+            on_ai_checked({"ok": any(item["ok"] for item in results.values()), "providers": dict(results)})
+
+        if config.openai_api_key:
             tts_model = config.models.tts_model("openai")
             if not tts_model:
                 results["openai_tts"] = _routing_unavailable_result("openai_tts")

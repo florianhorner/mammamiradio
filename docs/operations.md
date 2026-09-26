@@ -775,11 +775,12 @@ without waiting for a banter or TTS segment to fail. The active checks cover
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`,
 and `ELEVENLABS_API_KEY`.
 
-- On startup (when any key is configured) and after a key-save, a single secret-safe
+- On startup or a key-save when an Anthropic or OpenAI writing key is configured, a single secret-safe
   provider probe (`check_provider_keys`) runs in the background — fire-and-forget, so it
   never delays boot or the first audio. Anthropic/OpenAI use minimal text probes; Azure Speech
   and ElevenLabs use voice-list endpoints, not billable synthesis. `POST /api/setup/provider-check`
-  runs it on demand.
+  also checks voice keys on demand. Boot, save, and operator checks join the same in-flight probe for the
+  current keys; a quick save-then-check does not send duplicate provider calls.
 - The verdict is cached on the station state and exposed in `GET /api/capabilities`:
   `capabilities.anthropic_key_status` / `capabilities.openai_key_status`, and
   `provider_health.{anthropic,openai,azure_speech,elevenlabs_tts}.key_status`. Each is
@@ -788,6 +789,12 @@ and `ELEVENLABS_API_KEY`.
 - A `"rejected"` key reads in the Engine Room as a persistent **key not working — replace key**
   state, distinct from the transient time-based `anthropic_degraded` "suspended" fallback. When a
   rejected key is the only configured LLM key, `capabilities.next_step` steers toward replacing it.
+- Admin capabilities and provider health expose `provider_probe_in_flight`. An unverified key
+  reads as **Checking** only while a probe is active; an inconclusive completed probe asks the
+  operator to check the AI connection again. OpenAI script failures have their own bounded
+  breaker (`provider_health.openai.degraded` and `retry_after_s`), separate from OpenAI speech.
+  A previously valid OpenAI key does not make AI hosts appear ready while its script breaker
+  is active. `/public-status` does not expose these new diagnostics.
 - The listener side never surfaces key health; if OpenAI is valid the station keeps sounding live.
 
 For voice casting specifically, run

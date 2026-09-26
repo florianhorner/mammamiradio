@@ -331,6 +331,7 @@ quality profile if `OPENAI_API_KEY` is set (the role-specific catalog entry in
 `radio.toml`—when changing a script model or its token price.
 When Anthropic returns an authentication failure (for example `invalid x-api-key`) or a non-retryable provider configuration error (for example a 404/model-not-found from an invalid Claude model ID), the app suspends Anthropic for 10 minutes in-process and routes script generation to OpenAI immediately to avoid repeated provider spam. Concurrent banter, ad, and transition generations share a single attempt lock: the first call trips the circuit; sibling calls queued on the lock see the block and fall straight to OpenAI instead of each racing through their own failed request. After the 10-minute cooldown the next call logs a provider backoff expiry and makes exactly one retry; a successful retry clears the block, a fresh failure re-arms it for another 10 minutes.
 A temporary overload or rate limit (HTTP 429/529) uses a separate, much shorter breaker: it benches Anthropic for a bounded cooldown (default 20s, honoring a `Retry-After` header when present, clamped to 5–60s) so affected later segments go straight to OpenAI, then retries Anthropic automatically once the cooldown expires. A 429 is scoped to the failing model; a 529 overload benches Anthropic account-wide. This path needs no operator action — `/status` reports it as a self-recovering transient state, not an auth/config block.
+OpenAI script calls have a separate breaker. Authentication and quota failures pause the key for 10 minutes; a model 404, network error, timeout, or server failure uses a 20-second pause (429 honors bounded `Retry-After`). A 400/422 request rejection does not pause other scripts. A successful response clears the pause. A missing local model route uses stock copy without marking the provider down. Saving the OpenAI key clears its old breaker, and an earlier key's late failure cannot disable the replacement. OpenAI speech has its own health state.
 
 Check:
 
@@ -338,6 +339,7 @@ Check:
 - outbound network access is available
 - `/status` or the dashboard shows recent producer errors
 - `/api/capabilities` and `/status` now include `provider_health.anthropic` (`degraded`, `retry_after_s`, `auth_failures`)
+- `/api/capabilities` and `/status` include `provider_health.openai` (`degraded`, `retry_after_s`) and `provider_probe_in_flight` for the current admin check. **Checking AI hosts** should appear only while that check is running. If the key remains unconfirmed afterward, use **Check AI connection** in Motore; replace a key only when the provider refused it.
 
 If generated banter airs but listener memory or song callbacks are not growing,
 check the post-air extractor path separately:

@@ -139,13 +139,21 @@ def _llm_key_status(config: StationConfig, provider_health: dict | None = None) 
         provider_health.get("anthropic", {}).get("key_status") if has_anthropic else None,
         provider_health.get("openai", {}).get("key_status") if has_openai else None,
     ]
-    if "valid" in statuses:
+    if any(
+        configured
+        and provider_health.get(provider, {}).get("key_status") == "valid"
+        and not provider_health.get(provider, {}).get("degraded")
+        for provider, configured in (("anthropic", has_anthropic), ("openai", has_openai))
+    ):
         return "ready"
-    if "unverified" in statuses:
-        return "checking"
-    if "rejected" in statuses:
+    configured_statuses = [status for status in statuses if status is not None]
+    if configured_statuses and all(status == "rejected" for status in configured_statuses):
         return "rejected"
-    return "ready"
+    if any(provider_health.get(provider, {}).get("degraded") for provider in ("anthropic", "openai")):
+        return "degraded"
+    if "unverified" in statuses and provider_health.get("probe_in_flight"):
+        return "checking"
+    return "degraded"
 
 
 def _stream_status(config: StationConfig, state: StationState, golden_path: dict | None = None) -> str:
@@ -263,6 +271,8 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
                 "focus": "source",
             },
             "add_ai_key": {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"},
+            "check_ai_connection": {"kind": "check_ai_connection", "label": "Check AI connection", "target": "setup"},
+            "replace_ai_key": {"kind": "replace_ai_key", "label": "Replace AI key", "target": "setup"},
             "find_speaker": {"kind": "find_speaker", "label": "Find speaker", "target": "setup"},
             "play_here": {"kind": "play_here", "label": "Play here", "target": "setup"},
             "verify_audio": {"kind": "verify_audio", "label": "Did you hear it?", "target": "setup"},
@@ -410,6 +420,9 @@ def build_guided_setup(
     home_ready = home_availability.home_context_ready
     stream_status = _stream_status(config, state, golden_path)
     ai_status = _llm_key_status(config, provider_health)
+    ai_retrying = ai_status == "degraded" and any(
+        (provider_health or {}).get(provider, {}).get("degraded") for provider in ("anthropic", "openai")
+    )
     home_status = _legacy_home_context_status(has_llm, home_availability)
 
     source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
@@ -439,13 +452,33 @@ def build_guided_setup(
         "id": "ai_hosts",
         "status": ai_status,
         "label": "AI hosts",
-        "headline": "AI hosts are ready." if ai_status == "ready" else "Add one AI host key.",
+        "headline": {
+            "ready": "AI hosts are ready.",
+            "missing": "Add one AI host key.",
+            "checking": "Checking the AI connection.",
+            "rejected": "The AI key needs replacing.",
+            "degraded": "AI hosts are taking a break." if ai_retrying else "The AI connection needs a check.",
+        }[ai_status],
         "detail": (
             "Anthropic or OpenAI can generate live host breaks."
             if ai_status == "ready"
-            else "Add ANTHROPIC_API_KEY or OPENAI_API_KEY when you want generated banter and ads."
+            else "Add an Anthropic or OpenAI key when you want new conversations."
+            if ai_status == "missing"
+            else "The station is checking your saved key. You can keep listening."
+            if ai_status == "checking"
+            else "Open Settings and replace the key. Included host clips keep the show going."
+            if ai_status == "rejected"
+            else "Included host clips keep the show going while AI hosts reconnect. Check Settings if this continues."
+            if ai_retrying
+            else "Open Settings and check the AI connection again. Included host clips keep the show going."
         ),
-        "action": "review" if ai_status == "ready" else "add_ai_key",
+        "action": {
+            "ready": "review",
+            "missing": "add_ai_key",
+            "checking": "review",
+            "rejected": "replace_ai_key",
+            "degraded": "review" if ai_retrying else "check_ai_connection",
+        }[ai_status],
     }
     home_headline, home_detail = _home_context_copy(config, home_status)
     home_context = {
