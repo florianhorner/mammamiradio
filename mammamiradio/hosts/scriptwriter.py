@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import hmac
 import json
 import logging
 import math
@@ -123,6 +124,7 @@ _anthropic_client: anthropic.AsyncAnthropic | None = None
 _anthropic_key: str = ""
 _openai_client = None
 _openai_key: str = ""
+_openai_fingerprint_secret = os.urandom(32)
 _anthropic_auth_blocked_key: str = ""
 _anthropic_auth_blocked_until: float = 0.0
 _anthropic_blocked_reason: str = "provider error"
@@ -1050,30 +1052,35 @@ def _get_anthropic_attempt_lock() -> asyncio.Lock:
     return _anthropic_attempt_lock
 
 
+def _openai_key_fingerprint(key: str) -> str:
+    """Keep a fast, process-keyed identity without storing the API key."""
+    return hmac.digest(_openai_fingerprint_secret, key.encode(), "sha256").hex()
+
+
 def _trip_openai_script_circuit(state: StationState, key: str, exc: Exception) -> None:
     """Record a bounded script-provider outage without exposing response text."""
     status = getattr(exc, "status_code", None)
     quota = "insufficient_quota" in str(exc).lower() or "billing" in str(exc).lower()
-    transient = status in (429, 500, 502, 503, 504) or isinstance(exc, (openai.APIConnectionError, TimeoutError))
-    if quota:
+    transient = status in (404, 429, 500, 502, 503, 504) or isinstance(exc, (openai.APIConnectionError, TimeoutError))
+    state.openai_last_error_at = time.time()
+    state.openai_last_error = f"{type(exc).__name__}: HTTP {status}" if status else type(exc).__name__
+    if not (quota or transient or status == 401):
+        return
+    if quota or status == 401:
         seconds = 600
     elif status == 429:
         seconds = _anthropic_transient_backoff_seconds(exc)
     else:
-        seconds = 20 if transient else 600
-    state.openai_blocked_key_hash = hashlib.sha256(key.encode()).hexdigest()
+        seconds = 20
+    state.openai_blocked_key_hash = _openai_key_fingerprint(key)
     state.openai_disabled_until = time.time() + seconds
-    state.openai_last_error_at = time.time()
-    state.openai_last_error = f"{type(exc).__name__}: HTTP {status}" if status else type(exc).__name__
     if status == 401:
         state.openai_key_status = "rejected"
         state.openai_key_checked_at = time.time()
 
 
 def _openai_script_blocked(state: StationState, key: str) -> bool:
-    return state.openai_blocked_key_hash == hashlib.sha256(key.encode()).hexdigest() and (
-        state.openai_disabled_until > time.time()
-    )
+    return state.openai_blocked_key_hash == _openai_key_fingerprint(key) and (state.openai_disabled_until > time.time())
 
 
 async def _generate_json_response(
@@ -1384,10 +1391,7 @@ async def _generate_json_response(
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
     if not openai_key:
         raise RuntimeError("No LLM API key configured for script generation")
-    if (
-        state.openai_blocked_key_hash
-        and state.openai_blocked_key_hash != hashlib.sha256(openai_key.encode()).hexdigest()
-    ):
+    if state.openai_blocked_key_hash and state.openai_blocked_key_hash != _openai_key_fingerprint(openai_key):
         state.openai_disabled_until = 0.0
         state.openai_last_error = ""
         state.openai_blocked_key_hash = ""

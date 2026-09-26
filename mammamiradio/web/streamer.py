@@ -7642,17 +7642,8 @@ _SETUP_RECHECK_PROVIDER_WAIT_SECONDS = 2.0
 
 
 async def _run_setup_recheck_provider_check(request: Request) -> bool:
-    # The shared coordinator owns the outbound probe. Keep this waiter alive after
-    # the short response budget so its eventual result still updates the verdict.
+    # Keep the waiter alive after the response budget so the shared probe settles.
     config = request.app.state.config
-    expected_providers = [
-        provider
-        for provider, configured in (
-            ("anthropic", config.anthropic_api_key),
-            ("openai_chat", config.openai_api_key),
-        )
-        if configured
-    ]
     try:
         result = await _probe_provider_keys(request.app.state, ai_only=True)
     except asyncio.CancelledError:
@@ -7661,7 +7652,10 @@ async def _run_setup_recheck_provider_check(request: Request) -> bool:
         logger.debug("Setup recheck provider probe failed: %s", exc)
         return False
     providers = result.get("providers", {}) if isinstance(result, dict) else {}
-    return all(_verdict_from_probe_entry(providers.get(name, {})) is not None for name in expected_providers)
+    return all(
+        not key or _verdict_from_probe_entry(providers.get(name, {})) is not None
+        for name, key in (("anthropic", config.anthropic_api_key), ("openai_chat", config.openai_api_key))
+    )
 
 
 @router.post("/api/setup/first-listen/players")
@@ -8112,7 +8106,6 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
     request.app.state._provider_check_generation = getattr(request.app.state, "_provider_check_generation", 0) + 1
-    # A save invalidates cached results, even when the key is unchanged.
     request.app.state._provider_check_cached_result = None
 
     # Re-validate the freshly-saved key in the background so the admin reflects a bogus

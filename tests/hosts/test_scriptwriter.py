@@ -4085,7 +4085,7 @@ async def test_openai_script_breaker_ignores_stale_key_failure(config, state):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["network", "timeout", "quota", "routing"])
+@pytest.mark.parametrize("failure", ["network", "timeout", "quota", "routing", "request", "unprocessable", "model"])
 async def test_openai_script_breaker_classifies_other_provider_failures(config, state, failure):
     config.anthropic_api_key = ""
     config.openai_api_key = "openai-key"
@@ -4094,6 +4094,13 @@ async def test_openai_script_breaker_classifies_other_provider_failures(config, 
         error = openai.APIConnectionError(request=request)
     elif failure == "timeout":
         error = TimeoutError("OpenAI call took too long")
+    elif failure in ("request", "unprocessable", "model"):
+        error_type, status = {
+            "request": (openai.BadRequestError, 400),
+            "unprocessable": (openai.UnprocessableEntityError, 422),
+            "model": (openai.NotFoundError, 404),
+        }[failure]
+        error = error_type("provider error", response=httpx.Response(status, request=request), body={})
     else:
         error = openai.RateLimitError("insufficient_quota", response=httpx.Response(429, request=request), body={})
     client = _mock_openai_response('{"ok": true}')
@@ -4110,7 +4117,7 @@ async def test_openai_script_breaker_classifies_other_provider_failures(config, 
             with pytest.raises(type(error)):
                 await _call_openai_script(config, state)
     remaining = state.openai_disabled_until - scriptwriter_module.time.time()
-    if failure == "routing":
+    if failure in ("routing", "request", "unprocessable"):
         assert remaining <= 0  # A missing local model route is not a provider outage.
     else:
         assert 0 < remaining <= (600 if failure == "quota" else 20)

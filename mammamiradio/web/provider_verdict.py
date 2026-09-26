@@ -96,7 +96,6 @@ async def _probe_provider_keys(app_state, *, ai_only: bool = False) -> dict:
         if getattr(app_state, "_provider_check_task_keys", None) != keys:
             task = None
         if task is not None and task.done():
-            # Do not reuse a completed task after its completion-time cache expires.
             app_state._provider_check_task = None
             task = None
         if task is None:
@@ -137,7 +136,6 @@ async def _probe_provider_keys(app_state, *, ai_only: bool = False) -> dict:
 
 async def _perform_provider_probe(app_state, keys: tuple[str, ...], ai_result: asyncio.Future) -> dict:
     if keys != _provider_check_identity(app_state) or getattr(app_state, "_provider_checks_shutting_down", False):
-        # A later save owns validation for its generation.
         raise RuntimeError("Provider credentials changed before the check started")
 
     def ai_checked(result: dict) -> None:
