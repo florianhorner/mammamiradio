@@ -210,7 +210,7 @@ def test_unsafe_or_malformed_orphan_is_not_overwritten(eligible, damage):
     assert path.exists()
 
 
-@pytest.mark.parametrize("failure", ("file_fsync", "directory_fsync", "binding"))
+@pytest.mark.parametrize("failure", ("file_fsync", "directory_fsync", "binding", "provenance"))
 def test_interrupted_export_retries_only_exact_orphan_and_syncs_before_binding(eligible, monkeypatch, failure):
     state_dir, db_path = eligible
     original_sync, original_binding = os.fsync, profile._binding
@@ -232,6 +232,9 @@ def test_interrupted_export_retries_only_exact_orphan_and_syncs_before_binding(e
     with monkeypatch.context() as patch:
         if failure == "binding":
             patch.setattr(profile, "_binding", fail_binding)
+        elif failure == "provenance":
+            reads = iter((migration.load_legacy_home_provenance_v1(*eligible), None))
+            patch.setattr(migration, "load_legacy_home_provenance_v1", lambda *_: next(reads))
         else:
             patch.setattr(os, "fsync", fail_sync)
         assert profile.export_legacy_home_profile_v1(*eligible) is None
@@ -284,7 +287,10 @@ def test_transplant_rejected_but_matching_complete_backup_restores(eligible, tmp
     "sql",
     (
         "DELETE FROM {table}",
+        "UPDATE {table} SET profile_id = 'invalid'",
+        "UPDATE {table} SET profile_id = X'00'",
         "UPDATE {table} SET content_digest = 'different'",
+        "UPDATE {table} SET content_digest = X'00'",
         "DROP TABLE {table}; CREATE TABLE {table} (wrong TEXT)",
     ),
 )
