@@ -300,8 +300,13 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
     assert captured_opts["no_warnings"] is True
     assert captured_opts["noprogress"] is True
     assert captured_opts["abort_on_unavailable_fragments"] is True
-    assert captured_opts["throttled_rate"] == 100_000
-    assert captured_opts["check_formats"] is True
+    _trap = (
+        "yt-dlp ignores unknown keys, so throttled_rate does nothing; "
+        "throttledratelimit switches on an uncapped re-extract loop"
+    )
+    assert captured_opts["check_formats"] == "selected", _trap
+    assert "throttled_rate" not in captured_opts, _trap
+    assert "throttledratelimit" not in captured_opts, _trap
     assert captured_opts["concurrent_fragment_downloads"] == 2
     assert "temp" in captured_opts.get("paths", {})
 
