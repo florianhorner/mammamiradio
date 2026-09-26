@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
-import hmac
 import json
 import logging
 import math
@@ -1053,8 +1052,8 @@ def _get_anthropic_attempt_lock() -> asyncio.Lock:
 
 
 def _openai_key_fingerprint(key: str) -> str:
-    """Keep a fast, process-keyed identity without storing the API key."""
-    return hmac.digest(_openai_fingerprint_secret, key.encode(), "sha256").hex()
+    """Keep a salted, in-process identity without storing the API key in state."""
+    return hashlib.pbkdf2_hmac("sha256", key.encode(), _openai_fingerprint_secret, 100_000).hex()
 
 
 def _trip_openai_script_circuit(state: StationState, key: str, exc: Exception) -> None:
@@ -1080,7 +1079,11 @@ def _trip_openai_script_circuit(state: StationState, key: str, exc: Exception) -
 
 
 def _openai_script_blocked(state: StationState, key: str) -> bool:
-    return state.openai_blocked_key_hash == _openai_key_fingerprint(key) and (state.openai_disabled_until > time.time())
+    return (
+        bool(state.openai_blocked_key_hash)
+        and state.openai_blocked_key_hash == _openai_key_fingerprint(key)
+        and (state.openai_disabled_until > time.time())
+    )
 
 
 async def _generate_json_response(
