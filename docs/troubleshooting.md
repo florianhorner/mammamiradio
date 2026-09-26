@@ -288,15 +288,18 @@ A listener song request was pinned to the "play next" slot from two places: once
 
 The current ownership chain marks the initial claim with `song_pinned`, reserves every pending matched recording at producer admission and playback, then transfers the exact promised source into a one-shot `ListenerRequestHandoff` after the dedication queues. Queue admission marks that segment and releases the handoff, so later equivalent requests still cannot steal it or make it play anonymously. If you see a repeat, trace the complete reservation → dedication commit → handoff admission chain described in `docs/architecture.md`, including the producer and playback reservation gates; the pin marker alone is no longer the full invariant.
 
-## No station sounds between songs
+## No station sounds between songs and talk
 
-The short sounds between a song and talk (and between a song and an ad) come from the Engine Room **Transitions** dial. It is on unless someone turned it off.
+The short stings between a song and talk, plus bumpers around packaged ad spots, come from the Engine Room **Transitions** dial. Live ad breaks contain their own bumpers and are not changed by this dial. It is on unless someone turned it off.
 
 If the cut is plain:
 
-- In Engine Room, check that Transitions is on. On a Home Assistant add-on the dial resets to on after a restart; a standalone station keeps the choice in `.env` (`MAMMAMIRADIO_BOUNDARY_IMAGING`).
+- In Engine Room, check that Transitions is on. On a Home Assistant add-on the dial returns to its startup setting (on by default) after a restart; a standalone station keeps the choice in `.env` (`MAMMAMIRADIO_BOUNDARY_IMAGING`).
 - Confirm the imaging pack is installed at the configured `assets_dir` (the four files are `stingers/music_to_speech.mp3`, `stingers/speech_to_music.mp3`, `bumpers/ad_in.mp3`, and `bumpers/ad_out.mp3`).
-- In the station log, look for `asset_missing` or `Boundary imaging asset unusable`. A missing or unusable file is a clean cut, not a failed stream.
+- Custom carts must match the stream sample rate, bitrate, and channel count, use constant bitrate, and stay within 1.5 seconds and 1 MiB.
+- In the station log, look for `Boundary imaging asset unusable (missing or unreadable)` or the same warning with a format/load reason. A missing or unusable file is a clean cut, not a failed stream. Restoring or replacing the file takes effect at the next eligible seam without restarting.
+- In `/status`, inspect `runtime_health.boundary_imaging.skips`. `asset_missing` counts unusable carts. `switch_off` means the dial is off; `prev_none` and `generation_changed` mean playback has no preceding programme for this listener room. `prev_imaging`, `prev_rescue`, `next_rescue`, `next_error`, `next_music_tail`, `interrupt`, and `live_ad` keep imaging from stacking or delaying recovery and urgent audio. `skip`, `session_stopped`, and `stale_continuity` count carts interrupted before their final byte by a listener control or a changed programme timeline.
+- **Aired** counts fully completed playback carts this session. It can stay at 0 while hearing producer-rendered live-ad bumpers or music-tail crossfades. Local-library song/talk stings use the same playback counter as other song/talk seams.
 
 ## The stream works but banter or ads are bland
 

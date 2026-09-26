@@ -2230,14 +2230,6 @@ def _drop_segment_moment_receipts(state: StationState, segment: Segment, reason:
 _last_music_file: Path | None = None
 
 _MUSIC_TYPES = {SegmentType.MUSIC}
-_SPEECH_TYPES = {
-    SegmentType.BANTER,
-    SegmentType.NEWS_FLASH,
-    SegmentType.AD,
-    SegmentType.STATION_ID,
-    SegmentType.SWEEPER,
-    SegmentType.TIME_CHECK,
-}
 
 
 def _set_last_music_file(path: Path) -> None:
@@ -2628,12 +2620,6 @@ def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
         bed_volume_db=config.imaging.bed_volume_db,
         assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
         cache_dir=config.cache_dir,
-    )
-
-
-def _crosses_music_speech_boundary(prev_type: SegmentType, next_type: SegmentType) -> bool:
-    return (prev_type in _MUSIC_TYPES and next_type in _SPEECH_TYPES) or (
-        prev_type in _SPEECH_TYPES and next_type in _MUSIC_TYPES
     )
 
 
@@ -3882,73 +3868,6 @@ async def _try_crossfade(
         if isinstance(music_tail, PreparedMusicHandoff):
             _discard_prepared_handoff(music_tail)
         return voice_path
-
-
-async def _maybe_add_transition_sting(
-    segment: Segment,
-    previous_type: SegmentType | None,
-    config: StationConfig,
-    state: StationState,
-    *,
-    suppress_for_handoff: bool = False,
-) -> Segment:
-    """Apply the normal synthetic sting unless a committed-candidate tail owns it."""
-
-    actual_type = _adjacency_type_for(segment)
-    if (
-        previous_type is None
-        or actual_type is None
-        or not _crosses_music_speech_boundary(previous_type, actual_type)
-        or suppress_for_handoff
-        or segment.metadata.get("has_music_tail")
-        or segment.metadata.get("rescue")
-    ):
-        return segment
-    sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"
-    merged_path = config.tmp_dir / f"segment_with_sting_{uuid4().hex[:8]}.mp3"
-    pre_sting_path = segment.path
-    pre_sting_ephemeral = segment.ephemeral
-    imaging_lib = _make_imaging_lib(config)
-    try:
-        with _timed_render_stage(state, "mix"):
-            await _run_owned_thread(
-                imaging_lib.pick_stinger,
-                previous_type,
-                actual_type,
-                sting_path,
-            )
-            await _run_owned_thread(
-                concat_files,
-                [sting_path, segment.path],
-                merged_path,
-                0,
-                False,
-            )
-    except asyncio.CancelledError:
-        # Both scratch workers have settled before cleanup, so neither can
-        # republish after cancellation returns to the attempt owner.
-        _unlink_path_best_effort(sting_path)
-        _unlink_path_best_effort(merged_path)
-        raise
-    except Exception as exc:
-        _unlink_path_best_effort(sting_path)
-        _unlink_path_best_effort(merged_path)
-        logger.warning("Transition sting generation failed, using clean cut: %s", exc)
-        return segment
-    except BaseException:
-        _unlink_path_best_effort(sting_path)
-        _unlink_path_best_effort(merged_path)
-        raise
-
-    _unlink_path_best_effort(sting_path)
-    if pre_sting_ephemeral and not _is_packaged_asset(pre_sting_path):
-        _unlink_path_best_effort(pre_sting_path)
-    # The sting now lives at the head of this segment. The playback cart must
-    # not play a second one in front of it. Copy the metadata so a caller that
-    # still holds the pre-merge segment does not observe the latch.
-    merged_metadata = dict(segment.metadata) if isinstance(segment.metadata, dict) else {}
-    merged_metadata["boundary_sting_merged"] = True
-    return replace(segment, path=merged_path, ephemeral=True, metadata=merged_metadata)
 
 
 async def _synthesize_impossible_moment(
@@ -9238,14 +9157,8 @@ async def _run_producer_inner(
             _attach_runtime_provider_observations(segment, state, generation_provider_token)
             attempt_owner.own_segment(segment)
             if not _is_direct_attributed_music(segment) and not _is_packaged_ad_segment(segment):
-                segment = await _maybe_add_transition_sting(
-                    segment,
-                    prev_seg_type,
-                    config,
-                    state,
-                    suppress_for_handoff=rendered_handoff_tail and prepared_handoff is not None,
-                )
-                attempt_owner.own_segment(segment)
+                # Boundary stings belong to playback so the live dial also
+                # applies to audio already waiting in the queue.
                 segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             elif segment.duration_sec <= 0:
                 raise RuntimeError("direct attributed music is missing a validated duration")
@@ -9500,12 +9413,11 @@ async def _run_producer_inner(
                         _segment_admission_callback(segment)
                 else:
                     # The song remained whole; queue the pre-rendered dry path
-                    # with the ordinary sting rather than emitting a stale tail.
+                    # for playback rather than emitting a stale tail.
                     segment = fallback_segment
                     fallback_segment = None
                     prepared_handoff = None
                     rendered_handoff_tail = False
-                    segment = await _maybe_add_transition_sting(segment, prev_seg_type, config, state)
                     attempt_owner.own_segment(segment)
                     segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
                     shadow_entry = _queue_shadow_entry(segment)
@@ -9533,7 +9445,6 @@ async def _run_producer_inner(
                         _unlink_if_tmp_render(segment, config.tmp_dir)
                         segment = fallback_segment
                         fallback_segment = None
-                        segment = await _maybe_add_transition_sting(segment, prev_seg_type, config, state)
                         attempt_owner.own_segment(segment)
                         segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
                         shadow_entry = _queue_shadow_entry(segment)

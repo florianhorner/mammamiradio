@@ -4,22 +4,21 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from types import SimpleNamespace
-from typing import cast
 from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.audio.imaging import ImagingLibrary
-from mammamiradio.core.config import StationConfig, load_config
-from mammamiradio.core.models import Segment, SegmentType, StationState
+from mammamiradio.audio.imaging import ImagingLibrary, default_imaging_assets_dir
+from mammamiradio.core.config import load_config
+from mammamiradio.core.models import Segment, SegmentType
 from mammamiradio.scheduling import boundary_glue
 from mammamiradio.scheduling.boundary_glue import (
     AD_IN,
     AD_OUT,
     MUSIC_TO_SPEECH,
+    SKIP_INTERRUPT,
+    SKIP_LIVE_AD,
     SKIP_NEXT_ERROR,
-    SKIP_NEXT_LATCHED,
     SKIP_NEXT_MUSIC_TAIL,
     SKIP_NEXT_RESCUE,
     SKIP_PREV_IMAGING,
@@ -31,10 +30,9 @@ from mammamiradio.scheduling.boundary_glue import (
     seam_choice,
     validated_playable_bytes,
 )
-from mammamiradio.scheduling.producer import _maybe_add_transition_sting
+from mammamiradio.web.mp3_frames import mpeg1_l3_bitrate_kbps
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
-_BITRATES = (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
 
 
 def _frames(
@@ -44,13 +42,16 @@ def _frames(
     bitrate_index: int = 11,
     sample_rate_idx: int = 1,
     reservoir: int = 0,
+    crc: bool = False,
+    channel_mode: int = 0,
 ) -> bytes:
-    bitrate = _BITRATES[bitrate_index]
+    header = bytes((0xFF, 0xFA if crc else 0xFB, (bitrate_index << 4) | (sample_rate_idx << 2), channel_mode << 6))
+    bitrate = mpeg1_l3_bitrate_kbps(header)
+    assert bitrate is not None
     sample_rate = (44100, 48000, 32000)[sample_rate_idx]
     frame_length = 144 * bitrate * 1000 // sample_rate
-    header = bytes((0xFF, 0xFB, (bitrate_index << 4) | (sample_rate_idx << 2), 0x00))
     side = bytes(((reservoir >> 1) & 0xFF, (reservoir & 1) << 7))
-    payload = side + marker
+    payload = (b"\x89\xab" if crc else b"") + side + marker
     padding = frame_length - 4 - len(payload)
     assert padding >= 0
     return (header + payload + b"\0" * padding) * count
@@ -60,12 +61,13 @@ def _segment(kind: SegmentType, **metadata) -> Segment:
     return Segment(type=kind, path=Path("programme.mp3"), metadata=metadata, ephemeral=False)
 
 
-def _aired(kind: SegmentType, *, rescue: bool = False, generation: int = 1) -> AiredBoundary:
-    return AiredBoundary(kind=kind, rescue=rescue, generation=generation)
+def _aired(kind: SegmentType, *, rescue: bool = False, generation: int = 1, **metadata) -> AiredBoundary:
+    return AiredBoundary(kind=kind, rescue=rescue, generation=generation, **metadata)
 
 
 @pytest.fixture(autouse=True)
 def _clear_asset_cache():
+    boundary_glue.warn_unusable.cache_clear()
     boundary_glue._VALIDATION_CACHE.clear()
     yield
     boundary_glue._VALIDATION_CACHE.clear()
@@ -79,8 +81,8 @@ def test_glue_for_four_packaged_directions(tmp_path: Path):
     cases = (
         (_aired(SegmentType.MUSIC), _segment(SegmentType.BANTER), MUSIC_TO_SPEECH),
         (_aired(SegmentType.BANTER), _segment(SegmentType.MUSIC), SPEECH_TO_MUSIC),
-        (_aired(SegmentType.MUSIC), _segment(SegmentType.AD), AD_IN),
-        (_aired(SegmentType.AD), _segment(SegmentType.MUSIC), AD_OUT),
+        (_aired(SegmentType.MUSIC), _segment(SegmentType.AD, packaged=True), AD_IN),
+        (_aired(SegmentType.AD, packaged=True), _segment(SegmentType.MUSIC), AD_OUT),
         (_aired(SegmentType.MUSIC), _segment(SegmentType.NEWS_FLASH), MUSIC_TO_SPEECH),
     )
     for previous, nxt, relative in cases:
@@ -93,12 +95,11 @@ def test_glue_for_missing_asset_is_a_clean_cut(tmp_path: Path):
 
 
 def test_packaged_boundary_asset_rejects_missing_and_unsafe_paths(tmp_path: Path):
-    library = ImagingLibrary([], tmp_path, assets_dir=tmp_path)
-    assert library.packaged_boundary_asset(MUSIC_TO_SPEECH) is None
+    assert ImagingLibrary.packaged_boundary_asset(MUSIC_TO_SPEECH, assets_dir=tmp_path) is None
     (tmp_path / "stingers").mkdir()
-    assert library.packaged_boundary_asset(MUSIC_TO_SPEECH) is None
-    assert library.packaged_boundary_asset("../secrets.mp3") is None
-    assert library.packaged_boundary_asset("") is None
+    assert ImagingLibrary.packaged_boundary_asset(MUSIC_TO_SPEECH, assets_dir=tmp_path) is None
+    assert ImagingLibrary.packaged_boundary_asset("../secrets.mp3", assets_dir=tmp_path) is None
+    assert ImagingLibrary.packaged_boundary_asset("", assets_dir=tmp_path) is None
 
 
 def test_seam_skips_previous_none_imaging_and_rescue():
@@ -112,10 +113,8 @@ def test_seam_skips_previous_none_imaging_and_rescue():
     assert glue_for(None, speech, assets_dir=Path(".")) is None
 
 
-def test_seam_skips_next_latch_rescue_error_and_music_tail():
+def test_seam_skips_next_rescue_error_and_music_tail():
     previous = _aired(SegmentType.MUSIC)
-    latched = seam_choice(previous, _segment(SegmentType.BANTER, boundary_sting_merged=True))
-    assert latched.skip_reason == SKIP_NEXT_LATCHED
     assert seam_choice(previous, _segment(SegmentType.BANTER, rescue=True)).skip_reason == SKIP_NEXT_RESCUE
     errored = seam_choice(previous, _segment(SegmentType.BANTER, error="render failed"))
     assert errored.skip_reason == SKIP_NEXT_ERROR
@@ -164,11 +163,15 @@ def test_validation_rejects_bitrate_sample_rate_duration_and_reservoir(tmp_path:
         caplog.clear()
 
 
-def test_validation_cache_survives_a_deleted_file(tmp_path: Path):
+def test_validation_cache_reloads_replaced_file_and_rejects_deleted_file(tmp_path: Path):
     path = _install(tmp_path, _frames(4))
     first = validated_playable_bytes(path, sample_rate=48000, bitrate=192)
+    assert first == _frames(4)
+    replacement = _frames(5, b"NEW")
+    path.write_bytes(replacement)
+    assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) == replacement
     path.unlink()
-    assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) == first
+    assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) is None
 
 
 def test_boundary_imaging_env_parse(monkeypatch, caplog):
@@ -185,52 +188,94 @@ def test_boundary_imaging_env_parse(monkeypatch, caplog):
     assert "leaving transitions on" in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_latch_is_set_only_on_the_merged_return(tmp_path: Path):
-    voice = tmp_path / "voice.mp3"
-    voice.write_bytes(b"voice")
-    segment = Segment(type=SegmentType.BANTER, path=voice, metadata={"title": "Talk"}, ephemeral=False)
-    config = cast(StationConfig, SimpleNamespace(tmp_dir=tmp_path))
-    state = StationState()
+@pytest.mark.parametrize("packaged", [False, True])
+def test_ad_carts_only_surround_packaged_spots(packaged):
+    into = seam_choice(_aired(SegmentType.MUSIC), _segment(SegmentType.AD, packaged=packaged))
+    out = seam_choice(_aired(SegmentType.AD, packaged=packaged), _segment(SegmentType.MUSIC))
+    assert (into.relative, out.relative) == ((AD_IN, AD_OUT) if packaged else (None, None))
+    assert (into.skip_reason, out.skip_reason) == ((None, None) if packaged else (SKIP_LIVE_AD, SKIP_LIVE_AD))
 
-    def _pick(_from_seg, _to_seg, output_path: Path) -> Path:
-        output_path.write_bytes(b"sting")
-        return output_path
 
-    def _concat(_paths, output_path: Path, _fade, _flag) -> None:
-        output_path.write_bytes(b"merged")
+def test_interrupts_have_no_cart_on_either_side():
+    assert (
+        seam_choice(_aired(SegmentType.MUSIC), _segment(SegmentType.BANTER, interrupt=True)).skip_reason
+        == SKIP_INTERRUPT
+    )
+    assert (
+        seam_choice(_aired(SegmentType.BANTER, interrupt=True), _segment(SegmentType.MUSIC)).skip_reason
+        == SKIP_INTERRUPT
+    )
 
-    async def _inline(function, /, *args, **kwargs):
-        return function(*args, **kwargs)
 
-    library = SimpleNamespace(pick_stinger=_pick)
-    with (
-        patch("mammamiradio.scheduling.producer._make_imaging_lib", return_value=library),
-        patch("mammamiradio.scheduling.producer.concat_files", _concat),
-        patch("mammamiradio.scheduling.producer._run_owned_thread", _inline),
-    ):
-        merged = await _maybe_add_transition_sting(segment, SegmentType.MUSIC, config, state)
-    assert merged.metadata["boundary_sting_merged"] is True
-    assert "boundary_sting_merged" not in segment.metadata
-    assert merged.path != segment.path
+@pytest.mark.parametrize("relative", [MUSIC_TO_SPEECH, SPEECH_TO_MUSIC, AD_IN, AD_OUT])
+def test_real_packaged_cart_matches_stream_format(relative):
+    path = default_imaging_assets_dir() / relative
+    audio = load_config(TOML_PATH).audio
+    assert validated_playable_bytes(path, sample_rate=audio.sample_rate, bitrate=audio.bitrate, channels=audio.channels)
 
-    untouched = await _maybe_add_transition_sting(segment, None, config, state)
-    assert "boundary_sting_merged" not in untouched.metadata
 
-    rescue = Segment(type=SegmentType.BANTER, path=voice, metadata={"rescue": True}, ephemeral=False)
-    rescued = await _maybe_add_transition_sting(rescue, SegmentType.MUSIC, config, state)
-    assert "boundary_sting_merged" not in rescued.metadata
+@pytest.mark.parametrize("reservoir", [0, 1])
+def test_crc_frames_read_reservoir_after_checksum(tmp_path, reservoir):
+    payload = _frames(4, crc=True, reservoir=reservoir)
+    path = _install(tmp_path, payload)
+    assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) == (payload if reservoir == 0 else None)
 
-    def _boom(*_args, **_kwargs):
-        raise RuntimeError("synth failed")
 
-    library.pick_stinger = _boom
-    clean = Segment(type=SegmentType.BANTER, path=voice, metadata={}, ephemeral=False)
-    with (
-        patch("mammamiradio.scheduling.producer._make_imaging_lib", return_value=library),
-        patch("mammamiradio.scheduling.producer.concat_files", _concat),
-        patch("mammamiradio.scheduling.producer._run_owned_thread", _inline),
-    ):
-        failed = await _maybe_add_transition_sting(clean, SegmentType.MUSIC, config, state)
-    assert failed is clean
-    assert "boundary_sting_merged" not in failed.metadata
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _frames(4, channel_mode=3),
+        _frames(2) + _frames(2, channel_mode=1),
+        _frames(2) + _frames(2, bitrate_index=9),
+    ],
+)
+def test_every_frame_must_match_bitrate_and_channel_mode(tmp_path, payload):
+    assert validated_playable_bytes(_install(tmp_path, payload), sample_rate=48000, bitrate=192) is None
+
+
+def test_oversized_cart_is_rejected_before_frame_indexing(tmp_path):
+    path = _install(tmp_path, b"x" * (boundary_glue.BOUNDARY_MAX_BYTES + 2))
+    with patch.object(boundary_glue, "build_playable_mpeg1_layer3_frame_index") as index:
+        assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) is None
+    index.assert_not_called()
+
+
+def test_cart_read_is_bounded_and_transient_failure_is_retried(tmp_path, caplog):
+    from unittest.mock import mock_open
+
+    payload = _frames(4)
+    path = _install(tmp_path, payload)
+    with patch.object(Path, "open", side_effect=OSError("temporarily unavailable")):
+        assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) is None
+        assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) is None
+    assert not boundary_glue._VALIDATION_CACHE
+    assert caplog.text.count("Boundary imaging asset unusable") == 1
+    opened = mock_open(read_data=payload)
+    with patch.object(Path, "open", opened):
+        assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) == payload
+    opened().read.assert_called_once_with(boundary_glue.BOUNDARY_MAX_BYTES + 1)
+
+
+def test_repaired_invalid_cart_recovers_without_restart(tmp_path):
+    path = _install(tmp_path, b"broken")
+    assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) is None
+    path.write_bytes(_frames(4))
+    assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) == _frames(4)
+
+
+def test_packaged_lookup_rejects_symlink_escape(tmp_path):
+    outside = tmp_path / "outside.mp3"
+    outside.write_bytes(_frames(4))
+    root = tmp_path / "pack"
+    root.mkdir()
+    (root / "escaped.mp3").symlink_to(outside)
+    assert ImagingLibrary.packaged_boundary_asset("escaped.mp3", assets_dir=root) is None
+
+
+@pytest.mark.parametrize("payload", [b"", b"not an mp3", b"ID3\x04\0\0\0\0\0\0", _frames(2)[:-1]])
+def test_malformed_cart_is_a_clean_cut_and_warns_once(tmp_path, caplog, payload):
+    path = _install(tmp_path, payload)
+    for _ in range(2):
+        assert validated_playable_bytes(path, sample_rate=48000, bitrate=192) is None
+    warnings = [r for r in caplog.records if "Boundary imaging asset unusable" in r.message]
+    assert len(warnings) == 1

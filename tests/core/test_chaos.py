@@ -67,7 +67,6 @@ async def test_chaos_pending_first_strike_queues_banter_without_transition(tmp_p
     with (
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=2.0),
-        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda p, *_a, **_k: p),
         patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock) as transition,
         patch(
@@ -129,7 +128,6 @@ async def test_chaos_cutover_discards_in_flight_music_then_queues_strike(tmp_pat
         patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_render_music),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=2.0),
-        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="test"),
         patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
         patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, side_effect=lambda p, *_a, **_k: p),
@@ -269,7 +267,6 @@ async def test_playlist_revision_discard_preserves_cached_music(tmp_path):
         patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_render_music),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=2.0),
-        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="test"),
         patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
     ):
@@ -310,7 +307,6 @@ async def test_disable_teardown_clears_pending_before_producer_consumes(tmp_path
         ),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=2.0),
-        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="test"),
         patch(f"{PRODUCER_MODULE}.classify_track_crate", return_value="test"),
     ):
@@ -339,7 +335,6 @@ async def test_chaos_audio_failure_uses_canned_fallback_and_marks_degraded(tmp_p
     with (
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=2.0),
-        patch(f"{PRODUCER_MODULE}._crosses_music_speech_boundary", return_value=False),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter",
             new_callable=AsyncMock,

@@ -2564,10 +2564,10 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               Short station sounds between songs and talk. Turn off to hear the plain cut.
               The next break changes. The one already playing finishes as it is.
             </div>
-            <div id="boundaryImagingReset" style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)" hidden>
-              Resets to on after a restart.
+            <div id="boundaryImagingReset" style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+              On Home Assistant, returns to the startup setting after a restart.
             </div>
-            <div id="boundaryImagingCount" style="margin-top:6px;font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk)">Aired 0 times</div>
+            <div id="boundaryImagingCount" style="margin-top:6px;font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk)">Aired — times this session</div>
           </div>
         </div>
 
@@ -8952,7 +8952,11 @@ async function loadBroadcastChainToggle(){
   }catch(e){/* ignore — toggle re-syncs from the server on next load */}
 }
 function boundaryAiredLabel(n){
-  return n===1?'Aired 1 time':'Aired '+n+' times';
+  return n===1?'Aired 1 time this session':'Aired '+n+' times this session';
+}
+function updateBoundaryImagingReset(r){
+  const reset=document.getElementById('boundaryImagingReset');
+  if(reset&&r&&typeof r.resets_on_restart==='boolean')reset.hidden=!r.resets_on_restart;
 }
 async function loadBoundaryImagingToggle(){
   const cb=document.getElementById('boundaryImagingToggle');
@@ -8960,8 +8964,7 @@ async function loadBoundaryImagingToggle(){
   try{
     const r=await api('GET','/api/boundary-imaging');
     if(cb&&r&&typeof r.boundary_imaging==='boolean')cb.checked=r.boundary_imaging;
-    const reset=document.getElementById('boundaryImagingReset');
-    if(reset)reset.hidden=!(r&&r.resets_on_restart);
+    updateBoundaryImagingReset(r);
     const count=document.getElementById('boundaryImagingCount');
     if(count&&r&&typeof r.carts_aired==='number')count.textContent=boundaryAiredLabel(r.carts_aired);
   }catch(e){/* ignore — toggle re-syncs from the server on next load */}
@@ -8972,12 +8975,20 @@ async function toggleBoundaryImaging(el){
   el.disabled=true;
   try{
     const r=await api('POST','/api/boundary-imaging',{boundary_imaging:value});
-    if(!r||!r.ok)throw new Error('save failed');
-    toast(value?'Transitions on from the next break':'Transitions off from the next break');
+    if(r&&r.ok){
+      el.checked=value;
+      updateBoundaryImagingReset(r);
+      toast(value?'Transitions on from the next break':'Transitions off from the next break');
+    }else{
+      el.checked=!value;
+      toast(wayOut('change the transitions'));
+    }
   }catch(_){
     el.checked=!value;
-    toast('Couldn\'t save the transitions setting. Try again in a moment.');
+    toast(offlineMsg());
   }finally{
+    // A status response requested before this save must not undo the choice.
+    ++_fastPollGeneration;
     el.disabled=false;
   }
 }
@@ -9095,12 +9106,11 @@ function renderCostSplit(con){
 function updateEngineRoom(st,caps){
   const bi=st&&st.runtime_health&&st.runtime_health.boundary_imaging;
   const biCount=document.getElementById('boundaryImagingCount');
-  if(biCount){
-    const n=bi&&typeof bi.carts_aired==='number'?bi.carts_aired:0;
-    biCount.textContent=boundaryAiredLabel(n);
+  if(biCount&&bi&&typeof bi.carts_aired==='number'){
+    biCount.textContent=boundaryAiredLabel(bi.carts_aired);
   }
   const biToggle=document.getElementById('boundaryImagingToggle');
-  if(biToggle&&bi&&typeof bi.enabled==='boolean'&&document.activeElement!==biToggle)biToggle.checked=bi.enabled;
+  if(biToggle&&!biToggle.disabled&&bi&&typeof bi.enabled==='boolean'&&document.activeElement!==biToggle)biToggle.checked=bi.enabled;
   const rt=document.getElementById('engineRuntime');
   if(!rt)return;
   const uptime=(st.uptime_sec||st.uptime_s)?Math.round((st.uptime_sec||st.uptime_s)/60)+'m':'—';

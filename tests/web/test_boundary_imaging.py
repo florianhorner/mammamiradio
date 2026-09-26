@@ -75,16 +75,24 @@ async def test_get_boundary_imaging_addon_resets_on_restart():
 
 
 @pytest.mark.asyncio
-async def test_post_persists_before_the_runtime_changes():
+@pytest.mark.parametrize("value", [False, True])
+async def test_post_persists_before_the_runtime_changes(value):
     app = _make_test_app(is_addon=False)
-    with patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv:
+    app.state.config.audio.boundary_imaging = not value
+    os.environ["MAMMAMIRADIO_BOUNDARY_IMAGING"] = str(not value).lower()
+
+    def _persist(_updates):
+        assert app.state.config.audio.boundary_imaging is not value
+        assert os.environ["MAMMAMIRADIO_BOUNDARY_IMAGING"] == str(not value).lower()
+
+    with patch("mammamiradio.web.streamer._save_dotenv", side_effect=_persist) as save_dotenv:
         async with _client(app) as client:
-            resp = await client.post("/api/boundary-imaging", json={"boundary_imaging": False})
+            resp = await client.post("/api/boundary-imaging", json={"boundary_imaging": value})
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "boundary_imaging": False, "resets_on_restart": False}
-    save_dotenv.assert_called_once_with({"MAMMAMIRADIO_BOUNDARY_IMAGING": "false"})
-    assert os.environ["MAMMAMIRADIO_BOUNDARY_IMAGING"] == "false"
-    assert app.state.config.audio.boundary_imaging is False
+    assert resp.json() == {"ok": True, "boundary_imaging": value, "resets_on_restart": False}
+    save_dotenv.assert_called_once_with({"MAMMAMIRADIO_BOUNDARY_IMAGING": str(value).lower()})
+    assert os.environ["MAMMAMIRADIO_BOUNDARY_IMAGING"] == str(value).lower()
+    assert app.state.config.audio.boundary_imaging is value
 
 
 @pytest.mark.asyncio
@@ -102,7 +110,11 @@ async def test_persist_failure_leaves_the_runtime_unchanged():
 
 @pytest.mark.asyncio
 async def test_addon_updates_runtime_without_writing_dotenv():
+    from tests.web.test_operator_action_ledger import _FakeLedger, _operator_rows
+
     app = _make_test_app(is_addon=True)
+    ledger = _FakeLedger()
+    app.state.ledger = ledger
     with (
         patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
         patch("mammamiradio.web.streamer._save_addon_option") as save_addon,
@@ -114,6 +126,28 @@ async def test_addon_updates_runtime_without_writing_dotenv():
     assert app.state.config.audio.boundary_imaging is False
     save_dotenv.assert_not_called()
     save_addon.assert_not_called()
+    rows = _operator_rows(ledger)
+    assert len(rows) == 1
+    assert rows[0]["action"] == "boundary_imaging"
+    assert rows[0]["old_value"] is True
+    assert rows[0]["new_value"] is False
+
+
+def test_admin_toggle_wiring_preserves_pending_choice_and_shared_error_copy():
+    html = (Path(TOML_PATH).parent / "mammamiradio/web/templates/admin.html").read_text()
+    assert 'id="boundaryImagingToggle"' in html
+    assert 'onchange="toggleBoundaryImaging(this)"' in html
+    toggle = html.split("async function toggleBoundaryImaging(el){", 1)[1].split("async function ", 1)[0]
+    assert "api('POST','/api/boundary-imaging',{boundary_imaging:value})" in toggle
+    assert "el.disabled=true;" in toggle
+    assert "if(r&&r.ok){\n      el.checked=value;" in toggle
+    assert "toast(wayOut('change the transitions'));" in toggle
+    assert "toast(offlineMsg());" in toggle
+    assert toggle.index("++_fastPollGeneration;") < toggle.index("el.disabled=false;")
+    assert "updateBoundaryImagingReset(r);" in toggle
+    assert "typeof r.resets_on_restart==='boolean'" in html
+    assert "if(biCount&&bi&&typeof bi.carts_aired==='number')" in html
+    assert "if(biToggle&&!biToggle.disabled&&bi&&typeof bi.enabled==='boolean'" in html
 
 
 @pytest.mark.asyncio

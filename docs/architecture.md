@@ -82,7 +82,7 @@ standalone external-media-/  (optional; absent from both add-ons)
                 +-> /status (admin-only anonymous session diagnostics)
 ```
 
-The playback loop may also broadcast one packaged boundary asset immediately before a segment. That asset is not a queue item.
+The playback loop may also broadcast one packaged boundary asset immediately before a segment. That asset is not a queue item and is excluded from programme accounting and keepsakes. Both `/status` and `/public-status` report `runtime_health.boundary_imaging` with `enabled`, completed `carts_aired`, and per-reason `skips`.
 
 The listener revalidates `/public-status` with a weak semantic ETag; live/idle/stopped tabs poll every 3/3.5 seconds when visible and 30/60 seconds when hidden.
 Matching validators return bodyless 304s while one monotonic anchor advances listener clocks; payload, anchor, and ETag share a generation guard.
@@ -94,7 +94,9 @@ authority for admin modes and pacing. Supervisor materializes
 `/data/options.json` as a generated, read-only startup projection; the runtime
 reads that projection but never writes it directly. A value selected only in
 process memory by a pre-fix build cannot be reconstructed after an upgrade
-rematerializes an older Supervisor value.
+rematerializes an older Supervisor value. Transitions is session-only on the
+add-on, has no Supervisor option, and returns to its configured startup value
+(on by default) after restart.
 
 `mammamiradio.main:startup()` does ten things:
 
@@ -372,8 +374,8 @@ existed (which otherwise aired at their old, quieter level) one play at a time.
 
 Segments reach the playback queue through `_enqueue_with_egress()` in
 `scheduling/producer.py`; direct attributed music and approved packaged ads skip
-its FX passes to preserve exact bytes. Other segments leave after every mix, concat, and
-transition-sting merge is done. The funnel runs an ordered egress FX pipeline whose
+its FX passes to preserve exact bytes. Other segments leave after every mix and
+concat is done. Boundary stings are added at playback, outside this funnel. The funnel runs an ordered egress FX pipeline whose
 optional final stage is the **FM broadcast chain** (`apply_broadcast_chain()` in
 `audio/normalizer.py`): one extra FFmpeg pass that colours the finished audio like an
 over-the-air FM signal — a gentle pre-emphasis HF shelf, the ~15 kHz channel band-limit,
@@ -434,7 +436,7 @@ per-play tmp.
 
 **Synthetic layer cache.** Generated ad and imaging layers that do have stable
 inputs are cached separately as `synth_*.mp3` under `cache_dir`: ad music beds,
-environment beds, foley, brand motifs, transition stings, sweeper stings, and
+environment beds, foley, brand motifs, sweeper stings, and
 synthetic talk-bed fallback. The key includes the synthetic kind, generator cache
 version, normalized parameters (the rounded-up duration bucket is one such param),
 MP3 output arguments, and variant. The cache publishes atomically through a hidden
@@ -469,10 +471,11 @@ audition procedure is in
 [Operations](operations.md#audition-the-modern-night-drive-imaging-pack).
 
 Setting `[imaging].assets_dir` replaces the packaged root with a custom root.
-When the custom root lacks an asset, the runtime uses its procedural or cached
-fallback. It does not read the missing asset from the packaged root. Within the
-selected root, a transition tries `stingers/{from}_{to}.mp3` before the generic
-directional stinger. Talk beds use eligible adjacent music first, followed by a
+Playback boundary carts use only the four fixed paths described below. A
+missing or invalid cart is a clean cut; it never synthesizes or reads from the
+bundled root as a fallback. Producer-rendered beds and live-ad bumpers retain
+their procedural or cached fallbacks within the selected root. Talk beds use
+eligible adjacent music first, followed by a
 bundled bed or synthetic drone. For ads, a configured `[ads].sfx_dir` takes
 priority over the selected root's `sfx/` directory. A resolved recipe uses its
 declared bed and no more than two cue files. A missing or corrupt recipe falls
@@ -815,11 +818,18 @@ Script generation never names a model in code. Each call site asks for a model b
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may add transition stings at
-music/speech boundaries or mix an electronic scene recipe around ad dialogue.
-It also mixes identity stings under sweepers. Modern Night Drive is the default
-root, and a custom root can replace it. Generated stings and beds provide the
-legacy fallback and reuse matching `synth_` cache renders.
+Before queueing, `mammamiradio/audio/imaging.py` may mix an electronic scene
+recipe around ad dialogue or identity stings under sweepers. Modern Night Drive
+is the default root, and a custom root can replace it. Live-ad bumpers retain
+their procedural fallback; generated beds reuse matching `synth_` cache renders.
+
+Song/talk boundary stings belong to playback, so the live Transitions dial also
+affects already-queued local talk. `scheduling/boundary_glue.py` selects
+`stingers/music_to_speech.mp3` or `stingers/speech_to_music.mp3`; only packaged
+ad spots receive `bumpers/ad_in.mp3` and `bumpers/ad_out.mp3`, since live breaks
+contain their own bumpers. The cart airs outside programme accounting and
+keepsakes, without FFmpeg or loudness reconciliation. Rescue fills, reserved
+music tails, and urgent interrupts take their existing paths without a cart.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
@@ -1497,6 +1507,8 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/chaos` | POST | Admin | Toggle Chaos Mode with `{"enabled": bool}`; persists `chaos_mode_active` to `.env` or Supervisor's stored HA add-on options |
 | `/api/party` | GET | Admin | Return `{"active": bool, "mode": str\|null}` for Festival Mode |
 | `/api/party` | POST | Admin | Toggle Festival Mode with `{"action": "enable"\|"disable", "mode": "festival"}`; persists `festival_mode` to `.env` or Supervisor's stored HA add-on options; purges queue and arms first-strike banter on enable |
+| `/api/boundary-imaging` | GET | Admin | Return the live `boundary_imaging` boolean, `resets_on_restart`, and session `carts_aired` count |
+| `/api/boundary-imaging` | POST | Admin | Set `{"boundary_imaging": true\|false}` for the next seam without purging the queue; standalone persists `MAMMAMIRADIO_BOUNDARY_IMAGING` to `.env`, add-on changes last for the session; records `operator_action` |
 | `/api/quality` | GET | Admin | Return `{"active_profile": str, "profiles": [str]}` for the model quality dial |
 | `/api/quality` | POST | Admin | Set the active model profile with `{"quality_profile": "premium"\|"balanced"\|"economy"}`; hot-swaps live with no restart and no queue purge; persists `MAMMAMIRADIO_QUALITY` to `.env` or `quality_profile` through Supervisor |
 | `/api/trigger` | POST | Admin | Trigger segment production |
@@ -1691,6 +1703,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/playlist/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
 | `mammamiradio/scheduling/scheduler.py` | pacing rules and upcoming preview |
 | `mammamiradio/scheduling/producer.py` | segment generation pipeline |
+| `mammamiradio/scheduling/boundary_glue.py` | packaged playback cart selection and validation |
 | `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup; keepsake eligibility gates, exact-segment extraction, durable keepsake save |
 | `mammamiradio/release_campaign.py` | Packaged release-beat manifest loading and bounded on-air campaign state (`cache/release_campaign_ledger.json`) |
 | `mammamiradio/restart_handoff.py` | Post-restart music continuity spool: producer writes safe recent segments, startup admits them into the queue (`cache/restart_handoff/`) |

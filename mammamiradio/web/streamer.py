@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from mammamiradio.audio.imaging import default_imaging_assets_dir
 from mammamiradio.audio.norm_cache import (
     is_listener_reserved_cache_file as _is_listener_reserved_cache_file,
 )
@@ -205,9 +206,9 @@ from mammamiradio.scheduling.boundary_glue import (
     SKIP_SWITCH_OFF,
     AiredBoundary,
     _packaged_file,
-    default_imaging_assets_dir,
     seam_choice,
     validated_playable_bytes,
+    warn_unusable,
 )
 from mammamiradio.scheduling.clip import KEEPSAKE_SEGMENT_TYPES
 from mammamiradio.scheduling.handoff import (
@@ -5794,6 +5795,7 @@ def _finalize_selected_playback(
     terminal_reason: str,
     all_chunks_audience_delivered: bool,
     cancel_reason: str = GenerationWasteReason.OPERATOR_PURGE,
+    emit_stream_result: bool = True,
 ) -> None:
     """Settle every selected Segment exactly once, including setup failures.
 
@@ -5828,16 +5830,17 @@ def _finalize_selected_playback(
             )
         finally:
             try:
-                _emit_stream_result(
-                    state,
-                    segment,
-                    bytes_sent,
-                    was_skipped,
-                    start_listeners,
-                    terminal_reason=terminal_reason,
-                    all_chunks_audience_delivered=all_chunks_audience_delivered,
-                    accepted_listener_count=accepted_listener_count,
-                )
+                if emit_stream_result:
+                    _emit_stream_result(
+                        state,
+                        segment,
+                        bytes_sent,
+                        was_skipped,
+                        start_listeners,
+                        terminal_reason=terminal_reason,
+                        all_chunks_audience_delivered=all_chunks_audience_delivered,
+                        accepted_listener_count=accepted_listener_count,
+                    )
             finally:
                 # Best-effort unlink: a raw unlink here can raise a non-missing
                 # OSError and escape the finally, killing the playback loop after
@@ -5869,14 +5872,25 @@ def _note_boundary_skip(state: StationState, reason: str, previous: AiredBoundar
     )
 
 
-def _boundary_stop_requested(state: StationState, skip_event: asyncio.Event, epoch: int, stop_revision: int) -> bool:
+def _boundary_abort_reason(
+    state: StationState, skip_event: asyncio.Event, epoch: int, stop_revision: int
+) -> str | None:
     """Stop, Skip, or a continuity epoch change owns the seam before programme audio."""
-    return (
-        skip_event.is_set()
-        or state.session_stopped
-        or state.continuity_epoch != epoch
-        or state.session_stop_revision != stop_revision
-    )
+    if state.session_stopped:
+        return GenerationWasteReason.SESSION_STOPPED
+    if state.continuity_epoch != epoch or state.session_stop_revision != stop_revision:
+        return GenerationWasteReason.STALE_CONTINUITY
+    return "skip" if skip_event.is_set() else None
+
+
+@dataclass
+class _BoundaryPrelude:
+    """Caller-owned accounting survives interruption before programme audio."""
+
+    bytes_sent: int = 0
+    generation: int = 0
+    continuity_epoch: int = 0
+    abort_reason: str | None = None
 
 
 async def _broadcast_boundary_prelude(
@@ -5889,60 +5903,84 @@ async def _broadcast_boundary_prelude(
     last_aired: AiredBoundary | None,
     chunk_size: int,
     skip_event: asyncio.Event,
-) -> bool:
+    prelude: _BoundaryPrelude,
+) -> None:
     """Send a packaged boundary cart before the programme file.
 
-    Returns True when Stop, Skip, or a continuity change means the programme
-    file must not air. Prelude bytes are not accounted as the segment: the
+    Records an abort reason when Stop, Skip, or a continuity change means the
+    programme file must not air. Prelude bytes are not accounted as the segment: the
     caller keeps ``bytes_sent``, listener acceptance, and the share ring for
     the programme file alone. The send stays here, not in a helper shared with
     the file loop, so programme accounting cannot slip behind the pacing sleep.
     """
     choice = seam_choice(last_aired, segment)
     generation_stale = last_aired is not None and last_aired.generation != hub.delivery_generation
-    # seam_choice never sets relative and skip_reason together. A stale
-    # generation suppresses the policy skip so one seam is not counted twice.
+    # A policy exclusion owns its reason even when the room also changed.
+    # The immediate return keeps each skipped seam to one counter entry.
     if choice.relative is None:
-        if choice.skip_reason and not generation_stale:
+        if choice.skip_reason:
             _note_boundary_skip(state, choice.skip_reason, last_aired, segment)
-        return False
+        return
     if not config.audio.boundary_imaging:
         _note_boundary_skip(state, SKIP_SWITCH_OFF, last_aired, segment)
-        return False
+        return
     if generation_stale:
         _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
-        return False
+        return
 
-    path = _packaged_file(choice.relative, assets_dir=_boundary_assets_dir(config))
-    playable = (
-        validated_playable_bytes(
-            path,
-            sample_rate=int(config.audio.sample_rate),
-            bitrate=int(config.audio.bitrate),
+    asset = Path(choice.relative)
+    try:
+        assets_dir = _boundary_assets_dir(config)
+        asset = assets_dir / choice.relative
+        path = _packaged_file(choice.relative, assets_dir=assets_dir)
+        if path is None:
+            warn_unusable(asset, "missing or unreadable")
+        playable = (
+            validated_playable_bytes(
+                path,
+                sample_rate=int(config.audio.sample_rate),
+                bitrate=int(config.audio.bitrate),
+                channels=int(config.audio.channels),
+            )
+            if path is not None
+            else None
         )
-        if path is not None
-        else None
-    )
+    except Exception:
+        warn_unusable(asset, "could not load")
+        playable = None
     if not playable:
         _note_boundary_skip(state, SKIP_ASSET_MISSING, last_aired, segment)
-        return False
+        return
 
     captured_epoch = state.continuity_epoch
     captured_stop_revision = state.session_stop_revision
     captured_generation = hub.delivery_generation
-    if _boundary_stop_requested(state, skip_event, captured_epoch, captured_stop_revision):
-        return True
+    prelude.generation = captured_generation
+    prelude.continuity_epoch = captured_epoch
 
     offset = 0
     while offset < len(playable):
-        if _boundary_stop_requested(state, skip_event, captured_epoch, captured_stop_revision):
-            return True
+        prelude.abort_reason = _boundary_abort_reason(state, skip_event, captured_epoch, captured_stop_revision)
+        if prelude.abort_reason is not None:
+            _note_boundary_skip(state, prelude.abort_reason, last_aired, segment)
+            return
         if hub.delivery_generation != captured_generation:
             _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
-            return False
+            return
         piece = playable[offset : offset + chunk_size]
         offset += len(piece)
         await hub.broadcast(piece)
+        prelude.bytes_sent += len(piece)
+        if offset == len(playable):
+            # Completion is the last emitted cart byte, even when an operator
+            # aborts the following programme during the final pacing sleep.
+            state.boundary_carts_aired += 1
+            logger.info(
+                "boundary cart %s: %s → %s",
+                choice.relative,
+                last_aired.kind.value if last_aired is not None else "none",
+                segment.type.value,
+            )
         pacing = pacer.after_send(len(piece))
         if pacing.kind is not None:
             state.record_stream_pacing_event(
@@ -5960,16 +5998,7 @@ async def _broadcast_boundary_prelude(
         if pacing.sleep_seconds > 0.005:
             await asyncio.sleep(pacing.sleep_seconds)
 
-    if _boundary_stop_requested(state, skip_event, captured_epoch, captured_stop_revision):
-        return True
-    state.boundary_carts_aired += 1
-    logger.info(
-        "boundary cart %s: %s → %s",
-        choice.relative,
-        last_aired.kind.value if last_aired is not None else "none",
-        segment.type.value,
-    )
-    return False
+    prelude.abort_reason = _boundary_abort_reason(state, skip_event, captured_epoch, captured_stop_revision)
 
 
 async def run_playback_loop(app) -> None:
@@ -6243,6 +6272,7 @@ async def run_playback_loop(app) -> None:
                     ):
                         pass
                     elif elapsed >= 60.0:
+                        last_aired = None
                         # Request forced banter once per silence episode to avoid producer thrash.
                         # queue_empty_since is intentionally NOT reset — the silence gate on
                         # /healthz and /readyz must stay active until real audio resumes.
@@ -6256,6 +6286,7 @@ async def run_playback_loop(app) -> None:
                         continue
                     else:
                         logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+                        last_aired = None
                         pacer.reset_timeline("queue_gap_fallback")
                         continue
 
@@ -6418,15 +6449,17 @@ async def run_playback_loop(app) -> None:
             logger.info("Discarding exact-track packaged banter after its predecessor changed")
             continue
 
-        if not segment.mark_playback_started():
+        if segment.released:
             # Settle like every other pre-air drop site. Without this the
             # segment vanishes with its listener-request reservation still held,
             # so the promised recording stays excluded from ordinary rotation
             # for the rest of the session with no retry and no waste trail.
-            # Its own reason, too: the usual cause is the segment's provider
-            # withdrawing it (an expired or released transient lease), which is
+            # Its own reason, too: the cause is the segment's provider
+            # withdrawing it (a released transient lease), which is
             # not an operator action. `operator_purge` renders to the operator as
             # "queue cleared" and would name them for something they did not do.
+            # The one-shot admission callback waits until after any boundary
+            # cart, immediately before the programme's first byte.
             state.record_discard(
                 segment,
                 reason=GenerationWasteReason.PLAYBACK_ADMISSION_DENIED,
@@ -6514,6 +6547,8 @@ async def run_playback_loop(app) -> None:
 
         try:
             bytes_sent = 0
+            prelude = _BoundaryPrelude()
+            pre_air_discard_reason: str | None = None
             aired_generation = hub.delivery_generation
             accepted_listener_count = 0
             was_skipped = False
@@ -6552,31 +6587,72 @@ async def run_playback_loop(app) -> None:
                     # an orphan sting. The cart itself is not part of this read.
                     retained_chunk = f.read(chunk_size)
                     send_programme = True
-                    if retained_chunk and await _broadcast_boundary_prelude(
-                        hub=hub,
-                        pacer=pacer,
-                        state=state,
-                        config=config,
-                        segment=segment,
-                        last_aired=last_aired,
-                        chunk_size=chunk_size,
-                        skip_event=skip_event,
-                    ):
+                    if retained_chunk:
+                        await _broadcast_boundary_prelude(
+                            hub=hub,
+                            pacer=pacer,
+                            state=state,
+                            config=config,
+                            segment=segment,
+                            last_aired=last_aired,
+                            chunk_size=chunk_size,
+                            skip_event=skip_event,
+                            prelude=prelude,
+                        )
+                    if prelude.abort_reason == "skip":
                         was_skipped = True
                         terminal_reason = "skip"
                         if skip_event.is_set():
                             skip_event.clear()
                         logger.info("Skipping current segment")
                         send_programme = False
+                    elif prelude.abort_reason is not None:
+                        pre_air_discard_reason = prelude.abort_reason
                     elif retained_chunk and not _home_context_generation_is_current(state, config, segment):
+                        pre_air_discard_reason = GenerationWasteReason.OPERATOR_PURGE
+                    elif retained_chunk and not _packaged_banter_predecessor_is_current(state, segment):
+                        pre_air_discard_reason = GenerationWasteReason.STALE_PLAYED_TRACK_REF
+                    elif (
+                        retained_chunk
+                        and segment.type is SegmentType.MUSIC
+                        and song_identity_key_is_blocklisted(_segment_blocklist_key(segment), state.blocklist)
+                    ):
+                        pre_air_discard_reason = GenerationWasteReason.OPERATOR_BAN
+                    elif retained_chunk and _segment_is_listener_reserved(state, segment):
+                        pre_air_discard_reason = GenerationWasteReason.LISTENER_REQUEST_RESERVED
+                    elif retained_chunk and not segment.mark_playback_started():
+                        # A provider can revoke its still-queued lease during
+                        # the cart. Consuming admission before that await would
+                        # falsely mark an unheard file as already playing.
+                        pre_air_discard_reason = GenerationWasteReason.PLAYBACK_ADMISSION_DENIED
+                    if pre_air_discard_reason is not None:
                         state.record_discard(
                             segment,
-                            reason=GenerationWasteReason.OPERATOR_PURGE,
+                            reason=pre_air_discard_reason,
                             already_counted_in_produced=pulled_from_queue,
                         )
-                        _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+                        _drop_segment_moment_receipts(state, segment, pre_air_discard_reason)
                         listener_request_reservation_released = True
-                        logger.info("Discarding stale Home-context segment before playback")
+                        companionship_discard_recorded = True
+                        terminal_reason = pre_air_discard_reason
+                        if pre_air_discard_reason == GenerationWasteReason.STALE_CONTINUITY:
+                            logger.warning(
+                                "Discarding playback selection after continuity epoch changed "
+                                "captured_epoch=%d current_epoch=%d type=%s",
+                                prelude.continuity_epoch,
+                                state.continuity_epoch,
+                                segment.type.value,
+                                extra={
+                                    "event": "playback_selection_stale_continuity",
+                                    "captured_continuity_epoch": prelude.continuity_epoch,
+                                    "continuity_epoch": state.continuity_epoch,
+                                    "segment_type": segment.type.value,
+                                },
+                            )
+                        elif pre_air_discard_reason == GenerationWasteReason.OPERATOR_PURGE:
+                            logger.info("Discarding stale Home-context segment before playback")
+                        else:
+                            logger.info("Discarding playback selection before first byte (%s)", pre_air_discard_reason)
                         send_programme = False
                     pending_chunk: bytes | None = retained_chunk if send_programme else None
                     while send_programme:
@@ -6847,7 +6923,13 @@ async def run_playback_loop(app) -> None:
                     kind=segment.type,
                     rescue=bool(_aired_meta.get("rescue")),
                     generation=aired_generation,
+                    packaged=bool(_aired_meta.get("packaged")),
+                    interrupt=bool(_aired_meta.get("interrupt")),
                 )
+            elif prelude.bytes_sent > 0:
+                # An orphaned cart already occupied this seam. Do not stack a
+                # second cart before the next programme gets its first byte.
+                last_aired = AiredBoundary(SegmentType.SWEEPER, False, prelude.generation)
             if not listener_request_reservation_released:
                 # File-error/empty-file restoration already popped this token
                 # into an active or backlogged retry. Other pre-byte exits (an
@@ -6884,7 +6966,16 @@ async def run_playback_loop(app) -> None:
                 accepted_listener_count=accepted_listener_count,
                 terminal_reason=terminal_reason,
                 all_chunks_audience_delivered=all_chunks_audience_delivered,
+                emit_stream_result=pre_air_discard_reason is None,
+                cancel_reason=pre_air_discard_reason or GenerationWasteReason.OPERATOR_PURGE,
             )
+            if pulled_from_queue and pre_air_discard_reason in {
+                GenerationWasteReason.OPERATOR_BAN,
+                GenerationWasteReason.LISTENER_REQUEST_RESERVED,
+            }:
+                remaining = list(getattr(segment_queue, "_queue", ()))
+                prior_tail = remaining[-1] if remaining else segment
+                _reconcile_queue_tail_adjacency(segment_queue, state, prior_tail=prior_tail)
 
 
 def _schedule_banter_memory_extraction_after_send(
@@ -9814,7 +9905,7 @@ _boundary_imaging_lock = asyncio.Lock()
 
 @router.get("/api/boundary-imaging")
 async def get_boundary_imaging(request: Request, _: None = Depends(require_admin_access)):
-    """Return the Transitions dial and whether a restart puts it back on."""
+    """Return the Transitions dial and whether a restart resets its live choice."""
     config = request.app.state.config
     state = request.app.state.station_state
     return {
@@ -9830,8 +9921,8 @@ async def set_boundary_imaging(request: Request, _: None = Depends(require_admin
 
     No queue purge. Standalone writes ``MAMMAMIRADIO_BOUNDARY_IMAGING`` to
     ``.env`` before the runtime changes. The add-on has no Supervisor option
-    for this dial, so the change lasts until the container restarts and then
-    comes back on.
+    for this dial, so the change lasts until the container restarts with its
+    configured startup value (on by default).
     """
     config = request.app.state.config
     body, error = await read_json_object(request)
