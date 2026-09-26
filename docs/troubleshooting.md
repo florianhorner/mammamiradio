@@ -135,6 +135,12 @@ Source-checkout developers with MP3s in the repo-local `music/` directory can
 use them with external extraction off and Jamendo off. Those files remain the
 operator's responsibility.
 
+On a standalone install with external media, if `/status` shows
+`production.current` at `finding` on one external track for minutes and no new
+`Queued music` line appears, the producer is waiting on that download, which
+has no overall time limit. Restart to recover; set `MAMMAMIRADIO_ALLOW_YTDLP=false`
+and restart to keep it from recurring.
+
 ## Jamendo stays off or temporarily unavailable
 
 Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:

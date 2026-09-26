@@ -39,8 +39,10 @@ _EXTERNAL_MEDIA_SOURCES = frozenset({"youtube", "classic"})
 # Per-socket-operation timeout for yt-dlp network reads. Python's urllib has no
 # default socket timeout — without this a stalled YouTube socket blocks a
 # download thread forever, leaking a slot from the shared run_in_executor pool
-# the audio pipeline also uses. Pairs with the `throttled_rate` opt, which
-# already bounds slow-but-alive transfers.
+# the audio pipeline also uses. yt-dlp ignores unknown option keys, so the old
+# `throttled_rate` key never bounded slow transfers. Do not add
+# `throttledratelimit`: yt-dlp then re-extracts in an uncapped loop whenever a
+# download is slow.
 _YTDLP_SOCKET_TIMEOUT_SEC = 30
 
 # Canonical YouTube video-id shape (11 chars, base64url alphabet). Single source
@@ -409,8 +411,9 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "noprogress": True,
         "abort_on_unavailable_fragments": True,
         "socket_timeout": _YTDLP_SOCKET_TIMEOUT_SEC,  # fail a stalled socket, never hang
-        "throttled_rate": 100_000,  # re-extract URLs if speed drops below 100 KB/s
-        "check_formats": True,  # verify formats are downloadable before selecting
+        # Test only the format being downloaded. True test-downloads every
+        # format (175 for one video).
+        "check_formats": "selected",
         "concurrent_fragment_downloads": 2,  # parallel fragment downloads
         "paths": {"temp": str(ytdlp_tmp)},  # atomic: fragments in temp, move on completion
     }
