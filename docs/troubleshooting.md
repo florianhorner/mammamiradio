@@ -264,6 +264,24 @@ INFO Chart ingest: filtered 3 non-music entries
 
 If a legitimate song is being rejected, check `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`. The list is deliberately narrow (podcast, bbc comedy, audiobook, news briefing, asmr, …) so real titles almost never trip it. If a real Italian song title legitimately contains one of these markers, remove the marker from the list rather than loosening the check.
 
+## An external download was refused or stopped partway
+
+This applies only to a standalone installation with the `external-media`
+extra. Before any audio is transferred, the station refuses a live, scheduled,
+or just-ended stream, and a result more than four times as long as the track it
+stands for. That limit is never below 14 minutes. When yt-dlp cannot fetch part
+of the audio stream, the download fails instead of airing with a jump.
+
+For a rotation track the log names the reason, the track stays unavailable
+until the next restart, and the station plays other music:
+
+```text
+WARNING yt-dlp failed for Some Artist – Some Title: refused a live stream before download — marking track unavailable
+```
+
+An admin add, a Direction pick, or a listener song request gets the same notice
+as any other failed download.
+
 ## The station keeps rejecting the same track
 
 If a track fails `validate_download` (too short, corrupt, missing duration), the cached copy at `cache_dir/{cache_key}.mp3` used to stay put. The next selection of the same track returned it as a cache hit and the gate rejected it again. Endless loop.
