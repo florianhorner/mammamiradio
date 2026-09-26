@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,6 +54,7 @@ def test_manifest_is_stable_exact_and_carries_future_profile_intent():
     assert LEGACY_HOME_MANIFEST_V1.version == 1
     assert len(LEGACY_HOME_MANIFEST_V1.entries) == 35
     assert len(LEGACY_HOME_MANIFEST_V1.entity_ids) == 35
+    assert len({entry.role for entry in LEGACY_HOME_MANIFEST_V1.entries}) == 35
     assert LEGACY_HOME_MANIFEST_V1.entity_ids == frozenset(ALL_ENTITIES)
     assert (
         LEGACY_HOME_MANIFEST_V1.entity_id_digest == "72201ec2e2b10ec6d9c594cae11d5cb5a5da6e11d744229f8f2a53cdf4c6613a"
@@ -63,6 +65,13 @@ def test_manifest_is_stable_exact_and_carries_future_profile_intent():
     assert all("resident" in by_id[entity_id].scopes for entity_id in by_id if entity_id.startswith("person."))
     assert "moment" in by_id["switch.bar_kaffeemaschine_steckdose"].scopes
     assert by_id["binary_sensor.buro_9_ring_intercom_klingelt"].priority == "bronze"
+
+
+@pytest.mark.parametrize("role", ("", LEGACY_HOME_MANIFEST_V1.entries[1].role))
+def test_manifest_rejects_missing_or_duplicate_semantic_roles(role):
+    manifest = LEGACY_HOME_MANIFEST_V1
+    with pytest.raises(ValueError, match="roles must be nonempty and unique"):
+        replace(manifest, entries=(replace(manifest.entries[0], role=role), *manifest.entries[1:]))
 
 
 def test_capture_preflight_is_owner_only_and_idempotently_keeps_first_fact(tmp_path):
