@@ -1749,6 +1749,10 @@ class StationState:
     # Runtime integrity counters for long-lived sessions
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0
+    # Playback-seam cart. Session-local: a restart clears the counts. The dial
+    # itself lives on config.audio.boundary_imaging.
+    boundary_carts_aired: int = 0
+    boundary_imaging_skips: dict[str, int] = field(default_factory=dict)
     playback_epoch: int = 0
     # Producer rescue-bridge telemetry (#547 observability). Every time a
     # drain/resume/idle bridge enqueues rescue audio the station is, briefly,

@@ -271,6 +271,12 @@ class AudioSection:
     # imperceptible on good speakers, and the "what should the station sound like"
     # strategy is being revisited. Set true to opt in.
     broadcast_chain: bool = False
+    # Short packaged stingers and ad bumpers played at the playback seam, before
+    # the next programme file. Default on. Packaged media stays byte-for-byte
+    # untouched; a missing asset is a clean cut. The Engine Room Transitions
+    # dial flips this live. Standalone persists it to .env. The add-on does not
+    # have a Supervisor option, so a dial change there lasts until restart.
+    boundary_imaging: bool = True
 
 
 # ── Dynamic model routing ─────────────────────────────────────────────────
@@ -2347,6 +2353,22 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio_raw["broadcast_chain"] = True
     elif _bc_env in _FALSY:
         audio_raw["broadcast_chain"] = False
+
+    # Env override for the playback-seam cart. Default on. A typo must not
+    # silently turn the station sounds off, so junk forces the default and warns.
+    _bi_env = os.getenv("MAMMAMIRADIO_BOUNDARY_IMAGING", "").strip().lower()
+    if _bi_env in _TRUTHY:
+        audio_raw["boundary_imaging"] = True
+    elif _bi_env in _FALSY:
+        audio_raw["boundary_imaging"] = False
+    elif _bi_env:
+        import logging as _bi_logging
+
+        _bi_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_BOUNDARY_IMAGING=%r (use true/1/yes or false/0/no); leaving transitions on",
+            _bi_env,
+        )
+        audio_raw["boundary_imaging"] = True
 
     ha_raw = raw.get("homeassistant", {})
     # Env-var overrides for HA add-on: HA_URL and HA_ENABLED

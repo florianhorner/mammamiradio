@@ -326,17 +326,20 @@ def _skip_id3_and_xing_header(f) -> None:
     f.seek(frame_start + frame_length)
 
 
+def mpeg1_l3_bitrate_kbps(frame_header: bytes) -> int | None:
+    """Return the bitrate of a supported complete MPEG-1 Layer III header."""
+    if not _is_mpeg1_l3_header(frame_header, allow_free_bitrate=False) or frame_header[3] & 0x03 == 0x02:
+        return None
+    return _MPEG1_L3_BITRATES_KBPS[(frame_header[2] >> 4) & 0x0F]
+
+
 def _parse_mpeg1_l3_header(frame_header: bytes) -> tuple[int, int] | None:
     """Return ``(frame_length, sample_rate)`` for an exact supported header."""
 
-    if not _is_mpeg1_l3_header(frame_header, allow_free_bitrate=False):
+    bitrate_kbps = mpeg1_l3_bitrate_kbps(frame_header)
+    if bitrate_kbps is None:
         return None
-    bitrate_idx = (frame_header[2] >> 4) & 0x0F
     sample_rate_idx = (frame_header[2] >> 2) & 0x03
-    emphasis = frame_header[3] & 0x03
-    if emphasis == 0x02:  # reserved
-        return None
-    bitrate_kbps = _MPEG1_L3_BITRATES_KBPS[bitrate_idx]
     sample_rate = _MPEG1_SAMPLE_RATES[sample_rate_idx]
     padding = (frame_header[2] >> 1) & 0x01
     frame_length = (144 * bitrate_kbps * 1000 // sample_rate) + padding

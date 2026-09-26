@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import pytest
+
 from mammamiradio.core.config import load_config, runtime_json
 from mammamiradio.web.streamer import _skip_id3_and_xing_header
 
@@ -218,7 +220,9 @@ def test_run_playback_loop_strips_per_segment_metadata():
         raise AssertionError("run_playback_loop not found")
 
 
-def test_run_playback_loop_settles_a_denied_admission_before_moving_on():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_released", [False, True])
+async def test_run_playback_loop_settles_a_denied_admission_before_moving_on(tmp_path, already_released):
     """A denied admission is a pre-air drop and must settle like every other one.
 
     Without it the segment vanishes holding its listener-request reservation, so
@@ -227,59 +231,75 @@ def test_run_playback_loop_settles_a_denied_admission_before_moving_on():
     the usual cause is the segment's provider withdrawing it, and
     ``operator_purge`` renders to the operator as "queue cleared".
     """
-    import ast
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, call, patch
 
-    src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
-    tree = ast.parse(src)
-    loop = next(
-        (n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_playback_loop"),
-        None,
-    )
-    assert loop is not None, "run_playback_loop not found"
+    from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, Track
+    from mammamiradio.web.streamer import run_playback_loop
+    from tests.web.test_streamer_routes import _commit_playback_handoff, _make_test_app
 
-    denied_branch = next(
-        (
-            n
-            for n in ast.walk(loop)
-            if isinstance(n, ast.If) and "mark_playback_started" in (ast.get_source_segment(src, n.test) or "")
-        ),
-        None,
-    )
-    assert denied_branch is not None, "admission-denied branch not found"
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.audio.boundary_imaging = False
+    state = app.state.station_state
+    music, successor, original = _commit_playback_handoff(app, tmp_path)
+    head_path, successor_path = music.path, successor.path
+    requested = Track(title="Song", artist="Artist", duration_ms=180_000)
+    assert state.arm_listener_request_handoff({"request_id": "withdrawn-song"}, requested)
+    music.metadata.update(state.listener_request_handoff_metadata(requested))
+    state.admit_listener_request_handoff(music)
+    assert state.listener_request_admitted_reservations
+    music.metadata["ritual_moment_id"] = "withdrawn-song-moment"
+    successor.metadata["gag_moment_id"] = "withdrawn-talk-moment"
+    state.moment_store = MagicMock()
+    release = MagicMock()
+    music.release_callback = release
+    music.playback_start_callback = lambda: False
+    if already_released:
+        music.release()
 
-    # Match call nodes, never raw source: a substring check over the branch text
-    # is satisfied by a comment naming the helper, which is the same vacuity this
-    # guard exists to prevent.
-    called = {
-        c.func.id if isinstance(c.func, ast.Name) else c.func.attr
-        for c in ast.walk(denied_branch)
-        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name | ast.Attribute)
-    }
-    discard_calls = [
-        c
-        for c in ast.walk(denied_branch)
-        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "record_discard"
-    ]
-    assert len(discard_calls) == 1, "expected exactly one record_discard in the admission-denied branch"
-    kwargs = {k.arg: ast.unparse(k.value) for k in discard_calls[0].keywords}
-    assert kwargs.get("reason") == "GenerationWasteReason.PLAYBACK_ADMISSION_DENIED"
-    assert kwargs.get("already_counted_in_produced") == "pulled_from_queue"
-    assert "_settle_discarded_selection_handoff" in called, (
-        "a denied promised segment must settle its handoff, or the listener gets no retry"
+    good_path = tmp_path / "good.mp3"
+    good_path.write_bytes(b"good-song-audio")
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=good_path, ephemeral=False))
+    listener_id, listener_audio = app.state.stream_hub.subscribe()
+    with (
+        patch.object(state, "record_discard", wraps=state.record_discard) as discard,
+        patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=3)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            app.state.stream_hub.unsubscribe(listener_id)
+
+    chunks = []
+    while not listener_audio.empty():
+        chunks.append(listener_audio.get_nowait())
+    assert b"".join(chunks) == b"good-song-audio"
+    reason = GenerationWasteReason.PLAYBACK_ADMISSION_DENIED
+    assert discard.call_count == 2
+    assert {id(item.args[0]) for item in discard.call_args_list} == {id(music), id(successor)}
+    assert all(
+        item.kwargs == {"reason": reason, "already_counted_in_produced": True} for item in discard.call_args_list
     )
-    assert "_drop_segment_moment_receipts" in called
-    # Reason attributes, again as nodes: the in-code comment mentions the old
-    # reason on purpose, and a cosmetic edit to it must not turn this red.
-    reasons = {
-        node.attr
-        for node in ast.walk(denied_branch)
-        if isinstance(node, ast.Attribute)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "GenerationWasteReason"
-    }
-    assert reasons == {"PLAYBACK_ADMISSION_DENIED"}, (
-        f"a provider withdrawing a segment is not an operator action; got {sorted(reasons)}"
+    assert state.discard_by_reason[reason] == 2
+    state.moment_store.mark_dropped.assert_has_calls(
+        [call("withdrawn-song-moment", reason), call("withdrawn-talk-moment", reason)], any_order=True
     )
+    assert state.moment_store.mark_dropped.call_count == 2
+    release.assert_called_once_with()
+    assert state.listener_request_handoff is None
+    assert not state.listener_request_retry_handoffs
+    assert not state.listener_request_admitted_reservations
+    assert not state.handoff_reservations
+    assert original.exists()
+    assert not head_path.exists() and not successor_path.exists()
+    assert app.state.queue._unfinished_tasks == 0
+    assert state.active_playback_segment is None
+    assert len(state.stream_outcome_history) == 1
+    assert state.stream_outcome_history[0]["bytes_sent"] == len(b"good-song-audio")
 
 
 def test_run_playback_loop_records_session_stop_discard_before_airing():

@@ -7,6 +7,91 @@ async (page) => {
     if (!condition) throw new Error(`admin-browser-smoke: ${message}`);
   }
 
+  async function exerciseBoundaryImaging() {
+    return page.evaluate(async () => {
+      const saved = { api, fetchAdminJson, st: _st, hostsOk: _hostsOk, toast };
+      const checkbox = document.getElementById('boundaryImagingToggle');
+      const reset = document.getElementById('boundaryImagingReset');
+      const count = document.getElementById('boundaryImagingCount');
+      const prior = { checked: checkbox.checked, hidden: reset.hidden, count: count.textContent };
+      const checks = [];
+      const messages = [];
+      let releaseStatus;
+      let heldPoll;
+      const check = (condition, message) => {
+        if (!condition) throw new Error(`Transitions: ${message}`);
+        checks.push(message);
+      };
+      try {
+        toast = (message) => messages.push(message);
+        reset.hidden = false;
+        api = async () => { throw new Error('initial load unavailable'); };
+        await loadBoundaryImagingToggle();
+        check(!reset.hidden && !checkbox.disabled, 'failed initial load preserves conditional restart notice');
+
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { carts_aired: 3 } } }, _caps);
+        updateEngineRoom({ ...saved.st, runtime_health: {} }, _caps);
+        check(count.textContent === 'Aired 3 times this session', 'missing status preserves a known count');
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { carts_aired: 0 } } }, _caps);
+        check(count.textContent === 'Aired 0 times this session', 'explicit zero replaces the previous count');
+
+        for (const resetsOnRestart of [true, false]) {
+          api = async () => ({ ok: true, resets_on_restart: resetsOnRestart });
+          checkbox.checked = resetsOnRestart;
+          await toggleBoundaryImaging(checkbox);
+          check(reset.hidden === !resetsOnRestart, `successful save refreshes restart notice: ${resetsOnRestart}`);
+        }
+
+        let finishSave;
+        api = () => new Promise((resolve) => { finishSave = resolve; });
+        checkbox.checked = true;
+        const saving = toggleBoundaryImaging(checkbox);
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { enabled: false } } }, _caps);
+        check(checkbox.disabled && checkbox.checked, 'poll cannot overwrite a pending choice');
+        finishSave({ ok: true, resets_on_restart: false });
+        await saving;
+
+        _hostsOk = true;
+        fetchAdminJson = async (path) => path.startsWith('/status')
+          ? new Promise((resolve) => { releaseStatus = resolve; }) : [];
+        heldPoll = refreshFast();
+        check(typeof releaseStatus === 'function', 'old status request is held before saving');
+        checkbox.blur();
+        checkbox.checked = true;
+        api = async () => ({ ok: true, resets_on_restart: false });
+        await toggleBoundaryImaging(checkbox);
+        releaseStatus({ ...saved.st, runtime_health: { boundary_imaging: { enabled: false, carts_aired: 0 } } });
+        await heldPoll;
+        check(checkbox.checked, 'late status cannot contradict a completed save without focus');
+
+        api = async () => ({ ok: false });
+        checkbox.checked = false;
+        await toggleBoundaryImaging(checkbox);
+        check(checkbox.checked && !checkbox.disabled, 'declined save restores the prior choice');
+        check(messages.at(-1) === wayOut('change the transitions'), 'declined save uses shared recovery copy');
+        api = async () => { throw new Error('offline'); };
+        checkbox.checked = false;
+        await toggleBoundaryImaging(checkbox);
+        check(checkbox.checked && !checkbox.disabled, 'offline save restores the prior choice');
+        check(messages.at(-1) === offlineMsg(), 'offline save uses shared recovery copy');
+        return { checks: checks.length };
+      } finally {
+        ++_fastPollGeneration;
+        if (releaseStatus) releaseStatus(saved.st);
+        if (heldPoll) await heldPoll;
+        api = saved.api;
+        fetchAdminJson = saved.fetchAdminJson;
+        _st = saved.st;
+        _hostsOk = saved.hostsOk;
+        toast = saved.toast;
+        checkbox.checked = prior.checked;
+        checkbox.disabled = false;
+        reset.hidden = prior.hidden;
+        count.textContent = prior.count;
+      }
+    });
+  }
+
   async function exerciseMacFlow() {
     const result = await page.evaluate(async () => {
       const saved = { st: _st, ui: { ..._firstListenUi }, entry: document.body.dataset.firstListenEntry,
@@ -2146,6 +2231,7 @@ async (page) => {
   assert(escapedShell.deckVisible && escapedShell.rotationTabVisible,
     'the Station controls escape did not restore the producer desk tab bar');
 
+  const boundaryImaging = await exerciseBoundaryImaging();
   const macFlow = await exerciseMacFlow();
 
   const stoppedControls = await page.evaluate(() => {
@@ -2623,6 +2709,7 @@ async (page) => {
   assert(pageErrors.length === 0, `uncaught page errors: ${pageErrors.join(' | ')}`);
 
   return {
+    boundary_imaging: boundaryImaging,
     mac_flow: macFlow,
     ok: true,
     checks: 87,
