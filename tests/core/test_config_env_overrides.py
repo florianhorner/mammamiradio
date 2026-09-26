@@ -473,3 +473,28 @@ def test_dotenv_switch_blocks_a_planted_env_file(tmp_path: Path) -> None:
         "The probe .env was not loaded without the switch, so this test cannot "
         "detect a leak. Check find_dotenv() behaviour or the probe file."
     )
+
+
+def test_exported_runtime_settings_do_not_change_config_tests() -> None:
+    """The test session must isolate HA and port settings from the parent shell."""
+    env = dict(os.environ)
+    env.update(
+        {
+            "HA_ENABLED": "true",
+            "HA_URL": "http://127.0.0.1:9",
+            "MAMMAMIRADIO_BIND_HOST": "0.0.0.0",
+            "MAMMAMIRADIO_PORT": "9001",
+        }
+    )
+    repo_root = Path(__file__).resolve().parents[2]
+    ha_test = f"{Path(__file__).resolve()}::test_ha_stays_disabled_without_url"
+    port_test = repo_root / "tests/repo/test_stream_watch_server.py"
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", ha_test, f"{port_test}::test_upstream_base_url_uses_runtime_port"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

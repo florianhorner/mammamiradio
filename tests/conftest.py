@@ -51,7 +51,7 @@ def external_media_missing(monkeypatch):
 
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_env():
-    """Keep a developer's exported provider credentials out of the session.
+    """Keep exported credentials and runtime overrides out of the session.
 
     The workspace ``.env`` is already blocked at collection time by the
     ``PYTHON_DOTENV_DISABLED`` assignment at the top of this file; this fixture
@@ -63,7 +63,11 @@ def _isolate_env():
         "AZURE_SPEECH_KEY",
         "AZURE_SPEECH_REGION",
         "ELEVENLABS_API_KEY",
+        "HA_ENABLED",
         "HA_TOKEN",
+        "HA_URL",
+        "MAMMAMIRADIO_BIND_HOST",
+        "MAMMAMIRADIO_PORT",
         "STATION_NAME",
         "STATION_THEME",
     ]
