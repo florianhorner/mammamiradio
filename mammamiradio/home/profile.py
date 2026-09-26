@@ -49,14 +49,18 @@ def _legacy_document(profile_id: str) -> dict[str, Any]:
     # Imports stay inside the one-time exporter, away from authorization startup.
     from mammamiradio.core.listener_truth import _AUTHORIZED_HOME_RETURN_SOURCES
     from mammamiradio.home import catalog, ha_context
+    from mammamiradio.home.authorization import NARROW_DAYLIGHT_ENTITY_ID, NARROW_WEATHER_ENTITY_ID
     from mammamiradio.home.context_director import CURATED_COFFEE_ENTITY_IDS
 
     manifest = migration.LEGACY_HOME_MANIFEST_V1
     entries = manifest.entries
     tiers = (ha_context.GOLD_ENTITIES, ha_context.SILVER_ENTITIES, ha_context.BRONZE_ENTITIES)
-    ordered = [entity_id for tier in tiers for entity_id in tier]
-    priorities = [priority for priority, tier in zip(("gold", "silver", "bronze"), tiers, strict=True) for _ in tier]
-    if ordered != [entry.entity_id for entry in entries] or priorities != [entry.priority for entry in entries]:
+    expected = [
+        (priority, entity_id)
+        for priority, tier in zip(("gold", "silver", "bronze"), tiers, strict=True)
+        for entity_id in tier
+    ]
+    if expected != [(entry.priority, entry.entity_id) for entry in entries]:
         raise ValueError("legacy inventory drift")
     residents = [entry.entity_id for entry in entries if entry.role in {"resident_one", "resident_two"}]
     returns = [
@@ -86,7 +90,7 @@ def _legacy_document(profile_id: str) -> dict[str, Any]:
                 "label_it": catalog.ENTITY_LABELS[entity_id],
                 "label_en": catalog.ENTITY_LABELS_EN[entity_id],
             }
-            for entity_id in ("weather.ambient", "sun.ambient")
+            for entity_id in (NARROW_WEATHER_ENTITY_ID, NARROW_DAYLIGHT_ENTITY_ID)
         ],
         "reactive_triggers": [
             {"entity_id": entity_id, "state": state, "directive": directive, "cooldown": cooldown}
@@ -113,7 +117,7 @@ def _profile(document: object) -> HomeProfileV1:
     return HomeProfileV1(identity, hashlib.sha256(canonical.encode()).hexdigest(), canonical)
 
 
-def _read_profile(path: Path) -> HomeProfileV1:
+def _read_profile(path: Path, *, sync: bool = False) -> HomeProfileV1:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as handle:
         info = os.fstat(handle.fileno())
@@ -122,7 +126,12 @@ def _read_profile(path: Path) -> HomeProfileV1:
         raw = handle.read(_MAX_PROFILE_BYTES + 1)
         if len(raw) > _MAX_PROFILE_BYTES:
             raise ValueError("profile exceeds size limit")
-        return _profile(json.loads(raw))
+        result = _profile(json.loads(raw))
+        if sync:
+            os.fsync(handle.fileno())
+            if not os.path.samestat(info, path.stat(follow_symlinks=False)):
+                raise ValueError("profile replaced during synchronization")
+        return result
 
 
 def _binding(connection: sqlite3.Connection) -> tuple[str, str | None] | None:
@@ -195,24 +204,23 @@ def export_legacy_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfile
                         raise ValueError("unverifiable bound profile")
                     return existing
                 try:
-                    profile = _read_profile(path)
+                    _read_profile(path)
                 except FileNotFoundError:
                     profile = _profile(_legacy_document(binding[0]))
                     try:
                         migration._atomic_write_json(path, profile.to_dict(), replace_existing=False)
                     except FileExistsError:
                         pass  # Another exporter won publication; validate its complete file.
-                    profile = _read_profile(path)
+                # Bind only bytes validated and synced through the same safe FD.
+                profile = _read_profile(path, sync=True)
                 if profile.profile_id != binding[0]:
                     raise ValueError("profile belongs to another export intent")
-                # Also re-sync an orphan: the preceding process may have died
-                # after publication but before either file or directory fsync.
-                for target in (path, state_dir):
-                    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
-                    try:
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
+                # Re-sync the directory too when recovering an interrupted export.
+                fd = os.open(state_dir, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
                 if migration.load_legacy_home_provenance_v1(state_dir, db_path) is None:
                     return None
                 with connection:

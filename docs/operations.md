@@ -1014,6 +1014,9 @@ boolean, never the private document. A pending database export intent is not
 ready. File existence or an old success log alone
 does not establish readiness.
 
+Back up after readiness is confirmed: a hot backup during the first export can
+capture an unmatched file and binding. Such a partial restore remains unready.
+Preserve the profile's `0600` permissions; a restore with `0644` is refused.
 Keep `cache/mammamiradio.db` and `cache/state/` together in private backups. Do
 not delete or edit malformed evidence to force migration, transplant one file
 from another installation, or upload the snapshot with diagnostics. If the

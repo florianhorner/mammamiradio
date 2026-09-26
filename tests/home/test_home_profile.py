@@ -317,6 +317,54 @@ def test_publication_race_validates_winner_without_overwriting(eligible, monkeyp
     assert result is not None and result == profile.load_home_profile_v1(*eligible)
 
 
+@pytest.mark.parametrize("when", ("before_sync", "during_sync"))
+@pytest.mark.parametrize("replacement", ("foreign", "fifo"))
+def test_replaced_profile_stays_pending_and_can_retry(eligible, monkeypatch, when, replacement):
+    state_dir, db_path = eligible
+    original = profile.export_legacy_home_profile_v1(*eligible)
+    path, swap = state_dir / profile.PROFILE_FILENAME, state_dir / "replacement"
+    saved = path.read_bytes()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(f"UPDATE {profile.PROFILE_BINDING_TABLE} SET content_digest = NULL")
+    if replacement == "fifo":
+        os.mkfifo(swap, 0o600)
+    else:
+        swap.write_text(json.dumps(profile._legacy_document("f" * 32)))
+        swap.chmod(0o600)
+    read, sync, open_fd = profile._read_profile, os.fsync, os.open
+
+    def swap_once():
+        if swap.exists():
+            swap.replace(path)
+
+    def read_then_swap(*args, **kwargs):
+        result = read(*args, **kwargs)
+        if when == "before_sync":
+            swap_once()
+        return result
+
+    def sync_then_swap(fd):
+        sync(fd)
+        if when == "during_sync":
+            swap_once()
+
+    def refuse_blocking_fifo(target, flags, *args, **kwargs):
+        if target == path and path.is_fifo():
+            assert flags & os.O_NONBLOCK, "sync must never block on a replaced FIFO"
+        return open_fd(target, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(profile, "_read_profile", read_then_swap)
+        patch.setattr(os, "fsync", sync_then_swap)
+        patch.setattr(os, "open", refuse_blocking_fifo)
+        assert profile.export_legacy_home_profile_v1(*eligible) is None
+    assert _binding(db_path) == (original.profile_id, None)
+    path.unlink()
+    path.write_bytes(saved)
+    path.chmod(0o600)
+    assert profile.export_legacy_home_profile_v1(*eligible) == original
+
+
 @pytest.mark.parametrize("target_status", ("absent", "pending", "bound"))
 def test_foreign_profile_never_adopted_by_another_eligible_database(eligible, tmp_path, target_status):
     source_state, _ = eligible

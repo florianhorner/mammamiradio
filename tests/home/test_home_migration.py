@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -72,6 +73,17 @@ def test_manifest_rejects_missing_or_duplicate_semantic_roles(role):
     manifest = LEGACY_HOME_MANIFEST_V1
     with pytest.raises(ValueError, match="roles must be nonempty and unique"):
         replace(manifest, entries=(replace(manifest.entries[0], role=role), *manifest.entries[1:]))
+
+
+def test_complete_compatibility_snapshot_is_frozen_until_the_consumer_migration():
+    from mammamiradio.home.profile import _canonical, _legacy_document
+
+    document = _legacy_document("0" * 32)
+    document.pop("profile_id")
+    # Changing this aggregate requires a migration decision for already-exported profiles.
+    assert hashlib.sha256(_canonical(document).encode()).hexdigest() == (
+        "c49225bb57f04945c790c2c4883c6d6ee5edec5181761e3bce8f44f16577ecf3"
+    )
 
 
 def test_capture_preflight_is_owner_only_and_idempotently_keeps_first_fact(tmp_path):

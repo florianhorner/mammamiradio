@@ -1221,6 +1221,11 @@ consume the snapshot, change authorization, or remove built-in mappings. Schema
 consent grants. LEGACY still processes the full filtered HA snapshot, not only
 the curated inventory.
 
+A golden hash pins the complete compiled snapshot, excluding its random identity.
+Keep these constants frozen until the next update can consume existing profiles
+without recompiling them. Semantic roles identify the existing mood/formatting
+rules; their numeric thresholds and ordered logic still live in runtime code.
+
 - `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
 - `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so the empty-home mood and explicitly sourced named-resident facts can work; person events never reach `/public-status`
