@@ -775,11 +775,12 @@ without waiting for a banter or TTS segment to fail. The active checks cover
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`,
 and `ELEVENLABS_API_KEY`.
 
-- On startup (when any key is configured) and after a key-save, a single secret-safe
+- On startup or a key-save when an Anthropic or OpenAI writing key is configured, a single secret-safe
   provider probe (`check_provider_keys`) runs in the background — fire-and-forget, so it
   never delays boot or the first audio. Anthropic/OpenAI use minimal text probes; Azure Speech
   and ElevenLabs use voice-list endpoints, not billable synthesis. `POST /api/setup/provider-check`
-  runs it on demand.
+  also checks voice keys on demand. Boot, save, and operator checks join the same in-flight probe for the
+  current keys; a quick save-then-check does not send duplicate provider calls.
 - The verdict is cached on the station state and exposed in `GET /api/capabilities`:
   `capabilities.anthropic_key_status` / `capabilities.openai_key_status`, and
   `provider_health.{anthropic,openai,azure_speech,elevenlabs_tts}.key_status`. Each is
@@ -788,6 +789,12 @@ and `ELEVENLABS_API_KEY`.
 - A `"rejected"` key reads in the Engine Room as a persistent **key not working — replace key**
   state, distinct from the transient time-based `anthropic_degraded` "suspended" fallback. When a
   rejected key is the only configured LLM key, `capabilities.next_step` steers toward replacing it.
+- Admin capabilities and provider health expose `provider_probe_in_flight`. An unverified key
+  reads as **Checking** only while a probe is active; an inconclusive completed probe asks the
+  operator to check the AI connection again. OpenAI script failures have their own bounded
+  breaker (`provider_health.openai.degraded` and `retry_after_s`), separate from OpenAI speech.
+  A previously valid OpenAI key does not make AI hosts appear ready while its script breaker
+  is active. `/public-status` does not expose these new diagnostics.
 - The listener side never surfaces key health; if OpenAI is valid the station keeps sounding live.
 
 For voice casting specifically, run
@@ -988,6 +995,35 @@ path. Unreadable or disagreeing evidence leaves setup incomplete and privacy
 narrow instead of blocking the producer or widening Home access.
 
 When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter, ad, and news-flash generation (so the weather flash grounds in a freshly refreshed forecast), with a default full-state refresh interval of 300 seconds. A normal refresh gets a 2-second foreground wait (20 seconds on the first cold label/weather warm-up); when that wait expires, audio generation immediately uses the last prompt-safe snapshot while one producer-owned HA request continues for up to 30 seconds total. `/api/states`, optional registry metadata, and optional weather enrichment begin together; the optional calls are individually bounded, best-effort, and cannot extend that same total cap. A late valid reply is adopted only before a later eligible host segment, never into rendering or queued audio. At that adoption boundary its age is checked again: a completed snapshot that became older than `max(2 × poll interval, 120 seconds)` while waiting in the mailbox remains visible to the admin as stale, but its ambient prompt details and delayed one-shots stay withheld. The next fresh reply is a resynchronization and deliberately drops delayed full-context events, directives, interrupts, ritual/radio matches, and running gags. Timer interrupts use their independent lightweight entity poll and `timer` provenance, so stale full-context suppression cannot erase a current timer alert while Home context remains enabled. The add-on exposes **Host home context** (`ha_context_enabled`) separately from HA entity publishing: turning it off suspends full-state and timer polling, cancels Home-derived label/scene/memory work, removes unstarted Home-derived breaks, and clears public Casa moments while station entities can continue publishing. Audio already on air may finish to avoid dead air, but a revoked Home-derived segment cannot write post-air memory afterward. It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so the empty-home mood and explicitly sourced named-resident facts can work without leaking location; stream connections never authorize arrival or return copy. The admin Home context preview shows a sanitized slice of what hosts may use; Mute for future host use stores a local policy under `cache/state/ha_entity_policy.json` and removes that entity from future prompts, public Casa moments, reactive/timer triggers, label generation candidates, and running-gag inputs. It never interrupts audio already on air; when a muted entity — or one whose room-presence personal-moment permission is turned back off — supplied a selected Home Context Director fact, its matching unstarted host break is removed from the queue. The director gives casual banter one allowlisted ambient fact at most, holds its topic for 30 minutes after stream start, and can use a room-presence binary sensor only after the explicit preview permission; no extra HA polling is performed. This holds even when a HA refresh times out and the producer airs on a last-known context (`apply_entity_mute_policy` re-applies the live policy to that stale copy, since it bypasses `fetch_home_context`'s own filtering), and muting also purges any running-gag material already tallied for that entity before the mute, so a moment observed pre-mute cannot still be offered as a callback afterward. The remaining entities are scored and capped before prompt assembly. That same filtered interaction slice can also be included in the post-air memory extractor after generated banter streams cleanly, so future host memory is based on the final station script instead of queued drafts. The practical privacy/performance levers are muting specific entities, turning Host home context off when house state should not enter prompts or timer reads, increasing `ha_context_poll_interval`, or running without script-provider credentials to avoid durable AI memory extraction. When Home context, HA access, and an Anthropic key are all active, the display names and room assignments for non-sensitive, unmuted entities can also be sent to Anthropic once to generate radio-friendly labels; no sensor values, presence, or location are included, and the results are cached locally (`cache/ha_label_catalog.json`, owner-only) so each device is only looked up once. Home mood naming stays on the local heuristic ladder unless `MAMMAMIRADIO_HA_MOOD_LLM=true`; that experimental LLM path uses only the budgeted HA context slice, refreshes the generated scene name at most once per `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS` (keeping the last scene on air while a refresh runs, with bounded staleness), and falls back to the ladder on disabled config, missing keys, timeout, rejection, invalid output, or while the station's Anthropic circuit breaker is tripped. The admin Engine Room shows fact-free director diagnostics and privacy filter counts; `/public-status` exposes listener-safe Casa moments only while Home context is enabled.
+
+### Private Home compatibility migration
+
+The preparation update writes an owner-only `cache/state/home_profile_v1.json`
+for eligible legacy installations. A successful export logs `Private Home
+compatibility snapshot is ready`. Current Home context and radio behavior stay
+unchanged if export is incomplete. An already-sealed installation needs no new
+HA observation; other eligible installations must first complete the existing
+manifest observation. Failed attempts retry at the next observation or boot.
+
+Before installing a later update that removes the built-in mappings, check the
+snapshot and its database binding with `load_home_profile_v1(state_dir, db_path)`
+from `mammamiradio.home.profile` in the installation's Python environment. This
+is a read-only local check: a non-`None` result means the complete snapshot,
+binding, install-origin witnesses, and provenance agree. Print only a readiness
+boolean, never the private document. A pending database export intent is not
+ready. File existence or an old success log alone
+does not establish readiness.
+
+Back up after readiness is confirmed: a hot backup during the first export can
+capture an unmatched file and binding. Such a partial restore remains unready.
+Preserve the profile's `0600` permissions; a restore with `0644` is refused.
+Keep `cache/mammamiradio.db` and `cache/state/` together in private backups. Do
+not delete or edit malformed evidence to force migration, transplant one file
+from another installation, or upload the snapshot with diagnostics. If the
+check fails, remain on the preparation update and recover a matching complete
+backup or investigate locally. Rollback retains the original witness/provenance
+formats. Public mapping removal and the missing-profile runtime fallback belong
+to the later update; they are not active in this preparation update.
 
 ## Home Assistant entities
 

@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-from mammamiradio.core.config import GUEST_HOST_NAME, load_config, resolve_model
+# Captured while pytest is still importing this module, i.e. during collection.
+# That is when core/config.py's module-level load_dotenv() runs, so this is the
+# only moment at which the switch matters. If the assignment in tests/conftest.py
+# ever moves into a fixture, this reads None and the ordering test below fails.
+_DOTENV_FLAG_AT_COLLECTION = os.environ.get("PYTHON_DOTENV_DISABLED")
+
+from mammamiradio.core.config import GUEST_HOST_NAME, load_config, resolve_model  # noqa: E402
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -405,3 +414,87 @@ def test_max_cache_size_clamps_above_maximum(monkeypatch):
 def test_max_cache_size_negative_clamps_not_raises(monkeypatch):
     monkeypatch.setenv("MAMMAMIRADIO_MAX_CACHE_MB", "-1")
     assert load_config(TOML_PATH).max_cache_size_mb == 200
+
+
+def test_dotenv_switch_is_set_before_collection() -> None:
+    """tests/conftest.py must set PYTHON_DOTENV_DISABLED at module level.
+
+    core/config.py:37 loads .env at import time, which happens while pytest
+    collects test modules. A fixture would run after that and leave the leak in
+    place while every other test stays green.
+    """
+    assert _DOTENV_FLAG_AT_COLLECTION == "1", (
+        "PYTHON_DOTENV_DISABLED was not set when this module was collected. "
+        "Keep the assignment at module level in tests/conftest.py, not in a fixture."
+    )
+
+
+_LEAK_PROBE = "import os\nimport mammamiradio.core.config\nprint(os.environ.get('MAMMAMIRADIO_TEST_LEAK_PROBE'))\n"
+
+
+def _import_config_in_subprocess(cwd: Path, env: dict[str, str]) -> str:
+    # `python -c` on purpose: with no __main__.__file__, python-dotenv's
+    # find_dotenv() walks up from the cwd, so it sees the probe .env planted in
+    # tmp_path. A script file (or pytest itself) walks up from core/config.py's
+    # directory instead and would read the developer's real repo-root .env,
+    # which this test must never touch.
+    result = subprocess.run(
+        [sys.executable, "-c", _LEAK_PROBE],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_dotenv_switch_blocks_a_planted_env_file(tmp_path: Path) -> None:
+    """The inherited switch must stop config.py from loading a .env at import.
+
+    Runs both directions so the probe itself is proven: with the switch the
+    planted key is absent, without it the key appears. A probe that could not
+    detect a leak would pass the first half for the wrong reason.
+    """
+    (tmp_path / ".env").write_text("MAMMAMIRADIO_TEST_LEAK_PROBE=leaked\n", encoding="utf-8")
+
+    inherited = dict(os.environ)
+    inherited.pop("MAMMAMIRADIO_TEST_LEAK_PROBE", None)
+    assert inherited.get("PYTHON_DOTENV_DISABLED") == "1"
+    assert _import_config_in_subprocess(tmp_path, inherited) == "None", (
+        "core/config.py loaded a .env despite PYTHON_DOTENV_DISABLED=1. "
+        "python-dotenv >= 1.2 is required for the switch; run "
+        ".venv/bin/pip install -U 'python-dotenv>=1.2' and re-run."
+    )
+
+    without_switch = {k: v for k, v in inherited.items() if k != "PYTHON_DOTENV_DISABLED"}
+    assert _import_config_in_subprocess(tmp_path, without_switch) == "leaked", (
+        "The probe .env was not loaded without the switch, so this test cannot "
+        "detect a leak. Check find_dotenv() behaviour or the probe file."
+    )
+
+
+def test_exported_runtime_settings_do_not_change_config_tests() -> None:
+    """The test session must isolate HA and port settings from the parent shell."""
+    env = dict(os.environ)
+    env.update(
+        {
+            "HA_ENABLED": "true",
+            "HA_URL": "http://127.0.0.1:9",
+            "MAMMAMIRADIO_BIND_HOST": "0.0.0.0",
+            "MAMMAMIRADIO_PORT": "9001",
+        }
+    )
+    repo_root = Path(__file__).resolve().parents[2]
+    ha_test = f"{Path(__file__).resolve()}::test_ha_stays_disabled_without_url"
+    port_test = repo_root / "tests/repo/test_stream_watch_server.py"
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", ha_test, f"{port_test}::test_upstream_base_url_uses_runtime_port"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -7,11 +7,13 @@ import json
 import subprocess
 import sys
 import textwrap
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
 import httpx
+import openai
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
@@ -1193,6 +1195,12 @@ async def test_write_banter_open_guest_gate_accepts_case_insensitive_hans_tag(co
         result, _ = await write_banter(state, config)
 
     assert [host.name for host, _ in result] == [regulars[0].name, _LOCAL_BALLOON_GUEST_HOST, regulars[1].name]
+
+
+async def _call_openai_script(config, state):
+    return await scriptwriter_module._generate_json_response(
+        prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
+    )
 
 
 @pytest.mark.asyncio
@@ -4013,6 +4021,125 @@ async def test_openai_call_logs_json_parse_failure_and_reraises(config, state, c
     assert record.caller == "ad"
     assert record.fallback_reason == "anthropic_absent"
     assert record.raw_preview.startswith("not valid json")
+    assert state.openai_disabled_until == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_class", "status_code", "max_cooldown"),
+    [
+        (openai.AuthenticationError, 401, 600),
+        (openai.RateLimitError, 429, 60),
+        (openai.InternalServerError, 500, 20),
+    ],
+)
+async def test_openai_script_breaker_blocks_retries_and_recovers(config, state, error_class, status_code, max_cooldown):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    state.openai_key_status = "valid"
+    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
+    response = httpx.Response(status_code, request=request)
+    error = error_class("provider unavailable", response=response, body={})
+    client = _mock_openai_response('{"ok": true}')
+    client.chat.completions.create.side_effect = [error, _openai_completion('{"ok": true}')]
+
+    with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
+        with pytest.raises(error_class):
+            await _call_openai_script(config, state)
+        assert 0 < state.openai_disabled_until - scriptwriter_module.time.time() <= max_cooldown
+        assert state.openai_blocked_key_hash and state.openai_blocked_key_hash != config.openai_api_key
+        assert state.openai_key_status == ("rejected" if status_code == 401 else "valid")
+        with pytest.raises(RuntimeError, match="temporarily unavailable"):
+            await _call_openai_script(config, state)
+        assert client.chat.completions.create.call_count == 1
+        state.openai_disabled_until = 0.0
+        result = await _call_openai_script(config, state)
+
+    assert result == {"ok": True}
+    assert state.openai_last_error == ""
+    assert state.openai_blocked_key_hash == ""
+    assert state.openai_key_status == "valid"
+    assert client.chat.completions.create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_script_breaker_ignores_stale_key_failure(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "old-key"
+    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
+    error = openai.AuthenticationError("bad key", response=httpx.Response(401, request=request), body={})
+    client = _mock_openai_response('{"ok": true}')
+
+    def old_key_call(**_kwargs):
+        config.openai_api_key = "new-key"
+        raise error
+
+    client.chat.completions.create.side_effect = old_key_call
+    with (
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client),
+        pytest.raises(openai.AuthenticationError),
+    ):
+        await _call_openai_script(config, state)
+    assert state.openai_disabled_until == 0.0
+    assert state.openai_blocked_key_hash == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["network", "timeout", "quota", "routing", "request", "unprocessable", "model"])
+async def test_openai_script_breaker_classifies_other_provider_failures(config, state, failure):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
+    if failure == "network":
+        error = openai.APIConnectionError(request=request)
+    elif failure == "timeout":
+        error = TimeoutError("OpenAI call took too long")
+    elif failure in ("request", "unprocessable", "model"):
+        error_type, status = {
+            "request": (openai.BadRequestError, 400),
+            "unprocessable": (openai.UnprocessableEntityError, 422),
+            "model": (openai.NotFoundError, 404),
+        }[failure]
+        error = error_type("provider error", response=httpx.Response(status, request=request), body={})
+    else:
+        error = openai.RateLimitError("insufficient_quota", response=httpx.Response(429, request=request), body={})
+    client = _mock_openai_response('{"ok": true}')
+    client.chat.completions.create.side_effect = error
+    with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
+        if failure == "routing":
+            with (
+                patch("mammamiradio.hosts.scriptwriter.resolve_model", return_value=None),
+                pytest.raises(RuntimeError, match="No configured OpenAI script model"),
+            ):
+                await _call_openai_script(config, state)
+            client.chat.completions.create.assert_not_called()
+        else:
+            with pytest.raises(type(error)):
+                await _call_openai_script(config, state)
+    remaining = state.openai_disabled_until - scriptwriter_module.time.time()
+    if failure in ("routing", "request", "unprocessable"):
+        assert remaining <= 0  # A missing local model route is not a provider outage.
+    else:
+        assert 0 < remaining <= (600 if failure == "quota" else 20)
+
+
+@pytest.mark.asyncio
+async def test_healthy_openai_script_calls_do_not_queue_behind_each_other(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    barrier = threading.Barrier(2)
+    client = _mock_openai_response('{"ok": true}')
+
+    def simultaneous(**_kwargs):
+        barrier.wait(timeout=2)
+        return _openai_completion('{"ok": true}')
+
+    client.chat.completions.create.side_effect = simultaneous
+    with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
+        result = await asyncio.wait_for(
+            asyncio.gather(_call_openai_script(config, state), _call_openai_script(config, state)), timeout=3
+        )
+    assert result == [{"ok": True}, {"ok": True}]
 
 
 @pytest.mark.asyncio

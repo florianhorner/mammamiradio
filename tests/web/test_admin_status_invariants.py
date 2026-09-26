@@ -240,7 +240,7 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         "label:'AI key needs attention'",
     ):
         assert expected in hosts
-    assert "statuses.includes('rejected')&&!statuses.includes('valid')" in hosts
+    assert "statuses.length&&statuses.every(status=>status==='rejected')" in hosts
     # A known-degraded, non-rejected Anthropic must win outright before any pending-probe
     # check — otherwise an UNRELATED provider's own still-resolving probe (e.g. OpenAI
     # sitting at 'unverified' because it hasn't been checked yet) masks a fact we already
@@ -259,9 +259,14 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         "anthropicPendingUnresolved||openaiPendingUnresolved"
     )
     assert hosts.index("anthropicPendingUnresolved||openaiPendingUnresolved") < hosts.index(
-        "statuses.includes('rejected')"
+        "statuses.length&&statuses.every(status=>status==='rejected')"
     )
     assert "usableOpenAi||usableAnthropic" in hosts
+    assert "openaiStatus==='valid'&&!c.openai_degraded" in hosts
+    assert "c.provider_probe_in_flight&&(anthropicPendingUnresolved||openaiPendingUnresolved)" in hosts
+    assert "label:'AI connection needs a check'" in hosts
+    assert 'id="pipelineAiCheck"' in html
+    assert 'onclick="checkAiConnection(this)"' in html
 
 
 def test_admin_declares_dark_controls_and_readable_host_prose() -> None:
@@ -382,12 +387,13 @@ def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> Non
 
     assert "[['ANTHROPIC_API_KEY','anthropic_key_status'],['OPENAI_API_KEY','openai_key_status']]" in writing
     assert "caps[field]||'unverified'" in writing
-    assert "keys.has('OPENAI_API_KEY')&&caps.openai_key_status==='valid'" in writing
+    assert "keys.has('OPENAI_API_KEY')&&caps.openai_key_status==='valid'&&!caps.openai_degraded" in writing
     assert "keys.has('ANTHROPIC_API_KEY')&&caps.anthropic_key_status==='valid'&&!caps.anthropic_degraded" in writing
     assert "if(workingOpenai||workingAnthropic)return{state:'ready',label:'Writing connected'" in writing
     assert "if(_firstListenUi.connectionCheckFailed)return{state:'degraded'" in writing
     assert "if(statuses.every(status=>status==='rejected'))return{state:'blocked'" in writing
-    assert "return{state:'working',label:'Key saved · not confirmed yet'" in writing
+    assert "if(caps.provider_probe_in_flight)return{state:'working',label:'Checking connection'" in writing
+    assert "return{state:'degraded',label:'Key saved · not confirmed yet'" in writing
     assert "if(_firstListenUi.keySaving)return{state:'working'" in writing
     assert "if(_firstListenUi.keySaveUnconfirmed)return{state:'degraded'" in writing
 
@@ -645,7 +651,8 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     # for both Anthropic and OpenAI — distinct from the transient amber "suspended".
     assert "anthropicLine=statusInline('blocked','key not working'" in block
     assert "openaiLine=statusInline('blocked','key not working'" in block
-    assert "openaiLine=statusInline('ready','available')" in block
+    assert "openaiLine=statusInline('ready','connected')" in block
+    assert "openaiLine=statusInline('degraded','temporarily unavailable'+retry" in block
     assert "OpenAI: '+openaiLine" in block
     assert "'Voices: '+voicesLine" in block
     assert "statusInline('idle','Edge only')" in block

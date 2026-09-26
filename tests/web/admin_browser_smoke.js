@@ -775,7 +775,9 @@ async (page) => {
     const cases = {
       demo: { script_llm: false, anthropic_key: false, openai: false },
       valid: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', openai: false },
-      checking: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'unverified' },
+      checking: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'unverified', provider_probe_in_flight: true },
+      inconclusive: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'unverified', provider_probe_in_flight: false },
+      openaiDegraded: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'valid', openai_degraded: true },
       backup: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: false },
       rejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'rejected', openai: false },
       rejectedDegraded: {
@@ -792,7 +794,9 @@ async (page) => {
         anthropic_degraded: true,
         openai: true,
         openai_key_status: 'unverified',
+        provider_probe_in_flight: true,
       },
+      rejectedInconclusive: { script_llm: true, anthropic_key: true, anthropic_key_status: 'rejected', openai: true, openai_key_status: 'unverified', provider_probe_in_flight: false },
       backupWithRejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: true, openai_key_status: 'rejected' },
       degradedUnverified: {
         script_llm: true,
@@ -820,7 +824,7 @@ async (page) => {
     return Object.fromEntries(Object.entries(cases).map(([name, capabilities]) => {
       updatePipelineStatus({ capabilities, golden_path: status.golden_path }, status);
       const chip = document.querySelector('#pipelineStatus .srow:first-child .status-chip');
-      return [name, { state: chip?.classList[1] || '', text: chip?.textContent.trim() || '' }];
+      return [name, { state: chip?.classList[1] || '', text: chip?.textContent.trim() || '', checkVisible: !document.getElementById('pipelineAiCheck').hidden }];
     }));
   });
   assert(
@@ -829,10 +833,13 @@ async (page) => {
   );
   assert(hostPipelineStates.valid.state === 'ready', `valid AI provider was not ready: ${JSON.stringify(hostPipelineStates.valid)}`);
   assert(hostPipelineStates.checking.state === 'working', `unverified AI provider was not checking: ${JSON.stringify(hostPipelineStates.checking)}`);
+  assert(hostPipelineStates.inconclusive.state === 'degraded' && hostPipelineStates.inconclusive.checkVisible, `completed inconclusive probe stayed checking or hid the retry action: ${JSON.stringify(hostPipelineStates.inconclusive)}`);
+  assert(hostPipelineStates.openaiDegraded.state === 'degraded', `OpenAI runtime failure kept claiming AI hosts ready: ${JSON.stringify(hostPipelineStates.openaiDegraded)}`);
   assert(hostPipelineStates.backup.state === 'degraded', `backed-up AI provider lost degraded truth: ${JSON.stringify(hostPipelineStates.backup)}`);
   assert(hostPipelineStates.rejected.state === 'blocked', `rejected AI provider was not blocked: ${JSON.stringify(hostPipelineStates.rejected)}`);
   assert(hostPipelineStates.rejectedDegraded.state === 'blocked', `rejected AI provider was masked by cooldown: ${JSON.stringify(hostPipelineStates.rejectedDegraded)}`);
   assert(hostPipelineStates.rejectedChecking.state === 'working', `unverified fallback provider was masked by rejection: ${JSON.stringify(hostPipelineStates.rejectedChecking)}`);
+  assert(hostPipelineStates.rejectedInconclusive.state === 'degraded', `inconclusive second provider was treated as another rejected key: ${JSON.stringify(hostPipelineStates.rejectedInconclusive)}`);
   assert(hostPipelineStates.backupWithRejected.state === 'degraded', `valid provider cooldown was masked by rejected fallback: ${JSON.stringify(hostPipelineStates.backupWithRejected)}`);
   assert(
     hostPipelineStates.degradedUnverified.state === 'degraded',
@@ -843,6 +850,17 @@ async (page) => {
     `known-degraded provider was masked by an unrelated provider's own still-checking probe: ${JSON.stringify(hostPipelineStates.degradedMaskedByUnrelatedProbe)}`,
   );
   assert(hostPipelineStates.fallback.state === 'ready', `valid fallback provider did not keep AI hosts ready: ${JSON.stringify(hostPipelineStates.fallback)}`);
+
+  const aiCheckAction = await page.evaluate(async () => {
+    const oldApi = apiResponse, oldRefresh = refreshSlow, oldCaps = _caps, button = document.getElementById('pipelineAiCheck'); let calls = 0, busy = false;
+    try {
+      _caps = { capabilities: { openai: true, openai_key_status: 'unverified' } }; apiResponse = async (method, path, body) => { calls += 1; busy = button.disabled && button.getAttribute('aria-busy') === 'true'; if (method !== 'POST' || path !== '/api/setup/provider-check' || Object.keys(body).length) throw new Error('wrong check route'); return { response: { ok: true }, payload: { providers: { openai_chat: { ok: true } } } }; };
+      refreshSlow = async () => { _caps.capabilities.openai_key_status = 'valid'; };
+      await checkAiConnection(button); return { calls, busy, restored: !button.disabled && !button.hasAttribute('aria-busy') };
+    } finally { apiResponse = oldApi; refreshSlow = oldRefresh; _caps = oldCaps; }
+  });
+  assert(aiCheckAction.calls === 1 && aiCheckAction.busy && aiCheckAction.restored,
+    `AI connection action did not use the shared probe or recover its button: ${JSON.stringify(aiCheckAction)}`);
 
   const jamendoControls=await page.evaluate(async()=>{const status=(source,shared,enabled=true,acknowledged=true)=>({enabled,noncommercial_acknowledged:acknowledged,client_id_configured:Boolean(source),client_id_source:source,shared_access_available:shared}),view=()=>({label:jamendoSecretLabel.textContent,action:jamendoOwnClientIdAction.textContent,fieldHidden:jamendoClientField.hidden,clearHidden:jamendoClearClientId.hidden,help:jamendoAccessHelp.textContent});
     let confirmations=0,requests=[],responseStatus=status('bundled',true);const originalConfirm=window.confirm,originalRequest=window.mediaSourceRequest;window.confirm=()=>{confirmations+=1;return true};window.mediaSourceRequest=async(method,path,payload)=>{requests.push({method,path,payload});return{ok:true,status:200,data:{ok:true,status:responseStatus}}};

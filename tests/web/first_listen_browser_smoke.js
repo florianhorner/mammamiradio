@@ -1987,7 +1987,7 @@ async (page) => {
     assert(await page.locator('#setupSaveBtn').isDisabled(),'pending save allows duplicate submission');
     saveGate.release();
     await page.waitForFunction(()=>!_firstListenUi.keySaving&&!_firstListenUi.connectionChecking);
-    assert(await page.evaluate(()=>firstListenConnectionEvidence().state==='working'),'unverified save claimed connected');
+    assert(await page.evaluate(()=>firstListenConnectionEvidence().state==='degraded'),'unverified save claimed connected');
     assert(await page.locator('#firstListenConnectionNext').isHidden(),'unverified key claimed primary progression');
     assert(await page.locator('#firstListenConnectionCheck').isVisible(),'unverified key has no recheck action');
     await page.locator('#setupAnthropicKey').fill('unfinished-replacement');
@@ -2013,7 +2013,7 @@ async (page) => {
         if(failure==='timeout'){keyCheckGate.release();await page.evaluate(()=>{window.setTimeout=window.__keyCheckTimer;delete window.__keyCheckTimer;});}
       }
     }
-    for(const [capabilities,state] of [[{anthropic_key_status:'rejected'},'blocked'],[{anthropic_key_status:'valid',anthropic_degraded:true},'working'],[{anthropic_key_status:'valid'},'ready']]){
+    for(const [capabilities,state] of [[{anthropic_key_status:'rejected'},'blocked'],[{anthropic_key_status:'valid',anthropic_degraded:true},'degraded'],[{anthropic_key_status:'valid'},'ready']]){
       writingCapabilities=capabilities;
       const checks=keyChecks;
       await page.locator('#firstListenConnectionCheck').click();

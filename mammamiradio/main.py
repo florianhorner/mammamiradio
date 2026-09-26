@@ -57,6 +57,7 @@ from mammamiradio.home.migration import (
     seal_legacy_home_provenance_v1,
 )
 from mammamiradio.home.moment_receipts import STORE_FILENAME, MomentStore
+from mammamiradio.home.profile import export_legacy_home_profile_v1
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.scriptwriter import has_script_llm
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
@@ -378,6 +379,7 @@ def _runtime_build_label() -> str:
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
     global _producer_task, _playback_task, _prewarm_task
+    app.state._provider_checks_shutting_down = False
 
     config = load_config()
     # A bundled/default ``context_enabled = true`` must not let a fresh
@@ -577,29 +579,54 @@ async def startup():
     app.state.runtime_identity = f"Version {bridge_app_version} · {_runtime_build_label()}"
     provenance_announced = False
     provenance_task: asyncio.Task | None = None
+    observed_home_entity_ids: frozenset[str] | None = None
+    app.state.home_profile_ready = False
+    app.state.legacy_home_provenance_task = None
 
-    async def _seal_home_provenance(entity_ids: frozenset[str]) -> None:
-        nonlocal provenance_announced
-        try:
-            provenance = await asyncio.to_thread(
-                seal_legacy_home_provenance_v1,
+    def _prepare_home_snapshot(entity_ids: frozenset[str] | None):
+        provenance = None
+        if entity_ids is not None:
+            provenance = seal_legacy_home_provenance_v1(
                 config.cache_dir / "state",
                 entity_ids,
                 db_path=db_path,
                 bridge_app_version=bridge_app_version,
             )
-        except Exception:
-            logger.warning("Legacy Home continuity provenance write failed", exc_info=True)
-            return
-        if provenance is not None and not provenance_announced:
-            provenance_announced = True
-            logger.info("Legacy Home continuity provenance is ready")
+        return provenance, export_legacy_home_profile_v1(config.cache_dir / "state", db_path)
 
-    def _observe_home_entity_ids(entity_ids: frozenset[str]) -> None:
-        nonlocal provenance_task
-        if provenance_announced or (provenance_task is not None and not provenance_task.done()):
+    async def _seal_home_provenance() -> None:
+        nonlocal provenance_announced
+        while True:
+            entity_ids = observed_home_entity_ids
+            worker = asyncio.create_task(asyncio.to_thread(_prepare_home_snapshot, entity_ids))
+            try:
+                provenance, profile = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # The filesystem worker cannot be cancelled; drain before
+                # shutdown releases state or permits another startup writer.
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
+            except Exception:
+                logger.warning("Private Home compatibility snapshot is incomplete; will retry")
+                return
+            if (provenance is not None or profile is not None) and not provenance_announced:
+                provenance_announced = True
+                logger.info("Legacy Home continuity provenance is ready")
+            if profile is not None:
+                app.state.home_profile_ready = True
+                logger.info("Private Home compatibility snapshot is ready")
+                return
+            if entity_ids == observed_home_entity_ids:
+                return
+            # An observation arrived during the sealed-boot attempt. Process it
+            # in this same task so it is neither dropped nor written in parallel.
+
+    def _observe_home_entity_ids(entity_ids: frozenset[str] | None) -> None:
+        nonlocal provenance_task, observed_home_entity_ids
+        observed_home_entity_ids = entity_ids
+        if app.state.home_profile_ready or (provenance_task is not None and not provenance_task.done()):
             return
-        provenance_task = asyncio.create_task(_seal_home_provenance(entity_ids))
+        provenance_task = asyncio.create_task(_seal_home_provenance())
         app.state.legacy_home_provenance_task = provenance_task
         _register_background_task(app.state, provenance_task)
 
@@ -1019,6 +1046,10 @@ async def startup():
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
     app.state.home_context_off_ledger_persist_task = None
+    if home_authorization.mode is HomeAuthorizationMode.LEGACY:
+        # Already-sealed installations export without HA polling. Schedule only
+        # after audio tasks exist; all snapshot I/O runs in the worker above.
+        _observe_home_entity_ids(None)
 
     if explicit_home_context_off_purge_pending:
 
@@ -1164,6 +1195,7 @@ async def startup():
 
 async def shutdown():
     """Stop background workers and close shared streaming resources."""
+    app.state._provider_checks_shutting_down = True
     tasks_to_cancel = []
     if _prewarm_task:
         _prewarm_task.cancel()
@@ -1182,13 +1214,12 @@ async def shutdown():
     if jamendo_start_task:
         jamendo_start_task.cancel()
         tasks_to_cancel.append(jamendo_start_task)
-    # The provider-verdict probe is created outside the producer/playback set
-    # (startup + credential saves); cancel it so it can't mutate station_state
-    # after teardown begins — same write-after-shutdown race as the downloads.
-    verdict_task = getattr(app.state, "provider_verdict_task", None)
-    if verdict_task:
-        verdict_task.cancel()
-        tasks_to_cancel.append(verdict_task)
+    # Superseded probes remain in background_tasks for cancellation below.
+    for task_name in ("provider_verdict_task", "_setup_recheck_provider_task", "_provider_check_task"):
+        provider_task = getattr(app.state, task_name, None)
+        if provider_task and not provider_task.done():
+            provider_task.cancel()
+            tasks_to_cancel.append(provider_task)
     # Resume leaves a slow starter verification running rather than cancelling
     # it mid-request. Teardown is the one place that must, so its late result
     # cannot run eligibility bookkeeping against a station that is shutting down.

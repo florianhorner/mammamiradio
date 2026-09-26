@@ -321,6 +321,10 @@ def test_generator_selected_env_precedes_runtime_import_without_overriding_proce
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This test exercises a real load_dotenv() on a file it wrote itself. The
+    # suite-wide PYTHON_DOTENV_DISABLED switch (tests/conftest.py) would turn
+    # that into a no-op, so lift it for this test only; monkeypatch restores it.
+    monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
     env_file = tmp_path / "render.env"
     env_file.write_text("ELEVENLABS_API_KEY=selected-file-key\n", encoding="utf-8")
 

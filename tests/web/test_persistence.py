@@ -776,7 +776,13 @@ def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatc
         azure_speech_region="",
         elevenlabs_api_key="",
     )
-    state = SimpleNamespace(anthropic_disabled_until=99.0, anthropic_last_error="boom")
+    state = SimpleNamespace(
+        anthropic_disabled_until=99.0,
+        anthropic_last_error="boom",
+        openai_disabled_until=99.0,
+        openai_last_error="old failure",
+        openai_blocked_key_hash="old-hash",
+    )
 
     persistence._apply_live_credentials(
         state,
@@ -801,6 +807,9 @@ def test_apply_live_credentials_updates_config_env_and_clears_backoff(monkeypatc
     assert os.environ["ELEVENLABS_API_KEY"] == "el-new"
     assert state.anthropic_disabled_until == 0.0
     assert state.anthropic_last_error == ""
+    assert state.openai_disabled_until == 0.0
+    assert state.openai_last_error == ""
+    assert state.openai_blocked_key_hash == ""
     assert rearmed == ["openai", "azure", "elevenlabs"]
 
 

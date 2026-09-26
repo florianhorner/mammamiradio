@@ -1201,6 +1201,31 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - narrow mode skips registry/name loading, generated labels, event diffs, radio-event and ritual matchers, timer interrupts, mood derivation, weather forecast arcs, first-home directives, evening gags, and Moment Receipt projections. `/public-status` and `/status` do not replay persisted household moments, and the manual label-regeneration route reports no candidates.
 - exact-manifest sealing runs once at a time in a tracked background thread so file and directory `fsync` calls never stall the producer event loop. Only an authoritative legacy install receives that observer.
 
+The compatibility update additionally exports `cache/state/home_profile_v1.json`
+through `home/profile.py`. This owner-only snapshot contains the ordered curated
+inventory, bilingual labels, semantic roles, scopes, priorities, trigger rules,
+cooldowns, and anonymous resident/pet bindings. It contains no observed states,
+HA friendly names, credentials, or generated labels. Matching install-origin
+witnesses and valid sealed provenance are prerequisites. An already-sealed
+installation can export at boot without contacting HA.
+
+The database first reserves a random export identity with no digest. This
+pending intent is never ready. File publication and filesystem synchronization
+precede the final binding of the complete canonical document digest; an
+interrupted export can finish only when the file matches the database's own
+intent and the entire compiled snapshot. Conflicting evidence is preserved
+and reported as unready. Export runs once at a time after audio tasks start, and
+retries after a failure on the next observation or boot. This update does not
+consume the snapshot, change authorization, or remove built-in mappings. Schema
+1 preserves the existing fixed mood/formatting semantics; it introduces no new
+consent grants. LEGACY still processes the full filtered HA snapshot, not only
+the curated inventory.
+
+A golden hash pins the complete compiled snapshot, excluding its random identity.
+Keep these constants frozen until the next update can consume existing profiles
+without recompiling them. Semantic roles identify the existing mood/formatting
+rules; their numeric thresholds and ordered logic still live in runtime code.
+
 - `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
 - `person.*` is kept as home/away presence only (GPS, `user_id`, and tracker attributes stripped) so the empty-home mood and explicitly sourced named-resident facts can work; person events never reach `/public-status`

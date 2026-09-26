@@ -12,7 +12,7 @@ dependencies = [
 
     "anthropic>=0.94.0",
     "edge-tts>=7.0",
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.2",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "openai>=1.0",

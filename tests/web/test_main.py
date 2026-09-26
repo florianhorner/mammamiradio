@@ -1275,6 +1275,88 @@ async def test_startup_provenance_observer_runs_fsync_work_off_event_loop(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("already_sealed", "observation_during_export", "failed_export", "cancelled"))
+async def test_private_home_export_is_background_singleflight_and_preserves_runtime(tmp_path, caplog, scenario):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home import migration
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.profile import export_legacy_home_profile_v1, load_home_profile_v1
+
+    config = _privacy_startup_config(tmp_path)
+    state_dir, db_path = config.cache_dir / "state", config.cache_dir / "mammamiradio.db"
+    witness = migration.capture_legacy_home_preflight_v1(state_dir, database_preexisted=True)
+    migration.persist_legacy_home_database_preflight_v1(db_path, witness)
+    if scenario != "observation_during_export":
+        migration.seal_legacy_home_provenance_v1(
+            state_dir, migration.LEGACY_HOME_MANIFEST_V1.entity_ids, db_path=db_path, bridge_app_version="0+test"
+        )
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    started, release = threading.Event(), threading.Event()
+    event_loop_thread = threading.get_ident()
+    calls = 0
+
+    def slow_export(*args):
+        nonlocal calls
+        assert threading.get_ident() != event_loop_thread
+        calls += 1
+        if calls == 1:
+            started.set()
+            assert release.wait(timeout=5)
+            if scenario == "failed_export":
+                raise OSError("PRIVATE-EXPORT-ERROR-CANARY")
+        return export_legacy_home_profile_v1(*args)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock) as produce,
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock) as play,
+        patch(f"{MODULE}.export_legacy_home_profile_v1", side_effect=slow_export),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert await asyncio.to_thread(started.wait, 1)
+        task = app.state.legacy_home_provenance_task
+        assert not task.done() and task in app.state.background_tasks
+        assert not app.state.home_profile_ready
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+        await asyncio.sleep(0)
+        produce.assert_awaited()
+        play.assert_awaited()
+        observer = app.state.station_state.home_entity_ids_observer
+        if scenario == "observation_during_export":
+            observer(migration.LEGACY_HOME_MANIFEST_V1.entity_ids)
+            assert app.state.legacy_home_provenance_task is task
+        if scenario == "cancelled":
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()  # Shutdown must wait for the filesystem worker.
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not app.state.home_profile_ready
+            assert load_home_profile_v1(state_dir, db_path) is not None
+            return
+        release.set()
+        await task
+        if scenario == "failed_export":
+            assert not app.state.home_profile_ready
+            assert "PRIVATE-EXPORT-ERROR-CANARY" not in caplog.text
+            observer(migration.LEGACY_HOME_MANIFEST_V1.entity_ids)
+            assert app.state.legacy_home_provenance_task is not task
+            await app.state.legacy_home_provenance_task
+        assert app.state.home_profile_ready
+        assert load_home_profile_v1(state_dir, db_path) is not None
+        assert calls == (1 if scenario == "already_sealed" else 2)
+        completed = app.state.legacy_home_provenance_task
+        observer(migration.LEGACY_HOME_MANIFEST_V1.entity_ids)
+        assert app.state.legacy_home_provenance_task is completed
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+
+
+@pytest.mark.asyncio
 async def test_startup_wires_release_campaign_from_cache_dir():
     """Release campaign state is startup-owned and shared with streamer/producer."""
     from mammamiradio.core.models import Track
@@ -2469,7 +2551,14 @@ async def test_shutdown_cancels_background_tasks():
     # must cancel it too.
     verdict_task = AsyncMock()
     verdict_task.cancel = MagicMock()
+    verdict_task.done = MagicMock(return_value=False)
+    recheck_task, probe_task = AsyncMock(), AsyncMock()
+    for task in (recheck_task, probe_task):
+        task.cancel = MagicMock()
+        task.done = MagicMock(return_value=False)
     main_mod.app.state.provider_verdict_task = verdict_task
+    main_mod.app.state._setup_recheck_provider_task = recheck_task
+    main_mod.app.state._provider_check_task = probe_task
     main_mod.app.state.background_tasks = {bg_task}
     main_mod.app.state.stream_hub = MagicMock()
     if hasattr(main_mod.app.state, "local_library_task"):
@@ -2483,11 +2572,16 @@ async def test_shutdown_cancels_background_tasks():
     _args, _kwargs = mock_gather.call_args
     assert bg_task in _args
     assert verdict_task in _args
+    for task in (recheck_task, probe_task):
+        task.cancel.assert_called_once()
+        assert task in _args
     assert _kwargs.get("return_exceptions") is True
 
     # Cleanup
     main_mod.app.state.background_tasks = set()
     main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state._setup_recheck_provider_task = None
+    main_mod.app.state._provider_check_task = None
 
 
 @pytest.mark.asyncio
