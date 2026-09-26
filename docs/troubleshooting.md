@@ -282,6 +282,16 @@ A listener song request was pinned to the "play next" slot from two places: once
 
 The current ownership chain marks the initial claim with `song_pinned`, reserves every pending matched recording at producer admission and playback, then transfers the exact promised source into a one-shot `ListenerRequestHandoff` after the dedication queues. Queue admission marks that segment and releases the handoff, so later equivalent requests still cannot steal it or make it play anonymously. If you see a repeat, trace the complete reservation → dedication commit → handoff admission chain described in `docs/architecture.md`, including the producer and playback reservation gates; the pin marker alone is no longer the full invariant.
 
+## No station sounds between songs
+
+The short sounds between a song and talk (and between a song and an ad) come from the Engine Room **Transitions** dial. It is on unless someone turned it off.
+
+If the cut is plain:
+
+- In Engine Room, check that Transitions is on. On a Home Assistant add-on the dial resets to on after a restart; a standalone station keeps the choice in `.env` (`MAMMAMIRADIO_BOUNDARY_IMAGING`).
+- Confirm the imaging pack is installed at the configured `assets_dir` (the four files are `stingers/music_to_speech.mp3`, `stingers/speech_to_music.mp3`, `bumpers/ad_in.mp3`, and `bumpers/ad_out.mp3`).
+- In the station log, look for `asset_missing` or `Boundary imaging asset unusable`. A missing or unusable file is a clean cut, not a failed stream.
+
 ## The stream works but banter or ads are bland
 
 Banter may use stock copy when script generation fails. Failed live ads instead try an approved packaged recording, then continuity audio if no recording is usable.

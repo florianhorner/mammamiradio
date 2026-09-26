@@ -436,6 +436,22 @@ class ImagingLibrary:
                 return True
         return False
 
+    def packaged_boundary_asset(self, relative: str) -> Path | None:
+        """Return one packaged boundary file without copying or synthesizing it.
+
+        Missing, unsafe, or unreadable paths return None so playback can cut
+        clean. This method never calls ffmpeg.
+        """
+        if not isinstance(relative, str) or not relative:
+            return None
+        asset = self._safe_pack_asset_path(relative)
+        if asset is None:
+            return None
+        try:
+            return asset if asset.is_file() else None
+        except OSError:
+            return None
+
     def ad_sfx_dir(self, configured_dir: Path | None = None) -> Path | None:
         """Return a real custom SFX directory, otherwise the bundled identity pack."""
         if configured_dir is not None and configured_dir.is_dir():

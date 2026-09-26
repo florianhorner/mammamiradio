@@ -199,6 +199,16 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
+from mammamiradio.scheduling.boundary_glue import (
+    SKIP_ASSET_MISSING,
+    SKIP_GENERATION,
+    SKIP_SWITCH_OFF,
+    AiredBoundary,
+    _packaged_file,
+    default_imaging_assets_dir,
+    seam_choice,
+    validated_playable_bytes,
+)
 from mammamiradio.scheduling.clip import KEEPSAKE_SEGMENT_TYPES
 from mammamiradio.scheduling.handoff import (
     cancel_active_music_handoff,
@@ -3492,6 +3502,7 @@ def _sync_runtime_state(request: Request) -> None:
 
 def _runtime_health_snapshot(request: Request) -> dict:
     state = request.app.state.station_state
+    config = getattr(request.app.state, "config", None)
     queue = getattr(request.app.state, "queue", None)
     queue_depth = queue.qsize() if queue else -1
     queue_capacity = queue.maxsize if queue else -1
@@ -3532,6 +3543,11 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "audio_source": audio_source or "unknown",
         "failover_active": fallback_active,
         "shadow_queue_corrections": state.shadow_queue_corrections,
+        "boundary_imaging": {
+            "enabled": bool(getattr(getattr(config, "audio", None), "boundary_imaging", True)),
+            "carts_aired": state.boundary_carts_aired,
+            "skips": dict(state.boundary_imaging_skips),
+        },
     }
 
 
@@ -5835,6 +5851,127 @@ def _finalize_selected_playback(
                         state.active_playback_segment = None
 
 
+def _boundary_assets_dir(config) -> Path:
+    """Resolve the imaging pack the cart is allowed to read."""
+    configured = getattr(getattr(config, "imaging", None), "assets_dir", "") or ""
+    if isinstance(configured, str) and configured:
+        return Path(configured)
+    return default_imaging_assets_dir()
+
+
+def _note_boundary_skip(state: StationState, reason: str, previous: AiredBoundary | None, segment: Segment) -> None:
+    state.boundary_imaging_skips[reason] = state.boundary_imaging_skips.get(reason, 0) + 1
+    logger.debug(
+        "boundary cart skip %s: %s → %s",
+        reason,
+        previous.kind.value if previous is not None else "none",
+        segment.type.value,
+    )
+
+
+def _boundary_stop_requested(state: StationState, skip_event: asyncio.Event, epoch: int, stop_revision: int) -> bool:
+    """Stop, Skip, or a continuity epoch change owns the seam before programme audio."""
+    return (
+        skip_event.is_set()
+        or state.session_stopped
+        or state.continuity_epoch != epoch
+        or state.session_stop_revision != stop_revision
+    )
+
+
+async def _broadcast_boundary_prelude(
+    *,
+    hub,
+    pacer,
+    state: StationState,
+    config,
+    segment: Segment,
+    last_aired: AiredBoundary | None,
+    chunk_size: int,
+    skip_event: asyncio.Event,
+) -> bool:
+    """Send a packaged boundary cart before the programme file.
+
+    Returns True when Stop, Skip, or a continuity change means the programme
+    file must not air. Prelude bytes are not accounted as the segment: the
+    caller keeps ``bytes_sent``, listener acceptance, and the share ring for
+    the programme file alone. The send stays here, not in a helper shared with
+    the file loop, so programme accounting cannot slip behind the pacing sleep.
+    """
+    choice = seam_choice(last_aired, segment)
+    generation_stale = last_aired is not None and last_aired.generation != hub.delivery_generation
+    # seam_choice never sets relative and skip_reason together. A stale
+    # generation suppresses the policy skip so one seam is not counted twice.
+    if choice.relative is None:
+        if choice.skip_reason and not generation_stale:
+            _note_boundary_skip(state, choice.skip_reason, last_aired, segment)
+        return False
+    if not config.audio.boundary_imaging:
+        _note_boundary_skip(state, SKIP_SWITCH_OFF, last_aired, segment)
+        return False
+    if generation_stale:
+        _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
+        return False
+
+    path = _packaged_file(choice.relative, assets_dir=_boundary_assets_dir(config))
+    playable = (
+        validated_playable_bytes(
+            path,
+            sample_rate=int(config.audio.sample_rate),
+            bitrate=int(config.audio.bitrate),
+        )
+        if path is not None
+        else None
+    )
+    if not playable:
+        _note_boundary_skip(state, SKIP_ASSET_MISSING, last_aired, segment)
+        return False
+
+    captured_epoch = state.continuity_epoch
+    captured_stop_revision = state.session_stop_revision
+    captured_generation = hub.delivery_generation
+    if _boundary_stop_requested(state, skip_event, captured_epoch, captured_stop_revision):
+        return True
+
+    offset = 0
+    while offset < len(playable):
+        if _boundary_stop_requested(state, skip_event, captured_epoch, captured_stop_revision):
+            return True
+        if hub.delivery_generation != captured_generation:
+            _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
+            return False
+        piece = playable[offset : offset + chunk_size]
+        offset += len(piece)
+        await hub.broadcast(piece)
+        pacing = pacer.after_send(len(piece))
+        if pacing.kind is not None:
+            state.record_stream_pacing_event(
+                pacing.kind,
+                lateness_ms=pacing.lateness_seconds * 1000,
+                remaining_lead_ms=pacing.remaining_lead_seconds * 1000,
+                deficit_ms=pacing.deficit_seconds * 1000,
+                segment_type=segment.type.value,
+            )
+        if pacing.warn_underrun:
+            logger.warning(
+                "Stream delivery cushion exhausted by %.1f ms during boundary cart",
+                pacing.deficit_seconds * 1000,
+            )
+        if pacing.sleep_seconds > 0.005:
+            await asyncio.sleep(pacing.sleep_seconds)
+
+    if _boundary_stop_requested(state, skip_event, captured_epoch, captured_stop_revision):
+        return True
+    state.boundary_carts_aired += 1
+    logger.info(
+        "boundary cart %s: %s → %s",
+        choice.relative,
+        last_aired.kind.value if last_aired is not None else "none",
+        segment.type.value,
+    )
+    return False
+
+
 async def run_playback_loop(app) -> None:
     """Play queued segments on a single station timeline and fan out audio chunks."""
     # Producer admission and playback egress share the same privacy-generation
@@ -5863,9 +6000,13 @@ async def run_playback_loop(app) -> None:
     _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
     gap_clips_served = 0
+    # Last programme segment that sent audio. None after start, Stop, or an
+    # empty room, so the first bytes a listener hears are programme, not a cart.
+    last_aired: AiredBoundary | None = None
 
     while True:
         if state.session_stopped:
+            last_aired = None
             pacer.reset_timeline("playback_stop_resume")
             state.queue_empty_since = None
             gap_clips_served = 0
@@ -5879,6 +6020,7 @@ async def run_playback_loop(app) -> None:
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
+            last_aired = None
             pacer.reset_timeline("no_listeners")
             state.queue_empty_since = None
             gap_clips_served = 0
@@ -6372,6 +6514,7 @@ async def run_playback_loop(app) -> None:
 
         try:
             bytes_sent = 0
+            aired_generation = hub.delivery_generation
             accepted_listener_count = 0
             was_skipped = False
             send_completed_cleanly = False
@@ -6404,7 +6547,48 @@ async def run_playback_loop(app) -> None:
             try:
                 with open(segment.path, "rb") as f:
                     _skip_id3_and_xing_header(f)
-                    while chunk := f.read(chunk_size):
+                    # Read the programme's first chunk before any cart. An empty
+                    # or header-only file takes today's EOF path and never airs
+                    # an orphan sting. The cart itself is not part of this read.
+                    retained_chunk = f.read(chunk_size)
+                    send_programme = True
+                    if retained_chunk and await _broadcast_boundary_prelude(
+                        hub=hub,
+                        pacer=pacer,
+                        state=state,
+                        config=config,
+                        segment=segment,
+                        last_aired=last_aired,
+                        chunk_size=chunk_size,
+                        skip_event=skip_event,
+                    ):
+                        was_skipped = True
+                        terminal_reason = "skip"
+                        if skip_event.is_set():
+                            skip_event.clear()
+                        logger.info("Skipping current segment")
+                        send_programme = False
+                    elif retained_chunk and not _home_context_generation_is_current(state, config, segment):
+                        state.record_discard(
+                            segment,
+                            reason=GenerationWasteReason.OPERATOR_PURGE,
+                            already_counted_in_produced=pulled_from_queue,
+                        )
+                        _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+                        listener_request_reservation_released = True
+                        logger.info("Discarding stale Home-context segment before playback")
+                        send_programme = False
+                    pending_chunk: bytes | None = retained_chunk if send_programme else None
+                    while send_programme:
+                        if pending_chunk is not None:
+                            chunk = pending_chunk
+                            pending_chunk = None
+                        else:
+                            chunk = f.read(chunk_size)
+                        if not chunk:
+                            send_completed_cleanly = True
+                            terminal_reason = "eof"
+                            break
                         if skip_event.is_set():
                             logger.info("Skipping current segment")
                             was_skipped = True
@@ -6563,9 +6747,6 @@ async def run_playback_loop(app) -> None:
                             )
                         if pacing.sleep_seconds > 0.005:
                             await asyncio.sleep(pacing.sleep_seconds)
-                    else:
-                        send_completed_cleanly = True
-                        terminal_reason = "eof"
             except asyncio.CancelledError:
                 terminal_reason = "cancelled"
                 raise
@@ -6660,6 +6841,13 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            if bytes_sent > 0:
+                _aired_meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+                last_aired = AiredBoundary(
+                    kind=segment.type,
+                    rescue=bool(_aired_meta.get("rescue")),
+                    generation=aired_generation,
+                )
             if not listener_request_reservation_released:
                 # File-error/empty-file restoration already popped this token
                 # into an active or backlogged retry. Other pre-byte exits (an
@@ -9619,6 +9807,60 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
     logger.info("On-Air Sound (broadcast chain) %s by admin", "enabled" if value else "disabled")
     _record_operator_action(request, "broadcast_chain", old_value, value)
     return {"ok": True, "broadcast_chain": value}
+
+
+_boundary_imaging_lock = asyncio.Lock()
+
+
+@router.get("/api/boundary-imaging")
+async def get_boundary_imaging(request: Request, _: None = Depends(require_admin_access)):
+    """Return the Transitions dial and whether a restart puts it back on."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    return {
+        "boundary_imaging": bool(config.audio.boundary_imaging),
+        "resets_on_restart": bool(config.is_addon),
+        "carts_aired": state.boundary_carts_aired,
+    }
+
+
+@router.post("/api/boundary-imaging")
+async def set_boundary_imaging(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle packaged boundary sounds live, at the next seam.
+
+    No queue purge. Standalone writes ``MAMMAMIRADIO_BOUNDARY_IMAGING`` to
+    ``.env`` before the runtime changes. The add-on has no Supervisor option
+    for this dial, so the change lasts until the container restarts and then
+    comes back on.
+    """
+    config = request.app.state.config
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    if "boundary_imaging" not in body:
+        return {"ok": False, "error": "expected JSON object with boundary_imaging"}
+    raw_value = body["boundary_imaging"]
+    if not isinstance(raw_value, bool):
+        return {"ok": False, "error": "boundary_imaging must be a JSON boolean (true/false)"}
+    value = raw_value
+    env_value = "true" if value else "false"
+    loop = asyncio.get_running_loop()
+    async with _boundary_imaging_lock:
+        if not config.is_addon:
+            try:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_BOUNDARY_IMAGING": env_value})
+            except Exception:
+                logger.error("Failed to persist Transitions toggle", exc_info=True)
+                return JSONResponse(
+                    status_code=500,
+                    content={"ok": False, "error": "failed to persist transitions setting"},
+                )
+        old_value = bool(config.audio.boundary_imaging)
+        config.audio.boundary_imaging = value
+        os.environ["MAMMAMIRADIO_BOUNDARY_IMAGING"] = env_value
+    logger.info("Transitions (boundary imaging) %s by admin", "enabled" if value else "disabled")
+    _record_operator_action(request, "boundary_imaging", old_value, value)
+    return {"ok": True, "boundary_imaging": value, "resets_on_restart": bool(config.is_addon)}
 
 
 _quality_lock = asyncio.Lock()

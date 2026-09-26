@@ -265,6 +265,8 @@ and board previews. Pack layout, provenance, and its recovery boundary are in
 Runtime selection precedence and broadcast-chain boundaries are in
 [Architecture](architecture.md#modern-night-drive-imaging-pack).
 
+On air, those packaged transitions play from the Engine Room **Transitions** dial (on by default). Turn it off to hear the plain cut from the next break; the sound already playing finishes as it is. A Home Assistant add-on does not keep that choice: the dial resets to on after a restart. Standalone keeps it in `.env`.
+
 ## Startup model
 
 The intended local startup path is:

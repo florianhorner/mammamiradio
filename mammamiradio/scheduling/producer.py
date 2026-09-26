@@ -3943,7 +3943,12 @@ async def _maybe_add_transition_sting(
     _unlink_path_best_effort(sting_path)
     if pre_sting_ephemeral and not _is_packaged_asset(pre_sting_path):
         _unlink_path_best_effort(pre_sting_path)
-    return replace(segment, path=merged_path, ephemeral=True)
+    # The sting now lives at the head of this segment. The playback cart must
+    # not play a second one in front of it. Copy the metadata so a caller that
+    # still holds the pre-merge segment does not observe the latch.
+    merged_metadata = dict(segment.metadata) if isinstance(segment.metadata, dict) else {}
+    merged_metadata["boundary_sting_merged"] = True
+    return replace(segment, path=merged_path, ephemeral=True, metadata=merged_metadata)
 
 
 async def _synthesize_impossible_moment(
