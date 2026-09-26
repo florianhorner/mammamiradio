@@ -46,6 +46,7 @@ class LegacyHomeManifestEntryV1:
     entity_id: str
     priority: LegacyPriority
     scopes: tuple[str, ...]
+    role: str
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,9 @@ class LegacyHomeManifestV1:
             raise ValueError("legacy manifest version must match the v1 bridge")
         if len(entity_ids) != len(set(entity_ids)):
             raise ValueError("legacy manifest entity IDs must be unique")
+        roles = [entry.role for entry in self.entries]
+        if any(not role for role in roles) or len(roles) != len(set(roles)):
+            raise ValueError("legacy manifest roles must be nonempty and unique")
 
     @property
     def entity_ids(self) -> frozenset[str]:
@@ -86,8 +90,10 @@ def _entry(
     entity_id: str,
     priority: LegacyPriority,
     scopes: tuple[str, ...] = _AMBIENT,
+    *,
+    role: str,
 ) -> LegacyHomeManifestEntryV1:
-    return LegacyHomeManifestEntryV1(entity_id=entity_id, priority=priority, scopes=scopes)
+    return LegacyHomeManifestEntryV1(entity_id=entity_id, priority=priority, scopes=scopes, role=role)
 
 
 # The mapping intentionally duplicates the final developer-home defaults.  Keeping
@@ -96,41 +102,46 @@ def _entry(
 LEGACY_HOME_MANIFEST_V1 = LegacyHomeManifestV1(
     version=LEGACY_HOME_MANIFEST_VERSION,
     entries=(
-        _entry("switch.bar_kaffeemaschine_steckdose", "gold", _MOMENT),
-        _entry("input_select.kaffee_dad_jokes", "gold"),
-        _entry("vacuum.goldstaubsucher", "gold", _MOMENT),
-        _entry("vacuum.matrix10_ultra", "gold", _MOMENT),
-        _entry("weather.forecast_home", "gold", _WEATHER),
-        _entry("person.florian_horner", "gold", _RESIDENT),
-        _entry("person.sabrina", "gold", _RESIDENT),
-        _entry("person.schnuffi", "gold", _RESIDENT_CONTEXT),
-        _entry("lock.lock_ultra_8d3c", "gold", _MOMENT),
-        _entry("input_button.foyer_fahrstuhl_fingerbot_push_button", "gold"),
-        _entry("binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar", "silver", _PRESENCE),
-        _entry("input_select.bedroom_occupancy_state", "silver", _PRESENCE),
-        _entry("switch.bad_gross_waschmaschine_steckdose", "silver"),
-        _entry("media_player.samsung_s95ca_65", "silver"),
-        _entry("media_player.wohnzimmer_sonos_arc_lautsprecher", "silver"),
-        _entry("media_player.esszimmer", "silver"),
-        _entry("climate.wohnzimmer_tado_heizung", "silver"),
-        _entry("climate.schlafzimmer", "silver"),
-        _entry("sun.sun", "silver"),
-        _entry("fan.bad_gross_lufter_shelly", "silver"),
-        _entry("fan.bad_klein_lufter", "silver"),
-        _entry("fan.kuche_lufter", "silver"),
-        _entry("light.magic_areas_light_groups_wohnzimmer_all_lights", "silver"),
-        _entry("light.magic_areas_light_groups_schlafzimmer_all_lights", "silver"),
-        _entry("light.magic_areas_light_groups_kuche_all_lights", "silver"),
-        _entry("light.magic_areas_light_groups_esszimmer_all_lights", "silver"),
-        _entry("sensor.bar_bali_boot_steckdose_power", "silver"),
-        _entry("sensor.kuche_kaffeemaschine_steckdose_power", "silver", _MOMENT),
-        _entry("light.schlafzimmer_sternenlicht_projektor_2", "silver"),
-        _entry("light.kleiderschrank_sternenlicht_projektor", "silver"),
-        _entry("light.terrasse_9_outdoor_lichtschlauch", "silver", _MOMENT),
-        _entry("sensor.haushalt_stromverbrauch_gesamt", "silver"),
-        _entry("input_datetime.last_sleep_time", "bronze"),
-        _entry("input_datetime.last_wake_time", "bronze"),
-        _entry("binary_sensor.buro_9_ring_intercom_klingelt", "bronze"),
+        _entry("switch.bar_kaffeemaschine_steckdose", "gold", _MOMENT, role="coffee_switch"),
+        _entry("input_select.kaffee_dad_jokes", "gold", role="coffee_joke"),
+        _entry("vacuum.goldstaubsucher", "gold", _MOMENT, role="vacuum_one"),
+        _entry("vacuum.matrix10_ultra", "gold", _MOMENT, role="vacuum_two"),
+        _entry("weather.forecast_home", "gold", _WEATHER, role="weather"),
+        _entry("person.florian_horner", "gold", _RESIDENT, role="resident_one"),
+        _entry("person.sabrina", "gold", _RESIDENT, role="resident_two"),
+        _entry("person.schnuffi", "gold", _RESIDENT_CONTEXT, role="pet"),
+        _entry("lock.lock_ultra_8d3c", "gold", _MOMENT, role="entry_lock"),
+        _entry("input_button.foyer_fahrstuhl_fingerbot_push_button", "gold", role="elevator_button"),
+        _entry(
+            "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar",
+            "silver",
+            _PRESENCE,
+            role="living_presence",
+        ),
+        _entry("input_select.bedroom_occupancy_state", "silver", _PRESENCE, role="bedroom_presence"),
+        _entry("switch.bad_gross_waschmaschine_steckdose", "silver", role="laundry_switch"),
+        _entry("media_player.samsung_s95ca_65", "silver", role="television"),
+        _entry("media_player.wohnzimmer_sonos_arc_lautsprecher", "silver", role="living_speaker"),
+        _entry("media_player.esszimmer", "silver", role="dining_speaker"),
+        _entry("climate.wohnzimmer_tado_heizung", "silver", role="living_climate"),
+        _entry("climate.schlafzimmer", "silver", role="bedroom_climate"),
+        _entry("sun.sun", "silver", role="sun"),
+        _entry("fan.bad_gross_lufter_shelly", "silver", role="bathroom_fan_one"),
+        _entry("fan.bad_klein_lufter", "silver", role="bathroom_fan_two"),
+        _entry("fan.kuche_lufter", "silver", role="kitchen_fan"),
+        _entry("light.magic_areas_light_groups_wohnzimmer_all_lights", "silver", role="living_lights"),
+        _entry("light.magic_areas_light_groups_schlafzimmer_all_lights", "silver", role="bedroom_lights"),
+        _entry("light.magic_areas_light_groups_kuche_all_lights", "silver", role="kitchen_lights"),
+        _entry("light.magic_areas_light_groups_esszimmer_all_lights", "silver", role="dining_lights"),
+        _entry("sensor.bar_bali_boot_steckdose_power", "silver", role="laundry_power"),
+        _entry("sensor.kuche_kaffeemaschine_steckdose_power", "silver", _MOMENT, role="coffee_power"),
+        _entry("light.schlafzimmer_sternenlicht_projektor_2", "silver", role="bedroom_stars"),
+        _entry("light.kleiderschrank_sternenlicht_projektor", "silver", role="wardrobe_stars"),
+        _entry("light.terrasse_9_outdoor_lichtschlauch", "silver", _MOMENT, role="terrace_lights"),
+        _entry("sensor.haushalt_stromverbrauch_gesamt", "silver", role="household_power"),
+        _entry("input_datetime.last_sleep_time", "bronze", role="sleep_time"),
+        _entry("input_datetime.last_wake_time", "bronze", role="wake_time"),
+        _entry("binary_sensor.buro_9_ring_intercom_klingelt", "bronze", role="doorbell"),
     ),
 )
 
@@ -484,19 +495,27 @@ def seal_legacy_home_provenance_v1(
         return provenance
 
 
-def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
+def _atomic_write_json(path: Path, payload: Mapping[str, object], *, replace_existing: bool = True) -> None:
     """Write one owner-only JSON object and atomically publish it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1  # The file object now owns and closes the descriptor.
+        with handle:
             json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, path)
+        if replace_existing:
+            os.replace(tmp_path, path)
+        else:
+            # Link publishes a complete owner-only inode without overwriting a
+            # profile another process may already have committed or prepared.
+            os.link(tmp_path, path)
+            tmp_path.unlink()
         os.chmod(path, 0o600)
         directory_fd = os.open(path.parent, os.O_RDONLY)
         try:
@@ -505,7 +524,8 @@ def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
             os.close(directory_fd)
     except BaseException:
         try:
-            os.close(fd)
+            if fd >= 0:
+                os.close(fd)
         except OSError:
             pass
         try:

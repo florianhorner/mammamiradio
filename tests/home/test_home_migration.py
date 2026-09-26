@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,6 +55,7 @@ def test_manifest_is_stable_exact_and_carries_future_profile_intent():
     assert LEGACY_HOME_MANIFEST_V1.version == 1
     assert len(LEGACY_HOME_MANIFEST_V1.entries) == 35
     assert len(LEGACY_HOME_MANIFEST_V1.entity_ids) == 35
+    assert len({entry.role for entry in LEGACY_HOME_MANIFEST_V1.entries}) == 35
     assert LEGACY_HOME_MANIFEST_V1.entity_ids == frozenset(ALL_ENTITIES)
     assert (
         LEGACY_HOME_MANIFEST_V1.entity_id_digest == "72201ec2e2b10ec6d9c594cae11d5cb5a5da6e11d744229f8f2a53cdf4c6613a"
@@ -63,6 +66,24 @@ def test_manifest_is_stable_exact_and_carries_future_profile_intent():
     assert all("resident" in by_id[entity_id].scopes for entity_id in by_id if entity_id.startswith("person."))
     assert "moment" in by_id["switch.bar_kaffeemaschine_steckdose"].scopes
     assert by_id["binary_sensor.buro_9_ring_intercom_klingelt"].priority == "bronze"
+
+
+@pytest.mark.parametrize("role", ("", LEGACY_HOME_MANIFEST_V1.entries[1].role))
+def test_manifest_rejects_missing_or_duplicate_semantic_roles(role):
+    manifest = LEGACY_HOME_MANIFEST_V1
+    with pytest.raises(ValueError, match="roles must be nonempty and unique"):
+        replace(manifest, entries=(replace(manifest.entries[0], role=role), *manifest.entries[1:]))
+
+
+def test_complete_compatibility_snapshot_is_frozen_until_the_consumer_migration():
+    from mammamiradio.home.profile import _canonical, _legacy_document
+
+    document = _legacy_document("0" * 32)
+    document.pop("profile_id")
+    # Changing this aggregate requires a migration decision for already-exported profiles.
+    assert hashlib.sha256(_canonical(document).encode()).hexdigest() == (
+        "c49225bb57f04945c790c2c4883c6d6ee5edec5181761e3bce8f44f16577ecf3"
+    )
 
 
 def test_capture_preflight_is_owner_only_and_idempotently_keeps_first_fact(tmp_path):
@@ -426,3 +447,28 @@ def test_database_witness_reads_back_through_uri_special_char_path(tmp_path):
     assert witness is not None
     assert witness.durable is True
     assert witness.database_preexisted is True
+
+
+@pytest.mark.parametrize("replace_existing", (True, False))
+def test_atomic_write_failure_does_not_close_recycled_fd(tmp_path, monkeypatch, replace_existing):
+    from mammamiradio.home import migration
+
+    temp_path = tmp_path / "temp"
+    fd = os.open(temp_path, os.O_CREAT | os.O_RDWR, 0o600)
+    monkeypatch.setattr(migration.tempfile, "mkstemp", lambda **_: (fd, str(temp_path)))
+    with (tmp_path / "other").open("wb") as other:
+
+        def fail_publish(*_):
+            os.dup2(other.fileno(), fd)
+            raise FileExistsError("competing publication")
+
+        monkeypatch.setattr(os, "replace" if replace_existing else "link", fail_publish)
+        try:
+            with pytest.raises(FileExistsError):
+                migration._atomic_write_json(tmp_path / "profile", {}, replace_existing=replace_existing)
+            assert os.fstat(fd) == os.fstat(other.fileno())
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
