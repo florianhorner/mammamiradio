@@ -501,7 +501,9 @@ def _atomic_write_json(path: Path, payload: Mapping[str, object], *, replace_exi
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1  # The file object now owns and closes the descriptor.
+        with handle:
             json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
@@ -522,7 +524,8 @@ def _atomic_write_json(path: Path, payload: Mapping[str, object], *, replace_exi
             os.close(directory_fd)
     except BaseException:
         try:
-            os.close(fd)
+            if fd >= 0:
+                os.close(fd)
         except OSError:
             pass
         try:

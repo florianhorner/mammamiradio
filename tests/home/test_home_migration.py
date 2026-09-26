@@ -447,3 +447,28 @@ def test_database_witness_reads_back_through_uri_special_char_path(tmp_path):
     assert witness is not None
     assert witness.durable is True
     assert witness.database_preexisted is True
+
+
+@pytest.mark.parametrize("replace_existing", (True, False))
+def test_atomic_write_failure_does_not_close_recycled_fd(tmp_path, monkeypatch, replace_existing):
+    from mammamiradio.home import migration
+
+    temp_path = tmp_path / "temp"
+    fd = os.open(temp_path, os.O_CREAT | os.O_RDWR, 0o600)
+    monkeypatch.setattr(migration.tempfile, "mkstemp", lambda **_: (fd, str(temp_path)))
+    with (tmp_path / "other").open("wb") as other:
+
+        def fail_publish(*_):
+            os.dup2(other.fileno(), fd)
+            raise FileExistsError("competing publication")
+
+        monkeypatch.setattr(os, "replace" if replace_existing else "link", fail_publish)
+        try:
+            with pytest.raises(FileExistsError):
+                migration._atomic_write_json(tmp_path / "profile", {}, replace_existing=replace_existing)
+            assert os.fstat(fd) == os.fstat(other.fileno())
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
