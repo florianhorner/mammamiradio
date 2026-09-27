@@ -8,7 +8,10 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 cp .env.example .env
 ./start.sh                # or: docker compose up
 pytest tests/core/test_config.py -q  # fast loop while editing
@@ -37,11 +40,16 @@ add-ons. See [Music sources and rights boundaries](docs/music-sources.md).
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 cp .env.example .env
 ```
 
-That one install command includes the application plus the repo's pinned developer tools: pytest, Ruff, mypy, coverage, and the test watcher.
+Install developer tools first, then the hash-locked runtime dependencies. Installing the application with `--no-deps` preserves those versions; `pip check` verifies its declared requirements. Quality CI and both container builds use the same runtime lock. The dependency tests also verify the requested runtime extras against installed package metadata.
+
+For a targeted runtime update, use Python 3.11 and `pip-compile --generate-hashes --output-file=requirements.txt --strip-extras --upgrade-package PACKAGE==VERSION pyproject.toml`. Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
 
 If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 

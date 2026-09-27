@@ -377,6 +377,11 @@ def test_pre_lint_is_non_mutating_and_keeps_expensive_tests_out() -> None:
 
 
 def test_pre_lint_propagates_the_first_failure(tmp_path: Path) -> None:
+    ruff_version = next(
+        line.removeprefix("ruff==")
+        for line in (ROOT / "requirements-dev.txt").read_text().splitlines()
+        if line.startswith("ruff==")
+    )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "commands.log"
@@ -389,7 +394,7 @@ def test_pre_lint_propagates_the_first_failure(tmp_path: Path) -> None:
     _write(
         bin_dir / "ruff",
         "#!/usr/bin/env bash\n"
-        "if [ \"${1:-}\" = --version ]; then printf 'ruff 0.16.7\\n'; exit 0; fi\n"
+        f"if [ \"${{1:-}}\" = --version ]; then printf 'ruff {ruff_version}\\n'; exit 0; fi\n"
         f"printf 'ruff %s\\n' \"$*\" >> {log!s}\n"
         "exit 7\n",
     )
@@ -411,6 +416,11 @@ def test_pre_lint_propagates_the_first_failure(tmp_path: Path) -> None:
 
 
 def test_pre_lint_uses_pinned_docker_when_installed_shellcheck_is_stale(tmp_path: Path) -> None:
+    ruff_version = next(
+        line.removeprefix("ruff==")
+        for line in (ROOT / "requirements-dev.txt").read_text().splitlines()
+        if line.startswith("ruff==")
+    )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "commands.log"
@@ -421,7 +431,8 @@ def test_pre_lint_uses_pinned_docker_when_installed_shellcheck_is_stale(tmp_path
     )
     _write(
         bin_dir / "ruff",
-        "#!/usr/bin/env bash\nif [ \"${1:-}\" = --version ]; then printf 'ruff 0.16.7\\n'; exit 0; fi\nexit 7\n",
+        "#!/usr/bin/env bash\n"
+        f"if [ \"${{1:-}}\" = --version ]; then printf 'ruff {ruff_version}\\n'; exit 0; fi\nexit 7\n",
     )
     for executable in ("shellcheck", "docker", "ruff"):
         os.chmod(bin_dir / executable, 0o755)

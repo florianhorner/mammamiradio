@@ -1259,6 +1259,7 @@ if [ "${1:-}" = "--build" ]; then
     cp -r ha-addon/mammamiradio/* "$TMPCTX/"
     cp -r mammamiradio/ "$TMPCTX/mammamiradio/"
     cp pyproject.toml "$TMPCTX/"
+    cp requirements.txt "$TMPCTX/"
     cp radio.toml "$TMPCTX/"
     cp model_registry.toml "$TMPCTX/"
 
