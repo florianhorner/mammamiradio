@@ -393,6 +393,7 @@ Current config options:
 | `songs_between_ads` | `int(1,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS` |
 | `ad_spots_per_break` | `int(1,5)?` | `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK` |
 | `norm_cache_mb` | `int(200,8000)?` | `MAMMAMIRADIO_MAX_CACHE_MB` (Music cache size; add-on default 1500, standalone 500. Startup computes an effective limit from available disk space. See `docs/operations.md`, "Music cache sizing".) |
+| `music_folder` | `str?` | `MAMMAMIRADIO_MUSIC_FOLDER` (validated relative folder inside mounted Media; `run.sh` exports the selected `MAMMAMIRADIO_MUSIC_DIR`) |
 
 Jamendo is not a Supervisor option. The authenticated **Motore → Setup → Music
 sources** flow persists the client ID, enabled intent, current non-commercial
@@ -402,8 +403,11 @@ Supervisor client ID when possible, but keeps the source disabled until the
 operator reviews and acknowledges the current boundary. Additional candidate
 tuning can be set in `radio.toml` or container env without exposing Supervisor
 UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
-Add-on local music lives at `/data/music`; `run.sh` exports that path as
-`MAMMAMIRADIO_MUSIC_DIR`.
+Add-on local music is the Music folder option (default `mammamiradio`) under
+Home Assistant Media when `/media` is mounted. `run.sh` exports that path as
+`MAMMAMIRADIO_MUSIC_DIR`. When Media is not mounted, or the chosen folder is a
+symlink, the export is `/data/music`. A name that leaves Media is ignored and
+the default folder is used. The control room names the path actually in use.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -665,7 +669,12 @@ Generated downloads, normalization outputs, renders, and clips warm again after
 restore.
 
 `/data/music` stays in the add-on backup. The scanner reads it in place and
-never moves or deletes operator files.
+never moves or deletes operator files. Songs in the Media panel are outside this
+app backup. A Home Assistant backup includes local Media songs when that backup
+includes Media; back up a NAS library separately. The station does not copy
+them into `/data/music`.
+If Media is not mounted and `/data` cannot be written, the fallback
+`/tmp/mammamiradio-data/music` is not persisted in either backup.
 
 This is a live, file-level copy, **not a copy taken from one single exact
 moment** of the retained state. SQLite may commit while Supervisor is

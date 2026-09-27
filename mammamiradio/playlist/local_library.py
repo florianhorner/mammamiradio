@@ -42,6 +42,7 @@ LOCAL_METADATA_MAX_PROBE_BYTES = 64 * 1024
 # deadline a large or damaged library can hold the shared background ffmpeg slot
 # long past the point anyone is listening for the answer.
 LOCAL_METADATA_SCAN_BUDGET_SECONDS = 90.0
+ADDON_MEDIA_ROOT = Path("/media")
 
 _LocalMetadata = tuple[str, str]
 _LocalSignature = tuple[int, int]
@@ -62,6 +63,7 @@ class LocalLibraryScanResult:
     roots: tuple[Path, ...]
     root_keys: tuple[str, ...] = ()
     has_available_root: bool = False
+    folder_missing: bool = False
     tracks: list[Track] = field(default_factory=list)
     complete: bool = True
     entries_seen: int = 0
@@ -73,6 +75,7 @@ class LocalLibraryScanResult:
         return {
             "in_progress": False,
             "complete": self.complete,
+            "folder_missing": self.folder_missing,
             "roots": [str(root) for root in self.roots],
             "files_found": self.supported_files,
         }
@@ -87,6 +90,25 @@ def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibr
         result.complete = False
         result.warnings.append(warning)
     return result
+
+
+def _addon_media_root_is_unsafe(root: Path, resolved_root: Path) -> bool:
+    """Reject a Media root that follows a link or resolves outside Media.
+
+    Check on every scan: a configured directory may appear or change after the
+    add-on's startup validation, including behind a symlinked parent.
+    """
+    if not root.is_relative_to(ADDON_MEDIA_ROOT):
+        return False
+    if ADDON_MEDIA_ROOT.is_symlink():
+        return True
+    candidate = ADDON_MEDIA_ROOT
+    for part in root.relative_to(ADDON_MEDIA_ROOT).parts:
+        candidate /= part
+        if candidate.is_symlink():
+            return True
+    resolved_media = ADDON_MEDIA_ROOT.resolve(strict=False)
+    return resolved_root == resolved_media or not resolved_root.is_relative_to(resolved_media)
 
 
 def _clean_tag_value(value: object) -> str:
@@ -380,6 +402,7 @@ def local_track_is_blocklisted(track: Track, blocklist: object) -> bool:
 
 def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
     roots = (source,) if isinstance(source, Path) else (Path(source.music_dir),)
+    addon_mode = not isinstance(source, Path) and bool(getattr(source, "is_addon", False))
     result = LocalLibraryScanResult(roots=roots)
     seen_identities: set[tuple[str, str]] = set()
     scan_roots: dict[str, tuple[Path, Path]] = {}
@@ -394,12 +417,24 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
             resolved_root = root.resolve(strict=False)
         except (OSError, RuntimeError):
             resolved_root = Path(_path_key(root))
+        if addon_mode and _addon_media_root_is_unsafe(root, resolved_root):
+            result.complete = False
+            result.warnings.append(
+                f"Music folder cannot be read safely: {root}. Choose a real folder inside Media; tracks kept."
+            )
+            continue
         scan_roots.setdefault(_path_key(resolved_root), (root, resolved_root))
     result.root_keys = tuple(scan_roots)
 
     for root, resolved_root in scan_roots.values():
         if not resolved_root.is_dir():
             result.complete = False
+            try:
+                resolved_root.stat()
+            except FileNotFoundError:
+                result.folder_missing = True
+            except OSError:
+                pass
             result.warnings.append(f"Music folder is unavailable: {root}")
             continue
         result.has_available_root = True

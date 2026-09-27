@@ -134,8 +134,11 @@ when you want generated host conversations.
 
 The stock Docker setup leaves external extraction off. Standalone installs can
 add the `external-media` extra, but technical access does not grant media
-rights. The Home Assistant app and supplied Docker container use `/data/music`;
-source checkouts use `./music`. Set `MAMMAMIRADIO_MUSIC_DIR` to override either.
+rights. The supplied Docker container uses `/data/music`. The Home Assistant app
+reads a folder in the Media panel when that storage is mounted (the Music folder
+setting, default `mammamiradio`) and `/data/music` when it is not. Source
+checkouts use `./music`. Set `MAMMAMIRADIO_MUSIC_DIR` to override a standalone
+install.
 macOS users can run `./setup-mac.sh`; venv installs can run `./start.sh`.
 
 </details>
@@ -193,9 +196,11 @@ follows each provider's terms.
 Normal rotation starts with the offline, attributed twelve-track starter
 collection, so no provider account or network music source is required. The
 listener shows the source, license, and modification notice for each track.
-The Home Assistant app scans audio under `/data/music`; use **Rotazione >
-Local music > Scan now** to refresh without a restart. Standalone installs can
-set `MAMMAMIRADIO_MUSIC_DIR`.
+The Home Assistant app scans the Media folder named in its Music folder setting
+when Media is mounted, and `/data/music` when Media is not. The control room
+names that place. Use **Rotazione > Local music > Scan now** to refresh without
+a restart. The supplied Docker container keeps songs in `/data/music`. Other
+standalone installs can set `MAMMAMIRADIO_MUSIC_DIR`.
 
 Jamendo is off by default. To enable it, acknowledge that your Jamendo API use
 is non-commercial.

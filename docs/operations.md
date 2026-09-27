@@ -989,7 +989,7 @@ and trusts its own LAN for admin access (see **Admin access model**); set
 
 The dashboard is accessible via HA ingress (sidebar). First Listen shows source readiness, plays the station on the current browser device, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. Home Assistant speakers and AI-host keys are optional later enhancements.
 
-Operator local music remains under `/data/music`. Populate it through the deployment's supported storage tooling; Mamma Mi Radio scans recursively every 60 seconds and exposes **Rotazione → Local music → Scan now** for an immediate refresh.
+Operator local music in the Home Assistant app is the Media panel folder named by Music folder (default `mammamiradio`) when Media is mounted, and `/data/music` when it is not. Local Media songs are in a Home Assistant backup when that backup includes Media; a NAS library needs its own backup. `/data/music` stays in the app backup. Populate the folder the control room names; do not patch files into a running app container. The scanner runs every 60 seconds and **Rotazione → Local music → Scan now** refreshes it immediately.
 
 First Listen progress is owner-only setup metadata under `/data/cache/state` in
 add-on mode. Its receipt records factual milestones, not the live Home-context

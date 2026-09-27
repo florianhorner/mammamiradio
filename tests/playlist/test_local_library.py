@@ -24,8 +24,8 @@ from mammamiradio.playlist.local_library import (
 )
 
 
-def _config(root: Path):
-    return SimpleNamespace(music_dir=root)
+def _config(root: Path, *, is_addon: bool = False):
+    return SimpleNamespace(music_dir=root, is_addon=is_addon)
 
 
 def _track(title: str, *, source="starter", path: Path | None = None) -> Track:
@@ -259,6 +259,55 @@ def test_scan_rejects_a_symlinked_configured_root(tmp_path):
     assert result.complete is False
     assert result.tracks == []
     assert result.warnings == [f"Symlinked music folder skipped: {linked_root}. Use its real path; tracks kept."]
+
+
+def test_addon_scan_rejects_a_parent_link_that_appears_after_startup(tmp_path, monkeypatch):
+    media = tmp_path / "media"
+    media.mkdir()
+    root = media / "jump" / "songs"
+    monkeypatch.setattr(local_library_module, "ADDON_MEDIA_ROOT", media)
+    source = _config(root, is_addon=True)
+
+    before = scan_local_library(source)
+    assert before.tracks == []
+    assert before.complete is False
+    assert before.status_payload()["folder_missing"] is True
+
+    outside = tmp_path / "outside"
+    songs = outside / "songs"
+    songs.mkdir(parents=True)
+    (songs / "Outside.mp3").write_bytes(b"audio")
+    (media / "jump").symlink_to(outside)
+
+    after = scan_local_library(source)
+    assert after.tracks == []
+    assert after.complete is False
+    assert after.status_payload()["folder_missing"] is False
+    assert "Choose a real folder inside Media" in after.warnings[0]
+
+
+def test_addon_scan_keeps_a_real_nested_media_folder(tmp_path, monkeypatch):
+    media = tmp_path / "media"
+    root = media / "nas" / "songs"
+    root.mkdir(parents=True)
+    (root / "Inside.mp3").write_bytes(b"audio")
+    monkeypatch.setattr(local_library_module, "ADDON_MEDIA_ROOT", media)
+
+    result = scan_local_library(_config(root, is_addon=True))
+
+    assert result.complete is True
+    assert len(result.tracks) == 1
+    assert result.tracks[0].local_path == root / "Inside.mp3"
+
+
+def test_scan_does_not_call_an_existing_file_a_missing_folder(tmp_path):
+    root = tmp_path / "music"
+    root.write_text("not a directory", encoding="utf-8")
+
+    result = scan_local_library(_config(root))
+
+    assert result.complete is False
+    assert result.status_payload()["folder_missing"] is False
 
 
 def test_scanned_track_cannot_escape_library_after_symlink_swap(tmp_path):

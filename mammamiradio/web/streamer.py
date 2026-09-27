@@ -315,6 +315,8 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export â€
     _serialize_stream_log_entry,
     _serialize_track,
     _status_now_playback,
+    local_library_admin_status,
+    local_music_place,
     normalize_public_status_json,
     public_status_etag,
     public_status_not_modified,
@@ -4988,6 +4990,13 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
     config = request.app.state.config
     state = request.app.state.station_state
     golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
+    if golden_path["stage"] == "needs_music_source":
+        # The shared status also reaches /public-status. Keep the exact path in
+        # this operator-only setup projection, never in the listener payload.
+        golden_path = {
+            **golden_path,
+            "steps": [golden_path["steps"][0], f"Add files in {local_music_place(config.music_dir)}."],
+        }
     provider_health = _provider_health_snapshot(config, state)
     provider_health["probe_in_flight"] = _provider_probe_in_flight(request.app.state)
     origin = getattr(request.app.state, "first_listen_install_origin", None)
@@ -12965,8 +12974,9 @@ async def status(
             "playlist_source": _serialize_source(state.playlist_source),
             # Local paths and scan diagnostics are operator-only. The public
             # payload intentionally carries only source-readiness summaries.
-            "local_library": dict(
-                getattr(request.app.state, "local_library_status", {"in_progress": False, "roots": []})
+            "local_library": local_library_admin_status(
+                getattr(request.app.state, "local_library_status", None),
+                getattr(config, "music_dir", None),
             ),
             "jamendo": safe_jamendo_status(config, getattr(request.app.state, "jamendo_provider", None)),
             "external_extractors": _external_extractors_status(config),
