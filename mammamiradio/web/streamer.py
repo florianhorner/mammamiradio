@@ -7663,30 +7663,31 @@ async def service_worker():
 
 
 def _resolve_static_file(filename: str) -> Path | None:
-    """Resolve a user-requested static asset path safely.
+    """Select a contained static file without constructing a path from input.
 
-    Rejects absolute paths and ``..`` components before filesystem lookup, then
-    confirms the resolved target stays under the static directory and is a file.
+    Match the walked name before resolving it so safe file aliases still work.
+    Directory symlinks are not traversed by rglob.
     """
-    if filename.startswith("/") or ".." in Path(filename).parts:
+    if filename.startswith("/") or "\x00" in filename or ".." in filename.split("/"):
         return None
 
     try:
-        # Both resolutions sit inside the guard. Leaving the root outside it
-        # meant a broken install answered 500 to every static request.
-        # RuntimeError is a symlink cycle on Python 3.12 and earlier;
-        # ValueError is an embedded null byte, which a request path can carry.
-        # Uncaught, either left this unauthenticated route raising instead of
-        # answering the 404 it already returns for any name it cannot resolve.
         static_root = _STATIC_DIR.resolve()
-        candidate = (static_root / filename).resolve()
+        for entry in static_root.rglob("*"):
+            if filename != entry.relative_to(static_root).as_posix():
+                continue
+            try:
+                candidate = entry.resolve()
+                if candidate.is_relative_to(static_root) and candidate.is_file():
+                    return candidate
+            except (OSError, RuntimeError, ValueError):
+                continue
     except (OSError, RuntimeError, ValueError):
+        # Guard root resolution and lazy iteration too: an unreadable install
+        # or symlink cycle must answer 404 instead of raising on a public route.
         return None
 
-    if not candidate.is_relative_to(static_root) or not candidate.is_file():
-        return None
-
-    return candidate
+    return None
 
 
 @router.get("/static/{filename:path}")
@@ -9587,14 +9588,13 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
             "effective_on": "next_banter_generation",
             "stream_status": "unaffected",
         }
-    except Exception as exc:
-        logger.error("hot-reload: importlib.reload failed: %s", exc)
+    except Exception:
+        logger.exception("hot-reload: importlib.reload failed")
         return JSONResponse(
             status_code=500,
             content={
                 "ok": False,
                 "error_code": "reload_failed",
-                "exception": str(exc),
                 "stream_status": "unaffected",
                 "retryable": True,
             },

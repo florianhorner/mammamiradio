@@ -11988,7 +11988,7 @@ async def test_hot_reload_unauthenticated_rejected():
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_language_policy_stage_failure_returns_500():
+async def test_hot_reload_language_policy_stage_failure_returns_500(caplog):
     """First reload stage (language_policy) raises → 500 with stream_status=unaffected.
 
     Guards the failure contract for the leaves-first stage. With language_policy reloaded
@@ -12007,15 +12007,19 @@ async def test_hot_reload_language_policy_stage_failure_returns_500():
             )
     assert resp.status_code == 500
     body = resp.json()
-    assert body["ok"] is False
-    assert body["stream_status"] == "unaffected"
-    assert body["error_code"] == "reload_failed"
-    assert body["retryable"] is True
-    assert "syntax error in language_policy.py" in body["exception"]
+    assert body == {"ok": False, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": True}
+    assert "syntax error in language_policy.py" not in resp.text
+    assert any(
+        record.name == "mammamiradio.web.streamer"
+        and record.levelname == "ERROR"
+        and record.exc_info is not None
+        and "syntax error in language_policy.py" in str(record.exc_info[1])
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_scriptwriter_stage_failure_returns_500():
+async def test_hot_reload_scriptwriter_stage_failure_returns_500(caplog):
     """Last reload stage (the scriptwriter facade) fails after the leaves succeed → 500.
 
     The data leaves reload cleanly, then the scriptwriter facade raises at the
@@ -12036,11 +12040,15 @@ async def test_hot_reload_scriptwriter_stage_failure_returns_500():
             )
     assert resp.status_code == 500
     body = resp.json()
-    assert body["ok"] is False
-    assert body["stream_status"] == "unaffected"
-    assert body["error_code"] == "reload_failed"
-    assert body["retryable"] is True
-    assert "syntax error in scriptwriter.py" in body["exception"]
+    assert body == {"ok": False, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": True}
+    assert "syntax error in scriptwriter.py" not in resp.text
+    assert any(
+        record.name == "mammamiradio.web.streamer"
+        and record.levelname == "ERROR"
+        and record.exc_info is not None
+        and "syntax error in scriptwriter.py" in str(record.exc_info[1])
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
