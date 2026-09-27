@@ -54,7 +54,7 @@ def test_ci_workflow_permissions_are_least_privilege():
         "validate": {"contents": "read"},
         "build": {"contents": "read"},
         "media-proof": {"contents": "read"},
-        "push": {"contents": "read", "packages": "write"},
+        "push": {"packages": "write"},
         "smoke": {"contents": "read", "packages": "read"},
     }
 
