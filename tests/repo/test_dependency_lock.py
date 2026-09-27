@@ -30,6 +30,20 @@ def test_test_environment_uses_the_runtime_lock(pin: Requirement) -> None:
     assert installed in pin.specifier, f"{pin}: installed {installed}; install requirements.txt before testing"
 
 
+def test_lock_satisfies_source_requirements() -> None:
+    """Check direct source constraints even in source-resolved local environments."""
+    pins = _runtime_pins()
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    for raw in project["dependencies"]:
+        requirement = Requirement(raw)
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        name = canonicalize_name(requirement.name)
+        assert name in pins, f"Runtime dependency {requirement} is missing from requirements.txt"
+        pinned_version = next(iter(pins[name].specifier)).version
+        assert pinned_version in requirement.specifier, f"{requirement} conflicts with locked {name}=={pinned_version}"
+
+
 def test_lock_satisfies_source_requirements_and_their_extras() -> None:
     """Check actual metadata edges, including uvicorn[standard], without network access."""
     pins = _runtime_pins()
