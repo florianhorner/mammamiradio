@@ -265,6 +265,8 @@ and board previews. Pack layout, provenance, and its recovery boundary are in
 Runtime selection precedence and broadcast-chain boundaries are in
 [Architecture](architecture.md#modern-night-drive-imaging-pack).
 
+On air, the Engine Room **Transitions** dial (on by default) controls `stingers/music_to_speech.mp3` and `stingers/speech_to_music.mp3`, plus `bumpers/ad_in.mp3` and `bumpers/ad_out.mp3` around packaged ad spots. It leaves `ad_mid`, bumpers already inside live ad breaks, identity sounds, beds, and music-tail crossfades in place. Song/talk stings are added at playback, including for local-library music, so queued talk follows the current dial. Turn it off to hear the plain cut from the next break; the sound already playing finishes as it is. A Home Assistant add-on does not keep that choice: the dial returns to its startup setting (on by default) after a restart. Standalone keeps it in `.env`.
+
 ## Startup model
 
 The intended local startup path is:
@@ -963,7 +965,9 @@ value. If it is unset, the entrypoint generates one and writes it to
 The `ha-addon/` directory contains a complete Home Assistant app scaffold. Users add the repo URL in **Settings > Apps > App store > Repositories**, then install "Mamma Mi Radio" from the Apps catalog.
 
 Supervisor's stored app options are the sole durable authority for add-on admin
-modes and pacing. Admin saves commit there before live state changes.
+modes and pacing. Durable admin saves commit there before live state changes.
+Transitions is the session-only exception: it has no Supervisor option and resets
+to the configured startup value, on by default, after a restart.
 `/data/options.json` is a Supervisor-generated, read-only startup projection:
 the add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) reads it, maps the
 Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, overlays AI/TTS provider

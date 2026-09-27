@@ -6795,67 +6795,6 @@ async def test_impossible_moment_cancellation_drains_tts_before_cleanup(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("blocked_stage", ["stinger", "concat"])
-async def test_transition_sting_cancellation_drains_worker_and_preserves_source(
-    tmp_path,
-    blocked_stage,
-):
-    """Neither transition worker can republish scratch after cancellation cleanup."""
-    from mammamiradio.scheduling.producer import _maybe_add_transition_sting
-
-    config = _make_config()
-    config.tmp_dir = tmp_path
-    state = _make_state()
-    source = tmp_path / "dry_banter.mp3"
-    source.write_bytes(b"dry")
-    segment = Segment(type=SegmentType.BANTER, path=source, ephemeral=True)
-    worker_started = threading.Event()
-    release_worker = threading.Event()
-    imaging = MagicMock()
-
-    def _maybe_block(stage: str) -> None:
-        if blocked_stage != stage:
-            return
-        worker_started.set()
-        assert release_worker.wait(timeout=2.0)
-
-    def _pick_stinger(_previous, _actual, output_path) -> Path:
-        _maybe_block("stinger")
-        output_path.write_bytes(b"sting")
-        return output_path
-
-    def _concat(_inputs, output_path, *_args, **_kwargs) -> Path:
-        _maybe_block("concat")
-        output_path.write_bytes(b"merged")
-        return output_path
-
-    imaging.pick_stinger.side_effect = _pick_stinger
-    with (
-        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
-        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat),
-    ):
-        task = asyncio.create_task(_maybe_add_transition_sting(segment, SegmentType.MUSIC, config, state))
-        try:
-            deadline = asyncio.get_running_loop().time() + 2.0
-            while not worker_started.is_set():
-                if asyncio.get_running_loop().time() > deadline:
-                    raise AssertionError(f"{blocked_stage} worker did not start")
-                await asyncio.sleep(0.01)
-            task.cancel()
-            await asyncio.sleep(0.02)
-            assert not task.done()
-            release_worker.set()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        finally:
-            release_worker.set()
-
-    assert source.read_bytes() == b"dry"
-    assert list(tmp_path.glob("transition_*.mp3")) == []
-    assert list(tmp_path.glob("segment_with_sting_*.mp3")) == []
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("cached", [False, True])
 async def test_egress_cancellation_drains_worker_before_staging_cleanup(tmp_path, cached):
     """Fresh and cached egress workers settle before their scratch is removed."""

@@ -135,7 +135,7 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    one.
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
    context), `Costs` (token cost counter + cost split + segment counts — always visible),
-   `Configuration` (AI Quality and On-Air Sound controls), and `Setup` (a
+   `Configuration` (AI Quality, On-Air Sound, and Transitions controls), and `Setup` (a
    collapsible `<details>` that auto-collapses when every readiness item is
    ready; shows an `All ready ✓` blue badge when collapsed).
 

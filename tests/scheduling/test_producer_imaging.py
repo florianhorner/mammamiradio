@@ -16,7 +16,6 @@ from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorization
 from mammamiradio.scheduling.handoff import PreparedMusicHandoff
 from mammamiradio.scheduling.producer import (
     RenderedMusicTrack,
-    _crosses_music_speech_boundary,
     _enqueue_with_egress,
     _make_imaging_lib,
     run_producer,
@@ -121,19 +120,6 @@ def _prepared_handoff(segment: Segment, tmp_path: Path, *, tail_seconds: float =
             tail_frame_count=2,
         ),
     )
-
-
-def test_music_speech_boundary_includes_voice_led_imaging_segments():
-    for speech_type in (
-        SegmentType.BANTER,
-        SegmentType.NEWS_FLASH,
-        SegmentType.AD,
-        SegmentType.STATION_ID,
-        SegmentType.SWEEPER,
-        SegmentType.TIME_CHECK,
-    ):
-        assert _crosses_music_speech_boundary(SegmentType.MUSIC, speech_type)
-        assert _crosses_music_speech_boundary(speech_type, SegmentType.MUSIC)
 
 
 def test_make_imaging_lib_passes_cache_dir(tmp_path):
@@ -639,17 +625,27 @@ async def test_banter_after_rescue_song_uses_generic_bed_not_any_song(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_local_music_to_banter_sting_is_controlled_at_playback(tmp_path, enabled):
+    from tests.web.test_playback_boundary_cart import _app, _frames, _install_carts, _play
+
     state = _make_state()
     state.segments_produced = 1
     config = _make_config(tmp_path)
     config.pacing.lookahead_segments = 2
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     previous_music = tmp_path / "previous_music.mp3"
-    previous_music.write_bytes(b"music")
+    song = _frames(2, b"SONG")
+    talk = _frames(2, b"TALK")
+    cart = _frames(2, b"CART")
+    previous_music.write_bytes(song)
     queue.put_nowait(Segment(type=SegmentType.MUSIC, path=previous_music, ephemeral=False))
     host = config.hosts[0]
     banter_lines = [(host, "E adesso parliamo.")]
+
+    def _mix(_voice, _bed, output, *_args):
+        output.write_bytes(talk)
+        return output
 
     with (
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
@@ -664,7 +660,7 @@ async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dialogue.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_side_effect) as mock_concat,
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=3.5),
-        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix_bed_side_effect),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_bed", side_effect=_mix),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
     ):
@@ -674,16 +670,20 @@ async def test_transition_sting_prepended_at_music_to_banter_boundary(tmp_path):
 
         await _run_until_queued(queue, state, config, target_qsize=2)
 
-    queue.get_nowait()
+    music_seg = queue.get_nowait()
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
-    assert seg.path.name.startswith("segment_with_sting_")
-    imaging.pick_stinger.assert_called_once()
-    assert imaging.pick_stinger.call_args.args[:2] == (SegmentType.MUSIC, SegmentType.BANTER)
-    assert mock_concat.call_count == 2
-    stinger_path = imaging.pick_stinger.call_args.args[2]
-    final_concat_inputs = mock_concat.call_args_list[-1].args[0]
-    assert final_concat_inputs[0] == stinger_path
+    assert not seg.path.name.startswith("segment_with_sting_")
+    imaging.pick_stinger.assert_not_called()
+    assert mock_concat.call_count == 1
+
+    _install_carts(tmp_path, music_to_speech=cart)
+    app = _app(tmp_path)
+    app.state.config.audio.boundary_imaging = enabled
+    heard = await _play(app, [music_seg, seg])
+    assert heard == song + (cart if enabled else b"") + talk
+    assert app.state.station_state.boundary_carts_aired == int(enabled)
+    assert b"".join(app.state.clip_ring_buffer) == talk
 
 
 @pytest.mark.asyncio
@@ -720,11 +720,10 @@ async def test_transition_sting_preserves_cached_music_file(tmp_path):
     queue.get_nowait()
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
-    assert seg.path.name.startswith("segment_with_sting_")
-    assert seg.ephemeral is True
-    assert cached_music.exists()
-    imaging.pick_stinger.assert_called_once()
-    assert imaging.pick_stinger.call_args.args[:2] == (SegmentType.BANTER, SegmentType.MUSIC)
+    assert seg.path == cached_music
+    assert seg.ephemeral is False
+    assert cached_music.read_bytes() == b"cached music"
+    imaging.pick_stinger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1094,6 +1093,5 @@ async def test_idle_bridge_updates_boundary_before_next_music(tmp_path):
     music_seg = queue.get_nowait()
     assert bridge_seg.type == SegmentType.BANTER
     assert music_seg.type == SegmentType.MUSIC
-    assert music_seg.path.name.startswith("segment_with_sting_")
-    imaging.pick_stinger.assert_called_once()
-    assert imaging.pick_stinger.call_args.args[:2] == (SegmentType.BANTER, SegmentType.MUSIC)
+    assert music_seg.path == cached_music
+    imaging.pick_stinger.assert_not_called()
