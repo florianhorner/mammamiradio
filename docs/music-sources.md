@@ -103,9 +103,16 @@ Files in the configured local directory are labelled "Provided by the station
 operator" in listener credits. They receive no clearance badge or implied
 license, and upgrades never delete them.
 
-The supplied Home Assistant and Docker containers use `/data/music`; source
-checkouts use `./music`. The scanner runs every minute; use **Rotazione → Local
-music → Scan now** for an immediate refresh.
+The Home Assistant app reads the Media panel folder named by Music folder
+(default `mammamiradio`) when Home Assistant mounts Media, and `/data/music`
+otherwise. Songs in the Media panel are outside the app backup. A Home Assistant
+backup includes local Media songs when that backup includes Media; back up a
+NAS library separately. `/data/music` stays in the app backup. The supplied
+Docker container uses `/data/music`. Source checkouts use `./music`. The
+scanner runs every minute; use **Rotazione → Local music → Scan now** for an
+immediate refresh.
+If Media is not mounted and `/data` cannot be written, the app's
+`/tmp/mammamiradio-data/music` fallback is not persisted in either backup.
 
 Discovery recursively accepts MP3, M4A, MP4 audio, AAC, FLAC, OGG, Opus, and WAV.
 

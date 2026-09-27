@@ -441,6 +441,14 @@ try:
 except (TypeError, ValueError):
     cache_mb_int = 1500
 print('export MAMMAMIRADIO_MAX_CACHE_MB=' + shlex.quote(str(cache_mb_int)))
+# The shell block below owns MAMMAMIRADIO_MUSIC_DIR. Export only the raw
+# option so a missing, empty, or unparsed value leaves the shell on its default.
+music_folder = opts.get('music_folder', '')
+if not isinstance(music_folder, str):
+    music_folder = ''
+music_folder = music_folder.strip()
+if music_folder:
+    print('export MAMMAMIRADIO_MUSIC_FOLDER=' + shlex.quote(music_folder))
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse add-on config, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
@@ -480,21 +488,140 @@ export MAMMAMIRADIO_LEDGER_ENABLED="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Point runtime data at persistent /data ----
-export MAMMAMIRADIO_CACHE_DIR="/data/cache"
-export MAMMAMIRADIO_MUSIC_DIR="/data/music"
-export MAMMAMIRADIO_TMP_DIR="/data/tmp"
+# ---- Point cache and tmp at persistent /data; choose the music folder ----
+# BEGIN music path
+# Music is /media/<folder> when that path is a mount, /data/music when it is
+# not or the chosen folder is a symlink, and the /tmp music path only when
+# Media is absent and /data cannot be created. The four MAMMAMIRADIO_* roots
+# below are test seams, not operator options.
+MOUNTS_FILE="${MAMMAMIRADIO_PROC_MOUNTS:-/proc/mounts}"
+MEDIA_ROOT="${MAMMAMIRADIO_MEDIA_ROOT:-/media}"
+DATA_DIR="${MAMMAMIRADIO_DATA_DIR:-/data}"
+FALLBACK_BASE="${MAMMAMIRADIO_FALLBACK_BASE:-/tmp/mammamiradio-data}"
+DEFAULT_MUSIC_FOLDER="mammamiradio"
+export MAMMAMIRADIO_CACHE_DIR="$DATA_DIR/cache"
+export MAMMAMIRADIO_TMP_DIR="$DATA_DIR/tmp"
+DATA_MUSIC="$DATA_DIR/music"
+data_mkdir_err="${TMPDIR:-/tmp}/mammamiradio-data-mkdir.$$.err"
+media_mkdir_err="${TMPDIR:-/tmp}/mammamiradio-media-mkdir.$$.err"
 
-# ---- Ensure directories exist ----
-if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.err; then
-    FALLBACK_BASE="/tmp/mammamiradio-data"
-    echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
-    echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
-    export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
-    export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"
-    export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
-    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"
+# Success (0) means the name cannot be used as a folder inside Media.
+# A symlink is not invalid: the caller refuses to follow it.
+music_folder_invalid() {
+    name=$1
+    [ -n "$name" ] || return 0
+    case "$name" in
+        /*|*[[:cntrl:]]*) return 0 ;;
+    esac
+    rest=$name
+    parent=$MEDIA_ROOT
+    while :; do
+        segment=${rest%%/*}
+        case "$segment" in
+            ""|.|..) return 0 ;;
+        esac
+        case "$rest" in
+            */*)
+                parent="$parent/$segment"
+                [ -L "$parent" ] && return 0
+                rest=${rest#*/}
+                ;;
+            *) break ;;
+        esac
+    done
+    target="$MEDIA_ROOT/$name"
+    if [ -L "$target" ]; then
+        return 1
+    fi
+    if [ -e "$target" ]; then
+        if [ ! -d "$target" ]; then
+            return 0
+        fi
+        resolved=$(cd "$target" && pwd -P) || return 0
+        case "$resolved" in
+            "$MEDIA_REAL"/*) return 1 ;;
+            *) return 0 ;;
+        esac
+    fi
+    return 1
+}
+
+media_mounted=0
+if [ -f "$MOUNTS_FILE" ]; then
+    while IFS=' ' read -r _ mount_point _; do
+        if [ "$mount_point" = "$MEDIA_ROOT" ]; then
+            media_mounted=1
+            break
+        fi
+    done < "$MOUNTS_FILE" || true
 fi
+if [ -L "$MEDIA_ROOT" ]; then
+    media_mounted=0
+fi
+
+MEDIA_REAL=$MEDIA_ROOT
+if [ -d "$MEDIA_ROOT" ] && [ ! -L "$MEDIA_ROOT" ]; then
+    MEDIA_REAL=$(cd "$MEDIA_ROOT" && pwd -P) || MEDIA_REAL=$MEDIA_ROOT
+fi
+
+music_dir=$DATA_MUSIC
+if [ "$media_mounted" -eq 1 ]; then
+    chosen="${MAMMAMIRADIO_MUSIC_FOLDER:-$DEFAULT_MUSIC_FOLDER}"
+    if music_folder_invalid "$chosen"; then
+        echo "[mammamiradio] WARNING: music folder is not a folder inside Media. Using $DEFAULT_MUSIC_FOLDER."
+        chosen=$DEFAULT_MUSIC_FOLDER
+    fi
+    chosen_path="$MEDIA_ROOT/$chosen"
+    if [ -L "$chosen_path" ]; then
+        echo "[mammamiradio] WARNING: music folder $chosen is a link. Using $DATA_MUSIC and not following the link."
+        music_dir=$DATA_MUSIC
+    elif music_folder_invalid "$chosen"; then
+        echo "[mammamiradio] WARNING: music folder is not a folder inside Media. Using $DATA_MUSIC."
+        music_dir=$DATA_MUSIC
+    else
+        music_dir=$chosen_path
+        if [ "$chosen" = "$DEFAULT_MUSIC_FOLDER" ] && [ ! -e "$chosen_path" ] && [ ! -L "$chosen_path" ]; then
+            if ! mkdir "$chosen_path" 2>"$media_mkdir_err"; then
+                echo "[mammamiradio] WARNING: could not create $chosen_path ($(cat "$media_mkdir_err" 2>/dev/null || echo unknown error)). The station will still read that folder."
+            fi
+        fi
+        if [ -d "$DATA_MUSIC" ]; then
+            leftover=$(find "$DATA_MUSIC" -type f \( -iname '*.aac' -o -iname '*.flac' -o -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.mp4' -o -iname '*.ogg' -o -iname '*.opus' -o -iname '*.wav' \) -size +0c -print 2>/dev/null | head -n 1 || true)
+            if [ -n "$leftover" ]; then
+                echo "[mammamiradio] WARNING: $DATA_MUSIC still has audio. The station is reading $chosen_path. Those files stay where they are and will not play."
+            fi
+        fi
+    fi
+else
+    echo "[mammamiradio] Media is not mounted. Using $DATA_MUSIC."
+    music_dir=$DATA_MUSIC
+fi
+export MAMMAMIRADIO_MUSIC_DIR="$music_dir"
+
+if [ "$media_mounted" -eq 1 ]; then
+    if ! mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_TMP_DIR" 2>"$data_mkdir_err"; then
+        echo "[mammamiradio] WARNING: $DATA_DIR is not writable ($(cat "$data_mkdir_err" 2>/dev/null || echo unknown error))"
+        echo "[mammamiradio] WARNING: Falling back cache and tmp to $FALLBACK_BASE (music stays $MAMMAMIRADIO_MUSIC_DIR)"
+        export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
+        export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
+        mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_TMP_DIR"
+    elif [ "$MAMMAMIRADIO_MUSIC_DIR" = "$DATA_MUSIC" ]; then
+        if ! mkdir -p "$DATA_MUSIC" 2>"$data_mkdir_err"; then
+            echo "[mammamiradio] WARNING: could not create $DATA_MUSIC ($(cat "$data_mkdir_err" 2>/dev/null || echo unknown error))"
+        fi
+    fi
+else
+    if ! mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$DATA_MUSIC" "$MAMMAMIRADIO_TMP_DIR" 2>"$data_mkdir_err"; then
+        echo "[mammamiradio] WARNING: $DATA_DIR is not writable ($(cat "$data_mkdir_err" 2>/dev/null || echo unknown error))"
+        echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
+        export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
+        export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"
+        export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
+        mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"
+    fi
+fi
+rm -f "$data_mkdir_err" "$media_mkdir_err" || true
+# END music path
 
 # ---- Validate critical files exist ----
 if [ ! -f /app/radio.toml ]; then

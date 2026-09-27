@@ -89,12 +89,15 @@ Jamendo cannot repair a broken starter package: it is optional, default-off,
 asynchronous enrichment. A Jamendo failure must leave starter/local playback
 unchanged. See [Music sources and rights boundaries](music-sources.md).
 
-For the supplied Docker image or Home Assistant app, local audio belongs in the
-deployment's persistent `/data/music` directory. The scanner finds changes
-within one minute; use **Rotazione → Local music → Scan now** to refresh
-immediately. Populate that data area through the deployment's supported storage
-tooling; do not patch files into a running Home Assistant app container. A
-source checkout uses `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
+For the Home Assistant app, put songs in the Media panel folder named by the
+app's Music folder setting (default `mammamiradio`). When that Media storage is
+not mounted, the app uses `/data/music`. The supplied Docker image uses
+`/data/music`. The scanner finds changes within one minute; use **Rotazione →
+Local music → Scan now** to refresh immediately. The control room names the
+folder in use. Populate it through Home Assistant's Media panel or the
+deployment's supported storage tooling; do not patch files into a running Home
+Assistant app container. A source checkout uses `music/`, or the path set by
+`MAMMAMIRADIO_MUSIC_DIR`.
 
 **"Clear pool" does not delete local music files, and the songs come back.**
 This is by design and is not a bug in the button. `POST /api/playlist/purge`

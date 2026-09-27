@@ -117,6 +117,24 @@ def test_current_addon_guides_do_not_reintroduce_the_old_chart_boot_contract() -
     assert "MAMMAMIRADIO_ALLOW_YTDLP=false" in current
 
 
+def test_home_assistant_music_docs_name_each_backup_home() -> None:
+    for relative in (
+        "ha-addon/mammamiradio/DOCS.md",
+        "docs/runbooks/ha-addon.md",
+        "docs/music-sources.md",
+    ):
+        guide = _read(relative)
+        flat_guide = " ".join(guide.split())
+        assert "backup includes Media" in flat_guide, relative
+        assert "NAS library separately" in flat_guide, relative
+        assert "`/data/music`" in guide, relative
+        assert re.search(r"`/tmp/mammamiradio-data/music`[^.]{0,100}not persisted", flat_guide), relative
+    assert "| `music_folder` | `str?` | `MAMMAMIRADIO_MUSIC_FOLDER`" in _read("docs/runbooks/ha-addon.md")
+    assert "+-- /media/ (Home Assistant Media storage; outside the app backup)" in _read(
+        "ha-addon/mammamiradio/DOCS.md"
+    )
+
+
 def test_unreleased_changelogs_share_the_media_boundary() -> None:
     root = _read("CHANGELOG.md").split("## 2.", 1)[0]
     addon = _read("ha-addon/mammamiradio/CHANGELOG.md").split("## 2.", 1)[0]
