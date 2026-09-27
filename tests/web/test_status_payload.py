@@ -416,6 +416,66 @@ def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeyp
     assert "yt-dlp downloads" not in payload["fallback_sources"]
     assert payload["source_readiness"]["sources"]["charts"]["configured"] is True
     assert payload["source_readiness"]["sources"]["charts"]["status"] == "configured_unchecked"
+    assert payload["steps"][1] == "Add files in the configured music folder."
+
+
+def test_shared_golden_path_does_not_name_the_media_folder(monkeypatch):
+    class Config:
+        anthropic_api_key = ""
+        openai_api_key = ""
+        allow_ytdlp = False
+        music_dir = Path("/media/mammamiradio")
+        playlist = SimpleNamespace(jamendo_client_id="", jamendo_enabled=False)
+
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
+    payload = status_payload._golden_path_status(Config(), StationState())
+
+    assert payload["steps"][1] == "Add files in the configured music folder."
+
+
+def test_shared_golden_path_does_not_name_the_fallback_music_path(monkeypatch):
+    class Config:
+        anthropic_api_key = ""
+        openai_api_key = ""
+        allow_ytdlp = False
+        music_dir = Path("/tmp/mammamiradio-data/music")
+        playlist = SimpleNamespace(jamendo_client_id="", jamendo_enabled=False)
+
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
+    payload = status_payload._golden_path_status(Config(), StationState())
+
+    assert payload["steps"][1] == "Add files in the configured music folder."
+
+
+def test_local_library_admin_status_names_the_scan_root():
+    status = {"roots": ["/media/crate"], "complete": False, "files_found": 0, "active": 0}
+    payload = status_payload.local_library_admin_status(status, Path("/data/music"))
+    assert payload["place"] == "Media → crate"
+    assert payload["roots"] == ["/media/crate"]
+
+
+def test_local_library_admin_status_uses_the_configured_dir_without_a_scan_root():
+    payload = status_payload.local_library_admin_status({"roots": []}, Path("/data/music"))
+    assert payload["place"] == "/data/music"
+
+
+def test_local_music_place_preserves_a_literal_backslash_in_the_folder_name():
+    assert status_payload.local_music_place(Path("/media/DJ\\Crate")) == "Media → DJ\\Crate"
+
+
+def test_local_music_place_handles_missing_values_and_parent_segments():
+    assert status_payload.local_music_place(None) == "the configured music folder"
+    assert status_payload.local_music_place("") == "the configured music folder"
+    assert status_payload.local_music_place("/media/crate/../songs") == "Media → songs"
+
+
+def test_local_library_admin_status_skips_empty_roots_and_ignores_non_lists():
+    payload = status_payload.local_library_admin_status({"roots": ["", "/media/crate"]}, "/data/music")
+    assert payload["place"] == "Media → crate"
+    payload = status_payload.local_library_admin_status({"roots": "not a list"}, "/data/music")
+    assert payload["place"] == "/data/music"
 
 
 def _source_config(*, allow_ytdlp: bool = False, jamendo_client_id: str = "", jamendo_enabled: bool = False):

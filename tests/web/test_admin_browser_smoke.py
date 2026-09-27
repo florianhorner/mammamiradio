@@ -134,10 +134,12 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "same-page privacy save failure disappeared",
         "forced colors hid setup status glyphs",
         "local library row did not report active tracks",
-        "local library row did not show the configured music folder",
+        "local library row did not lead with the music place",
+        "local library place and state did not render on separate lines",
         "local library row hid scan counts",
         "local library row lost its explicit scan action",
         "local library row rebuilt upload/delete controls",
+        "an unreadable music folder was mislabeled missing",
         "incomplete scan lost its recovery",
         "incomplete scan toast lost its recovery",
     ):

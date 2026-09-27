@@ -2330,27 +2330,59 @@ async (page) => {
       roots: ['/data/music'],
     });
     const issues = {complete: false, active: 2, roots: ['/data/music']};
+    const missing = {
+      complete: false, active: 0, files_found: 0,
+      folder_missing: true, roots: ['/media/mammamiradio'],
+    };
+    const unreadable = {complete: false, active: 0, files_found: 0, roots: ['/media/crate']};
     return {
       label: document.getElementById('localSourceLabel').textContent,
       detail: document.getElementById('localSourceDetail').textContent,
+      whiteSpace: getComputedStyle(document.getElementById('localSourceDetail')).whiteSpace,
       scan: document.getElementById('localSourceScanBtn').textContent,
       uploadControls: document.querySelectorAll('#localSourceRow input[type="file"], #localSourceRow [data-action="delete"]').length,
+      scanning: localLibraryPresentation({in_progress: true, roots: ['/data/music']}),
       issues: localLibraryPresentation(issues),
       issueToast: localLibraryScanToast(issues),
+      missing: localLibraryPresentation(missing),
+      missingToast: localLibraryScanToast(missing),
+      unreadable: localLibraryPresentation(unreadable),
+      unreadableToast: localLibraryScanToast(unreadable),
     };
   });
   assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
-  assert(localLibrary.detail.includes('/data/music'),
-    'local library row did not show the configured music folder');
+  assert(localLibrary.detail.startsWith('Add files in /data/music.'),
+    `local library row did not lead with the music place: ${localLibrary.detail}`);
+  assert(localLibrary.detail.split('\n').length === 2
+      && localLibrary.detail.split('\n')[0] === 'Add files in /data/music.',
+    'local library place and state did not render on separate lines');
+  assert(localLibrary.whiteSpace === 'pre-line', 'local library detail did not preserve the place line break');
   assert(localLibrary.detail.includes('4 files found') && localLibrary.detail.includes('3 active')
       && localLibrary.detail.includes('Joins the current rotation'),
     `local library row hid scan counts: ${localLibrary.detail}`);
+  assert(localLibrary.scanning.label === 'Scanning local music'
+      && localLibrary.scanning.detail === 'Add files in /data/music.',
+    'a running scan buried the music place');
   assert(localLibrary.scan === 'Scan now' && localLibrary.uploadControls === 0,
     'local library row lost its explicit scan action; local library row rebuilt upload/delete controls');
   assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.detail.includes('Existing tracks kept')
       && localLibrary.issues.detail.includes('Scan now'), 'incomplete scan lost its recovery');
   assert(localLibrary.issueToast.includes('Existing tracks kept') && localLibrary.issueToast.includes('Scan now'),
     'incomplete scan toast lost its recovery');
+  assert(localLibrary.missing.state === 'blocked'
+      && localLibrary.missing.label === 'Local music · folder missing'
+      && localLibrary.missing.detail.startsWith('Add files in Media → mammamiradio.')
+      && localLibrary.missing.detail.includes('That folder is not there yet. Add a song, then Scan now.'),
+    'a missing music folder was described as an incomplete scan');
+  assert(localLibrary.missingToast === 'That folder is not there yet. Add a song, then Scan now.',
+    'Scan now toast did not match the missing-folder card');
+  assert(localLibrary.unreadable.state === 'degraded'
+      && !localLibrary.unreadable.detail.includes('folder is not there')
+      && !localLibrary.unreadable.detail.includes('Existing tracks kept'),
+    'an unreadable music folder was mislabeled missing');
+  assert(!localLibrary.unreadableToast.includes('folder is not there')
+      && !localLibrary.unreadableToast.includes('Existing tracks kept'),
+    'an unreadable scan toast was mislabeled missing');
 
   for (const width of [320, 375, 414, 600, 768]) {
     await page.setViewportSize({ width, height: 900 });

@@ -20,10 +20,13 @@ Click Start. Watch the log for:
 
 The add-on starts from its attributed 12-track starter catalog: no music
 provider key, download, or outbound network is required. Without an AI key, the
-hosts use stock copy and fallback voices. Operator-supplied audio in
-`/data/music` is discovered without a restart. Packaged recovery audio can
-prove transport without reporting a damaged source healthy. A successful start
-logs `Producer started`; `/readyz` stays `503 starting` until a listener connects.
+hosts use stock copy and fallback voices. Operator-supplied audio is
+discovered without a restart. When Home Assistant mounts Media, the station
+reads the Music folder setting (default `mammamiradio`, shown as Media →
+mammamiradio). When Media is not mounted, it reads `/data/music`. Packaged
+recovery audio can prove transport without reporting a damaged source healthy.
+A successful start logs `Producer started`; `/readyz` stays `503 starting`
+until a listener connects.
 
 ### 3. Install the HACS integration
 
@@ -197,15 +200,22 @@ HA Supervisor
   |           +-- playback task (streams segments to listeners)
   |           +-- packaged starter catalog (read-only, attributed music)
   |
+  +-- /media/ (Home Assistant Media storage; outside the app backup)
+  |     +-- <Music folder>/ (operator songs; default mammamiradio)
+  |
   +-- /data/ (persistent app data across restarts)
         +-- cache/   (eligible local/generated audio — survives restarts)
         |     +-- keepsakes/ (moments kept with "Keep this" — never expire)
-        +-- music/   (operator-supplied local songs; scanned in place)
+        +-- music/   (fallback local songs when Media is not mounted; scanned in place)
         +-- tmp/     (rendered segments — ephemeral)
 ```
 
 Jamendo's one prepared artifact is transient and is excluded from both
 persistent paths above.
+
+When Home Assistant mounts Media, operator songs live in `/media/<folder>`
+(the Music folder setting, default `mammamiradio`). The app does not own that
+folder's upload, disk, or backup.
 
 Supervisor's stored app options are the sole durable authority for Super
 Italian, Chaos, Festival, AI Quality, On-Air Sound, and pacing. Control-room
@@ -227,8 +237,15 @@ playing.
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.
 
-The station scans `/data/music` every minute; use **Rotazione → Local music →
+The station scans its music folder every minute; use **Rotazione → Local music →
 Scan now** to refresh immediately. Files are read in place and never moved.
+Songs in the Home Assistant Media panel are outside this app's backup. A Home
+Assistant backup includes local Media songs when that backup includes Media;
+back up a NAS library separately. `/data/music` stays in the app backup for the
+fallback path and for any songs already stored there. The station does not move
+files between the two.
+When Media is not mounted and `/data` cannot be written, the
+`/tmp/mammamiradio-data/music` fallback is not persisted in either backup.
 
 A hot backup copies retained files while the station is active, so it is not a
 copy taken from one single exact moment. After a restore, confirm
@@ -247,8 +264,9 @@ its files by hand.
    enablement settings are ignored.
 4. `mammamiradio/main.py` loads `radio.toml`, validates the packaged starter
    manifest, and makes its direct pre-normalized files available.
-5. The local-library worker scans `/data/music` at startup and every minute. A
-   manual scan refreshes it without restarting audio.
+5. The local-library worker scans the music directory chosen at startup — the
+   Media folder when `/media` is mounted, otherwise `/data/music` — at startup
+   and every minute. A manual scan refreshes it without restarting audio.
 6. Producer and playback tasks start from starter/local music. All twelve
    starter tracks complete before any starter track repeats.
 7. If Jamendo was explicitly enabled and acknowledged, its bounded preparation
@@ -417,7 +435,11 @@ Inputs to run.sh
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
   |
   +-- run.sh sets add-on containment and runtime defaults
-  |     MAMMAMIRADIO_MUSIC_DIR=/data/music
+  |     MAMMAMIRADIO_MUSIC_DIR is chosen at startup: `/media/<Music folder>` when
+  |     `/media` is a mount (default folder `mammamiradio`), `/data/music` when
+  |     Media is not mounted or the chosen folder is a symlink, or
+  |     `/tmp/mammamiradio-data/music` when Media is not mounted and `/data`
+  |     cannot be created
   |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
   |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
   |     MAMMAMIRADIO_ALLOW_YTDLP=false
