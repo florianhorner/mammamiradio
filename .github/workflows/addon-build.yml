@@ -26,6 +26,9 @@ on:
       - ".github/workflows/addon-build.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # Serialize runs on the same ref so two near-simultaneous merges don't run
 # redundant concurrent image builds.
 concurrency:
