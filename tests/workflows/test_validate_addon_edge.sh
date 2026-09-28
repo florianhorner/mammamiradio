@@ -218,7 +218,7 @@ assert_rejects "edge logo.png drift" "edge logo.png drifted from stable"
 # The listings must stay equivalent below the shared marker; only the Edge
 # warning above it may differ.
 stage_file "ha-addon/mammamiradio-edge/README.md"
-printf '%s\n' "$(sed 's/^- A continuous music stream.*/- Something else entirely/' ha-addon/mammamiradio-edge/README.md)" \
+printf '%s\n' "$(cat ha-addon/mammamiradio-edge/README.md)" "- Something else entirely, below the marker" \
   > "ha-addon/mammamiradio-edge/README.md"
 assert_rejects "edge listing body drift" "edge listing body drifted from stable"
 

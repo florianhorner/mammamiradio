@@ -198,6 +198,8 @@ def test_default_docs_check_covers_each_publication_surface(tmp_path: Path, path
         "README.md",
         "CONTRIBUTING.md",
         "ha-addon/README.md",
+        "ha-addon/mammamiradio/README.md",
+        "ha-addon/mammamiradio-edge/README.md",
         "ha-addon/mammamiradio/DOCS.md",
         "docs/REPO_MAP.md",
         "docs/agents.md",
