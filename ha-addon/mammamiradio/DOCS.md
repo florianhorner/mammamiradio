@@ -47,15 +47,15 @@ install opens directly on **First Listen** before the control room. Follow its
 vertical path; completed and existing installs keep their normal control-room
 landing, with review and repair under **Motore → Setup**:
 
-1. The opening card leads with a 27-second authored mini-show: an original music
-   bed, a privacy-aware Marco/Giulia welcome, then a handoff to the live stream.
-   No AI key or Home context is used. Source truth for live charts, Jamendo,
-   local music, bundled demo music, and recovery cover says whether primary
-   music, recovery cover, or a music repair follows the opening. Recovery audio
-   can keep the stream audible, but it is not a music rotation; bundled demo
-   music is not a promised song library.
-2. Select **Start sound check**. Confirm **Yes, I hear it** only after you hear
-   the opening, or **Not yet** for
+1. The opening card plays a reviewed English welcome from Marco and Giulia of
+   about 15 seconds, then hands off to the live stream. No AI key or Home
+   context is used. **Music details** says whether the starter collection,
+   local music, optional Jamendo, or recovery cover follows the opening, or
+   whether music needs a repair. Recovery audio can keep the stream audible,
+   but it is not a music rotation; bundled demo music is not a promised song
+   library.
+2. Select **Start my station**. Select **I can hear it** only after you hear
+   the opening, or **I can't hear you** for
    [this-device repair](../../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
    Home Assistant speakers remain an
    [optional later route](../../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
@@ -66,8 +66,12 @@ See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen
 
 On a fresh install, **Host home context** is omitted from saved add-on options
 and remains off. After you confirm you heard the station on this device,
-select **Keep Home private** without reading Home state, or select **See what
-the hosts would receive** before **Let Marco and Giulia use these details**.
+**Make it yours** starts with a recorded evening scene that uses no details
+from your home. Select **Keep Home private** without reading Home state, or
+**Set up AI and Home** after the scene (**Skip this example** goes straight
+there). In AI setup, add a writing key and select **Choose my Home details**,
+or select **Skip AI, choose Home details**; then select **Preview my Home**
+before **Share these details**.
 The preview is a fresh, detached Home
 Assistant read: it is not published into host scripts and is not sent to an AI
 provider. A preview containing only generic daylight is disclosed as
@@ -81,8 +85,9 @@ without reading Home state. An enabled choice remains active but requires a
 fresh filtered preview before **Save shared choice again**. AI-host setup remains
 locked until the review receipt is saved.
 
-Under **Optional enhancement**, select **Set up new conversations** to save
-either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
+**Set up AI and Home** during First Listen, or **Add new host conversations**
+under **Motore → Setup** later, saves either `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
 admin writes the key to `/config/secrets.env`, applies it live, and checks the
 provider without interrupting audio. First audio never needs it.
 

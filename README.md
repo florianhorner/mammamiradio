@@ -90,17 +90,21 @@ No AI key is required for your first listen. Fresh installs open **First Listen*
 at the producer desk (`/admin`). Returning installs open the control room;
 you can find First Listen under **Motore -> Setup**.
 
-1. Select **Play my station**. A reviewed English opening plays
+1. Select **Start my station**. A reviewed English opening plays
    `/stream?first_listen=1` on the current device for about 15 seconds, then
    hands off to the live stream.
    Use its speakers, headphones, Bluetooth, or AirPlay. You need no AI key or
    Home context. No HACS integration is required.
-2. Select **I hear you** only after you hear Mamma Mi Radio. Select **No sound yet**
-   for [repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
-3. Select **Finish with Home private**, or choose **Add live host writing**.
-   With default settings, Home context stays off unless you open **See what the
-   hosts would receive** and then select **Let Marco and Giulia use these details**.
-   You can choose **Keep Home private** from that review instead. If the preview
+2. Select **I can hear it** only after you hear Mamma Mi Radio. Select **I can't
+   hear you** for [repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
+3. **Make it yours** starts with a recorded evening scene that uses no details
+   from your home. Select **Keep Home private** to finish without setting
+   anything up. Otherwise select **Hear the evening**, then **Set up AI and
+   Home**; **Skip this example** goes straight to that setup. There, add a
+   writing key and select **Choose my Home details**, or select **Skip AI,
+   choose Home details**. With default settings, Home context stays off unless
+   you select **Preview my Home** and then **Share these details**. You can
+   choose **Keep Home private** from that preview instead. If the preview
    contains only generic daylight and no usable weather, the app labels it
    ambient-only. The button becomes **Let the hosts use daylight only**, with a
    warning that this would not make the show more personal yet.
@@ -162,9 +166,9 @@ ElevenLabs change only the voices.
 
 With the default Home-context setting, a fresh install starts off. The **Host
 home context** choice is omitted and remains off until you hear the station,
-inspect the filtered preview, and explicitly choose **Let Marco and Giulia use
-these details**. An explicit `MAMMAMIRADIO_HA_CONTEXT_ENABLED=true` operator
-setting overrides that guided default. The station does not poll Home state for
+inspect the filtered preview, and explicitly choose **Share these details**. An
+explicit `MAMMAMIRADIO_HA_CONTEXT_ENABLED=true` operator setting overrides that
+guided default. The station does not poll Home state for
 host material while context is off. You can keep Home private without fetching
 a preview. If you want household details on air, mute any entity the hosts
 should ignore. Previewing does not publish the snapshot into host scripts or

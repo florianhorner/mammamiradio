@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
+import re
 import sys
 import types
 from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +21,105 @@ import aiohttp
 import pytest
 from aiohttp import web as aiohttp_web
 
+from mammamiradio.core.first_listen_show import ADMIN_FIRST_LISTEN_SHOW_RELATIVE_PATH
+
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = ROOT / "custom_components" / "mammamiradio"
 MEDIA_SOURCE = COMPONENT / "media_source.py"
 CONST = COMPONENT / "const.py"
 DOC = ROOT / "docs" / "integrations" / "ha-integration.md"
+ADMIN_TEMPLATE = ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+SPOKEN_ASSETS = ROOT / "mammamiradio" / "assets" / "demo" / "spoken_assets.json"
+
+# An attribute only that First Listen button carries in admin.html. The install
+# docs must quote the text the button shows.
+FIRST_LISTEN_BUTTONS = {
+    "start": 'id="firstListenPlayBtn"',
+    "heard": 'id="firstListenHeardBtn"',
+    "not_heard": 'id="firstListenNotYetBtn"',
+    "hear_evening": 'data-household-example="quiet"',
+    "skip_example": 'id="firstListenProofSkipBtn"',
+    "set_up": 'id="firstListenMakeYoursBtn"',
+    "choose_home": 'id="firstListenConnectionNext"',
+    "skip_ai": 'id="firstListenConnectionSkip"',
+    "keep_private": 'id="firstListenKeepOffBtn"',
+    "preview": 'id="firstListenPreviewBtn"',
+    "share": 'id="firstListenEnableContextBtn"',
+    "listen": 'id="firstListenListenerBtn"',
+    "save_check": 'id="firstListenSaveAttemptBtn"',
+}
+# Buttons whose text the page script also sets. A rename made only in the script
+# would leave the markup agreeing with stale docs, so the script must still
+# contain each of these labels as a string.
+FIRST_LISTEN_SCRIPT_SET = ("start", "choose_home", "keep_private", "preview", "share", "listen", "save_check")
+# Which buttons each install doc walks the reader through ("controls" is the
+# finish screen's unlabelled Open station controls button).
+FIRST_LISTEN_INSTALL_DOCS = {
+    "README.md": (
+        "start",
+        "heard",
+        "not_heard",
+        "hear_evening",
+        "skip_example",
+        "set_up",
+        "choose_home",
+        "skip_ai",
+        "keep_private",
+        "preview",
+        "share",
+        "listen",
+        "controls",
+    ),
+    "ha-addon/README.md": (
+        "start",
+        "heard",
+        "not_heard",
+        "skip_example",
+        "set_up",
+        "choose_home",
+        "skip_ai",
+        "keep_private",
+        "preview",
+        "share",
+    ),
+    "ha-addon/mammamiradio/DOCS.md": (
+        "start",
+        "heard",
+        "not_heard",
+        "skip_example",
+        "set_up",
+        "choose_home",
+        "skip_ai",
+        "keep_private",
+        "preview",
+        "share",
+    ),
+    "docs/integrations/ha-integration.md": (
+        "start",
+        "set_up",
+        "choose_home",
+        "skip_ai",
+        "keep_private",
+        "preview",
+        "share",
+        "save_check",
+    ),
+}
+# Labels First Listen used to show. A doc that still names one sends readers
+# looking for a button that no longer exists.
+RETIRED_FIRST_LISTEN_LABELS = (
+    "Play my station",
+    "I hear you",
+    "No sound yet",
+    "Yes, I hear it",
+    "Not yet",
+    "Finish with Home private",
+    "Add live host writing",
+    "See what the hosts would receive",
+    "Let Marco and Giulia use these details",
+    "Optional enhancement",
+    "Set up new conversations",
+)
 
 
 class _BrowseError(Exception):
@@ -268,21 +365,20 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     rendered_first_listen = " ".join(first_listen.split())
     lowered_first_listen = rendered_first_listen.lower()
 
-    stream_proof = first_listen.index("`/stream?first_listen=1`")
-    human_confirmation = first_listen.index("**I hear you**")
-    privacy_choice = first_listen.index("**Keep Home private**")
+    stream_proof = rendered_first_listen.index("`/stream?first_listen=1`")
+    human_confirmation = rendered_first_listen.index("**I can hear it**")
+    privacy_choice = rendered_first_listen.index("**Keep Home private**")
     assert stream_proof < human_confirmation < privacy_choice
-    assert "**Play my station**" in first_listen
-    assert "**No sound yet**" in first_listen
-    assert "**Finish with Home private**" in first_listen
-    assert "**Add live host writing**" in first_listen
+    assert "**Start my station**" in rendered_first_listen
+    assert "**I can't hear you**" in rendered_first_listen
+    assert "**Set up AI and Home**" in rendered_first_listen
     assert "about 15 seconds" in first_listen
     assert "Start sound check" not in first_listen
     assert "Yes, I hear it" not in first_listen
     assert "current device" in lowered_first_listen or "device in front of you" in lowered_first_listen
     assert any(route in first_listen for route in ("Bluetooth", "AirPlay"))
-    assert "**See what the hosts would receive**" in rendered_first_listen
-    assert "**Let Marco and Giulia use these details**" in rendered_first_listen
+    assert "**Preview my Home**" in rendered_first_listen
+    assert "**Share these details**" in rendered_first_listen
     assert "**Let the hosts use daylight only**" in rendered_first_listen
     assert "only generic daylight and no usable weather" in rendered_first_listen
     assert "No HACS integration" in first_listen
@@ -305,6 +401,72 @@ def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choic
     assert "current device" in speaker_section
     assert "firsthand confirmation" in speaker_section
     assert hacs_install < speaker_heading
+
+
+def _normalized_doc_text(text: str) -> str:
+    """Collapse wrapping and typographic apostrophes the way a reader sees them."""
+    return " ".join(text.replace("’", "'").split())
+
+
+def _button_text(html: str, attribute: str, start: int = 0) -> str | None:
+    """Text of the first button at or after ``start`` carrying ``attribute``."""
+    tag = re.compile(rf"<button\b(?=[^>]*(?<![\w-]){re.escape(attribute)})[^>]*>([^<]+)</button>")
+    match = tag.search(html, start)
+    return " ".join(unescape(match.group(1)).split()) if match else None
+
+
+def _first_listen_buttons(html: str) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for key, attribute in FIRST_LISTEN_BUTTONS.items():
+        text = _button_text(html, attribute)
+        assert text, f"admin.html has no First Listen button with {attribute}; update FIRST_LISTEN_BUTTONS"
+        labels[key] = text
+    # The header has another button with the same handler, so read the one on
+    # the finish screen, after the listen button.
+    finish = html.index(FIRST_LISTEN_BUTTONS["listen"])
+    controls = _button_text(html, 'onclick="openFirstListenStation()"', finish)
+    assert controls, "admin.html has no openFirstListenStation() button on the finish screen"
+    labels["controls"] = controls
+    return labels
+
+
+def test_install_docs_name_the_current_first_listen_buttons() -> None:
+    """Install docs quote First Listen's buttons exactly as admin.html renders them.
+
+    Two First Listen changes shipped while these docs still named the old
+    buttons, and a literal pin in this file kept agreeing with the stale docs.
+    Reading the labels from the template makes the next rename fail here.
+    """
+    html = ADMIN_TEMPLATE.read_text(encoding="utf-8")
+    labels = _first_listen_buttons(html)
+    script_renamed = [labels[key] for key in FIRST_LISTEN_SCRIPT_SET if f"'{labels[key]}'" not in html]
+    assert not script_renamed, (
+        f"admin.html's script no longer sets these labels; rename the markup, script and docs together: "
+        f"{script_renamed}"
+    )
+    for relative, keys in FIRST_LISTEN_INSTALL_DOCS.items():
+        doc = _normalized_doc_text((ROOT / relative).read_text(encoding="utf-8"))
+        missing = [labels[key] for key in keys if f"**{_normalized_doc_text(labels[key])}**" not in doc]
+        assert not missing, f"{relative} does not name these First Listen buttons: {missing}"
+        retired = [label for label in RETIRED_FIRST_LISTEN_LABELS if f"**{label}**" in doc]
+        assert not retired, f"{relative} still names retired First Listen buttons: {retired}"
+
+
+def test_install_docs_state_the_measured_first_listen_opening_length() -> None:
+    """The opening length in the docs comes from the asset First Listen plays."""
+    manifest = json.loads(SPOKEN_ASSETS.read_text(encoding="utf-8"))
+    served = ADMIN_FIRST_LISTEN_SHOW_RELATIVE_PATH.as_posix()
+    durations = [asset["duration_seconds"] for asset in manifest["assets"] if asset.get("path") == served]
+    assert durations, f"spoken_assets.json has no duration for {served}"
+    seconds = round(durations[0])
+    for relative in ("README.md", "ha-addon/README.md", "ha-addon/mammamiradio/DOCS.md"):
+        doc = _normalized_doc_text((ROOT / relative).read_text(encoding="utf-8"))
+        assert f"about {seconds} seconds" in doc, f"{relative} does not give the {seconds}-second opening length"
+        assert "27-second" not in doc, f"{relative} still describes the retired 27-second opening"
+    readme = _normalized_doc_text((ROOT / "README.md").read_text(encoding="utf-8"))
+    claimed = re.findall(r"(\d+)-second First Listen opening", readme)
+    assert claimed, "README.md no longer states the First Listen opening length in its key table"
+    assert {int(value) for value in claimed} == {seconds}, f"README.md claims {claimed}-second openings, not {seconds}"
 
 
 def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:

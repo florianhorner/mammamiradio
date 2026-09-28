@@ -390,6 +390,9 @@ branch code, test credentials, or synthetic state to the live home.
 When behavior changes, update the matching docs in the same change:
 
 - `README.md` for user-facing setup and route changes
+- `ha-addon/README.md` and `ha-addon/mammamiradio/DOCS.md` for Home Assistant
+  install steps and First Listen labels
+- `docs/integrations/` for integration setup and playback routes
 - `docs/architecture.md` for runtime flow and system design changes
 - `CLAUDE.md` for the codebase map used by coding agents
 - `docs/troubleshooting.md` for failure modes users will actually hit

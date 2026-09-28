@@ -119,8 +119,9 @@ browser playback.
 The privacy decision is unlocked by the sound check on the current device, not
 by this optional route: playing to a speaker here writes no First Listen
 receipt. In First Listen, select **Keep Home private** without reading Home
-state, or select **See what the hosts would receive** before **Let Marco and
-Giulia use these details**. The preview is a fresh,
+state, or go through **Set up AI and Home** and **Choose my Home details** (or
+**Skip AI, choose Home details**) to **Preview my Home** before **Share these
+details**. The preview is a fresh,
 detached read: it does not make the result available to host scripts or send it
 to an AI provider. If Home Assistant offers only generic daylight, First Listen
 discloses it as ambient-only and not meaningful personalization, and recommends
@@ -142,7 +143,7 @@ If First Listen says the listening check was not saved, select **Save my sound
 check**. That action only retries the local receipt write; it does not replay
 the station or send another playback request. A refresh in the same app process
 restores that recovery choice. If the app restarted and the unsaved proof is
-gone, First Listen says so and asks you to refresh, then select **Play my
+gone, First Listen says so and asks you to refresh, then select **Start my
 station** on this device once more.
 
 If the privacy choice takes effect but its setup review is not saved, the live
