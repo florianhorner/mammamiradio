@@ -30,9 +30,12 @@ as in-process asyncio tasks.
 
 - **Python is 3.12 here, not 3.11.** The repo targets `>=3.11` and the Conductor
   bootstrap defaults to `python3.11`, which is not installed on this VM. Use
-  `python3` (3.12) — `pip install -e .` and the full suite pass on it. A fresh
-  venv ships setuptools < the `>=82.0.1` build requirement, so the update script
-  upgrades pip/setuptools/wheel before the editable install.
+  `python3` (3.12) to create the environment, then follow the locked installation
+  sequence in [Local setup](CONTRIBUTING.md#local-setup) before running tests.
+  Bootstrap may have installed newer runtime versions; the full suite checks
+  that installed versions match `requirements.txt`. A fresh venv ships
+  setuptools < the `>=82.0.1` build requirement, so the update script upgrades
+  pip/setuptools/wheel before the editable install.
 
 - **`python3.12-venv` is required before `python3 -m venv`.** The default image
   ships Python 3.12 without `ensurepip`. Creating `.venv` in that state yields a

@@ -1,6 +1,17 @@
 name: Docker (standalone image)
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/docker.yml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "mammamiradio/**"
+      - "radio.toml"
+      - "model_registry.toml"
+      - "scripts/docker-entrypoint.sh"
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -15,7 +26,23 @@ env:
   MMR_REQUIRE_HA_RECEIPTS: ${{ vars.MMR_REQUIRE_HA_RECEIPTS || '0' }}
 
 jobs:
+  standalone-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build and check the standalone image
+        run: |
+          docker build --platform linux/amd64 --tag mammamiradio:pr-smoke .
+          docker run --rm --network none --entrypoint python mammamiradio:pr-smoke -m pip check
+
   build-and-push:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read

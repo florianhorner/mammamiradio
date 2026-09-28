@@ -312,3 +312,102 @@ def test_static_route_refuses_a_symlink_cycle(tmp_path, monkeypatch):
 
     assert streamer._resolve_static_file("loop.svg") is None
     assert streamer._resolve_static_file("../../etc/passwd") is None
+
+
+@pytest.fixture
+def static_tree(tmp_path, monkeypatch):
+    from mammamiradio.web import streamer
+
+    static = tmp_path / "static"
+    (static / "nested").mkdir(parents=True)
+    (static / "flat.css").write_text("body { color: red; }")
+    (static / "nested" / "asset.js").write_text("export const ready = true;")
+    (static / "alias.css").symlink_to("flat.css")
+    (static / "directory-alias").symlink_to("nested", target_is_directory=True)
+    (tmp_path / "outside.css").write_text("private content")
+    (static / "escape.css").symlink_to(tmp_path / "outside.css")
+    (static / "broken.css").symlink_to("missing.css")
+    (static / "cycle.css").symlink_to("cycle.css")
+    monkeypatch.setattr(streamer, "_STATIC_DIR", static)
+    return static
+
+
+@pytest.mark.parametrize(
+    ("filename", "target"),
+    [("flat.css", "flat.css"), ("nested/asset.js", "nested/asset.js"), ("alias.css", "flat.css")],
+)
+@pytest.mark.asyncio
+async def test_static_route_serves_contained_files_and_aliases(static_tree, filename, target):
+    from mammamiradio.web import streamer
+
+    expected = (static_tree / target).resolve()
+    assert streamer._resolve_static_file(filename) == expected
+    async with AsyncClient(transport=ASGITransport(app=_make_app()), base_url="http://test") as client:
+        response = await client.get(f"/static/{filename}")
+    assert response.status_code == 200
+    assert response.content == expected.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "",
+        "nested",
+        "missing.css",
+        "/flat.css",
+        "../outside.css",
+        "nested/../../outside.css",
+        "nested/../flat.css",
+        "flat.css\x00",
+        "escape.css",
+        "broken.css",
+        "cycle.css",
+        "directory-alias/asset.js",
+    ],
+)
+def test_static_route_refuses_non_assets(static_tree, filename):
+    from mammamiradio.web import streamer
+
+    # Test the resolver directly: HTTP clients may normalize traversal first.
+    assert streamer._resolve_static_file(filename) is None
+
+
+@pytest.mark.parametrize("filename", ["escape.css", "broken.css", "cycle.css", "directory-alias/asset.js"])
+@pytest.mark.asyncio
+async def test_static_route_unservable_links_return_404(static_tree, filename):
+    async with AsyncClient(transport=ASGITransport(app=_make_app()), base_url="http://test") as client:
+        response = await client.get(f"/static/{filename}")
+    assert response.status_code == 404
+    assert "private content" not in response.text
+
+
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError, ValueError])
+@pytest.mark.parametrize("stage", ["root", "iteration", "resolve", "stat"])
+def test_static_route_filesystem_failures_return_none(static_tree, monkeypatch, stage, error_type):
+    from mammamiradio.web import streamer
+
+    path_type = type(static_tree)
+    target = static_tree / "flat.css"
+    if stage == "iteration":
+        original_walk = path_type.rglob
+
+        def broken_walk(path, *args, **kwargs):
+            if path == static_tree:
+                yield path / "unrelated.css"
+                raise error_type("unreadable static directory")
+            yield from original_walk(path, *args, **kwargs)
+
+        monkeypatch.setattr(path_type, "rglob", broken_walk)
+    else:
+        method = "is_file" if stage == "stat" else "resolve"
+        original = getattr(path_type, method)
+        failing_path = static_tree if stage == "root" else target
+
+        def broken_lookup(path, *args, **kwargs):
+            if path == failing_path:
+                raise error_type("unreadable static asset")
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(path_type, method, broken_lookup)
+
+    assert streamer._resolve_static_file("flat.css") is None

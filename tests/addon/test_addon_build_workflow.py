@@ -30,6 +30,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "addon-build.yml"
 
@@ -40,6 +42,21 @@ FORBIDDEN_OVERRIDE_KEYS = ("songs_between_banter", "ad_spots_per_break", "lookah
 
 def _workflow_text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_ci_workflow_permissions_are_least_privilege():
+    workflow = yaml.safe_load(_workflow_text())
+    assert workflow["permissions"] == {"contents": "read"}
+    effective_permissions = {
+        name: job.get("permissions", workflow["permissions"]) for name, job in workflow["jobs"].items()
+    }
+    assert effective_permissions == {
+        "validate": {"contents": "read"},
+        "build": {"contents": "read"},
+        "media-proof": {"contents": "read"},
+        "push": {"packages": "write"},
+        "smoke": {"contents": "read", "packages": "read"},
+    }
 
 
 # ---------------------------------------------------------------------------
