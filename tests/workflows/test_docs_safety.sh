@@ -575,7 +575,7 @@ expect_listing_arg_rejects "stacked-reference-definitions" "ha-addon/mammamiradi
 # Attribute-shaped prose inside a code span is not markup.
 # shellcheck disable=SC2016  # the backticks are literal code-span markers
 expect_listing_arg_accepts "inline-code-attribute" "ha-addon/mammamiradio-edge/README.md" \
-  '# Listing\n\nSet `data = 5` and `src=../x.png` in the example.\n'
+  '# Listing\n\nSet `data = 5` and `src=../x.png` in the example, or write `[a link](../mammamiradio/DOCS.md)`.\n'
 expect_listing_arg_rejects "html-unquoted-srcset" "ha-addon/mammamiradio/README.md" \
   '# Listing\n\n<img src=https://example.invalid/a.png srcset="https://example.invalid/a.png 1x, ../b.png 2x">\n' \
   "relative link in a store listing"

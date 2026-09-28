@@ -849,10 +849,11 @@ _CODE_SPAN_RE = re.compile(r"`+[^`]*`+")
 
 def _listing_targets(paragraph: str) -> list[str]:
     targets: list[str] = []
-    links, _ = markdown_links(paragraph)
+    # `[x](../y)` or `data = 5` inside a code span is prose about markup, not markup.
+    prose = _CODE_SPAN_RE.sub(" ", paragraph)
+    links, _ = markdown_links(prose)
     targets.extend(link.target for link in links)
-    # `data = 5` inside a code span is prose about code, not an attribute.
-    for match in _HTML_TARGET_RE.finditer(_CODE_SPAN_RE.sub(" ", paragraph)):
+    for match in _HTML_TARGET_RE.finditer(prose):
         value = next(group for group in match.groups() if group is not None)
         # srcset lists "url descriptor, url descriptor"; every URL counts.
         for candidate in value.split(","):
