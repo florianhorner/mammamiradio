@@ -82,8 +82,7 @@ any entity locally if needed. Enabling requires that fresh preview.
 If that live privacy choice applies but the setup review cannot be saved, the
 choice is not rolled back. The private path offers **Save private choice again**
 without reading Home state. An enabled choice remains active but requires a
-fresh filtered preview before **Save shared choice again**. AI-host setup remains
-locked until the review receipt is saved.
+fresh filtered preview before **Save shared choice again**.
 
 **Set up AI and Home** during First Listen, or **Add new host conversations**
 under **Motore → Setup** later, saves either `ANTHROPIC_API_KEY` or
