@@ -33,14 +33,15 @@ IMAGE_PATHS="ha-addon mammamiradio proof/media pyproject.toml requirements.txt r
 
 # Paths whose content enters the add-on image or its Supervisor-facing metadata:
 # the sources addon-build.yml stages into the build context ("Copy source into
-# addon build context": mammamiradio/, pyproject.toml, model_registry.toml) plus
+# addon build context": mammamiradio/, pyproject.toml, requirements.txt,
+# model_registry.toml) plus
 # the COPY lines in ha-addon/mammamiradio/Dockerfile (radio.toml, rootfs/), the
 # stable and edge add-on directories (config, translations, access policy), and
 # the workflow that picks the base image and build args. The drift check (I3)
 # exempts only a valid version-line change in the edge config.
 # It must stay a subset of IMAGE_PATHS and cover every staged source;
 # tests/workflows/test_cut_edge_release.sh asserts both directions.
-IMAGE_CONTENT_PATHS="ha-addon/mammamiradio ha-addon/mammamiradio-edge mammamiradio pyproject.toml radio.toml model_registry.toml .github/workflows/addon-build.yml"
+IMAGE_CONTENT_PATHS="ha-addon/mammamiradio ha-addon/mammamiradio-edge mammamiradio pyproject.toml requirements.txt radio.toml model_registry.toml .github/workflows/addon-build.yml"
 
 # The edge add-on config whose `version:` field IS the image tag the Supervisor
 # pulls. cut-edge-release.sh sets this before sourcing; the default serves every

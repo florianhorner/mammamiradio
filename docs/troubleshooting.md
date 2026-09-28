@@ -10,12 +10,15 @@ Start with the way you run Mamma Mi Radio. Home Assistant app operators and loca
 
 ## Local source or Docker
 
-For a source checkout, use the project environment and install both the app and developer tools:
+For a source checkout, use the project environment and install developer tools before the locked runtime and app:
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 ./start.sh
 ```
 
@@ -26,7 +29,7 @@ docker compose ps
 docker compose logs --tail=200
 ```
 
-If a source run or test reports a missing module such as `dotenv`, activate `.venv` and repeat the install command above. If Docker is unhealthy, keep the first error from `docker compose logs` and use the same symptom guide below.
+If a source run or test reports a missing module such as `dotenv` or a runtime-lock version mismatch, activate `.venv` and repeat the four `python -m pip` commands above. See [Local setup](../CONTRIBUTING.md#local-setup) for the full setup guide. If Docker is unhealthy, keep the first error from `docker compose logs` and use the same symptom guide below.
 
 ## Shared readiness checks
 

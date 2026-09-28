@@ -92,8 +92,19 @@ private durable system for strategy or relationship context.
 
 ## Commands
 
-- Setup: `python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .`
-- Install: `pip install -e .`
+Set up the environment before running the app or tests:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
+```
+
+For an existing environment, activate it and repeat the four `python -m pip` commands to restore the runtime lock. See [Local setup](CONTRIBUTING.md#local-setup).
+
 - Run full local stack: `./start.sh`
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
 - Test: `pytest tests/` or `make test` (with coverage)
@@ -110,7 +121,7 @@ private durable system for strategy or relationship context.
 
 ## Docker / Home Assistant
 
-- `Dockerfile`: standalone container image with Python 3.11 + FFmpeg
+- `Dockerfile`: standalone container image with Python 3.14 + FFmpeg
 - `docker-compose.yml`: one-command run for non-HA users
 - `.dockerignore`: keeps builds clean
 - `ha-addon/`: Home Assistant add-on scaffold

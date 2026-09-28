@@ -220,7 +220,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           python -m pip install uv==0.10.11
-          python -m pip install -e . -r requirements-dev.txt
+          python -m pip install -r requirements-dev.txt
+          python -m pip install --force-reinstall --require-hashes -r requirements.txt
+          python -m pip install --no-deps -e .
+          python -m pip check
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

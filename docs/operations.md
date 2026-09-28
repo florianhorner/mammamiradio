@@ -952,7 +952,9 @@ same structured shape under `active_setup_csrf_stale`.
 docker compose up
 ```
 
-The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`. Source checkouts default to `./music`; set `MAMMAMIRADIO_MUSIC_DIR` to override either layout. The local-library scanner runs every 60 seconds and **Rotazione → Local music → Scan now** triggers an immediate rescan without restart.
+The `Dockerfile` builds a standalone image with Python 3.14 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`. Source checkouts default to `./music`; set `MAMMAMIRADIO_MUSIC_DIR` to override either layout. The local-library scanner runs every 60 seconds and **Rotazione → Local music → Scan now** triggers an immediate rescan without restart.
+
+Both container builds install hash-verified runtime dependencies from the root `requirements.txt`, then install the application without resolving dependencies again and run `pip check`. Quality CI and the add-on media-proof jobs use that same lock, installed after developer tools. Regenerate the lock when changing runtime dependencies; changing only a lower bound in `pyproject.toml` is insufficient. The lock is also part of the Edge image-content check, so a previous image cannot represent a newer dependency set. Build-system dependencies are still resolved separately in pip's isolated build environment. The standalone contract-drift workflow and Conductor bootstrap remain separate source-resolution checks; the locked Quality suite includes the frozen integration tests.
 
 The container binds to `0.0.0.0`. Set `ADMIN_TOKEN` in `.env` to pin a known
 value. If it is unset, the entrypoint generates one and writes it to
