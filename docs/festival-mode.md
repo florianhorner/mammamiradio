@@ -136,24 +136,27 @@ reconstructed after an update rematerializes an older Supervisor value.
 
 ## Verification
 
+Each command prompts for the admin password. Replace `admin` if you configured
+a different username.
+
 ```bash
 # Check current state
-curl -s -u admin:YOUR_PASSWORD http://localhost:8000/api/party
+curl -s --user admin http://localhost:8000/api/party
 
 # Enable Festival Mode
 curl -s -X POST http://localhost:8000/api/party \
   -H "Content-Type: application/json" \
-  -u admin:YOUR_PASSWORD \
+  --user admin \
   -d '{"action":"enable","mode":"festival"}'
 
 # Confirm active
-curl -s -u admin:YOUR_PASSWORD http://localhost:8000/api/party
+curl -s --user admin http://localhost:8000/api/party
 # → {"active":true,"mode":"festival"}
 
 # Disable
 curl -s -X POST http://localhost:8000/api/party \
   -H "Content-Type: application/json" \
-  -u admin:YOUR_PASSWORD \
+  --user admin \
   -d '{"action":"disable"}'
 ```
 

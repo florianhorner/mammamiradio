@@ -140,18 +140,18 @@ This lab remains the way to exercise the optional Home Assistant speaker path.
 
 Then, in **First Listen** (the automatic fresh-install landing):
 
-1. Confirm that the opening card leads with the authored 27-second mini-show:
-   station music, the privacy-aware Marco/Giulia opening, then the live stream.
-   It must say that no AI key or Home context is used. Expand **What feeds the
-   station after the opening** only as supporting detail. Local music should be
-   ready; charts and Jamendo are intentionally unavailable; recovery/demo audio
-   must be described as a limitation rather than a music source.
-2. Mute the machine before confirming, select **Start sound check**, then **Not
-   yet**, and check that the repair guidance names this device's volume and mute
-   and offers to try again here.
-3. Unmute, select **Try this device again**, and listen for the music bed,
+1. Select **Start my station** and confirm the recorded English opening flows into
+   live music on the same player. Neither audio source uses an AI key or Home
+   context. **Music details** shows ready local music and optional setup choices;
+   unavailable or idle sources stay in
+   **Technical details**. Recovery alone must not imply primary music is ready.
+   The repair action must open **Music sources** once capabilities are checked.
+2. For a separate repair pass, use `replay`, mute the machine before selecting
+   **Start my station**, then choose **I can’t hear you**. Check that the repair
+   guidance names this device's volume and mute and offers to try again here.
+3. Unmute, select **Play on this device again**, and listen for the music bed,
    Mamma Mi Radio identity, and the Marco/Giulia exchange.
-4. Only after hearing the opening, select **Yes, I hear it**.
+4. Only after hearing the opening, select **I can hear it**.
 5. Separately, exercise the optional speaker route outside First Listen: in
    Home Assistant, **Media → Mamma Mi Radio → Mamma Mi Radio Live** to **Mac Lab
    Speaker**, and confirm the room by ear.

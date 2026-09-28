@@ -99,13 +99,10 @@ Assistant. The media-player ownership choice above does not change this route.
 1. Open the Mamma Mi Radio add-on Web UI. A fresh unfinished install opens
    **First Listen** automatically; completed installs review or repair it under
    **Motore → Setup**.
-2. The opening card puts a reviewed 27-second Mamma Mi Radio mini-show on deck:
-   an original music bed plus a privacy-aware Marco/Giulia welcome, then a
-   handoff to the live stream. It uses neither an AI key nor Home context.
-   Source readiness for live charts, Jamendo, local music, bundled demo music,
-   and recovery cover says whether primary music, recovery cover, or a music
-   repair follows the opening; it never blocks the speaker controls. Bundled
-   demo music is reported as unavailable when this build has no song library.
+2. First Listen offers a recorded welcome, then an English Marco/Giulia opening
+   when playback starts. Neither uses an AI key or Home details. **Music details**
+   shows ready and optional music sources; unavailable legacy sources and idle
+   backups stay in **Technical details**.
 3. Open Home Assistant's own media browser: **Media → Mamma Mi Radio → Mamma Mi
    Radio Live**, and send it to one physical speaker — not
    `media_player.mammamiradio`. The equivalent service call is **Developer tools
@@ -122,12 +119,16 @@ browser playback.
 The privacy decision is unlocked by the sound check on the current device, not
 by this optional route: playing to a speaker here writes no First Listen
 receipt. In First Listen, select **Keep Home private** without reading Home
-state, or select **See what the hosts would receive** before **Let Marco and
-Giulia use these details**. The preview is a fresh,
+state, or go through **Set up AI and Home** and **Choose my Home details** (or
+**Skip AI, choose Home details**) to **Preview my Home** before **Share these
+details**. The preview is a fresh,
 detached read: it does not make the result available to host scripts or send it
 to an AI provider. If Home Assistant offers only generic daylight, First Listen
 discloses it as ambient-only and not meaningful personalization, and recommends
-the private path. AI-host keys remain optional and come afterward.
+the private path. AI-host keys remain optional. Add a writing key during
+**Set up AI and Home**, select **Skip AI, choose Home details** to continue
+without one, or add it later under **Motore → Setup** with **Add new host
+conversations**.
 
 For branch development, use the
 [disposable local Home Assistant lab](../runbooks/first-listen-local-ha.md)
@@ -141,18 +142,17 @@ disposable HAOS/add-on test.
 
 ### First-listen repair
 
-If First Listen says the listening check was not saved, select **Restore sound
+If First Listen says the listening check was not saved, select **Save my sound
 check**. That action only retries the local receipt write; it does not replay
 the station or send another playback request. A refresh in the same app process
 restores that recovery choice. If the app restarted and the unsaved proof is
-gone, First Listen says so and asks you to refresh, then select **Start sound
-check** on this device once more.
+gone, First Listen says so and asks you to refresh, then select **Start my
+station** on this device once more.
 
 If the privacy choice takes effect but its setup review is not saved, the live
 choice remains in force. For the private choice, select **Save private choice
 again**; this does not fetch Home state. For an enabled choice, make the required
-fresh filtered preview, then select **Save shared choice again**. Optional AI
-setup stays locked until that local review receipt is saved.
+fresh filtered preview, then select **Save shared choice again**.
 
 If Home Assistant accepted playback but the room is quiet — this only applies
 to the optional physical-speaker route above, not the current-device stream:

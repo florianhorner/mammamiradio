@@ -46,6 +46,37 @@ On desktop, the **live deck** (`.mmr-deck`, containing `.mmr-console` + `.mmr-ta
 is pinned to the top and never scrolls away. It carries the whole live glance in
 one block:
 
+The deck has two backdrop states. At rest it paints none at all: the page
+atmosphere (Sun Glow, grain, warm top gradient; see `system.md`) runs straight
+through it, because at `scrollTop 0` there is nothing behind the deck to hide.
+Once it pins, a 1px sentinel above it (`.mmr-deck-sentinel`, watched by
+`initDeckPinned()`) adds `.is-pinned`, which arms the opaque `var(--bg)` fill
+plus a soft drop shadow. The shadow is the affordance: without it a pinned deck
+looks identical to an unpinned one and nothing tells the operator that content
+is passing underneath.
+
+The fill snaps on; only the shadow fades. `.mmr-tabbar` carries no background of
+its own, so anything that cross-fades the fill lets the page scroll through the
+tab row for the length of the fade. `transition` therefore names `box-shadow`
+alone, and the resting shadow is the pinned geometry at zero alpha (`box-shadow`
+does not interpolate from `none`).
+
+A permanent opaque backdrop is the bug this replaced. A flat fill over the
+warmest part of the atmosphere reads as a hard-edged rectangle. Do not
+reintroduce one; `test_admin_mobile_invariants.py` asserts the deck is
+transparent at rest.
+
+`scroll-padding-top` is derived from the live deck height by the same function,
+not hardcoded, because the console collapses and expands with `is-idle`. Without
+it, tabbing into a scrolled panel parks the focused control underneath the deck.
+
+On mobile (`<=768px`) the deck is `position: static` and scrolls away with the
+page, so nothing passes underneath it. The sentinel still leaves the viewport
+there, so `.is-pinned` can still be set; the phone block disarms the fill rather
+than pairing the rule with a `min-width: 769px` twin. A 768/769 pair leaves
+fractional viewport widths (routine under browser zoom) matching neither block,
+and the deck pins at those widths with no fill.
+
 - **Left:** now-playing (segment type `.status-chip`, title, artist, progress),
   Skip / Stop, the compact token cost counter, and two context-sensitive controls:
   Ban (songs only) and Keep this (voice segments only, plus a short grace after a
@@ -73,20 +104,23 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
 
 0. **First Listen** (gated — visible only while required or showing its one-time success)
    — full onboarding takeover. After the success exit, the tab leaves the chrome; repair
-   and replay live in **Motore → Setup** and the setup strip.
-1. **Diretta** — `Modalità live` (Chaos/Festival/Super Italian toggles),
-   `Azioni rapide` (fewer banter / fewer ads / reload / flag, plus a Lancia-red
-   `Purge queue`), `Cadenza` (pacing sliders). The `Azioni immediate` triggers
-   moved up into the console.
-2. **Scaletta** (default tab after onboarding) — forward-only rundown of up to ~8 upcoming items,
+   and replay live in **Motore → Setup** and the setup strip. Leaving a replay
+   restores saved completion without stopping audio.
+1. **Scaletta** (default tab after onboarding) — forward-only rundown of up to ~8 upcoming items,
    each with a compact relative label (`next` / `after` / `later`) + rough duration.
    Pending listener requests sit in a strip at the top and collapse when empty. No
    played history.
+2. **Diretta** — `Modalità live` (Chaos/Festival/Super Italian toggles),
+   `Azioni rapide` (fewer banter / fewer ads / reload / flag, plus a Lancia-red
+   `Purge queue`), `Cadenza` (pacing sliders). The `Azioni immediate` triggers
+   moved up into the console.
 3. **Rotazione** — Hunt-first music library. Record Hunt is the sole primary
    steering control: it takes a plain-language direction, keeps the full rotation
    visible, highlights its favored picks, and leaves every row's `Next` action
-   available. Exact-record search is secondary. Source imports, shuffle, bans,
-   and Clear pool sit in a collapsed **Library tools** disclosure; an empty pool
+   available. The current direction sits above the hunt input. Jamendo settings
+   stay in Rotazione’s **Music source settings**, including when already working.
+   Exact-record search is secondary. Source imports, shuffle, bans,
+   and Clear pool sit in compact rows within **Library tools**; an empty pool
    offers only recovery sources that the current capabilities expose. Row
    checkboxes select songs to ban; the selection is keyed by artist/title and
    survives the 3s status poll (it used to be wiped on every rebuild).
@@ -101,7 +135,7 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    one.
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
    context), `Costs` (token cost counter + cost split + segment counts — always visible),
-   `Configuration` (AI Quality and On-Air Sound controls), and `Setup` (a
+   `Configuration` (AI Quality, On-Air Sound, and Transitions controls), and `Setup` (a
    collapsible `<details>` that auto-collapses when every readiness item is
    ready; shows an `All ready ✓` blue badge when collapsed).
 
@@ -131,6 +165,9 @@ Italian headlines and station-feel words).
 
 ## Interaction standards
 
+- The header's **Listener view** link opens `/listen` in the same tab. If the
+  First Listen player is active, it uses the existing listener handoff so that
+  player remains owned by the admin page. The link is not a play control.
 - Minimum touch target: 44px on control buttons, filter chips/pills (`.filter-pill`), and section tabs (`.mmr-tab`). Compact status/mode/segment badge chips (`.status-chip`, `.btn-chip`) remain smaller — they are read-only indicators, not tap targets.
 - Every destructive action (purge, stop, delete) must show a toast confirmation
 - Sliders must update their visual track fill immediately on change

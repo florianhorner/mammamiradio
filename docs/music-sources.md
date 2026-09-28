@@ -10,7 +10,7 @@ certification that a particular broadcast is cleared in every jurisdiction.
 | Source | Default | Persistence | What the project asserts |
 | --- | --- | --- | --- |
 | Bundled starter collection | On | Packaged with the app | Exact files and attribution are hash-pinned in the release manifest. Every derivative is attribution-only — CC BY 4.0 from Incompetech, CC BY 3.0 from Jamendo — and carries a modification notice. |
-| Operator `music/` files | Available when mounted | Operator-managed | Mamma Mi Radio makes no rights claim. The operator is responsible for the files and their use. |
+| Operator local music | Available when mounted | Operator-managed | Mamma Mi Radio makes no rights claim. The operator is responsible for the files and their use. |
 | Jamendo transient expansion | Off | No audio or lease persistence | Jamendo reports the accepted track's source and CC BY 3.0/4.0 license. That report is attribution data, not a clearance verdict. |
 | External extraction | Off; standalone extra only | Normal standalone cache rules | Technical access is not permission. Both current Home Assistant add-ons omit yt-dlp entirely. |
 
@@ -45,25 +45,41 @@ musical edits. A release must prove all of the following:
 - at least 45 minutes total and no more than 75 MiB;
 - 48 kHz, stereo, 192 kbps MP3 at the station loudness target;
 - matching hashes, complete source evidence, and a full human audition record;
-- 20 cold Home Assistant Green runs with the first accepted non-silent starter
-  byte reaching a connected listener at p95 no slower than two seconds;
 - every track plays once before the starter cycle repeats.
+
+Physical Home Assistant Green cold-start evidence is a **separate, opt-in**
+gate, not part of the above. It is described under "Physical device evidence"
+below and is armed with `MMR_REQUIRE_HA_RECEIPTS=1`. A release cut without it
+ships without that evidence, and the pre-release summary says so.
 
 Until the exact derivatives, hashes, acquisition evidence, and complete
 audition records are present, the strict release gate remains red. Tooling does
 not fabricate or infer those human decisions.
 
+## Physical device evidence (opt-in)
+
+This gate is **off by default**. It has never been recorded, and 3.0.0 ships
+without it by an explicit decision. Arm it with `MMR_REQUIRE_HA_RECEIPTS=1` on
+`scripts/pre-release-check.sh` and on the tag workflows; unset, each reports the
+waiver rather than a pass.
+
+Armed, it requires 20 cold Home Assistant Green runs with the first accepted
+non-silent starter byte reaching a connected listener at p95 no slower than two
+seconds. That measurement is unchanged; only whether a release must produce it
+before tagging has moved.
+
 The ordinary pull-request gate runs one cold aarch64 launch in
 `.github/workflows/pi-smoke.yml`; it does not require physical-device receipts.
+Finalize version, changelogs, and all other cut content before recording.
+Review-receipt admission is retired; historical files do not need refreshing.
 For a stable release, start from the exact clean commit running on Home
 Assistant Green and record twenty cold runs locally on that device:
 
 ```bash
 for run in $(seq 1 20); do
-  python3.11 scripts/ha-green-launch-smoke.py \
+  python3.11 -P scripts/ha-green-launch-smoke.py \
     --record-release-receipt proof/media/ha-green-release-evidence
 done
-make ha-green-release-proof
 ```
 
 Receipt mode detects Home Assistant Green through the aarch64 device tree,
@@ -75,8 +91,7 @@ nearest-rank p95 instead of silently dropping outliers.
 
 Commit only `proof/media/ha-green-release-evidence/run-*.json` after the
 measurements, then rerun `make ha-green-release-proof` and `make pre-release`.
-Every receipt names the tested source commit; the final evidence commit may
-differ from it only by those receipt JSON files. This prevents both stale
+The hardware-neutral `mammamiradio-release-content-v1` profile covers sorted paths, Git modes, and blob bytes, excluding only HA receipt JSON. This prevents both stale
 evidence and the impossible self-reference of asking a committed receipt to
 name the commit that contains itself. The tracked
 `proof/media/ha-green-release-receipt.example.json` is explicitly marked as an
@@ -84,14 +99,46 @@ example and never counts toward a release.
 
 ## Operator-supplied local music
 
-Files mounted in `music/` remain available as local music. They are labelled
-"Provided by the station operator" in listener credits and do not receive a
-project-clearance badge, receipt, or implied license. Upgrades and source
-migrations never delete `music/`.
+Files in the configured local directory are labelled "Provided by the station
+operator" in listener credits. They receive no clearance badge or implied
+license, and upgrades never delete them.
 
-The stock Home Assistant add-on does not provide a general local-media upload
-workflow. A standalone operator who mounts local files is responsible for
-their provenance, licenses, and permitted use.
+The Home Assistant app reads the Media panel folder named by Music folder
+(default `mammamiradio`) when Home Assistant mounts Media, and `/data/music`
+otherwise. Songs in the Media panel are outside the app backup. A Home Assistant
+backup includes local Media songs when that backup includes Media; back up a
+NAS library separately. `/data/music` stays in the app backup. The supplied
+Docker container uses `/data/music`. Source checkouts use `./music`. The
+scanner runs every minute; use **Rotazione → Local music → Scan now** for an
+immediate refresh.
+If Media is not mounted and `/data` cannot be written, the app's
+`/tmp/mammamiradio-data/music` fallback is not persisted in either backup.
+
+Discovery recursively accepts MP3, M4A, MP4 audio, AAC, FLAC, OGG, Opus, and WAV.
+
+Labels come from the file's own embedded title/artist tags first (read with
+`ffprobe`, audio streams only, so embedded cover art can never name the song).
+A missing tag falls back to an `Artist - Title.ext` filename, then to the
+filename alone with a leading track number stripped and separators tidied —
+`29-salvatore-on-everything.mp3` becomes **Salvatore On Everything**. An artist
+is only ever taken from a tag or from an explicit `Artist - Title` filename,
+never guessed out of a one-part filename, so a song with no artist anywhere
+shows its title alone rather than a placeholder. Untaggable files stay
+playable: a probe failure, a missing `ffprobe`, or an absurdly long tag just
+falls through to the filename.
+
+Tags are re-read only when a file's size or timestamp changes, so the
+once-a-minute rescan costs nothing on a settled library. A first scan of a very
+large or slow folder stops reading tags after 90 seconds and labels the rest
+from filenames for that pass; already-read files keep their tag labels, and the
+next pass picks up where it left off, so the folder settles over a few minutes
+instead of holding up the station.
+
+Renaming a file or editing its tags changes how the station identifies that
+song. A ban placed before this release still holds — the previous identity is
+derived from the path and checked alongside the new one — but a ban placed on
+one spelling will not follow a later rename. Operators remain responsible for
+provenance, licenses, and permitted use.
 
 ## Optional transient Jamendo expansion
 
@@ -120,12 +167,17 @@ commercial radio licence for direct or indirect commercial activity. Read the
 enabling it.
 
 Configure it in **Motore -> Setup -> Music sources**. On a fresh install the
-card appears after the First Listen journey is finished, so the guided setup
-keeps a single obvious action. Saving applies live and
-does not restart or interrupt the station. A client ID saved by an older
-version is imported to owner-only secrets where possible, remains disabled,
-and requires a fresh acknowledgement before use. The admin UI never echoes the
-ID. Bundled users see **Use own ID**; **Replace** and **Clear** appear only after an operator ID is saved.
+card normally appears after the First Listen journey is finished, so the guided
+setup keeps a single obvious action. There is one repair exception: if First
+Listen has no playable music and live-chart tools are unavailable, **Open music
+source setup** temporarily replaces the journey with this card. **Station
+controls** returns to First Listen. A charts-capable standalone install instead
+opens the visible chart controls in **Rotazione**. Saving applies live and does
+not restart or interrupt the station. A client ID saved by an older version is
+imported to owner-only secrets where possible, remains disabled, and requires a
+fresh acknowledgement before use. The admin UI never echoes the ID. Bundled
+users see **Use my Jamendo ID**; **Replace my Jamendo ID** and **Remove my Jamendo ID** appear only after an operator
+ID is saved.
 
 The transient boundary is deliberately narrow:
 

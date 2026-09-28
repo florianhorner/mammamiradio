@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -214,7 +218,7 @@ def test_save_is_atomic_and_dirty_gated(tmp_path):
     _elected(store)
     store.save_if_dirty(tmp_path)
     assert (tmp_path / STORE_FILENAME).exists()
-    assert not list(tmp_path.glob("*.tmp"))
+    assert not list(tmp_path.glob(".moments.json.*.tmp"))
     mtime = (tmp_path / STORE_FILENAME).stat().st_mtime
     store.save_if_dirty(tmp_path)  # clean again — no rewrite
     assert (tmp_path / STORE_FILENAME).stat().st_mtime == mtime
@@ -222,9 +226,12 @@ def test_save_is_atomic_and_dirty_gated(tmp_path):
 
 @pytest.mark.parametrize("content", ["{not json", '"a string"', '{"rows": "nope"}'])
 def test_load_corrupt_or_wrong_shape_starts_fresh(tmp_path, content):
-    (tmp_path / STORE_FILENAME).write_text(content, encoding="utf-8")
+    path = tmp_path / STORE_FILENAME
+    path.write_text(content, encoding="utf-8")
+    os.chmod(path, 0o644)
     store = MomentStore.load(tmp_path)
     assert store.rows == []
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_load_missing_file_starts_fresh(tmp_path):
@@ -249,6 +256,92 @@ def test_save_failure_never_raises(tmp_path):
     target = tmp_path / "gone"
     store.save_if_dirty(target)  # directory doesn't exist — logged, not raised
     assert store._dirty is True  # stays dirty for a later retry
+
+
+def test_save_failure_preserves_previous_bytes_and_stays_dirty(tmp_path):
+    store = MomentStore()
+    _elected(store)
+    store.save_if_dirty(tmp_path)
+    path = tmp_path / STORE_FILENAME
+    previous = path.read_bytes()
+    store._dirty = True
+    with patch("mammamiradio.home.atomic_json.os.replace", side_effect=OSError("disk full")):
+        store.save_if_dirty(tmp_path)
+    assert store._dirty is True
+    assert path.read_bytes() == previous
+    assert list(tmp_path.glob(".moments.json.*.tmp")) == []
+
+
+def test_dirty_save_replaces_world_readable_file_with_owner_only(tmp_path):
+    store = MomentStore()
+    _elected(store)
+    path = tmp_path / STORE_FILENAME
+    path.write_text("{}", encoding="utf-8")
+    os.chmod(path, 0o644)
+    store.save_if_dirty(tmp_path)
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_load_tightens_world_readable_file_without_dirty_save(tmp_path):
+    path = tmp_path / STORE_FILENAME
+    path.write_text(json.dumps({"schema_version": 1, "rows": []}), encoding="utf-8")
+    os.chmod(path, 0o644)
+    loaded = MomentStore.load(tmp_path)
+    assert loaded.rows == []
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_save_unlinks_legacy_fixed_scratch(tmp_path):
+    store = MomentStore()
+    _elected(store)
+    leftover = tmp_path / "moments.json.tmp"
+    leftover.write_text("stale household", encoding="utf-8")
+    os.chmod(leftover, 0o644)
+    store.save_if_dirty(tmp_path)
+    assert not leftover.exists()
+
+
+def test_moment_temp_file_is_created_owner_only(tmp_path):
+    store = MomentStore()
+    _elected(store)
+    modes: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        modes.append(os.stat(name).st_mode & 0o777)
+        return fd, name
+
+    previous_umask = os.umask(0o000)
+    try:
+        with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+            store.save_if_dirty(tmp_path)
+    finally:
+        os.umask(previous_umask)
+
+    assert modes == [0o600]
+    assert (tmp_path / STORE_FILENAME).stat().st_mode & 0o777 == 0o600
+
+
+def test_moment_temp_names_are_unique(tmp_path):
+    store = MomentStore()
+    _elected(store)
+    names: list[str] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        names.append(Path(name).name)
+        return fd, name
+
+    with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+        store.save_if_dirty(tmp_path)
+        store._dirty = True
+        store.save_if_dirty(tmp_path)
+
+    assert len(names) == 2
+    assert names[0] != names[1]
+    assert all(n.startswith(".moments.json.") and n.endswith(".tmp") for n in names)
 
 
 def test_store_is_cache_protected():

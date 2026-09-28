@@ -20,19 +20,17 @@ This file supplements the global instructions for the `mammamiradio` repository.
   or attach its household/cloud/MQTT devices without explicit authorization in
   the current message. Keep lab state and credentials under gitignored
   `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
-- Before opening any PR (ANY runtime — Claude, Codex, Cursor), complete the
-  temporary dual-evidence sequence: commit and review the implementation; run
-  `scripts/emit-review-evidence.sh` and commit legacy
-  `proof/preship-review.json`; review that resulting commit; then run
-  `scripts/emit-review-evidence.sh --v2` and commit the immutable receipt under
-  `proof/preship-reviews/v2/`. V1 is part of the v2 content digest, so changing
-  v1 after v2 invalidates v2. CI checks both formats independently from trusted
-  base code and remains report-only during migration. On the bootstrap PR, v2
-  is explicitly not evaluated because the base does not contain its verifier.
-  V2 is process evidence for trusted repository writers, not a signed
-  attestation: CI cannot retrieve the local ledger behind its source hash. The
-  report-only `pull_request` workflow is also PR-controlled; move orchestration
-  to a base-owned exact-head control plane before making the result required.
+- Open PRs through `/ship` and review the implementation (adversarial,
+  test-coverage, and docs/config-consistency) before opening. Review changed
+  code again after fixes or conflict resolution. Local review-ledger entries
+  and committed v2 review receipts are no longer PR or landing admission gates.
+  Historical receipts under `proof/preship-reviews/v2/` and their standalone
+  verifier remain readable; do not emit or refresh them for ordinary PRs.
+  This retires automatic content-binding of the local review record, not code
+  review, required CI, branch freshness, bot-thread or release/HA gates.
+- Run `scripts/pre-lint.sh` before pushing. It is the shared, non-mutating
+  deterministic lint surface used by the pre-push hook and Quality CI; it does
+  not replace the full pytest/coverage, browser, ARM, or release gates.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, present real alternatives and their trade-offs, then
@@ -41,6 +39,28 @@ This file supplements the global instructions for the `mammamiradio` repository.
   deletions in the full diff. If a change approaches that limit, split it before
   implementation. Do not meet the limit by removing regression tests, required
   documentation, or review evidence.
+
+## Host Banter Creative Baseline
+
+The human-approved 2026-08-27 prerendered pack is the quality reference for
+Marco and Giulia. Future host-writing changes must preserve these traits:
+
+- Build each exchange around one concrete piece of Studio B lore or one
+  ordinary object treated with absurd seriousness. Avoid interchangeable radio
+  jokes or premise lists.
+- Keep Marco and Giulia character-specific: affectionate disagreement,
+  escalation, callbacks, and a clean turn at the end matter more than joke
+  density. The English Cattaneo scorecard, Archive receipt, and jealous
+  microphone cuts are the strongest references for character fidelity,
+  conversation quality, and chemistry respectively.
+- Giulia's restrained `Mah, guarda... and what did he say?` delivery in the
+  third-chair cut is the tonal benchmark: precise and conversational, never
+  generic announcer theatre.
+- Fourth-wall cuts are rare surprises. They may address one listener, but must
+  never pretend the station can see, hear, locate, monitor, or know private
+  facts about them.
+- Automated prompt and audio checks do not establish creative acceptance.
+  Human audition of the final rendered voices and mix remains required.
 
 ## Parallel workspaces
 
@@ -78,8 +98,15 @@ Hard rules agents must not invent around:
   next PR only when it is actually ready to land.
 - Let pure patch/minor Python Dependabot PRs with auto-merge armed land through
   Dependabot when they remain current and fresh required checks pass. A stale
-  PR parks until an authenticated maintainer updates it; this is deliberate. If
-  quality fails on an unrelated one-test timeout, verify the focused test
+  PR parks until an authenticated maintainer updates it; this is deliberate.
+  The workflow adds `cut-window-hold` to PRs it disarms during a release cut.
+  After publication, use a fresh PR event with verified Dependabot metadata or
+  the landing workflow to resume them. The sweep only disarms. PR events can
+  re-arm a PR you disarmed by hand. Before a cut, the release operator uses
+  `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` and keeps human landings paused until both
+  architecture promotions succeed. Resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`;
+  see the add-on runbook for the required proof and recovery.
+  If quality fails on an unrelated one-test timeout, verify the focused test
   locally before treating it as a rerunnable flake; stop on any deterministic
   dependency break.
 - Treat semver-major GitHub Actions PRs as manual landings: inspect the fresh

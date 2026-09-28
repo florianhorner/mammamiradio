@@ -17,7 +17,8 @@ verifying the shared values are active.
 
 ## Scripts
 
-- `scripts/conductor-setup.sh` — bootstraps the workspace venv and dev dependencies. Looks for `~/.config/mammamiradio/.env`, then falls back to `$CONDUCTOR_ROOT_PATH/.env`, and symlinks the first match into the workspace.
+- `scripts/conductor-setup.sh` — dispatches Cloud workspaces to `scripts/conductor-cloud-bootstrap.sh`; local workspaces keep the shared bootstrap path, including `.env` discovery from `~/.config/mammamiradio/.env` and then `$CONDUCTOR_ROOT_PATH/.env`.
+- `scripts/conductor-cloud-bootstrap.sh` — selects an available Python 3.11+ interpreter, builds `.venv`, and installs development requirements. Cloud setup preserves any `.env` file or symlink already supplied by Conductor; it does not relink `$CONDUCTOR_ROOT_PATH/.env` because Cloud root and workspace paths are the same directory.
 - `scripts/conductor-run.sh` — starts the app with workspace-scoped runtime paths under `.context/conductor/` and keeps `MAMMAMIRADIO_ALLOW_YTDLP=false`. External extraction is a deliberate standalone opt-in that also requires the optional `external-media` package extra; the default Conductor run uses local-or-starter music.
 - `scripts/conductor-archive.sh` — cleans up workspace runtime state when the workspace is archived. The shared archive hook invokes this file.
 
@@ -76,4 +77,6 @@ use a train and a direct-to-`main` PR for the same work.
 
 ## Shared credentials
 
-The setup script expects your API keys and secrets in a `.env` file at one of two known paths: `~/.config/mammamiradio/.env` (preferred, shared across workspaces) or `$CONDUCTOR_ROOT_PATH/.env` (per-Conductor-root fallback). See `.env.example` for the required keys.
+For local workspaces, the setup script expects API keys and secrets in `~/.config/mammamiradio/.env` (preferred, shared across workspaces) or `$CONDUCTOR_ROOT_PATH/.env` (per-Conductor-root fallback), then links the selected file into the workspace.
+
+For Cloud workspaces, supply secrets as injected environment variables or through Conductor Files to copy. The default `.env*` copy pattern covers a repository `.env`; `.worktreeinclude` or `file_include_globs` can declare other static gitignored files. Cloud setup preserves those files as provided. See `.env.example` for the required keys.

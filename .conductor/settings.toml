@@ -27,9 +27,19 @@ setup = "bash ./scripts/conductor-setup.sh"
 
 [scripts.run.run]
 available_in = ["local"]
-command = "bash ./scripts/conductor-run.sh"
+command = "MAMMAMIRADIO_ALLOW_YTDLP=false bash ./scripts/conductor-run.sh"
 default = true
 icon = "play"
+
+[scripts.run.run_ytdlp]
+available_in = ["local"]
+command = "MAMMAMIRADIO_ALLOW_YTDLP=true bash ./scripts/conductor-run.sh"
+icon = "radio"
+
+[scripts.run.fresh_start]
+available_in = ["local"]
+command = "bash ./scripts/conductor-fresh-start.sh --yes"
+icon = "refresh-cw"
 
 [prompts]
 

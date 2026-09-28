@@ -1,7 +1,7 @@
 name: Mamma Mi Radio (Edge)
 description: Development channel pinned to the newest tested main image when Edge is deliberately cut. May trail main; use stable for daily listening.
 slug: mammamiradio-edge
-version: 3a08dd6
+version: "5177195"
 stage: experimental
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}
@@ -24,6 +24,7 @@ ports_description:
   8000/tcp: Web UI and stream
 map:
   - addon_config:rw
+  - media:rw
 backup: hot
 backup_exclude:
   - "tmp"
@@ -53,6 +54,7 @@ options:
   songs_between_ads: 4
   ad_spots_per_break: 2
   norm_cache_mb: 1500
+  music_folder: mammamiradio
 schema:
   station_name: str?
   enable_home_assistant: bool?
@@ -70,3 +72,4 @@ schema:
   songs_between_ads: int(1,60)?
   ad_spots_per_break: int(1,5)?
   norm_cache_mb: int(200,8000)?
+  music_folder: str?

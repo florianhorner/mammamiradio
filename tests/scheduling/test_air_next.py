@@ -355,3 +355,33 @@ def test_front_insert_keeps_non_transition_head_segment():
     assert q.get_nowait() is banter
     assert q.get_nowait() is song1  # untouched — no stale-claim drop
     assert state.discarded_segments_total == 0
+
+
+def test_front_insert_releases_the_slot_it_displaces_when_parking_protected_audio():
+    """Parking protected audio over an occupied slot must release what it displaces.
+
+    Continuity runway can now be a starter song that owns a music admission
+    reservation. Overwriting the slot bare leaves that reservation held forever.
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    state = StationState()
+    released: list[str] = []
+    prior_slot = _seg("prior-slot")
+    prior_slot.metadata["continuity_reservation"] = True
+    prior_slot.release_callback = lambda: released.append("prior-slot")
+    state.continuity_slot = prior_slot
+    existing_air_next = _seg("existing-air-next", seg_type=SegmentType.BANTER)
+    existing_air_next.metadata["air_next"] = True
+    protected = _seg("continuity", seg_type=SegmentType.BANTER)
+    protected.metadata["continuity_reservation"] = True
+    for item in (existing_air_next, protected):
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("existing-air-next"), _shadow("continuity")]
+
+    newer = _seg("newer-air-next", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is True
+
+    assert state.continuity_slot is protected
+    assert prior_slot.released
+    assert released == ["prior-slot"]
+    assert not protected.released

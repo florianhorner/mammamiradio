@@ -63,7 +63,7 @@ for PAT in "${LINT_PATTERNS[@]}"; do
     exit 2
   fi
   while IFS= read -r line; do
-    echo "FAIL: issue body: $line  [pattern: $PAT]"
+    echo "FAIL: issue body:${line%%:*}  [pattern: $PAT]"
     HITS=$((HITS + 1))
   done <<< "$MATCHES"
   FAIL=1

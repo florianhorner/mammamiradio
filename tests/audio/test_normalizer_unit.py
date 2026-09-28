@@ -1162,3 +1162,77 @@ def test_normalize_fast_path_preserves_speech_with_internal_pauses(tmp_path):
         f"silenceremove stop_periods must stay negative (trailing-only trim), "
         f"else multi-phrase banter is rejected as implausibly short."
     )
+
+
+def test_atempo_chain_stays_in_range_on_older_ffmpeg():
+    """A single atempo instance is capped at [0.5, 2.0] on older builds."""
+    from mammamiradio.audio.normalizer import _TEMPO_MAX, _TEMPO_MIN, _atempo_chain
+
+    # In-band factors are reproduced exactly by the chain.
+    for factor in (0.4, 1.55, 1.95, 2.0, 3.1, 4.0):
+        chain = _atempo_chain(factor)
+        values = [float(part.split("=")[1]) for part in chain.split(",")]
+        assert all(0.5 <= v <= 2.0 for v in values), f"{factor} -> {chain} leaves the safe range"
+        product = 1.0
+        for v in values:
+            product *= v
+        assert product == pytest.approx(factor, rel=1e-3), f"{chain} does not multiply to {factor}"
+
+    # Out-of-band factors clamp instead of chaining without bound: unclamped,
+    # 1e300 produced 997 atempo stages, which on a fanless ARM box is the same
+    # outcome as the infinite loop the non-finite guard exists to prevent.
+    for factor, expected in ((1e300, _TEMPO_MAX), (5e-324, _TEMPO_MIN), (0.1, _TEMPO_MIN), (99.0, _TEMPO_MAX)):
+        values = [float(part.split("=")[1]) for part in _atempo_chain(factor).split(",")]
+        assert len(values) <= 4, f"{factor} produced {len(values)} atempo stages"
+        product = 1.0
+        for v in values:
+            product *= v
+        assert product == pytest.approx(expected, rel=1e-3), f"{factor} did not clamp to {expected}"
+
+
+def test_atempo_chain_never_spins_on_a_bad_factor():
+    """A non-positive factor diverges in the range-splitting loops.
+
+    remaining=-1.0 goes -2, -4, -8 ... forever, which would hang the executor
+    thread mid-render and surface as dead air.
+    """
+    from mammamiradio.audio.normalizer import _atempo_chain
+
+    for bad in (0.0, -1.0, -0.5, float("nan"), float("inf"), float("-inf")):
+        assert _atempo_chain(bad) == "atempo=1", f"{bad!r} did not degrade to a no-op"
+
+
+@pytest.mark.parametrize(
+    ("tempo", "expected_atempo", "gap_duration"),
+    [(1.55, "atempo=1.55", "0.08"), (1.0, None, "0.3"), (-1.0, None, "0.3"), (float("nan"), None, "0.3")],
+)
+def test_normalize_uses_one_validated_tempo_for_the_filter_path(mock_subprocess, tempo, expected_atempo, gap_duration):
+    mock_run, _ = mock_subprocess
+    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=False, tempo=tempo)
+    chain = _extract_af_value(mock_run)
+
+    assert mock_run.call_count == 1
+    assert f"stop_duration={gap_duration}" in chain
+    assert ("atempo" in chain) is (expected_atempo is not None)
+    if expected_atempo:
+        assert expected_atempo in chain
+        assert chain.index("silenceremove") < chain.index("atempo")
+
+
+def test_tempo_does_not_silently_drop_the_loudnorm_chain(mock_subprocess):
+    """An earlier revision reassigned audio_filter and discarded loudnorm.
+
+    No caller hit it (the only tempo caller passes loudnorm=False), but
+    synthesize() accepts loudnorm and tempo independently, so the next one would
+    have got an un-normalized file with no warning.
+    """
+    mock_run, _ = mock_subprocess
+
+    normalize(Path("/tmp/in.mp3"), Path("/tmp/out.mp3"), loudnorm=True, tempo=1.55)
+
+    cmd = mock_run.call_args[0][0]
+    chain = cmd[cmd.index("-filter:a") + 1]
+    assert "loudnorm" in chain or "dynaudnorm" in chain, f"loudness pass dropped: {chain!r}"
+    assert "atempo" in chain, f"tempo dropped: {chain!r}"
+    assert "afade" in chain, f"fade-in dropped: {chain!r}"
+    assert chain.index("silenceremove") < chain.index("atempo"), "gaps must go before compression"

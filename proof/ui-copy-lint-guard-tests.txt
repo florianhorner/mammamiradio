@@ -1,0 +1,35 @@
+# UI copy lint guard — test proof — 2026-09-07
+# branch florianhorner/chore/feature-description-rules
+
+## bash scripts/check-ui-copy-lint.sh
+UI copy lint clean (6 known violations baselined).
+exit 0
+
+## bash scripts/check-ui-copy-lint.sh --audit
+Scanned 548 curated human-facing strings across 9 files.
+Found 6 violations in 1 rule classes.
+
+## stale_speaker_copy (6: 6 blocking, 0 advisory)
+  (all six are the grandfathered rows in .config/ui-copy-baseline.json)
+
+## .venv/bin/python -m pytest tests/repo/test_ui_copy_lint.py -q
+54 passed in 1.19s
+
+## .venv/bin/python -m pytest tests/repo/test_ui_copy_lint.py tests/web/test_ui_copy.py \
+##   tests/repo/test_repo_scripts.py tests/playlist/test_jamendo_failure_code_contract.py \
+##   tests/web/test_admin_first_listen.py -q
+284 passed in 32.11s
+
+## bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+## scripts/check-preship-evidence.sh --v2 --target HEAD --base origin/main --mode pr
+landing-evidence: OK — pr content 00e318fb2996af68642a618a7fca5fa5f30fb54995759b7fb90c29bc8ea59e36
+has 1 matching v2 receipt(s)
+
+## make check
+Required test coverage of 92.0% reached. Total coverage: 92.52%
+8854 passed, 4 skipped, 49 deselected, 1 warning in 830.15s (0:13:50)
+All coverage floors held. Total: 93% (floor: 92%)
+All checks passed
+exit 0

@@ -51,8 +51,9 @@ After installing, go to the add-on's **Configuration** tab:
 
 The offline starter catalog needs no key and no network. AI/TTS credentials
 live in `/config/secrets.env` inside the add-on config folder. Without an AI
-key, the hosts use stock copy and fallback voices. Save one AI host key from
-**Motore → Setup → AI hosts**, which writes the file for you.
+key, the hosts use stock copy and fallback voices. Save one AI host key during
+First Listen or under **Motore → Setup** with **Add new host conversations**,
+which writes the file for you.
 `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` unlocks generated hosts. OpenAI also
 provides premium voices; Azure Speech and ElevenLabs are voice-only options and
 do not complete the AI-host step by themselves. Azure is ready only when both
@@ -84,20 +85,20 @@ before enabling it.
    integration](../docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback)
    later if you want native `media-source://mammamiradio/live` playback, then
    restart Home Assistant once.
-5. A fresh unfinished install opens **First Listen** automatically with an
-   authored 27-second mini-show on deck: an original music bed and a
-   privacy-aware Marco/Giulia opening, then a source-aware handoff to the live
-   stream. It needs no AI key or Home context. The attributed offline starter
-   catalog is the normal base rotation; source readiness also distinguishes
-   local music, optional Jamendo, and recovery cover.
-6. Select **Start sound check**. Confirm **Yes, I hear it** only after you hear
-   the opening. Use **Not yet** for
+5. A fresh unfinished install opens **First Listen** automatically with a
+   reviewed English opening of about 15 seconds from Marco and Giulia, then a
+   source-aware handoff to the live stream. It needs no AI key or Home context.
+   The attributed offline starter catalog is the normal base rotation; source
+   readiness also distinguishes local music, optional Jamendo, and recovery
+   cover.
+6. Select **Start my station**. Select **I can hear it** only after you hear
+   the opening, or **I can't hear you** for
    [this-device repair](../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
    Home Assistant speakers remain an
    [optional later route](../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
-7. Select **Keep Home private** without fetching Home state, or show the fresh filtered preview before selecting **Let Marco and Giulia use these details**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. Mute any useful entity the hosts should never use; room-presence stays off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** remain separate: turning host context off keeps entity publishing while stopping full-state and timer reads, host-context polling, and Home-derived host work. Filtered context becomes useful to generated host copy after an AI host key is ready.
+7. **Make it yours** starts with a recorded evening scene that uses no details from your home. Select **Keep Home private** without fetching Home state, or **Set up AI and Home** after the scene (**Skip this example** goes straight there). In AI setup, add a writing key and select **Choose my Home details**, or select **Skip AI, choose Home details**; then select **Preview my Home** before **Share these details**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. Mute any useful entity the hosts should never use; room-presence stays off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** remain separate: turning host context off keeps entity publishing while stopping full-state and timer reads, host-context polling, and Home-derived host work. Filtered context becomes useful to generated host copy after an AI host key is ready.
 8. Set **Station Name** to the name people should see and hear; entity IDs and the media-source URI stay stable.
-9. Under **Optional enhancement**, select **Set up new conversations** and add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if you want generated hosts. It is never required for first audio.
+9. For generated hosts, add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` through **Set up AI and Home** during First Listen, or later under **Motore → Setup** with **Add new host conversations**. It is never required for first audio.
 10. Optionally configure Jamendo under **Motore → Setup → Music sources** after reviewing and accepting the current non-commercial-use boundary.
 
 `/config/secrets.env` is a plaintext file in the add-on config storage, not Home Assistant's `/config/secrets.yaml`. Anyone with host/add-on config access can read it; it exists to keep provider credentials out of Supervisor options and diagnostics.

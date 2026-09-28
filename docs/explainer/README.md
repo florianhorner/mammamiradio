@@ -5,12 +5,14 @@ already running, and somewhere inside it the hosts mention something only your
 house could have told them. The sensor data arrives after the moment, as liner
 notes.
 
-The scenarios are invented. Marco and Giulia are not: the clips in
-`public/audio/` are the station's own hosts in their own configured voices.
-One of the four moments ("Evening, officially") uses only the sun and the
-weather, which is all a fresh install can share. The other three need the home
-grant, and the page says so. The page reads no Home Assistant data and sends
-nothing anywhere.
+The scenarios are invented. The clips in `public/audio/` use the station's own
+hosts and cast voices. "Evening, officially" illustrates the daylight-and-weather
+categories a fresh install may authorize after explicit opt-in, not a literal
+prompt preview. Runtime omits dawn and humidity and rounds temperature to
+five-degree Celsius bands. With default settings, a fresh install shares no
+Home context before that choice. The other three are staged examples of the
+wider Home Profile planned for a later update and may reflect an existing
+home-aware station. The page reads no Home Assistant data.
 
 ## How it is put together
 
@@ -47,13 +49,14 @@ npm run test:e2e  # drives the funnel in Chromium; run `npx playwright install c
 ```
 
 The build fails rather than shipping a broken page when a scenario in
-`index.html` and `scenarios.mjs` disagree, a clip is missing, a derived
-transcript is empty, no scenario is fresh-install reachable, or a produced
-clip has a `revealAtSec` that is absent or falls outside the clip.
+`index.html` and `scenarios.mjs` disagree, the explainer reachability labels
+drift from the Home-moment pack, a clip is missing, a derived transcript is
+empty, no post-opt-in `day-one` scenario exists, or a produced clip has a
+`revealAtSec` that is absent or falls outside the clip.
 
 The unit tests pin the framing (station first, sensors as the reveal, no
 pipeline ordinals, including the meta description), the failure contract, the
-transport, the day-one scenario's ambient-only entities, and the responsive
+transport, the `day-one` scenario's sun/weather-only entities, and the responsive
 and reduced-motion treatments, plus the link-preview card: that its URLs
 agree, that the og: and twitter: copy cannot drift apart, that the card ships
 in `dist/`, and that the declared size matches the real PNG. The end-to-end
@@ -85,6 +88,19 @@ and deploys `dist/` to GitHub Pages at
 <https://florianhorner.github.io/mammamiradio/>. The deploy job is gated on
 `refs/heads/main`, so the dispatch button tests a branch without publishing it.
 Operator detail lives in `docs/operations.md` under "Explainer page deployment".
+
+The same Pages artifact carries the Studio B hub and three watch routes:
+
+- <https://florianhorner.github.io/mammamiradio/shorts/>
+- <https://florianhorner.github.io/mammamiradio/shorts/archive-receipt/>
+- <https://florianhorner.github.io/mammamiradio/shorts/jealous-microphone/>
+- <https://florianhorner.github.io/mammamiradio/shorts/third-chair/>
+
+The approved MP4 masters remain outside Git and are loaded from tag-pinned
+GitHub Release asset URLs. Every public shorts page states `Contains synthetic
+voices.` Before publishing a changed master, verify playback and seeking in
+Safari and Chromium, then update the pinned URL only after the replacement is
+live. Do not add MP4 files under `docs/explainer/`.
 
 The directory root is also a complete static site on its own: prebuilt files
 plus `.nojekyll`, no build step needed to read it. Serving it from another

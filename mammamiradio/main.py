@@ -11,6 +11,7 @@ import os
 import secrets
 import shutil
 import sqlite3
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -38,12 +39,14 @@ from mammamiradio.core.first_listen import (
     capture_first_listen_install_origin,
     migrate_first_listen_install_origin,
 )
-from mammamiradio.core.models import PlaylistSource, StationState
+from mammamiradio.core.models import GenerationWasteReason, PlaylistSource, SourceReadinessEvidence, StationState
 from mammamiradio.core.sync import init_db
+from mammamiradio.home.atomic_json import prune_stale_atomic_json_tmp_files
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.context_director import HomeContextDirector
-from mammamiradio.home.entity_policy import muted_entity_ids
-from mammamiradio.home.evening_memory import EveningLedger
+from mammamiradio.home.entity_policy import muted_entity_ids, policy_path
+from mammamiradio.home.evening_memory import LEDGER_FILENAME, EveningLedger
+from mammamiradio.home.ha_context import _ha_registry_cache_path
 from mammamiradio.home.migration import (
     LegacyHomePreflightV1,
     capture_legacy_home_preflight_v1,
@@ -53,8 +56,10 @@ from mammamiradio.home.migration import (
     rewrite_legacy_home_preflight_cold_v1,
     seal_legacy_home_provenance_v1,
 )
-from mammamiradio.home.moment_receipts import MomentStore
+from mammamiradio.home.moment_receipts import STORE_FILENAME, MomentStore
+from mammamiradio.home.profile import export_legacy_home_profile_v1
 from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.hosts.scriptwriter import has_script_llm
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
 from mammamiradio.integrations import router as integrations_router
 from mammamiradio.playlist.blocklist import load_blocklist
@@ -66,6 +71,7 @@ from mammamiradio.playlist.direction import (
 from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
 from mammamiradio.playlist.jamendo_transient import JamendoStreamProvider
 from mammamiradio.playlist.legacy_media import reconcile_legacy_external_media
+from mammamiradio.playlist.local_library import initial_local_library_status, run_local_library_scanner
 from mammamiradio.playlist.playlist import (
     PERSISTED_HEADING_FILENAME,
     fetch_startup_playlist,
@@ -74,13 +80,19 @@ from mammamiradio.playlist.playlist import (
     normalized_track_key,
     read_persisted_heading,
     read_persisted_source,
+    record_recovery_availability,
     write_persisted_heading,
 )
 from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME, prune_stale_keepsake_tmp_files
-from mammamiradio.scheduling.producer import _queue_shadow_entry, prewarm_first_segment, run_producer
+from mammamiradio.scheduling.producer import (
+    _queue_shadow_entry,
+    prewarm_first_segment,
+    queue_first_listen_banter,
+    run_producer,
+)
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.media_sources import router as media_sources_router
 from mammamiradio.web.streamer import (
@@ -116,6 +128,7 @@ def _configure_http_logging() -> None:
 
 _configure_http_logging()
 logger = logging.getLogger("mammamiradio")
+_FIRST_LISTEN_OPENING_WAIT_SECONDS = 15.0
 
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
@@ -316,7 +329,7 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
         # queued — resolved to match how _prune_unreferenced_segments compares.
         try:
             state.restart_handoff_admitted_paths.add(segment.path.resolve(strict=False))
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
             state.restart_handoff_admitted_paths.add(segment.path)
         state.last_enqueued_type = segment.type
         state.last_music_file = segment.path
@@ -344,9 +357,29 @@ app.include_router(media_sources_router)
 app.include_router(integrations_router)
 
 
+def _runtime_build_label() -> str:
+    """Capture source provenance once at boot; installed wheels may have no Git."""
+    root = Path(__file__).resolve().parent.parent
+    if not (root / ".git").exists():
+        return "build unavailable"
+    try:
+        revision = subprocess.run(
+            ["git", "describe", "--always", "--dirty", "--exclude=*", "--abbrev=12"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=0.5,
+            check=True,
+        ).stdout.strip()
+        return revision.replace("-dirty", " · development changes") if revision else "build unavailable"
+    except (OSError, subprocess.SubprocessError):
+        return "build unavailable"
+
+
 async def startup():
     """Load config, build initial state, and start producer/playback workers."""
     global _producer_task, _playback_task, _prewarm_task
+    app.state._provider_checks_shutting_down = False
 
     config = load_config()
     # A bundled/default ``context_enabled = true`` must not let a fresh
@@ -390,6 +423,16 @@ async def startup():
 
     config.tmp_dir.mkdir(parents=True, exist_ok=True)
     config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    household_json_paths = (
+        _ha_registry_cache_path(config.cache_dir),
+        policy_path(config.cache_dir),
+        config.cache_dir / STORE_FILENAME,
+        config.cache_dir / LEDGER_FILENAME,
+    )
+    pruned_household_json_tmp = prune_stale_atomic_json_tmp_files(config.cache_dir, household_json_paths)
+    if pruned_household_json_tmp:
+        logger.info("Household JSON cleanup: pruned %d stale scratch file(s)", pruned_household_json_tmp)
 
     # Prune stale temp render scratch left by a prior run (crash/restart debris)
     # so the HA add-on's /data/tmp doesn't grow unbounded across restarts.
@@ -533,31 +576,57 @@ async def startup():
         bridge_app_version = importlib.metadata.version("mammamiradio")
     except importlib.metadata.PackageNotFoundError:  # pragma: no cover - editable installs provide metadata
         bridge_app_version = "0+unknown"
+    app.state.runtime_identity = f"Version {bridge_app_version} · {_runtime_build_label()}"
     provenance_announced = False
     provenance_task: asyncio.Task | None = None
+    observed_home_entity_ids: frozenset[str] | None = None
+    app.state.home_profile_ready = False
+    app.state.legacy_home_provenance_task = None
 
-    async def _seal_home_provenance(entity_ids: frozenset[str]) -> None:
-        nonlocal provenance_announced
-        try:
-            provenance = await asyncio.to_thread(
-                seal_legacy_home_provenance_v1,
+    def _prepare_home_snapshot(entity_ids: frozenset[str] | None):
+        provenance = None
+        if entity_ids is not None:
+            provenance = seal_legacy_home_provenance_v1(
                 config.cache_dir / "state",
                 entity_ids,
                 db_path=db_path,
                 bridge_app_version=bridge_app_version,
             )
-        except Exception:
-            logger.warning("Legacy Home continuity provenance write failed", exc_info=True)
-            return
-        if provenance is not None and not provenance_announced:
-            provenance_announced = True
-            logger.info("Legacy Home continuity provenance is ready")
+        return provenance, export_legacy_home_profile_v1(config.cache_dir / "state", db_path)
 
-    def _observe_home_entity_ids(entity_ids: frozenset[str]) -> None:
-        nonlocal provenance_task
-        if provenance_announced or (provenance_task is not None and not provenance_task.done()):
+    async def _seal_home_provenance() -> None:
+        nonlocal provenance_announced
+        while True:
+            entity_ids = observed_home_entity_ids
+            worker = asyncio.create_task(asyncio.to_thread(_prepare_home_snapshot, entity_ids))
+            try:
+                provenance, profile = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # The filesystem worker cannot be cancelled; drain before
+                # shutdown releases state or permits another startup writer.
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
+            except Exception:
+                logger.warning("Private Home compatibility snapshot is incomplete; will retry")
+                return
+            if (provenance is not None or profile is not None) and not provenance_announced:
+                provenance_announced = True
+                logger.info("Legacy Home continuity provenance is ready")
+            if profile is not None:
+                app.state.home_profile_ready = True
+                logger.info("Private Home compatibility snapshot is ready")
+                return
+            if entity_ids == observed_home_entity_ids:
+                return
+            # An observation arrived during the sealed-boot attempt. Process it
+            # in this same task so it is neither dropped nor written in parallel.
+
+    def _observe_home_entity_ids(entity_ids: frozenset[str] | None) -> None:
+        nonlocal provenance_task, observed_home_entity_ids
+        observed_home_entity_ids = entity_ids
+        if app.state.home_profile_ready or (provenance_task is not None and not provenance_task.done()):
             return
-        provenance_task = asyncio.create_task(_seal_home_provenance(entity_ids))
+        provenance_task = asyncio.create_task(_seal_home_provenance())
         app.state.legacy_home_provenance_task = provenance_task
         _register_background_task(app.state, provenance_task)
 
@@ -646,13 +715,17 @@ async def startup():
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
     try:
-        tracks, playlist_source, startup_source_error = fetch_startup_playlist(config, persisted_source)
+        tracks, playlist_source, startup_source_error = fetch_startup_playlist(
+            config, persisted_source, include_local=False
+        )
     except Exception as e:
         from mammamiradio.media.starter import starter_source
 
         logger.error("Playlist fetch crashed: %s — no unverified music will be loaded", e)
         tracks = []
         playlist_source = starter_source(0)
+        playlist_source.readiness_evidence = SourceReadinessEvidence()
+        record_recovery_availability(playlist_source.readiness_evidence)
         startup_source_error = str(e)
 
     # Persistent operator blocklist: a song the operator banned must never re-enter
@@ -797,12 +870,15 @@ async def startup():
     app.state.queue = queue
     app.state.skip_event = asyncio.Event()
     app.state.source_switch_lock = asyncio.Lock()
+    app.state.local_library_scan_lock = asyncio.Lock()
     app.state.csrf_token = secrets.token_urlsafe(32)
     app.state.stream_hub = LiveStreamHub()
     app.state.stream_hub.bind_state(state)
     app.state.station_state = state
     app.state.release_campaign = release_campaign
     app.state.config = config
+    app.state.local_library_status = initial_local_library_status(config)
+    app.state.local_library_status["active"] = sum(1 for track in state.playlist if track.source == "local")
     app.state.start_time = time.time()
     app.state.first_listen_store = FirstListenReceiptStore(config.cache_dir)
     app.state.first_listen_receipt = None
@@ -861,28 +937,87 @@ async def startup():
         # reading a spooled file must never abort startup (INSTANT AUDIO).
         logger.warning("Restart handoff admission failed; continuing without it", exc_info=True)
 
-    # Pre-produce music segments in the background so app startup is instant.
-    # If a listener connects before prewarm finishes, the producer's idle-resume
-    # logic queues a canned clip as an immediate fallback.
-    # Keep prewarm capped at 2 across environments to avoid ffmpeg pileups on
-    # constrained addon hardware while still buffering enough for smooth start.
+    # A fresh recorded station opens music -> third chair -> music. Keep the
+    # producer from overtaking that sequence; playback still starts immediately.
+    # The minimum queue capacity is three, so no listener is needed to fill it.
+    opening = (
+        app.state.first_listen_cold_install
+        and queue.empty()
+        and not state.session_stopped
+        and not config.super_italian_mode
+        and not has_script_llm(config)
+    )
+    opening_pending = opening
+    opening_epochs = (state.source_revision, state.chaos_cutover_epoch, state.continuity_epoch)
+
+    def _opening_stale_reason():
+        if state.session_stopped:
+            return GenerationWasteReason.SESSION_STOPPED
+        if state.source_revision != opening_epochs[0]:
+            return GenerationWasteReason.STALE_SOURCE
+        if state.chaos_cutover_epoch != opening_epochs[1]:
+            return GenerationWasteReason.STALE_CHAOS
+        if (
+            not opening_pending
+            or state.continuity_epoch != opening_epochs[2]
+            or config.super_italian_mode
+            or has_script_llm(config)
+        ):
+            return GenerationWasteReason.STALE_CONTINUITY
+        return None
+
     async def _prewarm_multiple():
-        total = 2
-        for _ in range(total):
+        if opening:
+            # Every leg of the opening carries the same revocation rule, enforced
+            # at its admission boundary rather than only before generation. The
+            # wait below can time out while a render is still in flight, and on a
+            # Pi cold install that is the ordinary path, not a freak event: an
+            # unfenced late track would land after ordinary production started
+            # and skip the third chair.
+            if not await prewarm_first_segment(queue, state, config, stale_check=_opening_stale_reason):
+                return  # Release ordinary production; do not retry the opening.
+            if not await queue_first_listen_banter(queue, state, config, stale_check=_opening_stale_reason):
+                return  # A rejected host break ends the opening; no second track.
+            if _opening_stale_reason() is not None:
+                return  # Revoked while the host break rendered.
+            await prewarm_first_segment(queue, state, config, stale_check=_opening_stale_reason)
+            return
+        # Existing/keyed/stopped stations retain two concurrent music prewarms.
+        for _ in range(2):
             await prewarm_first_segment(queue, state, config)
 
     _prewarm_task = asyncio.create_task(_prewarm_multiple())
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
-    _producer_task = asyncio.create_task(
-        run_producer(
+
+    async def _produce_after_opening():
+        nonlocal opening_pending
+        if opening:
+            try:
+                await asyncio.wait_for(_prewarm_task, timeout=_FIRST_LISTEN_OPENING_WAIT_SECONDS)
+            except Exception:
+                # No shield: the timeout cancels the opening instead of leaving
+                # it racing ordinary production. A render already awaiting a
+                # thread can still finish, which is why every opening admission
+                # is fenced by _opening_stale_reason rather than by this
+                # cancellation alone.
+                logger.warning("Opening preparation did not finish; continuing ordinary production", exc_info=True)
+            finally:
+                opening_pending = False
+        await run_producer(
             queue,
             state,
             config,
             skip_event=app.state.skip_event,
             jamendo_provider=jamendo_provider,
         )
+
+    _producer_task = asyncio.create_task(_produce_after_opening())
+    local_library_task = asyncio.create_task(
+        run_local_library_scanner(app.state),
+        name="local-library-scanner",
     )
+    app.state.local_library_task = local_library_task
     # Discovery/preparation must never delay listener-ready startup. The
     # provider itself remains inert unless the current acknowledgement and
     # client ID are both present.
@@ -911,6 +1046,10 @@ async def startup():
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
     app.state.home_context_off_ledger_persist_task = None
+    if home_authorization.mode is HomeAuthorizationMode.LEGACY:
+        # Already-sealed installations export without HA polling. Schedule only
+        # after audio tasks exist; all snapshot I/O runs in the worker above.
+        _observe_home_entity_ids(None)
 
     if explicit_home_context_off_purge_pending:
 
@@ -1056,6 +1195,7 @@ async def startup():
 
 async def shutdown():
     """Stop background workers and close shared streaming resources."""
+    app.state._provider_checks_shutting_down = True
     tasks_to_cancel = []
     if _prewarm_task:
         _prewarm_task.cancel()
@@ -1066,17 +1206,27 @@ async def shutdown():
     if _playback_task:
         _playback_task.cancel()
         tasks_to_cancel.append(_playback_task)
+    local_library_task = getattr(app.state, "local_library_task", None)
+    if local_library_task and not local_library_task.done():
+        local_library_task.cancel()
+        tasks_to_cancel.append(local_library_task)
     jamendo_start_task = getattr(app.state, "jamendo_start_task", None)
     if jamendo_start_task:
         jamendo_start_task.cancel()
         tasks_to_cancel.append(jamendo_start_task)
-    # The provider-verdict probe is created outside the producer/playback set
-    # (startup + credential saves); cancel it so it can't mutate station_state
-    # after teardown begins — same write-after-shutdown race as the downloads.
-    verdict_task = getattr(app.state, "provider_verdict_task", None)
-    if verdict_task:
-        verdict_task.cancel()
-        tasks_to_cancel.append(verdict_task)
+    # Superseded probes remain in background_tasks for cancellation below.
+    for task_name in ("provider_verdict_task", "_setup_recheck_provider_task", "_provider_check_task"):
+        provider_task = getattr(app.state, task_name, None)
+        if provider_task and not provider_task.done():
+            provider_task.cancel()
+            tasks_to_cancel.append(provider_task)
+    # Resume leaves a slow starter verification running rather than cancelling
+    # it mid-request. Teardown is the one place that must, so its late result
+    # cannot run eligibility bookkeeping against a station that is shutting down.
+    resume_prepare_task = getattr(app.state, "resume_starter_prepare_task", None)
+    if resume_prepare_task and not resume_prepare_task.done():
+        resume_prepare_task.cancel()
+        tasks_to_cancel.append(resume_prepare_task)
     listener_session_tasks = getattr(getattr(app.state, "station_state", None), "listener_session_tasks", None)
     if listener_session_tasks:
         for _session_task in list(listener_session_tasks):
@@ -1114,6 +1264,8 @@ async def shutdown():
         app.state.prewarm_task = None
     if hasattr(app.state, "playback_task"):
         app.state.playback_task = None
+    if hasattr(app.state, "local_library_task"):
+        app.state.local_library_task = None
     if hasattr(app.state, "stream_hub"):
         app.state.stream_hub.close()
     # Stop the ledger AFTER producer/playback are cancelled so final rows drain.

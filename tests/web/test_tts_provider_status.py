@@ -148,7 +148,7 @@ def test_multi_engine_aggregate_reason_translates_each_engine_independently():
     status = _tts_provider_status(config, state)
 
     reason = status["switch_reason"].lower()
-    assert "key was not accepted" in reason  # azure's HTTP 401 translation
+    assert "key was rejected" in reason  # azure's HTTP 401 translation
     assert "key is missing" in reason  # elevenlabs' missing_credentials translation
     assert "http 401" not in reason
     assert "missing_credentials" not in reason

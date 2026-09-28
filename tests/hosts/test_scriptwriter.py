@@ -7,11 +7,13 @@ import json
 import subprocess
 import sys
 import textwrap
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
 import httpx
+import openai
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
@@ -32,6 +34,8 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.hosts.ad_creative import (
     AD_FORMATS,
+    ALL_FORMATS,
+    DISCLAIMER_ROLE,
     SPEAKER_ROLES,
     AdBrand,
     AdFormat,
@@ -850,6 +854,67 @@ def _banter_user_prompt(mock_cls) -> str:
     return create.call_args.kwargs["messages"][0]["content"]
 
 
+@pytest.mark.asyncio
+async def test_anthropic_creative_call_sends_configured_effort(config, state):
+    """Balanced creative (Sonnet 5) must pass medium effort via extra_body."""
+    config.super_italian_mode = True
+    host_name = config.hosts[0].name
+    response_json = json.dumps({"lines": [{"host": host_name, "text": "ciao"}], "new_joke": None})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_banter(state, config)
+
+    create = mock_cls.return_value.messages.create
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == "claude-sonnet-5"
+    assert kwargs["extra_body"] == {"output_config": {"effort": "medium"}}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_fast_path_omits_effort(config, state):
+    """Transitions resolve to Haiku, which must never receive output_config."""
+    config.super_italian_mode = True
+    response_json = json.dumps({"text": "next up"})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_transition(state, config, next_segment="banter", song_cues=[])
+
+    create = mock_cls.return_value.messages.create
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == "claude-haiku-4-5-20251001"
+    assert "extra_body" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_fast_override_matching_creative_model_omits_effort(config, state):
+    """A fast override must not inherit effort from an equal creative model ID."""
+    config.super_italian_mode = True
+    config.models.catalog["anthropic"]["__env_fast"] = "claude-sonnet-5"
+    for profile in config.models.profiles.values():
+        profile.setdefault("anthropic", {})["fast"] = "__env_fast"
+    response_json = json.dumps({"text": "next up"})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        await write_transition(state, config, next_segment="banter", song_cues=[])
+
+    create = mock_cls.return_value.messages.create
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == "claude-sonnet-5"
+    assert "extra_body" not in kwargs
+
+
 def _no_deferred_mutations(commit) -> bool:
     """True when commit is None or only carries exchange-shape observability."""
     if commit is None:
@@ -1132,6 +1197,12 @@ async def test_write_banter_open_guest_gate_accepts_case_insensitive_hans_tag(co
     assert [host.name for host, _ in result] == [regulars[0].name, _LOCAL_BALLOON_GUEST_HOST, regulars[1].name]
 
 
+async def _call_openai_script(config, state):
+    return await scriptwriter_module._generate_json_response(
+        prompt="p", config=config, state=state, model=None, max_tokens=100, caller="banter"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "lines",
@@ -1153,6 +1224,7 @@ async def test_write_banter_open_guest_gate_requires_regular_hosts_around_hans(c
     mock_cls = _mock_anthropic_response(response_json)
 
     with (
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
@@ -1178,6 +1250,7 @@ async def test_write_banter_hans_only_response_falls_back_to_regular_hosts(confi
     mock_cls = _mock_anthropic_response(response_json)
 
     with (
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
@@ -1205,6 +1278,7 @@ async def test_write_banter_guest_gate_drop_to_single_line_uses_full_fallback(co
     mock_cls = _mock_anthropic_response(response_json)
 
     with (
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
@@ -1232,6 +1306,7 @@ async def test_write_banter_guest_gate_post_dedup_single_line_uses_full_fallback
     mock_cls = _mock_anthropic_response(response_json)
 
     with (
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
@@ -1261,6 +1336,7 @@ async def test_write_banter_guest_gate_fallback_uses_normal_mode_language(config
 
     config.super_italian_mode = False
     with (
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda seq: seq[0]),
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
@@ -1515,6 +1591,8 @@ async def test_write_banter_normal_mode_falls_back_after_all_italian_repair(conf
     assert commit is None
     assert mock_generate.await_count == 2
 
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 1)
+
 
 @pytest.mark.asyncio
 async def test_write_banter_normal_mode_rechecks_after_guest_gate_drops_english_line(config, state):
@@ -1558,6 +1636,8 @@ async def test_write_banter_normal_mode_rechecks_after_guest_gate_drops_english_
     assert [text for _, text in result] == ["Anyway. Not bad.", "No, wait—", "Music. Now. Trust the process."]
     assert commit is None
     assert mock_generate.await_count == 1
+
+    assert (state.language_guard_rejections, state.language_guard_failures) == (0, 1)
 
 
 @pytest.mark.asyncio
@@ -1640,6 +1720,8 @@ async def test_write_news_flash_normal_mode_fallback_after_all_italian_repair_is
     assert "notizia" not in text.lower()
     assert category == "breaking"
 
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 1)
+
 
 @pytest.mark.asyncio
 async def test_write_news_flash_does_not_retire_callback_when_final_language_guard_falls_back(config, state):
@@ -1668,6 +1750,8 @@ async def test_write_news_flash_does_not_retire_callback_when_final_language_gua
 
     assert "breaking news" in text.lower()
     assert state.pending_callback_landed is False
+
+    assert (state.language_guard_rejections, state.language_guard_failures) == (0, 1)
 
 
 @pytest.mark.asyncio
@@ -1711,6 +1795,8 @@ async def test_write_transition_normal_mode_fallback_after_all_italian_repair_is
     assert text == "Stay close, amici — a quick word from our sponsors."
     assert played_track_ref is None
 
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 1)
+
 
 @pytest.mark.asyncio
 async def test_write_ad_normal_mode_retries_all_italian_voice_parts(config, state):
@@ -1747,6 +1833,7 @@ async def test_write_ad_normal_mode_retries_all_italian_voice_parts(config, stat
     assert "This offer lands fast, mamma mia, and then the room keeps smiling." in voice_lines
     assert result.summary == "English-led ad"
     assert mock_generate.await_count == 2
+    assert [call.kwargs["max_tokens"] for call in mock_generate.await_args_list] == [1100, 1100]
     assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
 
 
@@ -1778,6 +1865,36 @@ async def test_write_ad_normal_mode_fallback_after_all_italian_repair_is_english
         "FallbackBrand. Because you deserve it, amici."
     ]
     assert result.summary == "Fallback ad for FallbackBrand"
+
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_write_ad_require_generated_rejects_final_language_fallback(config, state):
+    config.super_italian_mode = False
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+    italian_response = {
+        "parts": [
+            {
+                "type": "voice",
+                "text": "Questa offerta arriva adesso e la casa respira piano mentre tutti restano qui.",
+            }
+        ],
+        "summary": "Rejected all-Italian ad",
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, italian_response],
+        ),
+        pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="FallbackBrand"),
+    ):
+        await write_ad(brand, voices, state, config, require_generated=True)
+
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 1)
 
 
 @pytest.mark.asyncio
@@ -2738,8 +2855,8 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
-    """Lock the production default: balanced creative fallback uses GPT-5.4 mini."""
+async def test_openai_fallback_default_model_is_gpt_5_6_terra(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.6 Terra."""
     config.super_italian_mode = True
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
@@ -2758,7 +2875,7 @@ async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.4-mini"
+    assert call_kwargs["model"] == "gpt-5.6-terra"
 
 
 @pytest.mark.asyncio
@@ -2787,7 +2904,7 @@ async def test_openai_fallback_uses_max_completion_tokens(config, state):
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
     assert "max_completion_tokens" in call_kwargs
     assert "max_tokens" not in call_kwargs
-    # gpt-5.x counts hidden reasoning tokens against this cap. We request minimal
+    # gpt-5.x counts hidden reasoning tokens against this cap. We disable
     # reasoning and add a small fixed residual buffer on top of the caller's
     # visible-output budget — lock the exact additive contract so a regression
     # that stops adding the caller budget (or inflates it) is caught.
@@ -2801,7 +2918,8 @@ async def test_openai_fallback_uses_max_completion_tokens(config, state):
     # Anthropic failed on a generic (non-truncation) exception here, so the OpenAI
     # floor must stay at the BASE budget — no escalation leaked in.
     assert call_kwargs["max_completion_tokens"] == _BANTER_MAX_TOKENS + _OPENAI_REASONING_HEADROOM
-    assert call_kwargs.get("reasoning_effort") == "minimal"
+    assert call_kwargs.get("reasoning_effort") == "none"
+    assert openai_client.chat.completions.create.call_count == 1
     # The SDK-level timeout must ride along AND be budget-scaled: asyncio.wait_for
     # abandons (does not cancel) the sync SDK thread, so the HTTP-layer timeout is
     # the real stop — and a regression back to a fixed 45s would make the bigger
@@ -2847,7 +2965,7 @@ async def test_openai_fallback_retries_without_reasoning_effort_on_400(config, s
 
     # First attempt carried reasoning_effort and 400'd; the retry dropped it.
     assert len(calls) == 2
-    assert calls[0].get("reasoning_effort") == "minimal"
+    assert calls[0].get("reasoning_effort") == "none"
     assert "reasoning_effort" not in calls[1]
     assert calls[1]["max_completion_tokens"] == calls[0]["max_completion_tokens"]
 
@@ -2857,8 +2975,8 @@ async def test_openai_fallback_uses_configured_model(config, state):
     config.super_italian_mode = True
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced OpenAI creative = "small"
-    config.models.catalog["openai"]["small"] = "gpt-5.4-mini-test"
+    # banter → creative role → balanced OpenAI creative = "mid"
+    config.models.catalog["openai"]["mid"] = "gpt-5.6-terra-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -2875,21 +2993,21 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.4-mini-test"
+    assert call_kwargs["model"] == "gpt-5.6-terra-test"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_model"),
     [
-        ("news_flash", "gpt-5.4-mini"),
-        ("ad", "gpt-5.4-mini"),
-        ("transition", "gpt-5.4-mini"),
+        ("news_flash", "gpt-5.6-terra"),
+        ("ad", "gpt-5.6-terra"),
+        ("transition", "gpt-5.6-luna"),
     ],
 )
 async def test_openai_fallback_routes_by_caller_role(config, state, caller, expected_model):
     config.super_italian_mode = True
-    """Creative fallbacks use GPT-5.5; latency-sensitive transitions use GPT-5.4-mini."""
+    """Balanced: creative OpenAI fallback is Terra; fast stays on Luna."""
     config.openai_api_key = "openai-key"
     openai_client = _mock_openai_response(json.dumps({"ok": True}))
     mock_client = MagicMock()
@@ -2942,7 +3060,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-5.4-mini"
+    assert record.model == "gpt-5.6-terra"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True
@@ -3903,6 +4021,125 @@ async def test_openai_call_logs_json_parse_failure_and_reraises(config, state, c
     assert record.caller == "ad"
     assert record.fallback_reason == "anthropic_absent"
     assert record.raw_preview.startswith("not valid json")
+    assert state.openai_disabled_until == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_class", "status_code", "max_cooldown"),
+    [
+        (openai.AuthenticationError, 401, 600),
+        (openai.RateLimitError, 429, 60),
+        (openai.InternalServerError, 500, 20),
+    ],
+)
+async def test_openai_script_breaker_blocks_retries_and_recovers(config, state, error_class, status_code, max_cooldown):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    state.openai_key_status = "valid"
+    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
+    response = httpx.Response(status_code, request=request)
+    error = error_class("provider unavailable", response=response, body={})
+    client = _mock_openai_response('{"ok": true}')
+    client.chat.completions.create.side_effect = [error, _openai_completion('{"ok": true}')]
+
+    with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
+        with pytest.raises(error_class):
+            await _call_openai_script(config, state)
+        assert 0 < state.openai_disabled_until - scriptwriter_module.time.time() <= max_cooldown
+        assert state.openai_blocked_key_hash and state.openai_blocked_key_hash != config.openai_api_key
+        assert state.openai_key_status == ("rejected" if status_code == 401 else "valid")
+        with pytest.raises(RuntimeError, match="temporarily unavailable"):
+            await _call_openai_script(config, state)
+        assert client.chat.completions.create.call_count == 1
+        state.openai_disabled_until = 0.0
+        result = await _call_openai_script(config, state)
+
+    assert result == {"ok": True}
+    assert state.openai_last_error == ""
+    assert state.openai_blocked_key_hash == ""
+    assert state.openai_key_status == "valid"
+    assert client.chat.completions.create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_script_breaker_ignores_stale_key_failure(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "old-key"
+    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
+    error = openai.AuthenticationError("bad key", response=httpx.Response(401, request=request), body={})
+    client = _mock_openai_response('{"ok": true}')
+
+    def old_key_call(**_kwargs):
+        config.openai_api_key = "new-key"
+        raise error
+
+    client.chat.completions.create.side_effect = old_key_call
+    with (
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client),
+        pytest.raises(openai.AuthenticationError),
+    ):
+        await _call_openai_script(config, state)
+    assert state.openai_disabled_until == 0.0
+    assert state.openai_blocked_key_hash == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["network", "timeout", "quota", "routing", "request", "unprocessable", "model"])
+async def test_openai_script_breaker_classifies_other_provider_failures(config, state, failure):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
+    if failure == "network":
+        error = openai.APIConnectionError(request=request)
+    elif failure == "timeout":
+        error = TimeoutError("OpenAI call took too long")
+    elif failure in ("request", "unprocessable", "model"):
+        error_type, status = {
+            "request": (openai.BadRequestError, 400),
+            "unprocessable": (openai.UnprocessableEntityError, 422),
+            "model": (openai.NotFoundError, 404),
+        }[failure]
+        error = error_type("provider error", response=httpx.Response(status, request=request), body={})
+    else:
+        error = openai.RateLimitError("insufficient_quota", response=httpx.Response(429, request=request), body={})
+    client = _mock_openai_response('{"ok": true}')
+    client.chat.completions.create.side_effect = error
+    with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
+        if failure == "routing":
+            with (
+                patch("mammamiradio.hosts.scriptwriter.resolve_model", return_value=None),
+                pytest.raises(RuntimeError, match="No configured OpenAI script model"),
+            ):
+                await _call_openai_script(config, state)
+            client.chat.completions.create.assert_not_called()
+        else:
+            with pytest.raises(type(error)):
+                await _call_openai_script(config, state)
+    remaining = state.openai_disabled_until - scriptwriter_module.time.time()
+    if failure in ("routing", "request", "unprocessable"):
+        assert remaining <= 0  # A missing local model route is not a provider outage.
+    else:
+        assert 0 < remaining <= (600 if failure == "quota" else 20)
+
+
+@pytest.mark.asyncio
+async def test_healthy_openai_script_calls_do_not_queue_behind_each_other(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = "openai-key"
+    barrier = threading.Barrier(2)
+    client = _mock_openai_response('{"ok": true}')
+
+    def simultaneous(**_kwargs):
+        barrier.wait(timeout=2)
+        return _openai_completion('{"ok": true}')
+
+    client.chat.completions.create.side_effect = simultaneous
+    with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):
+        result = await asyncio.wait_for(
+            asyncio.gather(_call_openai_script(config, state), _call_openai_script(config, state)), timeout=3
+        )
+    assert result == [{"ok": True}, {"ok": True}]
 
 
 @pytest.mark.asyncio
@@ -5869,6 +6106,42 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_ad_require_generated_rejects_provider_fallback(config, state):
+    """The on-air producer contract must never turn a provider outage into an ad."""
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+    mock_cls = MagicMock(return_value=mock_client)
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="FallbackBrand"),
+    ):
+        await write_ad(brand, voices, state, config, require_generated=True)
+
+
+@pytest.mark.asyncio
+async def test_write_ad_require_generated_rejects_unusable_output(config, state):
+    """Malformed provider output cannot fall back to a brand name or tagline."""
+    config.super_italian_mode = True
+    brand = AdBrand(name="SilentBrand", tagline="Silenzio è oro", category="luxury")
+    voices = {"default": AdVoice(name="Voce Tre", voice="it-IT-ElsaNeural", style="whispery")}
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value={"parts": [{"type": "pause", "duration": 0.5}]},
+        ),
+        pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="no usable voice copy"),
+    ):
+        await write_ad(brand, voices, state, config, require_generated=True)
+
+
+@pytest.mark.asyncio
 async def test_write_ad_no_llm_restores_legacy_attention_script(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
@@ -6087,6 +6360,9 @@ async def test_write_ad_replaces_partner_only_direct_campaign_output(config, sta
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
         result = await write_ad(brand, voices, state, config, ad_format=ad_format)
+        if ad_format == "duo_scene":
+            with pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="required spokesperson"):
+                await write_ad(brand, voices, state, config, ad_format=ad_format, require_generated=True)
 
     assert result.format == "classic_pitch"
     assert [part.role for part in result.parts if part.type == "voice"] == ["hammer"]
@@ -6131,6 +6407,8 @@ async def test_write_ad_language_fallback_preserves_direct_role_and_format(confi
     assert voice_parts[0].role == "hammer"
     assert "hammer" in result.roles_used
     assert state.pending_callback_landed is False
+
+    assert (state.language_guard_rejections, state.language_guard_failures) == (0, 1)
 
 
 @pytest.mark.asyncio
@@ -6649,6 +6927,21 @@ async def test_write_banter_deduped_unpaired_fragment_uses_stock_exchange(config
 
 
 # --- write_transition tests ---
+
+
+@pytest.mark.asyncio
+async def test_write_transition_accepts_english_opener_with_italian_handoff(config, state):
+    config.super_italian_mode = False
+    text = "Modus just melted us, ma prima delle pubblicità—una cosa veloce."
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"text": text},
+    ) as generate:
+        _host, spoken, _track_ref = await write_transition(state, config, next_segment="ad")
+    assert spoken == text
+    generate.assert_awaited_once()
+    assert (state.language_guard_rejections, state.language_guard_failures) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -7581,6 +7874,11 @@ def test_has_script_llm_true_with_registry_false_when_registry_unavailable(confi
     config.openai_api_key = "openai-key"
     # Real registry loaded by the fixture resolves a route.
     assert has_script_llm(config) is True
+    for profile in config.models.profiles.values():
+        for provider in profile.values():
+            provider.pop("creative", None)
+    assert has_script_llm(config) is True
+    assert has_script_llm(config, caller="ad") is False
 
     # Registry unavailable — keys still set, but no route resolves.
     config.models = _empty_models()
@@ -8484,3 +8782,434 @@ async def test_write_banter_empty_fallback_and_post_restart_empty_deques(config,
     assert list(restarted.recent_shapes) == []
     success_commit.apply(restarted, config)
     assert success_commit.exchange_shape_id in restarted.recent_shapes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "responses,counts,raises",
+    [
+        (["This song is ready."], (0, 0), False),
+        (["Questa canzone è bella.", "This song is ready."], (1, 0), False),
+        (["Questa canzone è bella."] * 2, (1, 1), True),
+        ([RuntimeError("provider unavailable")], (0, 0), True),
+        ([ValueError("malformed JSON")], (0, 0), True),
+        (["Questa canzone è bella.", RuntimeError("provider unavailable")], (1, 0), True),
+    ],
+)
+async def test_language_guard_counts_only_language_rejections(config, state, responses, counts, raises):
+    config.super_italian_mode = False
+    state.language_guard_rejections, state.language_guard_failures = 3, 2
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[{"text": response} if isinstance(response, str) else response for response in responses],
+    ) as generate:
+        call = scriptwriter_module._generate_json_response_with_language_guard(
+            prompt="test", config=config, state=state, model=None, max_tokens=100, caller="transition"
+        )
+        if raises:
+            with pytest.raises((ValueError, RuntimeError)):
+                await call
+        else:
+            await call
+    assert generate.await_count == len(responses)
+    assert (state.language_guard_rejections, state.language_guard_failures) == (3 + counts[0], 2 + counts[1])
+
+
+@pytest.mark.parametrize("surface", [None, "banter", "news_flash", "ad", "transition"])
+def test_bilingual_transition_exception_does_not_relax_other_surfaces(config, surface):
+    config.super_italian_mode = False
+    accepted = scriptwriter_module._normal_mode_language_ok(
+        ["Modus just melted us, ma prima delle pubblicità—una cosa veloce."], config, surface=surface
+    )
+    assert accepted is (surface == "transition")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repaired", [False, True])
+async def test_transition_final_language_failure_is_counted_once(config, state, repaired):
+    config.super_italian_mode = False
+    responses = [{"text": "This song is ready for you."}]
+    if repaired:
+        responses.insert(0, {"text": "Questa canzone è bella."})
+    with (
+        patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock(side_effect=responses)),
+        patch("mammamiradio.hosts.scriptwriter._massage_transition_text", return_value="Questa canzone è bella."),
+    ):
+        _host, text, track_ref = await write_transition(state, config)
+    assert text != "Questa canzone è bella."
+    assert track_ref is None
+    assert (state.language_guard_rejections, state.language_guard_failures) == (int(repaired), 1)
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_repair_counts_final_language_failure(config, state):
+    config.super_italian_mode = False
+    response = {"lines": [{"host": host.name, "text": "Questa canzone è bella."} for host in _regular_hosts(config)]}
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock(return_value=response)):
+        assert await scriptwriter_module.repair_banter_without_listener_context(state, config) is None
+    assert (state.language_guard_rejections, state.language_guard_failures) == (0, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pool_index", range(4))
+@pytest.mark.parametrize("solo", [False, True])
+async def test_normal_mode_selects_each_complete_fallback_pool(config, state, pool_index, solo):
+    config.super_italian_mode = False
+    if solo:
+        config.hosts = [_regular_hosts(config)[0]]
+    pools = _banter_fallback_pools(config)
+    assert len(pools) == 4
+    assert len({tuple(line.text for line in pool) for pool in pools}) == 4
+    hosts = _regular_hosts(config)
+    h0, h1 = hosts[0], hosts[-1]
+    assert [line.host for line in pools[pool_index]] == ([h0, h1, h0] if pool_index in (0, 2) else [h1, h0, h1])
+
+    def choose(choices):
+        return choices[pool_index] if isinstance(choices[0], list) else choices[0]
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=choose),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+        patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock(side_effect=RuntimeError)),
+    ):
+        lines, commit = await write_banter(state, config)
+    assert lines == pools[pool_index]
+    assert commit is None
+    assert scriptwriter_module._normal_mode_language_ok([line.text for line in lines], config)
+    assert _banter_turn_taking_ok(lines)
+    assert (state.language_guard_rejections, state.language_guard_failures) == (0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Ad fine print: role addressing, prompt contract, format label, pharma authority
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_ad_role_recovers_the_prompt_roster_label():
+    """The model returns the roster label, not always the cast key.
+
+    The prompt used to print "BUREAUCRAT (Nonno Aldo)" while the JSON example
+    asked for "bureaucrat"; 31% of voice parts came back with a role no cast
+    entry matched, silently rendering on default_voice with no speed-up.
+    """
+    from mammamiradio.hosts.ad_creative import AdVoice
+    from mammamiradio.hosts.scriptwriter import _resolve_ad_role
+
+    voices = {"bureaucrat": AdVoice(name="Nonno Aldo", voice="v", style="s", role="bureaucrat")}
+
+    assert _resolve_ad_role("BUREAUCRAT (Nonno Aldo)", voices) == "bureaucrat"
+    assert _resolve_ad_role("BUREAUCRAT", voices) == "bureaucrat"
+    assert _resolve_ad_role("  bureaucrat  ", voices) == "bureaucrat"
+    assert _resolve_ad_role("bureaucrat", voices) == "bureaucrat"
+
+
+def test_resolve_ad_role_keeps_the_disclaimer_role_addressable_when_uncast():
+    """No format but classic_pitch casts a goblin, yet every format addresses one.
+
+    tts._render_part resolves an uncast disclaimer role to the format's own
+    voice and still applies the rate, so the token must survive normalization.
+    """
+    from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE, AdVoice
+    from mammamiradio.hosts.scriptwriter import _resolve_ad_role
+
+    voices = {"seductress": AdVoice(name="Palmira", voice="v", style="s", role="seductress")}
+
+    assert _resolve_ad_role("DISCLAIMER_GOBLIN", voices) == DISCLAIMER_ROLE
+    assert _resolve_ad_role(DISCLAIMER_ROLE, voices) == DISCLAIMER_ROLE
+    # An unknown role is preserved, not blanked — it must keep falling through
+    # to default_voice exactly as before.
+    assert _resolve_ad_role("narrator", voices) == "narrator"
+    assert _resolve_ad_role("", voices) == ""
+    assert _resolve_ad_role(None, voices) == ""
+
+
+def test_format_roles_always_leave_a_character_besides_the_fine_print():
+    """Every format must have someone left to speak once the goblin is excluded.
+
+    Asserts the data, not the source text: an earlier version of this test
+    grepped scriptwriter.py for literal lines, so it passed on dead code and
+    would have broken on a reformat.
+    """
+    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES, ALL_FORMATS, DISCLAIMER_ROLE
+
+    for fmt in ALL_FORMATS:
+        characters = [r for r in _FORMAT_ROLES[fmt] if r != DISCLAIMER_ROLE]
+        assert characters, f"{fmt} has no character role once the disclaimer is excluded"
+
+
+@pytest.mark.asyncio
+async def test_ad_prompt_forbids_faking_speed_in_the_text(config, state):
+    """The model glues words together to fake speed; that renders SLOWER.
+
+    Asserts against the rendered prompt rather than the source file.
+    """
+    captured = {}
+
+    async def _capture(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"parts": [{"type": "voice", "text": "Copy.", "role": "hammer"}]}
+
+    # A fine-print category: the anti-glue rule only exists where fine print does.
+    brand = AdBrand(name="Bancone", tagline="T", category="banking")
+    voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
+        await write_ad(brand, voices, state, config, ad_format="classic_pitch")
+
+    prompt = captured["prompt"]
+    assert "never run words together" in prompt
+    assert "never join them with hyphens" in prompt
+    assert "copied exactly" in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ad_format", list(ALL_FORMATS))
+async def test_the_fine_print_rule_reaches_every_format(config, state, ad_format):
+    """For a brand that carries fine print, every format states the restriction.
+
+    classic_pitch is the one format that casts the goblin, and was the only one
+    whose roster omitted the never-for-sales-copy rule. Fine print is now a brand
+    trait, so the brand here is in a fine-print category; the no-fine-print side
+    is covered by test_no_fine_print_brand_never_hears_the_role.
+    """
+    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES
+
+    captured = {}
+
+    async def _capture(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"parts": [{"type": "voice", "text": "Copy.", "role": _FORMAT_ROLES[ad_format][0]}]}
+
+    brand = AdBrand(name="Bancone", tagline="T", category="banking")
+    voices = {
+        r: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=r)
+        for i, r in enumerate(_FORMAT_ROLES[ad_format])
+    }
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
+        await write_ad(brand, voices, state, config, ad_format=ad_format)
+
+    assert "never for sales copy" in captured["prompt"], f"{ad_format} roster omits the fine-print restriction"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("only_disclaimer", [False, True])
+async def test_pharma_canonical_disclaimer_wins_over_the_models_own(config, state, only_disclaimer):
+    """The canonical medicine tail replaces every model disclaimer and ends the ad."""
+    from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE
+
+    config.super_italian_mode = True
+    brand = AdBrand(name="Capellissimo", tagline="Circa.", category="pharma")
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    model_disclaimer = {"type": "voice", "text": "Non responsabile per capelli.", "role": DISCLAIMER_ROLE}
+    model_parts = [model_disclaimer]
+    if not only_disclaimer:
+        model_parts.insert(0, {"type": "voice", "text": "Capellissimo: capelli da sogno, circa.", "role": "default"})
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": model_parts,
+            "summary": "Capellissimo ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config)
+        if only_disclaimer:
+            with pytest.raises(scriptwriter_module.AdGenerationUnavailableError, match="only fine print"):
+                await write_ad(brand, voices, state, config, require_generated=True)
+
+    disclaimers = [p for p in result.parts if p.role == DISCLAIMER_ROLE]
+    assert len(disclaimers) == 1, f"expected one disclaimer, got {[d.text for d in disclaimers]}"
+    assert result.parts[-1] is disclaimers[0], "the ad must end on the fine print"
+    assert "ibuprofene" in disclaimers[0].text, "the model's disclaimer replaced the canonical one"
+    assert not any("Non responsabile" in p.text for p in result.parts), "model fine print survived replacement"
+    assert any("Capellissimo" in p.text for p in result.parts if p.role != DISCLAIMER_ROLE)
+    assert DISCLAIMER_ROLE in result.roles_used, "a disclaimer aired but roles_used omits it"
+
+
+@pytest.mark.asyncio
+async def test_write_ad_normalizes_the_role_the_model_returns(config, state):
+    """The parse site must actually call _resolve_ad_role, not just define it.
+
+    A roster-label role ("DEFAULT (Voce Uno)") reaching AdPart unchanged makes
+    voices.get(part.role, default_voice) miss and skips the disclaimer rate gate.
+    """
+    from mammamiradio.hosts.ad_creative import DISCLAIMER_ROLE
+
+    # A fine-print category, so the normalized disclaimer part survives to the
+    # script rather than being dropped as copy this brand should not carry.
+    brand = AdBrand(name="Bancone", tagline="T", category="banking")
+    voices = {"hammer": AdVoice(name="Voce Uno", voice="it-IT-DiegoNeural", style="hard sell", role="hammer")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [
+                {"type": "voice", "text": "Testo is here today.", "role": "HAMMER (Voce Uno)"},
+                {"type": "voice", "text": "Terms apply. Results may vary.", "role": "DISCLAIMER_GOBLIN"},
+            ],
+            "summary": "Testo ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format="classic_pitch")
+
+    roles = [p.role for p in result.parts if p.type == "voice" and p.text]
+    assert "hammer" in roles, f"roster label was not normalized onto the cast key: {roles}"
+    assert DISCLAIMER_ROLE in roles, f"uppercase disclaimer role was not normalized: {roles}"
+    assert not any("(" in r for r in roles), f"a roster label survived into a part: {roles}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ad_format", list(ALL_FORMATS))
+@pytest.mark.parametrize("category", ["banking", "tech"])
+async def test_ad_prompt_never_asks_for_a_role_it_did_not_list(config, state, ad_format, category):
+    """The SPEAKERS block, the role rule and the JSON example must agree.
+
+    The prompt tells the model every role must come from SPEAKERS, so the roster
+    and the example have to move together. They can be consistent in two ways and
+    both are asserted here:
+
+    * a fine-print brand lists DISCLAIMER_ROLE *and* asks for it, in every format,
+      including the five that do not cast a goblin voice;
+    * a no-fine-print brand does neither, including classic_pitch, which casts a
+      goblin the prompt must then not offer.
+
+    Listing the token without using it (or the reverse) is the self-inconsistency
+    that put the roster and the example out of step before, so `requested <=
+    listed` holds on both sides of the split.
+    """
+    import re
+
+    from mammamiradio.hosts.ad_creative import _FORMAT_ROLES, DISCLAIMER_ROLE, brand_has_fine_print
+
+    captured = {}
+
+    async def _capture(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return {"parts": [{"type": "voice", "text": "Copy.", "role": _FORMAT_ROLES[ad_format][0]}]}
+
+    brand = AdBrand(name="Testo", tagline="T", category=category)
+    fine_print = brand_has_fine_print(brand)
+    assert fine_print == (category == "banking"), "fixture drifted from FINE_PRINT_CATEGORIES"
+    voices = {
+        role: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=role)
+        for i, role in enumerate(_FORMAT_ROLES[ad_format])
+    }
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_capture):
+        await write_ad(brand, voices, state, config, ad_format=ad_format)
+
+    prompt = captured["prompt"]
+    listed = set(re.findall(r'^- "([a-z_]+)"', prompt, re.M))
+    requested = set(re.findall(r'"role": "([a-z_]+)"', prompt))
+
+    assert requested, f"{ad_format}/{category}: no roles in the JSON example"
+    assert requested <= listed, (
+        f"{ad_format}/{category}: example asks for {sorted(requested - listed)} "
+        f"but SPEAKERS only lists {sorted(listed)}"
+    )
+    if fine_print:
+        assert DISCLAIMER_ROLE in listed, f"{ad_format}: fine-print role missing from SPEAKERS"
+        assert DISCLAIMER_ROLE in requested, f"{ad_format}: fine print not addressed to the rate-gated role"
+    else:
+        assert DISCLAIMER_ROLE not in listed, (
+            f"{ad_format}: SPEAKERS offers the fine-print role to a brand that carries none"
+        )
+        assert DISCLAIMER_ROLE not in requested, (
+            f"{ad_format}: the example still asks for fine print on a brand that carries none"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("roles", "expected_format"),
+    [
+        (["hammer", DISCLAIMER_ROLE], AdFormat.CLASSIC_PITCH),
+        (["hammer", "maniac", DISCLAIMER_ROLE], AdFormat.DUO_SCENE),
+    ],
+)
+async def test_duo_demotion_counts_characters_not_the_fine_print(config, state, roles, expected_format):
+    """A duo that is one announcer plus fine print is still a classic pitch."""
+    brand = AdBrand(name="Testo", tagline="T", category="tech")
+    voices = {r: AdVoice(name=f"V{i}", voice="it-IT-DiegoNeural", style="s", role=r) for i, r in enumerate(roles)}
+    parts = [{"type": "voice", "text": f"Line for {r}.", "role": r} for r in roles]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={"parts": parts, "summary": "s"},
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format="duo_scene")
+
+    assert result.format == expected_format
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["tech", "pharma"])
+async def test_a_script_labelled_all_fine_print_still_speaks_the_brand(config, state, category):
+    """Guard against an ad whose brand copy is nothing but blur."""
+    # Super Italian keeps the Italian copy below from being rejected by the
+    # Normal Mode language guard, which would return a one-part fallback and
+    # make this assertion pass without ever exercising the cap.
+    config.super_italian_mode = True
+    brand = AdBrand(name="Capellissimo", tagline="Circa.", category=category)
+    voices = {"hammer": AdVoice(name="V", voice="it-IT-DiegoNeural", style="s", role="hammer")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [
+                {"type": "voice", "text": "Capellissimo, i capelli dei sogni!", "role": "DISCLAIMER_GOBLIN"},
+                {"type": "voice", "text": "Solo oggi, prezzo speciale.", "role": "Disclaimer Goblin (V)"},
+                {"type": "voice", "text": "Capellissimo. Circa.", "role": "disclaimer_goblin"},
+            ],
+            "summary": "s",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format="classic_pitch")
+
+    assert not result.summary.startswith("Fallback"), (
+        "the language guard replaced the script; this test would pass vacuously"
+    )
+    spoken = [p for p in result.parts if p.type == "voice" and p.text]
+    compressed = [p for p in spoken if p.role == DISCLAIMER_ROLE]
+    assert len(compressed) <= 1, f"{len(compressed)} parts would be time-compressed, expected at most 1"
+    assert any(p.role != DISCLAIMER_ROLE for p in spoken), "nothing would air at normal speed"
+    assert any("Capellissimo" in p.text for p in spoken if p.role != DISCLAIMER_ROLE), (
+        "the brand name is only ever spoken as blur"
+    )
+
+
+def test_single_voice_disclaimer_is_demoted_but_a_real_tail_is_kept():
+    from mammamiradio.hosts.ad_creative import AdPart
+    from mammamiradio.hosts.scriptwriter import _cap_disclaimer_parts
+
+    sole = [AdPart(type="voice", text="The whole ad.", role=DISCLAIMER_ROLE)]
+    mixed = [
+        AdPart(type="voice", text="Brand copy.", role="hammer"),
+        AdPart(type="voice", text="Terms.", role=DISCLAIMER_ROLE),
+    ]
+    misplaced = [
+        AdPart(type="voice", text="Terms.", role=DISCLAIMER_ROLE),
+        AdPart(type="pause", duration=0.2),
+        AdPart(type="voice", text="Brand copy.", role="hammer"),
+        AdPart(type="sfx", sfx="sting"),
+    ]
+
+    assert _cap_disclaimer_parts(sole, "hammer")[0].role == "hammer"
+    assert _cap_disclaimer_parts(mixed, "hammer")[-1].role == DISCLAIMER_ROLE
+    reordered = _cap_disclaimer_parts(misplaced, "hammer")
+    assert [part.text for part in reordered if part.type == "voice"] == ["Brand copy.", "Terms."]
+    assert reordered[-1].type == "sfx", "a trailing non-voice outro should keep its position"
+
+
+def test_resolve_ad_role_accepts_a_space_separated_label():
+    """The model spaces the token as often as it underscores it."""
+    from mammamiradio.hosts.scriptwriter import _resolve_ad_role
+
+    voices = {"hammer": AdVoice(name="V", voice="v", style="s", role="hammer")}
+    assert _resolve_ad_role("Disclaimer Goblin", voices) == DISCLAIMER_ROLE
+    assert _resolve_ad_role("DISCLAIMER GOBLIN (V)", voices) == DISCLAIMER_ROLE

@@ -23,6 +23,14 @@ def _reason_for_decision(reason_key: str, *, threshold: int = 0) -> str:
         "station_id_due": "Station ID cadence slot opened.",
         "time_check_due": "Time-check cadence slot opened.",
         "music_default": "No pacing trigger active; continue music flow.",
+        # Two different fixes can end this state, so name both. Advice that only
+        # fits one cause would send an operator with a key but no brands looking
+        # for a key they already have.
+        "ad_owed_no_programme": (
+            "No finished advertisement is ready, so the music keeps playing. "
+            "Ads need a working AI key in Motore and at least one ad brand that can air; "
+            "the break airs as soon as both are in place."
+        ),
     }
     return reasons.get(reason_key, "Scheduled by pacing rules.")
 
@@ -36,12 +44,21 @@ def _decide_with_reason(
     songs_since_news: int = 0,
     segments_since_station_id: int = 0,
     segments_since_time_check: int = 0,
+    ad_available: bool = True,
 ) -> tuple[SegmentType, str]:
-    """Core pacing decision. Single source of truth."""
+    """Core pacing decision. Single source of truth.
+
+    ``ad_available`` is false when the station has no way to produce a real
+    advertisement: no AI key, or no ad brands. The slot is then skipped rather
+    than filled with a placeholder, and the caller must not reset
+    ``songs_since_ad``: the break stays owed and fires as soon as a real
+    advertisement is possible.
+    """
     if segments_produced == 0:
         return SegmentType.MUSIC, _reason_for_decision("first_segment_music")
 
-    if songs_since_ad >= pacing.songs_between_ads:
+    ad_due = songs_since_ad >= pacing.songs_between_ads
+    if ad_due and ad_available:
         return SegmentType.AD, _reason_for_decision("ad_due")
 
     threshold = pacing.songs_between_banter
@@ -72,6 +89,10 @@ def _decide_with_reason(
         if segments_since_time_check >= 8 and (deterministic or random.random() < 0.25):
             return SegmentType.TIME_CHECK, _reason_for_decision("time_check_due")
 
+    if ad_due:
+        # The break is overdue and unfillable. Record that instead of the
+        # ordinary music reason, so any reader of the schedule sees why.
+        return SegmentType.MUSIC, _reason_for_decision("ad_owed_no_programme")
     return SegmentType.MUSIC, _reason_for_decision("music_default")
 
 
@@ -84,6 +105,7 @@ def _decide(
     songs_since_news: int = 0,
     segments_since_station_id: int = 0,
     segments_since_time_check: int = 0,
+    ad_available: bool = True,
 ) -> SegmentType:
     """Core pacing decision. Single source of truth."""
     seg_type, _ = _decide_with_reason(
@@ -95,6 +117,7 @@ def _decide(
         songs_since_news,
         segments_since_station_id,
         segments_since_time_check,
+        ad_available=ad_available,
     )
     return seg_type
 
@@ -109,6 +132,7 @@ def next_segment_type(state: StationState, pacing: PacingSection) -> SegmentType
         songs_since_news=state.songs_since_news,
         segments_since_station_id=state.segments_since_station_id,
         segments_since_time_check=state.segments_since_time_check,
+        ad_available=state.ad_programme_available,
     )
 
 

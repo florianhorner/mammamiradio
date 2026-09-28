@@ -55,7 +55,7 @@ for FILE in "${CHANGELOGS[@]}"; do
       exit 2
     fi
     while IFS= read -r line; do
-      echo "FAIL: $FILE: $line  [pattern: $PAT]"
+      echo "FAIL: $FILE:${line%%:*}  [pattern: $PAT]"
       HITS=$((HITS + 1))
     done <<< "$MATCHES"
     FAIL=1

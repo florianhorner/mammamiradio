@@ -76,6 +76,9 @@ def test_canonical_music_source_guide_records_the_rights_boundaries() -> None:
         "75 MiB",
         "20 cold Home Assistant Green runs",
         "p95 no slower than two seconds",
+        # The gate is opt-in; the guide must name the switch, not just the
+        # measurement, or a reader cannot tell whether a release produced it.
+        "MMR_REQUIRE_HA_RECEIPTS",
     ):
         assert boundary in flat_guide
 
@@ -112,6 +115,24 @@ def test_current_addon_guides_do_not_reintroduce_the_old_chart_boot_contract() -
     assert "Both add-ons" in current and "Neither image" in current
     assert "Jamendo transient provider" in current
     assert "MAMMAMIRADIO_ALLOW_YTDLP=false" in current
+
+
+def test_home_assistant_music_docs_name_each_backup_home() -> None:
+    for relative in (
+        "ha-addon/mammamiradio/DOCS.md",
+        "docs/runbooks/ha-addon.md",
+        "docs/music-sources.md",
+    ):
+        guide = _read(relative)
+        flat_guide = " ".join(guide.split())
+        assert "backup includes Media" in flat_guide, relative
+        assert "NAS library separately" in flat_guide, relative
+        assert "`/data/music`" in guide, relative
+        assert re.search(r"`/tmp/mammamiradio-data/music`[^.]{0,100}not persisted", flat_guide), relative
+    assert "| `music_folder` | `str?` | `MAMMAMIRADIO_MUSIC_FOLDER`" in _read("docs/runbooks/ha-addon.md")
+    assert "+-- /media/ (Home Assistant Media storage; outside the app backup)" in _read(
+        "ha-addon/mammamiradio/DOCS.md"
+    )
 
 
 def test_unreleased_changelogs_share_the_media_boundary() -> None:

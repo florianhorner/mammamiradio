@@ -214,19 +214,71 @@ def test_direction_timeout_clears_stale_pending_record_hunt_before_refresh() -> 
 
 
 def test_pipeline_status_uses_canonical_status_chips() -> None:
-    block = _function_block(_read_admin_html(), "updatePipelineStatus")
+    html = _read_admin_html()
+    block = _function_block(html, "updatePipelineStatus")
+    hosts = _function_block(html, "pipelineHostStatus")
 
     assert 'class="chip ${state}"' not in block
     for expected in (
         "statusChip('working','Checking…')",
-        "statusChip('degraded','Anthropic')",
-        "statusChip('ready','Anthropic')",
-        "statusChip('blocked','Anthropic')",
         "statusChip('idle','HA: off')",
     ):
         assert expected in block
+    assert "const hosts=pipelineHostStatus(c)" in block
+    assert "statusChip(hosts.state,hosts.label,hosts.detail)" in block
     assert "statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail)" in block
     assert "statusChip('ready','Stream')" not in block
+    for expected in (
+        "state:'ready',",
+        "label:'Demo Radio · ready'",
+        "label:'AI hosts · ready'",
+        "state:'degraded'",
+        "label:'AI hosts · backup active'",
+        "state:'working'",
+        "label:'Checking AI hosts'",
+        "state:'blocked'",
+        "label:'AI key needs attention'",
+    ):
+        assert expected in hosts
+    assert "statuses.length&&statuses.every(status=>status==='rejected')" in hosts
+    # A known-degraded, non-rejected Anthropic must win outright before any pending-probe
+    # check — otherwise an UNRELATED provider's own still-resolving probe (e.g. OpenAI
+    # sitting at 'unverified' because it hasn't been checked yet) masks a fact we already
+    # know. This is why the degraded-and-not-rejected check runs FIRST, ahead of both the
+    # pending-probe check and the rejected check below it.
+    assert "anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected'" in hosts
+    # A provider's own probe still pending wins ("checking") only when that provider
+    # ISN'T the one already known to be degraded (circuit breaker tripped) — an
+    # inconclusive probe never overwrites the prior status (see provider_verdict.py),
+    # so anthropic can sit at its default 'unverified' indefinitely while backup
+    # content is actually airing. That known fact must not be masked by a status
+    # that never really resolves.
+    assert "anthropicStatus==='unverified'&&!c.anthropic_degraded" in hosts
+    assert "openaiStatus==='unverified'" in hosts
+    assert hosts.index("anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected'") < hosts.index(
+        "anthropicPendingUnresolved||openaiPendingUnresolved"
+    )
+    assert hosts.index("anthropicPendingUnresolved||openaiPendingUnresolved") < hosts.index(
+        "statuses.length&&statuses.every(status=>status==='rejected')"
+    )
+    assert "usableOpenAi||usableAnthropic" in hosts
+    assert "openaiStatus==='valid'&&!c.openai_degraded" in hosts
+    assert "c.provider_probe_in_flight&&(anthropicPendingUnresolved||openaiPendingUnresolved)" in hosts
+    assert "label:'AI connection needs a check'" in hosts
+    assert 'id="pipelineAiCheck"' in html
+    assert 'onclick="checkAiConnection(this)"' in html
+
+
+def test_admin_declares_dark_controls_and_readable_host_prose() -> None:
+    html = _read_admin_html()
+
+    assert re.search(r"html\s*\{[^}]*color-scheme:\s*dark", html, re.DOTALL)
+    host_style = re.search(r"\.host-style\s*\{([^}]*)\}", html)
+    assert host_style is not None
+    declarations = host_style.group(1)
+    assert "font-size: 14px" in declarations
+    assert "line-height: 1.5" in declarations
+    assert "max-width: 72ch" in declarations
 
 
 def test_pipeline_stream_status_is_driven_by_fast_runtime_truth() -> None:
@@ -310,35 +362,54 @@ def test_resume_offers_force_start_only_after_confirmed_assetless_refusal() -> N
 
 
 def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> None:
-    block = _function_block(_read_admin_html(), "renderSetup")
-
     html = _read_admin_html()
-    assert "AI service connected" in html
-    assert "Voice service connected" in html
+    block = _function_block(html, "renderFirstListenConnection")
+    setup = _function_block(html, "renderSetup")
+    writing = _function_block(html, "firstListenConnectionEvidence")
+    voices = _function_block(html, "firstListenVoiceEvidence")
+
+    # One receipt owns both status and the edit form; setup polling must not
+    # overwrite its evidence with a second configured-means-connected banner.
     assert "Provider keys configured" not in html
-    assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
-    assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
-    assert "providerKeysConfigured=configuredKeys.length>0" in block
-    assert "aiKeysConfigured=configuredLlmKeys.length>0" in block
-    assert "providerReadiness=setupProviderReadiness(configuredKeys)" in block
-    assert "providerSetupIncomplete=providerKeysConfigured&&" in block
+    assert "stage==='voices'?firstListenVoiceEvidence():firstListenConnectionEvidence()" in block
+    for element_id in ("setupKeysLabel", "setupKeysDetail", "setupKeysConfigured", "setupKeysForm"):
+        assert f"getElementById('{element_id}')" in block
+        assert f"getElementById('{element_id}')" not in setup
+    assert "getElementById('setupKeysDetail').textContent=evidence.detail" in block
+    assert "getElementById('setupKeysConfigured').dataset.state=evidence.state" in block
+    assert "getElementById('setupKeysConfigured').style.display=evidence.state==='idle'?'none':'block'" in block
+    assert "const hasDraft=firstListenKeyValues().some(Boolean)" in block
+    assert "const showForm=voices||evidence.state!=='ready'||_keysEditMode||hasDraft" in block
+    assert "getElementById('setupKeysForm').style.display=showForm?'block':'none'" in block
     # The glyphs are load-bearing, not decoration: this banner is read by a
     # red-green colorblind operator, so every state pairs its colour with a shape.
-    assert "providerSetupIncomplete?'△ AI setup needs attention'" in block
-    assert "keysBanner.dataset.state=providerSetupIncomplete?'incomplete':'ready'" in block
-    assert "aiKeysConfigured?'✓ AI service connected':'✓ Voice service connected'" in block
-    assert "setupProviderLabels(configuredKeys).join(' · ')" in block
-    labels = _function_block(html, "setupProviderLabels")
-    for capability in (
-        "Anthropic AI hosts",
-        "OpenAI AI hosts + voices",
-        "Azure Speech voices",
-        "ElevenLabs voices",
+    assert "({ready:'✓ ',working:'○ ',blocked:'✗ ',degraded:'△ '}[evidence.state]||'')+evidence.label" in block
+
+    assert "[['ANTHROPIC_API_KEY','anthropic_key_status'],['OPENAI_API_KEY','openai_key_status']]" in writing
+    assert "caps[field]||'unverified'" in writing
+    assert "keys.has('OPENAI_API_KEY')&&caps.openai_key_status==='valid'&&!caps.openai_degraded" in writing
+    assert "keys.has('ANTHROPIC_API_KEY')&&caps.anthropic_key_status==='valid'&&!caps.anthropic_degraded" in writing
+    assert "if(workingOpenai||workingAnthropic)return{state:'ready',label:'Writing connected'" in writing
+    assert "if(_firstListenUi.connectionCheckFailed)return{state:'degraded'" in writing
+    assert "if(statuses.every(status=>status==='rejected'))return{state:'blocked'" in writing
+    assert "if(caps.provider_probe_in_flight)return{state:'working',label:'Checking connection'" in writing
+    assert "return{state:'degraded',label:'Key saved · not confirmed yet'" in writing
+    assert "if(_firstListenUi.keySaving)return{state:'working'" in writing
+    assert "if(_firstListenUi.keySaveUnconfirmed)return{state:'degraded'" in writing
+
+    for provider in (
+        "['ELEVENLABS_API_KEY','elevenlabs']",
+        "['OPENAI_API_KEY','openai_speech']",
+        "['AZURE_SPEECH_KEY','azure_speech']",
     ):
-        assert capability in labels
-    readiness = _function_block(html, "setupProviderReadiness")
-    assert "voiceReady:keys.has('OPENAI_API_KEY')" in readiness
-    assert "azureIncomplete:hasAzureKey!==hasAzureRegion" in readiness
+        assert provider in voices
+    assert "keys.has('AZURE_SPEECH_KEY')!==keys.has('AZURE_SPEECH_REGION')" in voices
+    assert "state:'degraded',label:'Azure setup is incomplete'" in voices
+    assert "_caps?.provider_health?.[name]||{}" in voices
+    assert "h.key_status==='rejected'||h.disabled||h.cooldown||h.quota_exhausted||Number(h.failed_voices)>0" in voices
+    assert "if(failed)return{state:'degraded'" in voices
+    assert "return{state:'working',label:'Voice settings saved'" in voices
+    assert "state:'ready'" not in voices
 
 
 def test_runtime_status_header_uses_shared_runtime_verdict() -> None:
@@ -580,9 +651,61 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     # for both Anthropic and OpenAI — distinct from the transient amber "suspended".
     assert "anthropicLine=statusInline('blocked','key not working'" in block
     assert "openaiLine=statusInline('blocked','key not working'" in block
-    assert "openaiLine=statusInline('ready','available')" in block
+    assert "openaiLine=statusInline('ready','connected')" in block
+    assert "openaiLine=statusInline('degraded','temporarily unavailable'+retry" in block
     assert "OpenAI: '+openaiLine" in block
+    assert "'Voices: '+voicesLine" in block
+    assert "statusInline('idle','Edge only')" in block
+    assert "['openai_speech','OpenAI']" in block
+    assert "p.quota_exhausted" in block
+    assert "statusInline('blocked','quota exhausted'" in block
+    assert "p.cooldown" in block
+    assert "statusInline('degraded','retrying'" in block
+    assert "p.failed_voices>0" in block
+    assert "voiceCount" in block
+    assert "statusInline('idle','configured'" in block
+    assert "p.last_error" not in block
+    assert "Temporary provider trouble; will retry automatically" in block
+    assert "First Listen → Review AI setup → " in block
+    assert "Check the configured provider voice, model, and region settings" in block
+    assert 'data-tab="setup">First Listen' in _read_admin_html()
+    assert (
+        'id="setupKeysEditBtn" data-stopped-exempt onclick="openFirstListenKeyEditor(this)">Change key</button>'
+        in _read_admin_html()
+    )
+    assert "<summary>Other voice setups</summary>" in _read_admin_html()
+    assert "restart the add-on" not in block
     assert "Home Assistant: '+statusInline(c.ha?'ready':'idle'" in block
+    assert "'Voices: '+voicesLine" in block
+    assert "homePublishPresentation(pub)" in block
+    assert "Publishing: '+statusInline(publish.state,publish.label)" in block
+    assert "esc(publish.detail)" in block
+    assert "esc(publish.nextStep)" in block
+    assert "const pub=st.runtime_health&&st.runtime_health.ha_publish" in block
+    assert "if(pub||hd)" in block
+    assert "haCard.style.display='none'" in block
+
+
+def test_engine_room_publishing_states_are_plain_and_escaped() -> None:
+    html = _read_admin_html()
+    presentation = _function_block(html, "homePublishPresentation")
+    engine = _function_block(html, "updateEngineRoom")
+
+    assert "if(status==='disabled')return{state:'idle',label:'off'" in presentation
+    assert "if(status==='unconfigured')return{state:'idle',label:'not configured'" in presentation
+    assert "if(status==='idle')return{state:'idle',label:'not tested yet'" in presentation
+    assert (
+        "if(status==='ok'){\n"
+        "    if(pub.last_failure_at)return{state:'ready',label:'recovered',detail:message,nextStep};\n"
+        "    return{state:'ready',label:'working',detail:message,nextStep};\n"
+        "  }"
+    ) in presentation
+    assert "if(reason==='auth_denied')return{state:'blocked',label:'token rejected'" in presentation
+    assert "if(status==='degraded')return{state:'degraded',label:'retrying'" in presentation
+    assert "esc(publish.detail)" in engine
+    assert "esc(publish.nextStep)" in engine
+    assert "st.runtime_health&&st.runtime_health.ha_publish" in engine
+    assert "statusInline('idle','Edge only')" in engine
 
 
 def test_engine_room_ha_observability_escapes_home_assistant_values() -> None:
@@ -657,7 +780,8 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
         "statusInline('ready',r.song_track||'ready')",  # no ▶ prefix — ::before adds ✓
         "statusInline('blocked',listenerSongErrorLabel(r.song_error_reason))",
         "statusInline('working','searching…')",
-        "statusInline('working','shoutout')",  # shoutout is pending, not idle
+        "statusInline('working','Waiting for hosts')",
+        "Prepared — airtime unconfirmed",
         "r.status==='source_changed'",
         "Music changed — submit again",
         "Dismissed — resubmit if still wanted",

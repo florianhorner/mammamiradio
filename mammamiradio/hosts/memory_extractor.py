@@ -21,7 +21,7 @@ from mammamiradio.core.models import StationState
 
 logger = logging.getLogger(__name__)
 
-MEMORY_EXTRACT_MAX_TOKENS = 500
+MEMORY_EXTRACT_MAX_TOKENS = 900
 MEMORY_EXTRACT_CALLER = "memory_extract"
 _MAX_IN_FLIGHT_EXTRACTIONS = 5
 _HOME_MEMORY_REVOCATION_DRAIN_SECONDS = 1.0

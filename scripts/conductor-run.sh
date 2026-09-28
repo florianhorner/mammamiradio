@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Preserve a deliberate run-profile override while loading the shared dotenv
+# file.  Conductor's safe/default and yt-dlp run buttons pass this variable
+# explicitly, so local credentials must not silently change the selected mode.
+_MAMMAMIRADIO_YTDLP_WAS_SET="${MAMMAMIRADIO_ALLOW_YTDLP+x}"
+_MAMMAMIRADIO_YTDLP_REQUESTED="${MAMMAMIRADIO_ALLOW_YTDLP-}"
+
 # Load credentials from safe location (outside repo tree)
 _ENV_SAFE="$HOME/.config/mammamiradio/.env"
 if [ -f "$_ENV_SAFE" ]; then
@@ -20,7 +26,11 @@ elif [ -f "$ROOT/.env" ]; then
 fi
 
 # External extraction is an explicit standalone opt-in, even in local dev.
-export MAMMAMIRADIO_ALLOW_YTDLP="${MAMMAMIRADIO_ALLOW_YTDLP:-false}"
+if [ "$_MAMMAMIRADIO_YTDLP_WAS_SET" = x ]; then
+  export MAMMAMIRADIO_ALLOW_YTDLP="$_MAMMAMIRADIO_YTDLP_REQUESTED"
+else
+  export MAMMAMIRADIO_ALLOW_YTDLP="${MAMMAMIRADIO_ALLOW_YTDLP:-false}"
+fi
 
 RUNTIME_ROOT="$ROOT/.context/conductor"
 export MAMMAMIRADIO_BIND_HOST="${MAMMAMIRADIO_BIND_HOST:-127.0.0.1}"

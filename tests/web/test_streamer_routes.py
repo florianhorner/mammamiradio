@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import os
 import re
 import subprocess
@@ -23,7 +24,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -51,9 +52,11 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.scheduling.handoff import PreparedMusicHandoff, commit_music_handoff
 from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow, _reserve_music_segment
+from mammamiradio.web import provider_verdict as provider_verdict_module
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 from mammamiradio.web.streamer import (
@@ -386,7 +389,7 @@ def test_stream_pacer_records_100ms_lateness_without_moving_the_media_timeline()
 
 @pytest.mark.parametrize(
     "reason",
-    ["no_listeners", "playback_stop_resume", "explicit_skip", "queue_gap_fallback"],
+    ["no_listeners", "playback_stop_resume", "queue_gap_fallback"],
 )
 def test_stream_pacer_resets_only_for_named_transport_discontinuities(reason: str):
     clock = _FakeMonotonic()
@@ -794,6 +797,71 @@ async def test_stale_queued_companionship_epoch_is_discarded_before_audio(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_exact_packaged_banter_rechecks_its_audible_predecessor(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    _, listener_queue = app.state.stream_hub.subscribe()
+    audio = b"exact packaged banter"
+    audio_path = tmp_path / "exact-banter.mp3"
+    audio_path.write_bytes(audio)
+
+    def _segment(queue_id: str) -> Segment:
+        return Segment(
+            type=SegmentType.BANTER,
+            path=audio_path,
+            duration_sec=1.0,
+            metadata={
+                "queue_id": queue_id,
+                "title": "Exact banter",
+                "canned": True,
+                PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY: "EXPECTED-ID",
+            },
+            ephemeral=False,
+        )
+
+    # The exact clip was queued behind EXPECTED-ID, then a queue/source
+    # mutation made another starter the actual audible predecessor.
+    state.now_streaming = {
+        "type": "music",
+        "metadata": {"source_kind": "starter", "provider_track_id": "EXPECTED-ID"},
+    }
+    state.current_stream_audible = False
+    state._last_audible_stream = {
+        "type": "music",
+        "metadata": {"source_kind": "starter", "provider_track_id": "OTHER-ID"},
+    }
+    app.state.queue.put_nowait(_segment("stale-exact"))
+    state.queued_segments = [{"id": "stale-exact", "type": "banter"}]
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert listener_queue.empty()
+        assert state.discard_by_reason[GenerationWasteReason.STALE_PLAYED_TRACK_REF] == 1
+        assert audio_path.exists()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    # The same clip remains eligible when its named starter really was the
+    # immediately previous listener-audible segment.
+    state._last_audible_stream = {
+        "type": "music",
+        "metadata": {"source_kind": "starter", "provider_track_id": "EXPECTED-ID"},
+    }
+    app.state.queue.put_nowait(_segment("current-exact"))
+    state.queued_segments = [{"id": "current-exact", "type": "banter"}]
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        assert await asyncio.wait_for(listener_queue.get(), timeout=1.0) == audio
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        assert state.now_streaming["label"] == "Exact banter"
+        assert state.discard_by_reason[GenerationWasteReason.STALE_PLAYED_TRACK_REF] == 1
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_companionship_epoch_fence_stops_remaining_chunks_after_epoch_changes(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 32
@@ -1194,12 +1262,31 @@ async def test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next(tmp_pat
             await asyncio.gather(task, return_exceptions=True)
 
     queued_at_boundary = observed["queue"]
-    assert observed == {
-        "active": None,
-        "accepted": True,
-        "queue": [successor, forced],
-    }
-    assert queued_at_boundary == [successor, forced]
+    assert isinstance(queued_at_boundary, list)
+    assert observed["active"] is None
+    assert observed["accepted"] is True
+
+    # The guarantee is ordering, not queue contents at one exact tick. The
+    # snapshot is taken from a call_soon callback racing the playback loop's
+    # own queue.get(), so whether the successor is still queued depends on
+    # event-loop dispatch order:
+    #
+    #   3.11   queue == [successor, forced]   successor not yet taken
+    #   3.14   queue == [forced]              successor already taken
+    # (measured at those two points; the exact interpreter where dispatch
+    #  order changes was not pinned down, which is why neither shape is
+    #  asserted as the expected one.)
+    #
+    # Both satisfy "successor ahead of air-next" -- already dequeued is further
+    # ahead, not behind. Pin the invariant, and let the listener assertions
+    # below prove the order actually reached air.
+    # Assert on both shapes, not just the one this interpreter happens to
+    # produce. A bare `if successor in queue` guard is vacuous exactly on
+    # 3.14, where the successor is already dequeued.
+    assert queued_at_boundary[-1] is forced, "air-next must land behind whatever is still queued, never ahead of it"
+    if successor in queued_at_boundary:
+        assert queued_at_boundary.index(successor) < queued_at_boundary.index(forced)
+
     assert listener_queue.get_nowait() == b"head-audio"
     assert listener_queue.get_nowait() == b"speech-audio"
     assert sum(segment is music for segment in emitted) == 1
@@ -2962,6 +3049,69 @@ async def test_playback_built_rescue_rearms_after_epoch_changes_during_probe(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("destination", ["queue", "slot"])
+@pytest.mark.parametrize("playable", [True, False])
+async def test_playback_yields_prepared_recovery_to_new_playable_runway(tmp_path, destination, playable):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    fallback_path = tmp_path / "fallback.mp3"
+    fallback_path.write_bytes(b"fallback" * 4096)
+    fresh_path = tmp_path / "fresh.mp3"
+    if playable:
+        fresh_path.write_bytes(b"fresh" * 4096)
+    fresh = Segment(type=SegmentType.MUSIC, path=fresh_path, duration_sec=10, ephemeral=False)
+    probing = asyncio.Event()
+    release = asyncio.Event()
+    delivered = asyncio.Event()
+    heard = []
+    real_wait_for = asyncio.wait_for
+    waits = 0
+
+    async def _first_timeout(awaitable, *args, **kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            awaitable.close()
+            raise TimeoutError
+        return await real_wait_for(awaitable, *args, **kwargs)
+
+    async def _prepare(_path):
+        probing.set()
+        await release.wait()
+        return Segment(type=SegmentType.BANTER, path=fallback_path, duration_sec=4, ephemeral=False)
+
+    async def _hear(chunk):
+        heard.append(chunk)
+        delivered.set()
+        return 1
+
+    app.state.stream_hub.broadcast = _hear
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", side_effect=_first_timeout),
+        patch("mammamiradio.scheduling.producer._pick_recovery_clip", return_value=fallback_path),
+        patch("mammamiradio.web.streamer._packaged_recovery_segment", side_effect=_prepare),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            async with asyncio.timeout(2):
+                await probing.wait()
+                if destination == "queue":
+                    app.state.queue.put_nowait(fresh)
+                else:
+                    state.continuity_slot = fresh
+                release.set()
+                await delivered.wait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert heard[0].startswith(b"fresh" if playable else b"fallback")
+    assert not state.discard_by_reason
+
+
+@pytest.mark.asyncio
 async def test_rejected_playback_rescue_preserves_gap_clock(tmp_path):
     from mammamiradio.web.streamer import _stamp_playback_gap_fill
 
@@ -3567,16 +3717,7 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
     real_song = tmp_path / "real_song.mp3"
     real_song.write_bytes(b"music-bytes" * 512)
 
-    app.state.queue.put_nowait(
-        Segment(
-            type=SegmentType.MUSIC,
-            path=real_song,
-            metadata={"type": "music", "title": "Real Song"},
-            ephemeral=False,
-        )
-    )
-
-    # Call 1 forces the first gap (clip serves); call 2 lets the real queued
+    # Call 1 forces the first genuinely empty gap; call 2 admits the real
     # segment through (resetting the gap counter); later calls force a second
     # gap that must open with the instant clip again.
     calls = {"n": 0}
@@ -3584,6 +3725,14 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
     async def _scripted_wait(awaitable, *_args, **_kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
+            app.state.queue.put_nowait(
+                Segment(
+                    type=SegmentType.MUSIC,
+                    path=real_song,
+                    metadata={"type": "music", "title": "Real Song"},
+                    ephemeral=False,
+                )
+            )
             return await awaitable
         awaitable.close()
         await asyncio.sleep(0)
@@ -4923,8 +5072,9 @@ async def test_audio_generator_preserves_persisted_session_stopped_on_connect(tm
     assert flag.exists()
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscription(tmp_path):
+async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscription(tmp_path, first_listen):
     """The mini-show is client-local and hands off to the ordinary live hub."""
     import threading
 
@@ -4934,7 +5084,8 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
     app.state.first_listen_receipt = None
     show = tmp_path / "first-listen-show.mp3"
-    show.write_bytes(b"authored-mini-show")
+    opening_bytes = b"english-mini-show" if first_listen else b"italian-mini-show"
+    show.write_bytes(opening_bytes)
 
     mock_request = MagicMock()
     mock_request.app = app
@@ -4943,21 +5094,22 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     approval_threads: list[int] = []
     read_threads: list[int] = []
 
-    def approve_show():
+    def approve_show(*, english):
+        assert english is first_listen
         approval_threads.append(threading.get_ident())
         return show
 
     def chunks(_path):
         read_threads.append(threading.get_ident())
-        yield b"authored-mini-show"
+        yield opening_bytes
 
     with (
         patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
         patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=approve_show),
         patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=chunks),
     ):
-        generator = _audio_generator(mock_request)
-        assert await anext(generator) == b"authored-mini-show"
+        generator = _audio_generator(mock_request, first_listen=first_listen)
+        assert await anext(generator) == opening_bytes
         assert app.state.station_state.listeners_active == 0
 
         live_chunk = asyncio.create_task(anext(generator))
@@ -4974,6 +5126,192 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
     assert app.state.station_state.listeners_active == 0
     assert approval_threads and approval_threads[0] != event_loop_thread
     assert read_threads and read_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_prelude_bytes_count_as_accepted_air_so_readyz_reports_ready(tmp_path):
+    """Scenario 1 (normal): the opening is audio a listener accepted.
+
+    The prelude is paced in real time, so nobody reaches the shared hub for
+    roughly 23s on a cold install. Without this the station reports
+    `503 starting` while it is audibly covering the speaker, which is what the
+    arm64 launch smoke caught.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    state = app.state.station_state
+    state.last_air_monotonic = None
+    show = tmp_path / "show.mp3"
+    show.write_bytes(b"opening")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch(
+            "mammamiradio.web.streamer.iter_first_listen_show_chunks",
+            side_effect=lambda _p: iter([b"opening-a", b"opening-b"]),
+        ),
+    ):
+        generator = _audio_generator(mock_request)
+        assert await anext(generator) == b"opening-a"
+        # The stamp lands after the yield resumes, so it proves the consumer
+        # actually took the bytes rather than that they were merely offered.
+        assert await anext(generator) == b"opening-b"
+        assert state.last_air_monotonic is not None, "prelude bytes did not count as accepted air"
+        # The opening is not a queued segment, so nothing may claim to be on air.
+        assert state.current_stream_audible is False
+        await generator.aclose()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_unreadable_prelude_does_not_fake_accepted_air(tmp_path):
+    """Scenario 2 (empty fallback): a missing or corrupt opening proves nothing.
+
+    The generator falls through to the ordinary live ladder; readiness must
+    still wait for real hub-accepted audio rather than inherit a stamp from an
+    opening that never played.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    state = app.state.station_state
+    state.last_air_monotonic = None
+
+    def unreadable(_path):
+        raise OSError("packaged opening is unreadable")
+        yield  # pragma: no cover - generator protocol only
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=tmp_path / "gone.mp3"),
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=unreadable),
+    ):
+        mock_request = MagicMock()
+        mock_request.app = app
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+        generator = _audio_generator(mock_request)
+        live = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("unreadable opening did not fall through to the live hub")
+            await asyncio.sleep(0)
+        assert state.last_air_monotonic is None, "an opening that never played must not prove readiness"
+        await app.state.stream_hub.broadcast(b"live")
+        assert await live == b"live"
+        await generator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stopped_session_prelude_never_stamps_accepted_air(tmp_path):
+    """Scenario 3 (post-restart): a stopped session must not read as ready.
+
+    The watchdog can restart the add-on with `session_stopped` still persisted.
+    A listener connecting then gets no opening, so nothing may stamp air.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    (tmp_path / "session_stopped.flag").touch()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.last_air_monotonic = None
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=tmp_path / "show.mp3"),
+    ):
+        generator = _audio_generator(mock_request)
+        async for _ in generator:  # pragma: no cover - exits before yielding
+            break
+
+    assert state.last_air_monotonic is None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/readyz")
+    assert resp.status_code == 503
+    assert resp.json()["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_first_listen_receipt_completion_keeps_the_connected_live_stream(tmp_path):
+    """Heard/privacy receipts never terminate or replay an attached stream."""
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"authored-mini-show")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True) as show_required,
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch(
+            "mammamiradio.web.streamer.iter_first_listen_show_chunks",
+            return_value=iter([b"authored-mini-show"]),
+        ) as show_chunks,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        assert await anext(generator) == b"authored-mini-show"
+
+        before_receipt = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("First Listen did not attach to the live hub")
+            await asyncio.sleep(0)
+        await app.state.stream_hub.broadcast(b"live-before-receipt")
+        assert await asyncio.wait_for(before_receipt, timeout=1.0) == b"live-before-receipt"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+        )
+        after_heard = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-heard")
+        assert await asyncio.wait_for(after_heard, timeout=1.0) == b"live-after-heard"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+            privacy_reviewed_at=102.0,
+        )
+        after_privacy = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-privacy")
+        assert await asyncio.wait_for(after_privacy, timeout=1.0) == b"live-after-privacy"
+        assert app.state.station_state.listeners_active == 1
+        await generator.aclose()
+
+    assert app.state.station_state.listeners_active == 0
+    show_required.assert_called_once_with(app.state)
+    show_chunks.assert_called_once_with(show)
 
 
 @pytest.mark.asyncio
@@ -5202,8 +5540,9 @@ async def test_password_configured_active_setup_still_rejects_a_rebound_host_wit
     assert response.status_code in (401, 403)
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path):
+async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path, first_listen):
     """A truncated packaged mini-show must hand off to live audio, never silence."""
     from mammamiradio.web.streamer import _audio_generator
 
@@ -5224,7 +5563,7 @@ async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_pa
         patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
         patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=broken_chunks),
     ):
-        generator = _audio_generator(mock_request)
+        generator = _audio_generator(mock_request, first_listen=first_listen)
         assert await anext(generator) == b"partial-show"
 
         live_chunk = asyncio.create_task(anext(generator))
@@ -5241,8 +5580,9 @@ async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_pa
     assert app.state.station_state.listeners_active == 0
 
 
+@pytest.mark.parametrize("first_listen", [False, True])
 @pytest.mark.asyncio
-async def test_first_listen_package_approval_timeout_falls_through_to_live_audio():
+async def test_first_listen_package_approval_timeout_falls_through_to_live_audio(first_listen, caplog):
     """Slow package I/O never consumes the instant-audio startup guarantee."""
     import threading
 
@@ -5250,8 +5590,10 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
 
     app = _make_test_app()
     release_approval = threading.Event()
+    selections = []
 
-    def stalled_approval():
+    def stalled_approval(*, english):
+        selections.append(english)
         release_approval.wait(timeout=1)
         return None
 
@@ -5265,7 +5607,7 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
             patch("mammamiradio.web.streamer.approved_first_listen_show_path", side_effect=stalled_approval),
             patch("mammamiradio.web.streamer.FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS", 0.01),
         ):
-            generator = _audio_generator(mock_request)
+            generator = _audio_generator(mock_request, first_listen=first_listen)
             live_chunk = asyncio.create_task(anext(generator))
             deadline = time.monotonic() + 0.5
             while app.state.station_state.listeners_active == 0:
@@ -5279,6 +5621,8 @@ async def test_first_listen_package_approval_timeout_falls_through_to_live_audio
     finally:
         release_approval.set()
 
+    assert selections == [first_listen]
+    assert "First Listen package approval exceeded the first-audio budget" in caplog.text
     assert app.state.station_state.listeners_active == 0
 
 
@@ -5333,6 +5677,238 @@ async def test_skip_route_succeeds_when_skip_history_persistence_fails():
     assert app.state.skip_event.is_set()
     assert app.state.station_state.now_streaming["type"] == "skipping"
     persona_store.record_play.assert_awaited_once()
+
+
+def _skip_latency_percentile(samples: list[float], percentile: float) -> float:
+    """Nearest-rank percentile for the probe's delay samples."""
+    if not samples:
+        return 0.0
+    ordered = sorted(samples)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = max(1, min(len(ordered), math.ceil(percentile / 100.0 * len(ordered))))
+    return ordered[rank - 1]
+
+
+def _skip_latency_probe_cycles() -> int:
+    """Read the optional probe cycle count with a useful configuration error."""
+    raw_cycles = os.environ.get("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", "10")
+    try:
+        return max(1, int(raw_cycles))
+    except (TypeError, ValueError):
+        pytest.fail(
+            "Invalid MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES configuration: expected an integer, got " + repr(raw_cycles)
+        )
+
+
+@pytest.mark.parametrize(
+    ("configured_cycles", "expected_cycles"),
+    [(None, 10), ("0", 1), ("-2", 1), ("3", 3)],
+)
+def test_skip_latency_probe_cycles_preserves_default_and_minimum(monkeypatch, configured_cycles, expected_cycles):
+    if configured_cycles is None:
+        monkeypatch.delenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", raising=False)
+    else:
+        monkeypatch.setenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", configured_cycles)
+
+    assert _skip_latency_probe_cycles() == expected_cycles
+
+
+@pytest.mark.parametrize("configured_cycles", ["", "not-a-number"])
+def test_skip_latency_probe_cycles_fails_clearly_for_invalid_configuration(monkeypatch, configured_cycles):
+    monkeypatch.setenv("MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES", configured_cycles)
+
+    with pytest.raises(
+        pytest.fail.Exception,
+        match=r"Invalid MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES configuration: expected an integer",
+    ):
+        _skip_latency_probe_cycles()
+
+
+@pytest.mark.asyncio
+async def test_skip_latency_probe_measures_app_to_listener_handoff(tmp_path):
+    """Repeated skip probe at the accepted-listener boundary (no new production fields).
+
+    Seeds deterministic current/next segments, POSTs ``/api/skip``, and records
+    command acceptance → ``skipping`` → playback-epoch change → the next
+    segment's accepted-listener audible commit. Collects pacing/underrun/drop
+    counters and reports P50/P95 app-to-listener handoff delay. Opt into a longer run with
+    ``MAMMAMIRADIO_SKIP_LATENCY_PROBE_CYCLES`` (default 10).
+    """
+    cycles = _skip_latency_probe_cycles()
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    state = app.state.station_state
+    listener_id, listener_queue = app.state.stream_hub.subscribe()
+
+    segments: list[Segment] = []
+    for index in range(cycles + 1):
+        path = tmp_path / f"skip-probe-{index}.mp3"
+        # Enough packets that a held first-chunk pacing wait cannot race EOF.
+        path.write_bytes(b"x" * (4096 * 8))
+        segment = Segment(
+            type=SegmentType.MUSIC,
+            path=path,
+            duration_sec=30.0,
+            metadata={
+                "title": f"Probe Artist – Probe {index}",
+                "title_only": f"Probe {index}",
+                "artist": "Probe Artist",
+                "queue_id": f"skip-probe-{index}",
+                "duration_ms": 30_000,
+            },
+            ephemeral=False,
+        )
+        segments.append(segment)
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {
+            "id": segment.metadata["queue_id"],
+            "type": "music",
+            "label": segment.metadata["title"],
+            "duration_sec": 30.0,
+        }
+        for segment in segments
+    ]
+
+    hold_for_skip = asyncio.Event()
+    hold_for_skip.set()
+    real_sleep = asyncio.sleep
+
+    async def _hold_after_audible_chunk(seconds: float) -> None:
+        if hold_for_skip.is_set() and state.current_stream_audible:
+            await app.state.skip_event.wait()
+            return
+        await real_sleep(0)
+
+    handoffs: list[dict] = []
+    seen_titles: list[str] = []
+    playback_task = asyncio.create_task(run_playback_loop(app))
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    try:
+        with (
+            patch("mammamiradio.web.streamer.asyncio.sleep", side_effect=_hold_after_audible_chunk),
+            patch("mammamiradio.playlist.song_cues.detect_skip_bit", new=AsyncMock(return_value=False)),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                for index in range(cycles):
+                    expected_current = f"Probe {index}"
+                    expected_next = f"Probe {index + 1}"
+                    deadline = time.monotonic() + 2.0
+                    while True:
+                        label = str((state.now_streaming or {}).get("label") or "")
+                        if state.current_stream_audible and expected_current in label:
+                            break
+                        if time.monotonic() > deadline:
+                            raise AssertionError(
+                                f"cycle {index}: current segment never became listener-audible "
+                                f"(label={label!r}, audible={state.current_stream_audible})"
+                            )
+                        await real_sleep(0)
+
+                    epoch_before = state.playback_epoch
+                    audible_before = state.audible_playback_epoch
+                    command_started = time.perf_counter()
+                    response = await client.post("/api/skip")
+                    command_accepted_at = time.perf_counter()
+                    assert response.status_code == 200, response.text
+                    body = response.json()
+                    assert body.get("ok") is True, body
+                    assert body.get("bridged") is False, body
+                    assert (state.now_streaming or {}).get("type") == "skipping"
+                    skipping_at = time.perf_counter()
+
+                    deadline = time.monotonic() + 2.0
+                    while state.playback_epoch <= epoch_before:
+                        if time.monotonic() > deadline:
+                            raise AssertionError(
+                                f"cycle {index}: playback epoch did not advance after skip "
+                                f"(before={epoch_before}, now={state.playback_epoch})"
+                            )
+                        await real_sleep(0)
+                    epoch_changed_at = time.perf_counter()
+
+                    deadline = time.monotonic() + 2.0
+                    while True:
+                        label = str((state.now_streaming or {}).get("label") or "")
+                        if (
+                            state.current_stream_audible
+                            and expected_next in label
+                            and state.audible_playback_epoch > audible_before
+                        ):
+                            break
+                        if time.monotonic() > deadline:
+                            raise AssertionError(
+                                f"cycle {index}: next segment never reached an accepted listener "
+                                f"(label={label!r}, audible={state.current_stream_audible}, "
+                                f"audible_epoch={state.audible_playback_epoch})"
+                            )
+                        # Drain prior chunks while waiting so the harness cannot
+                        # manufacture a synthetic slow-listener drop.
+                        with contextlib.suppress(asyncio.QueueEmpty):
+                            while True:
+                                chunk = listener_queue.get_nowait()
+                                assert chunk, "listener received an empty/sentinel chunk mid-probe"
+                        await real_sleep(0)
+                    listener_at = time.perf_counter()
+                    seen_titles.append(str((state.now_streaming or {}).get("label") or ""))
+
+                    accepted_chunks = 0
+                    while True:
+                        try:
+                            chunk = listener_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        assert chunk, "listener received an empty/sentinel chunk mid-probe"
+                        accepted_chunks += 1
+                    assert accepted_chunks > 0, f"cycle {index}: audible commit had no accepted listener chunk"
+
+                    handoffs.append(
+                        {
+                            "command_ms": (command_accepted_at - command_started) * 1000,
+                            "skipping_ms": (skipping_at - command_started) * 1000,
+                            "epoch_ms": (epoch_changed_at - command_started) * 1000,
+                            "listener_ms": (listener_at - command_started) * 1000,
+                            "playback_epoch": state.playback_epoch,
+                            "audible_playback_epoch": state.audible_playback_epoch,
+                        }
+                    )
+    finally:
+        hold_for_skip.clear()
+        if not app.state.skip_event.is_set():
+            app.state.skip_event.set()
+        playback_task.cancel()
+        await asyncio.gather(playback_task, return_exceptions=True)
+        app.state.stream_hub.unsubscribe(listener_id)
+
+    assert not app.state.stream_hub.has_listener(listener_id)
+    assert len(handoffs) == cycles
+    assert len(seen_titles) == cycles
+    for index, title in enumerate(seen_titles):
+        assert f"Probe {index + 1}" in title, f"duplicate/late segment at cycle {index}: {title!r}"
+
+    delivery = state.stream_delivery_snapshot()
+    # No underrun assertion here on purpose. This harness runs the pacer at
+    # target_lead_seconds=0.0 (see _make_test_app), where the benign "late"
+    # band is unreachable -- lateness >= the threshold implies the lead is
+    # already negative -- so any host stall over 50ms is reported as a cushion
+    # exhaustion on a pacer that has no cushion. That measured the runner, not
+    # the station. The real cushion is covered by the StreamPacer unit tests at
+    # the production lead; what this probe owns is handoff latency and whether
+    # a skip costs anyone their stream.
+    assert delivery["slow_listener_drops"]["session"] == 0, delivery
+
+    listener_delays = [item["listener_ms"] for item in handoffs]
+    p50 = _skip_latency_percentile(listener_delays, 50)
+    p95 = _skip_latency_percentile(listener_delays, 95)
+    # Bound is for missing transitions / dead air, not Sonos-audibility. Instant
+    # test pacing should hand off well under a second; keep headroom for CI load.
+    assert p95 < 1000.0, f"skip listener handoff too slow: p50={p50:.1f}ms p95={p95:.1f}ms samples={listener_delays}"
+    print(
+        f"skip_latency_probe cycles={cycles} "
+        f"p50_listener_ms={p50:.1f} p95_listener_ms={p95:.1f} "
+        f"samples_ms={','.join(f'{value:.1f}' for value in listener_delays)}"
+    )
 
 
 @pytest.mark.asyncio
@@ -5788,6 +6364,178 @@ async def test_setup_status_and_recheck_share_projection():
     assert recheck["recommended_next_action"] == status["recommended_next_action"]
 
 
+async def _post_setup_probe(client, path, payload=None):
+    return await client.post(f"/api/setup/{path}", headers=ACTIVE_SETUP_HEADERS, json=payload or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["ok", "exception", "quota", "network"])
+async def test_setup_recheck_reports_shared_probe_result(outcome: str):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    probe = (
+        AsyncMock(side_effect=RuntimeError("probe failed"))
+        if outcome == "exception"
+        else AsyncMock(return_value=_probe_payload(anthropic=outcome))
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=probe):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await _post_setup_probe(client, "recheck")
+
+    probe.assert_awaited_once_with(app.state.config, on_ai_checked=ANY)
+    assert app.state.station_state.anthropic_key_status == ("valid" if outcome == "ok" else "unverified")
+    assert response.json()["provider_check_pending"] is False
+    assert response.json()["provider_check_failed"] is (outcome != "ok")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ai_status", [200, 429])
+async def test_setup_recheck_settles_ai_while_voice_probe_is_slow(ai_status):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    app.state.config.azure_speech_key = "voice-key"
+    app.state.config.azure_speech_region = "westeurope"
+    voice_started = asyncio.Event()
+    release_voice = asyncio.Event()
+
+    async def slow_voice(*_args, **_kwargs):
+        voice_started.set()
+        await release_voice.wait()
+        return 401, ""
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.core.provider_checks._post_json", new=AsyncMock(return_value=(ai_status, ""))),
+        patch("mammamiradio.core.provider_checks._post_empty", new=slow_voice),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            try:
+                recheck = await asyncio.wait_for(_post_setup_probe(client, "recheck"), timeout=1)
+                await voice_started.wait()
+                assert recheck.json()["provider_check_pending"] is False
+                assert recheck.json()["provider_check_failed"] is (ai_status == 429)
+                assert app.state.station_state.anthropic_key_status == ("valid" if ai_status == 200 else "unverified")
+                assert (await client.get("/api/capabilities")).json()["provider_health"]["probe_in_flight"] is False
+                full = asyncio.create_task(_post_setup_probe(client, "provider-check"))
+                await asyncio.sleep(0)
+                assert not full.done()
+            finally:
+                release_voice.set()
+            assert (await full).json()["providers"]["azure_speech"]["error_type"] == "authentication_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save_first", [False, True])
+async def test_recheck_joins_in_flight_probe_without_waiting_for_completion(save_first: bool):
+    app = _make_test_app()
+    if not save_first:
+        app.state.config.anthropic_api_key = "test-key"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_probe(_config, **_kwargs):
+        started.set()
+        await release.wait()
+        return _probe_payload(anthropic="ok")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._SETUP_RECHECK_PROVIDER_WAIT_SECONDS", 0.01),
+        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            if save_first:
+                saved = await _post_setup_probe(client, "save-keys", {"ANTHROPIC_API_KEY": "test-key"})
+                assert saved.status_code == 200
+                await started.wait()
+            recheck = await asyncio.wait_for(_post_setup_probe(client, "recheck"), timeout=1)
+            pending = (await client.get("/api/capabilities")).json()
+            assert pending["capabilities"]["provider_probe_in_flight"] is True
+            assert pending["provider_health"]["probe_in_flight"] is True
+            assert recheck.json()["provider_check_pending"] is True
+            repeated = await _post_setup_probe(client, "recheck")
+            assert repeated.json()["provider_check_pending"] is True
+            release.set()
+            if save_first:
+                await app.state.provider_verdict_task
+            await app.state._setup_recheck_provider_task
+            completed_recheck = await _post_setup_probe(client, "recheck")
+            assert completed_recheck.json()["provider_check_pending"] is False
+            settled = (await client.get("/api/capabilities")).json()
+            status = (await client.get("/status")).json()
+
+    assert settled["capabilities"]["provider_probe_in_flight"] is False
+    assert settled["capabilities"]["anthropic_key_status"] == "valid"
+    assert status["provider_health"]["probe_in_flight"] is False
+    probe.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_old", [False, True])
+async def test_setup_recheck_fences_old_probe_across_key_cycle(fail_old):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "old-test-key"
+    old_keys = provider_verdict_module._provider_check_identity(app.state)
+    app.state._provider_check_generation = 1
+    with pytest.raises(RuntimeError, match="changed before the check started"):
+        await provider_verdict_module._perform_provider_probe(
+            app.state, old_keys, asyncio.get_running_loop().create_future()
+        )
+    app.state._provider_check_generation = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def probe(_config, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            if fail_old:
+                raise RuntimeError("old probe failed")
+            return _probe_payload(anthropic="auth")
+        return _probe_payload(anthropic="ok")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._run_provider_verdict", new=AsyncMock()),
+        patch("mammamiradio.web.provider_verdict.check_provider_keys", new=probe),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            old_request = asyncio.create_task(provider_verdict_module._probe_provider_keys(app.state))
+            await started.wait()
+            old_worker = app.state._provider_check_task
+            await _post_setup_probe(client, "save-keys", {"ANTHROPIC_API_KEY": "new-test-key"})
+            await _post_setup_probe(client, "recheck")
+            assert app.state.station_state.anthropic_key_status == "valid"
+            await _post_setup_probe(client, "save-keys", {"ANTHROPIC_API_KEY": "old-test-key"})
+            assert (await _post_setup_probe(client, "recheck")).status_code == 200
+            assert app.state._provider_check_generation == 2
+            assert old_worker in app.state.background_tasks
+            assert app.state._provider_check_task is not old_worker
+            release.set()
+            if fail_old:
+                with pytest.raises(RuntimeError, match="old probe failed"):
+                    await old_request
+            else:
+                await old_request
+            await app.state.provider_verdict_task
+            assert app.state._provider_check_cached_result is not None
+            await _post_setup_probe(client, "save-keys", {"ANTHROPIC_API_KEY": "new-test-key"})
+            assert app.state._provider_check_cached_result is None
+            assert app.state.station_state.anthropic_key_status == "unverified"
+            await _post_setup_probe(client, "recheck")
+
+    assert calls == 4
+    assert app.state.station_state.anthropic_key_status == "valid"
+
+
 @pytest.mark.asyncio
 async def test_active_setup_recheck_requires_csrf_and_exact_empty_json_on_loopback():
     app = _make_test_app()
@@ -6135,6 +6883,7 @@ async def test_status_operator_force_pending_set_only_by_trigger():
     force_next directly) must NOT — otherwise the panel lies during an incident.
     """
     app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         # Internal force (simulates the 60s-silence dead-air rescue / stop-skip music force).
@@ -6158,6 +6907,7 @@ async def test_trigger_rejects_second_while_one_pending():
     from mammamiradio.core.models import SegmentType
 
     app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"  # the second tap is an ad; it must be makeable
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         first = await client.post("/api/trigger", json={"type": "banter"})
@@ -6198,6 +6948,154 @@ async def test_interrupt_supersedes_earlier_operator_trigger_without_stranding_g
 
     assert retry.json() == {"ok": True, "triggered": "banter"}
     assert state.operator_force_pending is SegmentType.BANTER
+
+
+def _keyless_ad_app(**overrides):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = ""
+    app.state.config.openai_api_key = ""
+    for name, value in overrides.items():
+        setattr(app.state.station_state, name, value)
+    return app
+
+
+@pytest.fixture
+def no_packaged_ads(monkeypatch):
+    """Exercise refusals only when the second ad source is also unavailable."""
+    monkeypatch.setattr("mammamiradio.scheduling.producer.packaged_ad_programme_available", lambda _config: False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("super_italian", [False, True])
+async def test_packaged_bank_enables_ad_button_and_status_without_live_config(monkeypatch, super_italian):
+    app = _keyless_ad_app()
+    app.state.config.ads.brands = []
+    app.state.config.super_italian_mode = super_italian
+    monkeypatch.setattr(
+        "mammamiradio.scheduling.producer.packaged_ad_programme_available",
+        lambda config: config.super_italian_mode == super_italian,
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        status = (await client.get("/status")).json()
+        trigger = (await client.post("/api/trigger", json={"type": "ad"})).json()
+    assert status["pacing"]["ad_block"] is None
+    assert trigger == {"ok": True, "triggered": "ad"}
+    assert app.state.station_state.operator_force_pending is SegmentType.AD
+
+
+@pytest.mark.asyncio
+async def test_ad_break_button_refuses_an_ad_the_station_cannot_write(no_packaged_ads):
+    """A forced ad needs the same model-route guard as natural scheduling."""
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    for profile in app.state.config.models.profiles.values():
+        profile["anthropic"].pop("creative", None)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+    body = response.json()
+    assert body["ok"] is False
+    assert "ad model route" in body["error"].lower()
+    assert "model_registry.toml" in body["error"]  # the way out, leadership #5
+    assert "tap ad break again" in body["error"].lower()
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.operator_force_pending is None
+
+
+@pytest.mark.asyncio
+async def test_ad_break_button_names_brands_when_brands_are_what_is_missing(no_packaged_ads):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    app.state.config.ads.brands = []
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "ad brands" in body["error"].lower()
+    assert "ai key" not in body["error"].lower()
+    assert app.state.station_state.force_next is None
+
+
+@pytest.mark.asyncio
+async def test_ad_break_button_refuses_when_the_provider_refused_the_key(no_packaged_ads):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    app.state.config.openai_api_key = ""
+    app.state.station_state.anthropic_key_status = "rejected"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        trigger = (await client.post("/api/trigger", json={"type": "ad"})).json()
+        status = (await client.get("/status")).json()
+
+    assert trigger["ok"] is False
+    assert "check it in motore" in trigger["error"].lower()
+    assert status["pacing"]["ad_block"] == "no_ai_key"
+    assert app.state.station_state.force_next is None
+
+
+@pytest.mark.asyncio
+async def test_a_missing_key_is_named_even_while_another_pick_is_pending(no_packaged_ads):
+    app = _keyless_ad_app(operator_force_pending=SegmentType.BANTER)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "ai key" in body["error"].lower()
+    assert app.state.station_state.operator_force_pending is SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_a_paused_station_is_named_before_a_missing_key():
+    app = _keyless_ad_app(session_stopped=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/trigger", json={"type": "ad"})
+
+    body = response.json()
+    assert body["ok"] is False
+    assert "paused" in body["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_banter_and_news_triggers_are_unaffected_without_a_key():
+    for picked in ("banter", "news_flash"):
+        app = _keyless_ad_app()
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/trigger", json={"type": picked})
+
+        assert response.json() == {"ok": True, "triggered": picked}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "brands", "route", "expected"),
+    [
+        (True, True, True, None),
+        (False, True, True, "no_ai_key"),
+        (True, False, True, "no_ad_brands"),
+        (True, True, False, "no_ad_route"),
+    ],
+)
+async def test_status_names_why_ads_cannot_air(key, brands, route, expected, no_packaged_ads):
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key" if key else ""
+    app.state.config.openai_api_key = ""
+    if not brands:
+        app.state.config.ads.brands = []
+    if not route:
+        for profile in app.state.config.models.profiles.values():
+            profile["anthropic"].pop("creative", None)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/status")).json()
+
+    assert body["pacing"]["ad_block"] == expected
 
 
 @pytest.mark.asyncio
@@ -6293,7 +7191,9 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
         },
     }
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe_payload)
+    ) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
 
@@ -6302,14 +7202,14 @@ async def test_setup_provider_check_returns_secret_safe_probe_payload():
     assert body == probe_payload
     assert "anthropic-secret" not in resp.text
     assert "openai-secret" not in resp.text
-    probe.assert_awaited_once_with(app.state.config)
+    probe.assert_awaited_once_with(app.state.config, on_ai_checked=ANY)
 
 
 @pytest.mark.asyncio
 async def test_setup_provider_check_requires_exact_empty_json():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock()) as probe:
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock()) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             missing = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS)
             extra = await client.post(
@@ -6332,14 +7232,14 @@ async def test_setup_provider_check_shares_in_flight_probe():
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def slow_probe(config):
+    async def slow_probe(config, **_kwargs):
         assert config is app.state.config
         started.set()
         await release.wait()
         return probe_payload
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             first = asyncio.create_task(client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={}))
             await started.wait()
@@ -6363,7 +7263,9 @@ async def test_setup_provider_check_returns_cached_result_within_debounce_window
     app = _make_test_app()
     probe_payload = {"ok": True, "providers": {}}
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=probe_payload)) as probe:
+    with patch(
+        "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=probe_payload)
+    ) as probe:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             first = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
             second = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
@@ -6383,7 +7285,7 @@ async def test_setup_provider_check_clears_task_on_exception():
     # than propagating them, so we can inspect app state after the failure.
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
     with patch(
-        "mammamiradio.web.streamer.check_provider_keys",
+        "mammamiradio.web.provider_verdict.check_provider_keys",
         new=AsyncMock(side_effect=RuntimeError("probe failed")),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -6397,14 +7299,15 @@ async def test_setup_provider_check_clears_task_on_exception():
 async def test_setup_provider_check_clears_task_on_cancel():
     """Cancelling the in-flight provider-check task clears the task reference."""
     app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
     barrier = asyncio.Event()
 
-    async def slow_probe(_config):
+    async def slow_probe(_config, **_kwargs):
         barrier.set()
         await asyncio.sleep(10)
         return {"anthropic": True}
 
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=slow_probe):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=slow_probe):
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345), raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             check_coro = client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
@@ -6414,13 +7317,52 @@ async def test_setup_provider_check_clears_task_on_cancel():
             # HTTP task observe the cancellation.
             probe_task = app.state._provider_check_task
             assert probe_task is not None
+            recheck_task = asyncio.create_task(_post_setup_probe(client, "recheck"))
+            async with asyncio.timeout(2):
+                while getattr(app.state, "_setup_recheck_provider_task", None) is None:
+                    await asyncio.sleep(0.001)
             probe_task.cancel()
+            recheck = await recheck_task
+            assert recheck.json()["provider_check_pending"] is False
+            assert recheck.json()["provider_check_failed"] is True
             try:
                 await check_task
             except (asyncio.CancelledError, httpx.RemoteProtocolError):
                 pass
 
     assert getattr(app.state, "_provider_check_task", None) is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_provider_check_waiter_keeps_shared_probe_for_verdict():
+    app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_probe(_config, **_kwargs):
+        started.set()
+        await release.wait()
+        return _probe_payload(anthropic="ok")
+
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=slow_probe)) as probe:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request_task = asyncio.create_task(provider_verdict_module._probe_provider_keys(app.state))
+            await started.wait()
+            shared_task = app.state._provider_check_task
+            request_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request_task
+            assert not shared_task.done()
+            release.set()
+            await shared_task
+            app.state._provider_check_cached_at -= 3
+            renewed = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
+
+    assert app.state.station_state.anthropic_key_status == "valid"
+    assert renewed.status_code == 200
+    assert probe.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -7113,6 +8055,160 @@ async def test_stop_never_treats_transport_sentinel_as_real_media(tmp_path, sent
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resume_via", ["admin", "ha"])
+@pytest.mark.parametrize("busy", [False, True])
+async def test_resume_audio_finishes_before_producer_wake_without_duplicate_recovery(tmp_path, resume_via, busy):
+    from mammamiradio.scheduling import producer
+    from mammamiradio.web.streamer import _bridge_health_snapshot, _resume_station
+
+    app = _make_test_app()
+    config = app.state.config
+    config.cache_dir = config.tmp_dir = tmp_path
+    config.homeassistant.enabled = False
+    config.pacing.lookahead_segments = 2 if busy else 1
+    config.audio.bitrate = 3200
+    state = app.state.station_state
+    state.session_stopped = not busy
+    if not busy:
+        (tmp_path / "session_stopped.flag").touch()
+    app.state.stream_hub.subscribe()
+    parked = asyncio.Event()
+    release_wake = asyncio.Event()
+    rendering = asyncio.Event()
+    release_render = asyncio.Event()
+    later_drain = asyncio.Event()
+
+    class DelayedResume(asyncio.Event):
+        async def wait(self):
+            assert not busy, "the busy producer must miss the stopped boolean entirely"
+            parked.set()
+            await super().wait()
+            await release_wake.wait()
+            return True
+
+    state.resume_event = DelayedResume()
+    music_path = tmp_path / "ordinary.mp3"
+    track = state.playlist[0]
+    render_calls = 0
+
+    async def _render(*_args, **_kwargs):
+        nonlocal render_calls
+        render_calls += 1
+        if busy and render_calls == 2:
+            parked.set()  # one admitted segment; the next render spans Stop/Resume
+            await release_wake.wait()
+        elif not busy or render_calls > 2:
+            rendering.set()
+            await release_render.wait()
+        music_path.write_bytes(b"ordinary" * 512)
+        return producer.RenderedMusicTrack(track=track, path=music_path, cache_path=music_path, cache_hit=True)
+
+    async def _later_drain(*_args, **_kwargs):
+        later_drain.set()
+        raise asyncio.CancelledError
+
+    async def _passthrough(segment, *_args, **_kwargs):
+        return segment
+
+    playback_task = None
+    with (
+        patch.object(producer, "next_segment_type", return_value=SegmentType.MUSIC),
+        patch.object(producer, "_select_accepted_music_track", return_value=track),
+        patch.object(producer, "_render_music_track", side_effect=_render),
+        patch.object(producer, "_apply_egress", side_effect=_passthrough),
+        patch.object(producer, "validate_segment_audio"),
+        patch.object(producer, "fetch_home_context", new_callable=AsyncMock),
+        patch.object(producer, "_queue_continuity_bridge", new=AsyncMock(return_value=False)) as wake_bridge,
+        patch.object(producer, "_queue_drain_recovery_bridge", side_effect=_later_drain) as drain,
+    ):
+        task = asyncio.create_task(producer.run_producer(app.state.queue, state, config))
+        try:
+            async with asyncio.timeout(5):
+                await parked.wait()
+                transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                    if busy:
+                        assert (await client.post("/api/stop")).status_code == 200
+                    if resume_via == "admin":
+                        assert (await client.post("/api/resume")).status_code == 200
+                    else:
+                        await _resume_station(app.state)
+                playback_task = asyncio.create_task(run_playback_loop(app))
+                await app.state.queue.join()  # EOF, not just selection or first byte
+                assert state._last_audible_stream["metadata"]["continuity_reservation"]
+                assert not state.current_stream_audible
+                assert state.active_playback_segment is None
+                config.pacing.lookahead_segments = 1
+                release_wake.set()
+                await rendering.wait()
+                wake_bridge.assert_not_awaited()
+                drain.assert_not_awaited()
+                assert state.bridge_fires_by_type["continuity"] == 1
+                assert _bridge_health_snapshot(state)["window_count"] == 0
+                release_render.set()
+                await later_drain.wait()  # ordinary admission re-arms genuine recovery
+        finally:
+            task.cancel()
+            if playback_task is not None:
+                playback_task.cancel()
+            await asyncio.gather(task, *([playback_task] if playback_task else []), return_exceptions=True)
+
+    assert not (tmp_path / "session_stopped.flag").exists()
+    drain.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_force_resume_recovers_when_busy_producer_never_observed_stop(tmp_path):
+    from mammamiradio.scheduling import producer
+
+    app = _make_test_app()
+    config = app.state.config
+    config.cache_dir = config.tmp_dir = tmp_path
+    config.homeassistant.enabled = False
+    state = app.state.station_state
+    app.state.stream_hub.subscribe()
+    rendering = asyncio.Event()
+    release = asyncio.Event()
+    path = tmp_path / "old-render.mp3"
+    track = state.playlist[0]
+
+    async def _render(*_args, **_kwargs):
+        rendering.set()
+        await release.wait()
+        path.write_bytes(b"old timeline")
+        return producer.RenderedMusicTrack(track=track, path=path, cache_path=path, cache_hit=True)
+
+    with (
+        patch.object(producer, "next_segment_type", return_value=SegmentType.MUSIC),
+        patch.object(producer, "_select_accepted_music_track", return_value=track),
+        patch.object(producer, "_render_music_track", side_effect=_render),
+        patch.object(producer, "validate_segment_audio"),
+        patch.object(producer, "fetch_home_context", new_callable=AsyncMock),
+        patch.object(producer, "_queue_continuity_bridge", side_effect=asyncio.CancelledError) as bridge,
+    ):
+        task = asyncio.create_task(producer.run_producer(app.state.queue, state, config))
+        try:
+            await asyncio.wait_for(rendering.wait(), timeout=2)
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                assert (await client.post("/api/stop")).status_code == 200
+                response = await client.post("/api/resume?force=true")
+            assert response.status_code == 200
+            assert response.json()["recovering"] is True
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    bridge.assert_awaited_once()
+    assert bridge.call_args.kwargs["bridge_type"] == "resume"
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    assert app.state.queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_resume_warm_cache_reservation_is_synchronous_and_probe_free(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
@@ -7166,6 +8262,240 @@ async def test_resume_cold_cache_reserves_packaged_continuity_without_probe(tmp_
     assert runway[0].path == _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
     assert runway[0].metadata["continuity_reservation"] is True
     probe.assert_not_called()
+
+
+def _install_starter_playlist(state: StationState) -> None:
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+
+    tracks = load_starter_tracks()
+    state.playlist = tracks
+    state.playlist_source = starter_source(len(tracks))
+
+
+@pytest.mark.asyncio
+async def test_resume_cold_cache_reserves_starter_music_without_probe(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    with patch("mammamiradio.web.streamer.probe_duration_sec") as probe:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert len(runway) == 1
+    assert runway[0].metadata["audio_source"] == "starter"
+    assert runway[0].metadata["continuity_reservation"] is True
+    assert runway[0].path != _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert runway[0].path.is_file()
+    probe.assert_not_called()
+    reserved = state.music_admission_reservations[runway[0].metadata["queue_id"]]
+    assert reserved.source == "starter"
+    assert reserved.cache_key in {track.cache_key for track in state.playlist}
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_stopped_when_stop_lands_during_starter_prepare(tmp_path):
+    """A real Stop under the prepare await keeps the station paused, and says so.
+
+    The stimulus must be an actual Stop, not a bare ``continuity_epoch`` bump:
+    two dozen paths advance that counter, so a test that bumps it directly proves
+    nothing about Stop and pins every one of those paths to the same refusal.
+    """
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+    real_prepare = producer_mod._prepare_starter_catalog_runway
+
+    async def prepare_then_stop(*args, **kwargs):
+        prepared = await real_prepare(*args, **kwargs)
+        # Exactly what POST /api/stop does to the fields Resume reads.
+        state.session_stopped = True
+        state.session_stop_revision += 1
+        state.continuity_epoch += 1
+        return prepared
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=prepare_then_stop):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["ok"] is False
+    # The refusal must name the control conflict, not missing assets, and must
+    # not offer Force Start -- that remedy would undo the operator's own Stop.
+    assert "paused again" in payload["error"]
+    assert "force_available" not in payload
+    assert "recovery audio" not in payload["error"]
+    assert state.session_stopped is True
+    assert marker.exists()
+    assert not state.resume_event.is_set()
+    assert state.music_admission_reservations == {}
+
+
+@pytest.mark.asyncio
+async def test_resume_still_reserves_ladder_when_another_control_moves_the_epoch(tmp_path):
+    """A non-Stop control under the await costs the starter song, never the audio.
+
+    Pool purge, per-row ban, and bulk ban all reserve continuity runway with no
+    ``session_stopped`` guard, so they advance ``continuity_epoch`` while the
+    station is paused. Resume must drop the now-stale starter candidate and still
+    come back with the packaged ladder.
+    """
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+    real_prepare = producer_mod._prepare_starter_catalog_runway
+
+    async def prepare_then_unrelated_control(*args, **kwargs):
+        prepared = await real_prepare(*args, **kwargs)
+        state.continuity_epoch += 1  # a ban or purge, NOT a stop
+        return prepared
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=prepare_then_unrelated_control):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    assert state.session_stopped is False
+    runway = list(app.state.queue._queue)
+    assert runway, "a non-Stop epoch move must not leave Resume with an empty queue"
+    assert runway[0].path == _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    # The stale candidate released its cycle reservation, so rotation can still
+    # pick that song later.
+    assert state.music_admission_reservations == {}
+    assert not state.starter_cycle_reserved
+
+
+@pytest.mark.asyncio
+async def test_resume_falls_back_to_ladder_when_starter_preparation_raises(tmp_path):
+    """Scenario 2: starter verification explodes and the packaged rung still airs.
+
+    The starter rung is an improvement on the clip, never a precondition for it.
+    """
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    async def explode(*_args, **_kwargs):
+        raise TypeError("rationale generator blew up on a malformed starter row")
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=explode):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert runway, "a starter failure must not cost Resume its packaged recovery audio"
+    assert runway[0].path == _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert state.session_stopped is False
+    assert state.music_admission_reservations == {}
+
+
+@pytest.mark.asyncio
+async def test_ha_resume_cold_cache_reserves_starter_music(tmp_path):
+    from mammamiradio.web.streamer import _resume_station
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+
+    await _resume_station(app.state)
+
+    runway = list(app.state.queue._queue)
+    assert len(runway) == 1
+    assert runway[0].metadata["audio_source"] == "starter"
+    assert state.session_stopped is False
+    assert not marker.exists()
+    assert state.resume_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_resume_warm_cache_prefers_cache_over_starter(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    cached = _write_indexed_cache_track(
+        tmp_path, "norm_warm_song_192k.mp3", title="Warm Song", artist="Cache Artist", duration=180.0, state=state
+    )
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    with patch("mammamiradio.web.streamer.probe_duration_sec") as probe:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert [segment.path for segment in runway] == [cached]
+    assert runway[0].metadata["audio_source"] == "norm_cache"
+    probe.assert_not_called()
+    assert state.music_admission_reservations == {}
+
+
+def test_continuity_reservation_prefers_prepared_starter_over_canned(tmp_path):
+    state = StationState()
+    starter_path = tmp_path / "starter-ready.mp3"
+    starter_path.write_bytes(b"starter-audio" * 256)
+    preferred = Segment(
+        type=SegmentType.MUSIC,
+        path=starter_path,
+        duration_sec=180.0,
+        metadata={
+            "title": "Starter Song",
+            "artist": "Starter Artist",
+            "title_only": "Starter Song",
+            "audio_source": "starter",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+
+    segments = _continuity_reservation_segments(
+        state,
+        SimpleNamespace(),
+        target_seconds=1.0,
+        max_segments=1,
+        preferred_ready_segments=[preferred],
+    )
+
+    assert segments == [preferred]
+    assert _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3" not in {segment.path for segment in segments}
 
 
 @pytest.mark.asyncio
@@ -9364,6 +10694,39 @@ async def test_admin_panel_with_basic_auth_returns_html():
     assert "text/html" in resp.headers["content-type"]
 
 
+@pytest.mark.asyncio
+async def test_listener_admin_shortcuts_do_not_change_admin_access():
+    app = _make_test_app(admin_password="secret")
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.50", 9999))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        listener = await client.get("/")
+        blocked = await client.get("/admin")
+        admin = await client.get("/admin", auth=("admin", "secret"))
+        app.state.config.super_italian_mode = True
+        italian_listener = await client.get("/listen")
+
+    assert listener.status_code == 200
+    assert 'id="admin-view-link" href="/admin">Admin</a>' in listener.text
+    assert blocked.status_code == 401
+    assert admin.status_code == 200
+    assert 'id="listener-view-link" href="/listen"' in admin.text
+    assert 'id="admin-view-link" href="/admin">Regia</a>' in italian_listener.text
+
+
+@pytest.mark.asyncio
+async def test_listener_admin_shortcuts_keep_ha_ingress_prefix():
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    headers = {"X-Ingress-Path": "/api/hassio_ingress/test-token"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        listener = await client.get("/listen", headers=headers)
+        admin = await client.get("/admin", headers=headers)
+
+    assert listener.status_code == admin.status_code == 200
+    assert 'id="admin-view-link" href="/api/hassio_ingress/test-token/admin"' in listener.text
+    assert 'id="listener-view-link" href="/api/hassio_ingress/test-token/listen"' in admin.text
+
+
 # ---------------------------------------------------------------------------
 # HA add-on mode: LAN trust without admin_token configured
 # ---------------------------------------------------------------------------
@@ -9551,9 +10914,17 @@ async def test_capabilities_openai_only_marks_ai_as_available():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/api/capabilities")
+        app.state.station_state.openai_key_status = "valid"
+        app.state.station_state.openai_disabled_until = time.time() + 30
+        app.state.station_state.openai_last_error = "AuthenticationError: HTTP 401"
+        degraded = (await client.get("/api/capabilities")).json()
     assert resp.status_code == 200
     assert resp.json()["capabilities"]["llm"] is True
     assert resp.json()["next_step"]["key"] != "add_ai_key"
+    assert degraded["capabilities"]["openai_degraded"] is True
+    assert 0 < degraded["capabilities"]["openai_retry_after_s"] <= 30
+    assert degraded["provider_health"]["openai"]["degraded"] is True
+    assert degraded["guided_setup"]["ai_hosts"]["status"] == "degraded"
 
 
 @pytest.mark.asyncio
@@ -10241,7 +11612,7 @@ async def test_homeassistant_entity_policy_hard_mute_blocks_late_label_catalog_p
     }
     provider_entered = asyncio.Event()
 
-    async def cancellation_resistant_provider(candidates, _config, *, role):
+    async def cancellation_resistant_provider(candidates, _config, *, role, policy_epoch):
         assert role == "fast"
         provider_entered.set()
         try:
@@ -10617,7 +11988,7 @@ async def test_hot_reload_unauthenticated_rejected():
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_language_policy_stage_failure_returns_500():
+async def test_hot_reload_language_policy_stage_failure_returns_500(caplog):
     """First reload stage (language_policy) raises → 500 with stream_status=unaffected.
 
     Guards the failure contract for the leaves-first stage. With language_policy reloaded
@@ -10636,15 +12007,19 @@ async def test_hot_reload_language_policy_stage_failure_returns_500():
             )
     assert resp.status_code == 500
     body = resp.json()
-    assert body["ok"] is False
-    assert body["stream_status"] == "unaffected"
-    assert body["error_code"] == "reload_failed"
-    assert body["retryable"] is True
-    assert "syntax error in language_policy.py" in body["exception"]
+    assert body == {"ok": False, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": True}
+    assert "syntax error in language_policy.py" not in resp.text
+    assert any(
+        record.name == "mammamiradio.web.streamer"
+        and record.levelname == "ERROR"
+        and record.exc_info is not None
+        and "syntax error in language_policy.py" in str(record.exc_info[1])
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_scriptwriter_stage_failure_returns_500():
+async def test_hot_reload_scriptwriter_stage_failure_returns_500(caplog):
     """Last reload stage (the scriptwriter facade) fails after the leaves succeed → 500.
 
     The data leaves reload cleanly, then the scriptwriter facade raises at the
@@ -10665,11 +12040,15 @@ async def test_hot_reload_scriptwriter_stage_failure_returns_500():
             )
     assert resp.status_code == 500
     body = resp.json()
-    assert body["ok"] is False
-    assert body["stream_status"] == "unaffected"
-    assert body["error_code"] == "reload_failed"
-    assert body["retryable"] is True
-    assert "syntax error in scriptwriter.py" in body["exception"]
+    assert body == {"ok": False, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": True}
+    assert "syntax error in scriptwriter.py" not in resp.text
+    assert any(
+        record.name == "mammamiradio.web.streamer"
+        and record.levelname == "ERROR"
+        and record.exc_info is not None
+        and "syntax error in scriptwriter.py" in str(record.exc_info[1])
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -10758,7 +12137,12 @@ def _probe_entry(provider: str, outcome: str | None) -> dict:
             "error_type": "",
             "detail": "",
         }
-    mapping = {"auth": (401, "authentication_error"), "quota": (403, "insufficient_quota"), "rate": (429, "rate_limit")}
+    mapping = {
+        "auth": (401, "authentication_error"),
+        "quota": (403, "insufficient_quota"),
+        "rate": (429, "rate_limit"),
+        "network": (None, "network_error"),
+    }
     status_code, error_type = mapping[outcome]
     return {
         "provider": provider,
@@ -10830,6 +12214,8 @@ async def test_run_provider_verdict_swallows_probe_exception():
         "mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=RuntimeError("boom"))
     ):
         await _run_provider_verdict(app.state)  # must not raise
+        app.state._provider_checks_shutting_down = True
+        await _run_provider_verdict(app.state)  # shutdown must also be harmless
     assert app.state.station_state.anthropic_key_status == "unverified"
 
 
@@ -10852,7 +12238,7 @@ async def test_provider_check_route_persists_rejected_verdict():
     app.state.config.anthropic_api_key = "anthropic-secret"
     payload = _probe_payload(anthropic="auth")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=payload)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
     assert resp.status_code == 200
@@ -10870,7 +12256,7 @@ async def test_save_keys_resets_status_and_revalidates():
     # reset — otherwise an immediate AsyncMock makes the "unverified" assertion racy.
     gate = asyncio.Event()
 
-    async def _delayed_probe(_config):
+    async def _delayed_probe(_config, **_kwargs):
         await gate.wait()
         return _probe_payload(anthropic="ok")
 
@@ -10980,7 +12366,7 @@ async def test_provider_check_cached_result_does_not_clear_verdict():
     app.state.config.anthropic_api_key = "anthropic-secret"
     payload = _probe_payload(anthropic="auth")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(return_value=payload)):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(return_value=payload)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             await client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={})
             assert app.state.station_state.anthropic_key_status == "rejected"
@@ -10996,7 +12382,7 @@ async def test_run_provider_verdict_discards_stale_result_when_key_changed():
     app.state.config.anthropic_api_key = "sk-ant-old-bad"
     app.state.station_state.anthropic_key_status = "valid"  # a fresh save already set this
 
-    async def _slow_probe(config):
+    async def _slow_probe(config, **_kwargs):
         # Simulate save_keys swapping the key while this stale probe is in flight.
         config.anthropic_api_key = "sk-ant-new-good"
         return _probe_payload(anthropic="auth")
@@ -11020,13 +12406,13 @@ async def test_provider_check_stale_shared_task_not_recorded_after_key_swap():
     started = asyncio.Event()
     gate = asyncio.Event()
 
-    async def _gated_old_probe(_config):
+    async def _gated_old_probe(_config, **_kwargs):
         started.set()
         await gate.wait()
         return _probe_payload(anthropic="auth")  # old key 401
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.streamer.check_provider_keys", new=AsyncMock(side_effect=_gated_old_probe)):
+    with patch("mammamiradio.web.provider_verdict.check_provider_keys", new=AsyncMock(side_effect=_gated_old_probe)):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             req = asyncio.create_task(client.post("/api/setup/provider-check", headers=ACTIVE_SETUP_HEADERS, json={}))
             await started.wait()  # task created with the "sk-ant-old" snapshot
@@ -13512,3 +14898,950 @@ async def test_admin_status_buffered_audio_excludes_blocklisted_queue(tmp_path):
     # Only the clean track counts; the banned queued segment (which the playback
     # loop discards before its first byte) must not inflate the honest readout.
     assert admin_status["buffered_audio_sec"] == 180.0
+
+
+def _voice_health_config(*, openai="", azure="", region="", elevenlabs="", model=None, host_engine=""):
+    return SimpleNamespace(
+        anthropic_api_key="",
+        openai_api_key=openai,
+        azure_speech_key=azure,
+        azure_speech_region=region,
+        elevenlabs_api_key=elevenlabs,
+        models=SimpleNamespace(tts_model=lambda _engine: model),
+        hosts=[SimpleNamespace(engine=host_engine)] if host_engine else [],
+        ads=SimpleNamespace(voices=[]),
+        sonic_brand=SimpleNamespace(sweeper_voice="", sweeper_engine="edge"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "key_status", "quota_exhausted"),
+    [
+        ("HTTP 401 — quota_exceeded", "unverified", True),
+        ("HTTP 401 — invalid_api_key", "rejected", False),
+    ],
+)
+def test_provider_health_distinguishes_quota_401_from_rejected_key(reason, key_status, quota_exhausted):
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_route(
+        ("elevenlabs", "fp", "eleven_multilingual_v2", ""),
+        retryable=False,
+        reason=reason,
+    )
+    health = _provider_health_snapshot(_voice_health_config(elevenlabs="x"), StationState())["elevenlabs"]
+    assert health["configured"] is health["disabled"] is True
+    assert health["cooldown"] is False
+    assert health["quota_exhausted"] is quota_exhausted
+    assert health["key_status"] == key_status
+    assert health["last_error"] == reason
+
+
+def test_provider_health_marks_voice_cooldown_separately_from_session_disable():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_route
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_route(("azure", "westeurope", "fp", ""), retryable=True)
+    config = _voice_health_config(openai="sk", azure="az", region="westeurope", model="gpt-4o-mini-tts")
+    health = _provider_health_snapshot(config, StationState())
+    azure = health["azure_speech"]
+    assert azure["configured"] is azure["cooldown"] is True
+    assert azure["key_status"] == "unverified"
+    assert health["openai_speech"]["configured"] is True
+
+
+def test_provider_health_surfaces_one_failed_voice_without_disabling_route():
+    from mammamiradio.audio.tts import _memoize_failed_cloud_voice
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    _memoize_failed_cloud_voice(
+        ("azure", "bad-voice", "westeurope:fp", ""),
+        reason="HTTP 404 — voice not found",
+    )
+    health = _provider_health_snapshot(_voice_health_config(azure="az", region="westeurope"), StationState())[
+        "azure_speech"
+    ]
+    assert health["disabled"] is False
+    assert health["failed_voices"] == 1
+    assert health["last_error"] == "HTTP 404 — voice not found"
+
+
+def test_provider_health_openai_speech_requires_model_and_inherits_key_rejection():
+    from mammamiradio.web.streamer import _provider_health_snapshot
+
+    config = _voice_health_config(openai="sk")
+    state = StationState()
+    assert _provider_health_snapshot(config, state)["openai_speech"]["configured"] is False
+
+    config.models = SimpleNamespace(tts_model=lambda _engine: "gpt-4o-mini-tts")
+    state.openai_key_status = "rejected"
+    health = _provider_health_snapshot(config, state)["openai_speech"]
+    assert health["configured"] is True
+    assert health["key_status"] == "rejected"
+
+
+def test_tts_reason_copy_never_promises_a_retry_for_a_session_disable():
+    from mammamiradio.web.streamer import _tts_single_reason_label
+
+    for token in (
+        "provider_disabled_session",
+        "provider_disabled_session:HTTP 401 — x",
+        "provider_disabled:HTTP 401",
+        "provider_disabled_session:HTTP 401 — quota_exceeded",
+    ):
+        label = _tts_single_reason_label(token)
+        assert "temporarily" not in label.lower()
+        assert "will retry" not in label.lower()
+        assert "restart the add-on" not in label.lower()
+        assert "first listen → change ai services → voice providers" in label.lower()
+        if "quota" in token:
+            assert "quota" in label.lower() and "rejected" not in label.lower()
+
+
+def test_tts_runtime_reason_keeps_each_mixed_provider_remedy():
+    from mammamiradio.web.streamer import _tts_runtime_reason_label
+
+    reason = (
+        "Runtime TTS fallback: azure=provider_disabled:HTTP 401 — invalid_api_key; "
+        "elevenlabs=provider_disabled_session:HTTP 429 — insufficient_quota"
+    )
+
+    label = _tts_runtime_reason_label(reason)
+
+    assert "Azure Speech:" in label
+    assert "Save a working key" in label
+    assert "ElevenLabs:" in label
+    assert "quota or credits" in label
+
+
+def test_tts_reason_copy_does_not_assume_every_404_is_a_voice_id():
+    from mammamiradio.web.streamer import _tts_single_reason_label
+
+    reason = "provider_disabled:HTTP 404 — model_not_found"
+    label = _tts_single_reason_label(reason).lower()
+
+    assert "voice id was not found" not in label
+    assert "one configured cloud voice route" in label
+    for setting in ("voice", "model", "region"):
+        assert setting in label
+
+
+def test_tts_provider_status_does_not_duplicate_reason_as_action_guidance():
+    from mammamiradio.web.streamer import _tts_provider_status
+
+    config = _voice_health_config(elevenlabs="x", host_engine="elevenlabs")
+    state = StationState()
+    state.runtime_provider_state["tts_provider"] = {
+        "fallback_active": True,
+        "current_provider": "edge",
+        "reason": "Runtime TTS fallback: elevenlabs=provider_disabled_session:HTTP 401",
+    }
+    status = _tts_provider_status(config, state)
+    assert "Save a working key" in status["current_reason"]
+    assert status["action_guidance"] == ""
+
+    state.runtime_provider_state["tts_provider"]["invalidated_by_credential_save"] = True
+    assert _tts_provider_status(config, state)["fallback_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_script_guard_counters_stay_in_admin_diagnostics():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.language_guard_rejections, state.language_guard_failures = 4, 2
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for path in ("/status", "/api/capabilities"):
+            response = await client.get(path)
+            assert response.status_code == 200
+            body = response.json()
+            health = body["provider_health"]
+            assert health["script_guard"] == {"rejections": 4, "failures": 2}
+            assert {"anthropic", "openai_speech", "azure_speech", "elevenlabs", "chaos"} <= health.keys()
+            if path == "/status":
+                assert "ha_publish" in body["runtime_health"]
+        response = await client.get("/public-status")
+        assert response.status_code == 200
+        assert "script_guard" not in response.text
+        assert "language_guard" not in response.text
+
+
+@pytest.mark.parametrize("first_listen", [False, True])
+@pytest.mark.parametrize("tail_bytes", [8192, 16384])
+@pytest.mark.parametrize("handoff", ["live", "stopped", "disconnected", "unreadable", "unreadable_stopped"])
+@pytest.mark.asyncio
+async def test_opening_is_paced_before_live_subscription(tmp_path, first_listen, tail_bytes, handoff):
+    from mammamiradio.core.first_listen_show import iter_first_listen_show_chunks
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    hub = app.state.stream_hub
+    request = MagicMock(app=app)
+    request.is_disconnected = AsyncMock(return_value=False)
+    clock = _FakeMonotonic()
+    opening = tmp_path / "opening.mp3"
+    opening.write_bytes(b"x" * (9 * 16384 + tail_bytes))
+    subscribed_at = []
+    subscribe = hub.subscribe
+
+    def opening_chunks(path):
+        yield from iter_first_listen_show_chunks(path)
+        if handoff.startswith("unreadable"):
+            raise OSError("opening read failed")
+
+    def start_live():
+        subscribed_at.append(clock.now)
+        listener_id, queue = subscribe()
+        queue.put_nowait(b"live")
+        return listener_id, queue
+
+    async def advance(delay):
+        clock.advance(delay)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=opening) as approved,
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=opening_chunks),
+        patch.object(hub, "subscribe", side_effect=start_live),
+        patch(
+            "mammamiradio.web.streamer.StreamPacer",
+            side_effect=lambda rate, **kw: StreamPacer(rate, monotonic=clock, **kw),
+        ),
+        patch("mammamiradio.web.streamer.asyncio.sleep", side_effect=advance),
+    ):
+        generator = _audio_generator(request, first_listen=first_listen)
+        try:
+            for index, size in enumerate([16384] * 9 + [tail_bytes]):
+                assert len(await anext(generator)) == size
+                media_before = index * 16384 / 24000
+                assert clock.now == pytest.approx(max(0, media_before - STREAM_TARGET_LEAD_SECONDS))
+                assert media_before + size / 24000 - clock.now <= STREAM_TARGET_LEAD_SECONDS + 16384 / 24000
+                assert app.state.station_state.listeners_active == 0
+            final_packet_at = clock.now
+            if handoff in {"live", "unreadable"}:
+                assert await anext(generator) == b"live"
+                assert subscribed_at == [final_packet_at]
+            else:
+                if handoff in {"stopped", "unreadable_stopped"}:
+                    app.state.station_state.session_stopped = True
+                else:
+                    request.is_disconnected.return_value = True
+                with pytest.raises(StopAsyncIteration):
+                    await anext(generator)
+                assert not subscribed_at
+            assert clock.now == final_packet_at
+            approved.assert_called_once_with(english=first_listen)
+        finally:
+            await generator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_explicit_live_reconnect_bypasses_opening_without_completing_setup():
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+
+    async def audio(*args, **kwargs):
+        yield b"live"
+
+    with patch("mammamiradio.web.streamer._audio_generator", side_effect=audio) as generate:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+            response = await client.get("/stream?first_listen=live")
+        assert response.content == b"live"
+        assert generate.call_args.kwargs == {"first_listen": True, "prelude": False}
+        assert app.state.first_listen_receipt is None
+
+
+@pytest.mark.parametrize("during_wait", [False, True])
+@pytest.mark.asyncio
+async def test_dropped_stream_never_drains_stale_audio(during_wait):
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    hub = app.state.stream_hub
+    request = MagicMock(app=app)
+    request.is_disconnected = AsyncMock(return_value=False)
+    generator = _audio_generator(request)
+    pending = asyncio.create_task(anext(generator))
+    while not hub._listeners:
+        await asyncio.sleep(0)
+    lid, queue = next(iter(hub._listeners.items()))
+    await hub.broadcast(b"current")
+    assert await pending == b"current"
+    queue.put_nowait(b"stale")
+    if during_wait:
+
+        async def remove_before_return():
+            hub.unsubscribe(lid)
+            return b"stale"
+
+        queue.get = AsyncMock(side_effect=remove_before_return)
+    else:
+        hub.unsubscribe(lid)
+    with pytest.raises(StopAsyncIteration):
+        await anext(generator)
+
+
+@pytest.mark.asyncio
+async def test_repeated_skips_do_not_accumulate_delivery_cushions(tmp_path):
+    from dataclasses import replace
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.audio.bitrate = 192
+    app.state.stream_hub.subscribe()
+    for number in range(4):
+        path = tmp_path / f"music-{number}.mp3"
+        path.write_bytes(b"x" * 240_000)
+        app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=path, metadata={"title": f"Song {number}"}))
+    clock = _FakeMonotonic()
+    leads = []
+    sent = 0.0
+
+    class MeasuredPacer(StreamPacer):
+        def after_send(self, size):
+            nonlocal sent
+            decision = super().after_send(size)
+            sent += size / self.bytes_per_second
+            leads.append(sent - clock.now)
+            clock.advance(decision.sleep_seconds)
+            return replace(decision, sleep_seconds=0)
+
+    app.state.stream_pacer_factory = lambda rate: MeasuredPacer(rate, monotonic=clock)
+    finished = asyncio.Event()
+    packets = 0
+
+    async def broadcast(chunk):
+        nonlocal packets
+        packets += 1
+        if packets in (40, 80, 120):
+            app.state.skip_event.set()
+        if packets == 140:
+            finished.set()
+        await asyncio.sleep(0)
+        return 1
+
+    app.state.stream_hub.broadcast = broadcast
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=3)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert app.state.stream_pacer.reset_count == 0
+    assert max(leads) <= STREAM_TARGET_LEAD_SECONDS + STREAM_MAX_PACKET_SECONDS + 0.001
+
+
+@pytest.mark.requires_ffmpeg
+@pytest.mark.parametrize("filename", ["first_listen_show.mp3", "first_listen_admin_show.mp3"])
+def test_packaged_opening_bitrate_matches_its_delivery_clock(filename):
+    import json
+
+    from mammamiradio.web.streamer import DEFAULT_CLIP_BITRATE_KBPS
+
+    path = _DEMO_ASSETS_DIR / "first_listen" / filename
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=bit_rate",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert int(json.loads(result.stdout)["streams"][0]["bit_rate"]) == DEFAULT_CLIP_BITRATE_KBPS * 1000
+
+
+@pytest.mark.asyncio
+async def test_superseded_protected_starter_runway_releases_its_reservation(tmp_path):
+    """A later control that rebuilds protected runway must release what it replaces.
+
+    Protected continuity segments used to be plain cache or packaged audio, so a
+    rebuild could drop them silently. A starter song reserved by Resume holds a
+    music admission reservation; dropping it without ``release()`` leaves its key
+    in ``starter_cycle_reserved`` forever, and once every other starter track has
+    aired the cycle waits on a song that is no longer queued anywhere.
+    """
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+    from mammamiradio.web.streamer import _reserve_continuity_runway
+
+    # conftest pins the floor to 0 so any protected segment covers the target.
+    # Use the production floor: the leak needs a rebuild, and a rebuild needs a
+    # protected set that falls short of it.
+    production_floor = 240
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    # Only songs shorter than the runway floor, so the reserved starter cannot
+    # cover the target by itself and a later reservation is allowed to rebuild.
+    short = [track for track in load_starter_tracks() if track.duration_ms / 1000 < production_floor]
+    assert short
+    state.playlist = short
+    state.playlist_source = starter_source(len(short))
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", production_floor):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume")
+    assert response.status_code == 200
+    starter_segment = next(iter(app.state.queue._queue))
+    assert starter_segment.metadata["audio_source"] == "starter"
+    starter_key = state.music_admission_reservations[starter_segment.metadata["queue_id"]].cache_key
+    assert starter_key in state.starter_cycle_reserved
+
+    # The cache warms with a song longer than the reserved starter, so the next
+    # control's reservation outranks the protected set and rebuilds it.
+    cached = _write_indexed_cache_track(
+        tmp_path, "norm_long_song_192k.mp3", title="Long Song", artist="Cache Artist", duration=900.0, state=state
+    )
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", production_floor):
+        _reserve_continuity_runway(app.state, state, app.state.config)
+
+    assert [segment.path for segment in app.state.queue._queue] == [cached]
+    assert starter_segment.released
+    assert state.music_admission_reservations == {}
+    assert starter_key not in state.starter_cycle_reserved
+
+
+def _stopped_starter_app(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _install_starter_playlist(state)
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    (tmp_path / "session_stopped.flag").touch()
+    return app, state
+
+
+async def _post_resume(app):
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.post("/api/resume")
+
+
+@pytest.mark.asyncio
+async def test_resume_falls_back_to_ladder_when_starter_verification_is_slow(tmp_path):
+    """Slow storage costs the starter song, not the Resume, and is not a catalog failure."""
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app, state = _stopped_starter_app(tmp_path)
+
+    async def _slow(*_args, **_kwargs):
+        await asyncio.sleep(30)
+
+    with (
+        patch("mammamiradio.web.streamer._RESUME_STARTER_PREPARE_TIMEOUT_SECONDS", 0.05),
+        patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=_slow),
+        patch.object(state.source_readiness, "mark_failure") as mark_failure,
+    ):
+        response = await _post_resume(app)
+
+    assert response.status_code == 200
+    runway = list(app.state.queue._queue)
+    assert runway[0].path == _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert state.music_admission_reservations == {}
+    mark_failure.assert_not_called()
+    pending = app.state.resume_starter_prepare_task
+    assert not pending.done(), "a slow verification is left to finish, never cancelled"
+    pending.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await pending
+
+
+@pytest.mark.asyncio
+async def test_concurrent_resumes_run_the_path_once(tmp_path):
+    """A double tap serializes: one verification, and the second Resume reconciles."""
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app, state = _stopped_starter_app(tmp_path)
+    real_prepare = producer_mod._prepare_starter_catalog_runway
+    calls = 0
+
+    async def _counting_prepare(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)
+        return await real_prepare(*args, **kwargs)
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=_counting_prepare):
+        first, second = await asyncio.gather(_post_resume(app), _post_resume(app))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls == 1
+    assert state.session_stopped is False
+    assert len(state.music_admission_reservations) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_declines_with_way_out_when_another_resume_holds_the_lock(tmp_path):
+    from mammamiradio.web.streamer import _resume_lock
+
+    app, state = _stopped_starter_app(tmp_path)
+    lock = _resume_lock(app.state)
+    await lock.acquire()
+    try:
+        with patch("mammamiradio.web.streamer._RESUME_LOCK_TIMEOUT_SECONDS", 0.05):
+            response = await _post_resume(app)
+    finally:
+        lock.release()
+
+    assert response.status_code == 409
+    assert "already starting" in response.json()["error"]
+    assert "force_available" not in response.json()
+    assert state.session_stopped is True
+
+
+@pytest.mark.asyncio
+async def test_ha_resume_raises_when_another_resume_holds_the_lock(tmp_path):
+    from mammamiradio.web.streamer import _resume_lock, _resume_station
+
+    app, state = _stopped_starter_app(tmp_path)
+    lock = _resume_lock(app.state)
+    await lock.acquire()
+    try:
+        with (
+            patch("mammamiradio.web.streamer._RESUME_LOCK_TIMEOUT_SECONDS", 0.05),
+            pytest.raises(RuntimeError, match="already resuming"),
+        ):
+            await _resume_station(app.state)
+    finally:
+        lock.release()
+    assert state.session_stopped is True
+
+
+def test_released_segment_is_never_immediately_playable(tmp_path):
+    """``mark_playback_started`` refuses a released segment, so runway must too."""
+    from mammamiradio.web.streamer import _segment_is_immediately_playable
+
+    state = StationState()
+    audio = tmp_path / "norm_ready_192k.mp3"
+    audio.write_bytes(b"audio" * 256)
+    segment = Segment(type=SegmentType.BANTER, path=audio, duration_sec=5.0, metadata={}, ephemeral=False)
+    assert _segment_is_immediately_playable(state, segment)
+
+    segment.release()
+
+    assert segment.released
+    assert not _segment_is_immediately_playable(state, segment)
+
+
+def test_resume_starter_probe_writes_nothing(tmp_path):
+    """Asking whether Resume wants a starter song cannot change what the reservation reads."""
+    from mammamiradio.web.streamer import _resume_runway_wants_starter
+
+    app, state = _stopped_starter_app(tmp_path)
+    missing = tmp_path / "norm_gone_192k.mp3"
+    state.immediate_audio_index[missing] = 180.0  # indexed, file absent: a prune candidate
+    dead_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished.mp3",
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = dead_slot
+
+    assert _resume_runway_wants_starter(app.state, state, app.state.config) is True
+
+    assert missing in state.immediate_audio_index
+    assert state.continuity_slot is dead_slot
+    assert not dead_slot.released
+
+
+def test_resume_starter_probe_skips_verification_when_runway_is_already_covered(tmp_path):
+    from mammamiradio.web.streamer import _resume_runway_wants_starter
+
+    app, state = _stopped_starter_app(tmp_path)
+    covering = tmp_path / "covering.mp3"
+    covering.write_bytes(b"audio" * 256)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=covering,
+            duration_sec=600.0,
+            metadata={"continuity_reservation": True},
+            ephemeral=False,
+        )
+    )
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        assert _resume_runway_wants_starter(app.state, state, app.state.config) is False
+
+
+def test_resume_starter_probe_uses_the_reservations_exclusions(tmp_path):
+    """Cache music the reservation would refuse must not suppress the starter song.
+
+    The only cached song is already queued as ordinary audio, so the reservation
+    excludes it. The probe used to ask with no exclusions, saw cache music, and
+    skipped the starter song -- landing on the packaged clip anyway.
+    """
+    from mammamiradio.web.streamer import _resume_runway_wants_starter
+
+    app, state = _stopped_starter_app(tmp_path)
+    cached = _write_indexed_cache_track(
+        tmp_path, "norm_only_song_192k.mp3", title="Only Song", artist="Cache Artist", duration=180.0, state=state
+    )
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=cached,
+            duration_sec=180.0,
+            metadata={"title": "Only Song", "title_only": "Only Song", "artist": "Cache Artist"},
+            ephemeral=False,
+        )
+    )
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        assert _resume_runway_wants_starter(app.state, state, app.state.config) is True
+
+
+@pytest.mark.asyncio
+async def test_resume_releases_a_prepared_starter_the_reservation_did_not_take(tmp_path):
+    from mammamiradio.web.streamer import _reserve_resume_runway
+
+    app, state = _stopped_starter_app(tmp_path)
+
+    with patch("mammamiradio.web.streamer._reserve_continuity_runway", return_value=0):
+        outcome = await _reserve_resume_runway(app.state, state, app.state.config, discard_reason="operator_stop")
+
+    assert outcome.superseded_by_stop is False
+    assert app.state.queue.empty()
+    assert state.music_admission_reservations == {}
+    assert not state.starter_cycle_reserved
+
+
+def test_claim_releases_a_slot_that_became_banned_before_playback(tmp_path):
+    from mammamiradio.web.streamer import _claim_continuity_slot
+
+    state = StationState()
+    released: list[str] = []
+    audio = tmp_path / "starter.mp3"
+    audio.write_bytes(b"audio" * 256)
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=audio,
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True, "title_only": "Song", "artist": "Artist"},
+        ephemeral=False,
+    )
+    slot.release_callback = lambda: released.append("slot")
+    state.continuity_slot = slot
+    state.blocklist[("artist", "song")] = {"display": "Artist - Song"}
+
+    assert _claim_continuity_slot(state) is None
+    assert state.continuity_slot is None
+    assert slot.released
+    assert released == ["slot"]
+
+
+def test_slot_self_heal_releases_a_slot_whose_file_vanished(tmp_path):
+    from mammamiradio.web.streamer import _continuity_slot_seconds
+
+    state = StationState()
+    released: list[str] = []
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished.mp3",
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    slot.release_callback = lambda: released.append("slot")
+    state.continuity_slot = slot
+
+    assert _continuity_slot_seconds(state) == 0.0
+    assert state.continuity_slot is None
+    assert released == ["slot"]
+
+
+def test_slot_status_read_never_releases(tmp_path):
+    """The read-only status path must not release the dead-air safety slot."""
+    from mammamiradio.web.streamer import _continuity_slot_seconds
+
+    state = StationState()
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished.mp3",
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    assert _continuity_slot_seconds(state, self_heal=False) == 0.0
+    assert state.continuity_slot is slot
+    assert not slot.released
+
+
+def _park_preferred_in_slot(_app_state, state, _config, **kwargs):
+    """Stand-in reservation that parks the prepared song out of band."""
+    preferred = kwargs.get("preferred_ready_segments") or []
+    if preferred:
+        state.continuity_slot = preferred[0]
+    return 0
+
+
+@pytest.mark.asyncio
+async def test_queued_resume_starter_is_accounted_in_queue_order(tmp_path):
+    """A starter song Resume puts in the real queue is lookahead, like producer music."""
+    app, state = _stopped_starter_app(tmp_path)
+    songs_since_banter = state.songs_since_banter
+
+    with patch.object(state.source_readiness, "mark_playable") as mark_playable:
+        response = await _post_resume(app)
+
+    assert response.status_code == 200
+    segment = next(iter(app.state.queue._queue))
+    reserved = state.music_admission_reservations[segment.metadata["queue_id"]]
+    assert [track.cache_key for track in state.played_tracks] == [reserved.cache_key]
+    assert state.current_track is reserved
+    assert state.songs_since_banter == songs_since_banter + 1
+    mark_playable.assert_called_once_with("starter")
+
+    # Admission commits the rights-sensitive cycle and nothing else: no double count.
+    assert segment.mark_playback_started() is True
+    assert len(state.played_tracks) == 1
+    assert state.songs_since_banter == songs_since_banter + 1
+
+
+@pytest.mark.asyncio
+async def test_queued_resume_starter_admission_does_not_rewind_newer_queue_state(tmp_path):
+    """The producer queues song B before starter A airs; A airing must not make A 'latest'.
+
+    ``write_transition`` reads ``played_tracks[-1]`` as the song before the next
+    speech. Accounting A at admission overwrote B there.
+    """
+    app, state = _stopped_starter_app(tmp_path)
+    response = await _post_resume(app)
+    assert response.status_code == 200
+    starter = next(iter(app.state.queue._queue))
+    newer = Track(title="Newer Song", artist="Producer Artist", duration_ms=200_000)
+    state.after_music(newer)
+
+    assert starter.mark_playback_started() is True
+
+    assert state.played_tracks[-1] is newer
+    assert state.current_track is newer
+
+
+@pytest.mark.asyncio
+async def test_slot_parked_resume_starter_is_accounted_only_when_admitted(tmp_path):
+    from mammamiradio.web.streamer import _reserve_resume_runway
+
+    app, state = _stopped_starter_app(tmp_path)
+    songs_since_banter = state.songs_since_banter
+
+    with patch("mammamiradio.web.streamer._reserve_continuity_runway", side_effect=_park_preferred_in_slot):
+        await _reserve_resume_runway(app.state, state, app.state.config, discard_reason="operator_stop")
+
+    slot = state.continuity_slot
+    assert slot is not None and slot.metadata["audio_source"] == "starter"
+    reserved = state.music_admission_reservations[slot.metadata["queue_id"]]
+    assert list(state.played_tracks) == []
+    assert state.songs_since_banter == songs_since_banter
+
+    with patch.object(state.source_readiness, "mark_playable") as mark_playable:
+        assert slot.mark_playback_started() is True
+
+    assert state.current_track is reserved
+    assert state.songs_since_banter == songs_since_banter + 1
+    mark_playable.assert_called_once_with("starter")
+
+
+@pytest.mark.asyncio
+async def test_slot_parked_resume_starter_that_is_discarded_counts_for_nothing(tmp_path):
+    from mammamiradio.scheduling.queue_mutations import discard_continuity_slot
+    from mammamiradio.web.streamer import _reserve_resume_runway
+
+    app, state = _stopped_starter_app(tmp_path)
+    songs_since_banter = state.songs_since_banter
+    with patch("mammamiradio.web.streamer._reserve_continuity_runway", side_effect=_park_preferred_in_slot):
+        await _reserve_resume_runway(app.state, state, app.state.config, discard_reason="operator_stop")
+    slot = state.continuity_slot
+
+    discard_continuity_slot(state)
+
+    assert slot.released
+    assert slot.mark_playback_started() is False
+    assert list(state.played_tracks) == []
+    assert state.songs_since_banter == songs_since_banter
+    assert state.music_admission_reservations == {}
+    assert not state.starter_cycle_reserved
+
+
+@pytest.mark.asyncio
+async def test_slot_parked_starter_banned_before_admission_counts_for_nothing(tmp_path):
+    from mammamiradio.web.streamer import _reserve_resume_runway
+
+    app, state = _stopped_starter_app(tmp_path)
+    songs_since_banter = state.songs_since_banter
+    with patch("mammamiradio.web.streamer._reserve_continuity_runway", side_effect=_park_preferred_in_slot):
+        await _reserve_resume_runway(app.state, state, app.state.config, discard_reason="operator_stop")
+    slot = state.continuity_slot
+    reserved = state.music_admission_reservations[slot.metadata["queue_id"]]
+    state.blocklist[(reserved.artist.strip().lower(), reserved.title.strip().lower())] = {"display": reserved.display}
+
+    assert slot.mark_playback_started() is True
+
+    assert list(state.played_tracks) == []
+    assert state.songs_since_banter == songs_since_banter
+
+
+@pytest.mark.asyncio
+async def test_resume_queued_behind_another_does_not_undo_a_later_stop(tmp_path):
+    """Two Resumes, then a Stop during the first one's verification: the station stays paused.
+
+    The waiter used to capture the stop revision only after taking the lock, so it
+    adopted the Stop as its baseline and un-paused the station.
+    """
+    from mammamiradio.scheduling import producer as producer_mod
+
+    app, state = _stopped_starter_app(tmp_path)
+    marker = tmp_path / "session_stopped.flag"
+    real_prepare = producer_mod._prepare_starter_catalog_runway
+    stopped = False
+
+    async def _prepare_then_stop_once(*args, **kwargs):
+        nonlocal stopped
+        await asyncio.sleep(0.05)  # the second Resume is now waiting on the lock
+        prepared = await real_prepare(*args, **kwargs)
+        if not stopped:
+            stopped = True
+            state.session_stopped = True
+            state.session_stop_revision += 1
+            state.continuity_epoch += 1
+        return prepared
+
+    with patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=_prepare_then_stop_once):
+        first, second = await asyncio.gather(_post_resume(app), _post_resume(app))
+
+    assert first.status_code == 409
+    assert second.status_code == 409
+    assert "paused again" in second.json()["error"]
+    assert state.session_stopped is True
+    assert marker.exists()
+    assert not state.resume_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ha_resume_queued_behind_admin_does_not_undo_a_later_stop(tmp_path):
+    from mammamiradio.web.streamer import _resume_lock, _resume_station
+
+    app, state = _stopped_starter_app(tmp_path)
+    lock = _resume_lock(app.state)
+    await lock.acquire()
+    waiter = asyncio.ensure_future(_resume_station(app.state))
+    await asyncio.sleep(0.01)  # the HA resume has captured its revision and is waiting
+    state.session_stop_revision += 1  # an operator Stop lands
+    lock.release()
+
+    with pytest.raises(RuntimeError, match="station control changed"):
+        await waiter
+    assert state.session_stopped is True
+
+
+@pytest.mark.asyncio
+async def test_starter_verification_never_stacks_workers(tmp_path):
+    """A slow verification is left running, and a retry does not start a second one."""
+    from mammamiradio.scheduling import producer as producer_mod
+    from mammamiradio.web.streamer import _prepare_resume_starter_bounded
+
+    app, state = _stopped_starter_app(tmp_path)
+    gate = asyncio.Event()
+    started = 0
+    late_segment = Segment(
+        type=SegmentType.MUSIC, path=tmp_path / "late.mp3", duration_sec=180.0, metadata={}, ephemeral=False
+    )
+
+    async def _slow(*_args, **_kwargs):
+        nonlocal started
+        started += 1
+        await gate.wait()
+        return SimpleNamespace(segment=late_segment)
+
+    with (
+        patch("mammamiradio.web.streamer._RESUME_STARTER_PREPARE_TIMEOUT_SECONDS", 0.02),
+        patch.object(producer_mod, "_prepare_starter_catalog_runway", side_effect=_slow),
+    ):
+        assert await _prepare_resume_starter_bounded(app.state, state, app.state.config) is None
+        assert await _prepare_resume_starter_bounded(app.state, state, app.state.config) is None
+        assert started == 1
+        task = app.state.resume_starter_prepare_task
+        assert not task.done() and not task.cancelled()
+
+        gate.set()
+        await task
+        await asyncio.sleep(0)  # let the late-result callback run
+
+    assert late_segment.released, "a late verification's result is dropped, not leaked"
+
+
+def test_slot_release_helpers_leave_ordinary_survivors_alone(tmp_path):
+    """An ordinary survivor parked in the slot is not continuity audio to release."""
+    from mammamiradio.scheduling.queue_mutations import discard_continuity_slot, park_continuity_slot
+
+    state = StationState()
+    ordinary = Segment(type=SegmentType.MUSIC, path=tmp_path / "survivor.mp3", metadata={}, ephemeral=False)
+    state.continuity_slot = ordinary
+    discard_continuity_slot(state)
+    assert state.continuity_slot is None
+    assert not ordinary.released
+
+    state.continuity_slot = ordinary
+    protected = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "clip.mp3",
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    park_continuity_slot(state, protected)
+    assert state.continuity_slot is protected
+    assert not ordinary.released
+
+
+def test_superseded_runway_release_skips_an_ordinary_prior_slot(tmp_path):
+    from mammamiradio.web.streamer import _release_superseded_continuity_audio
+
+    app = _make_test_app()
+    state = app.state.station_state
+    ordinary = Segment(type=SegmentType.MUSIC, path=tmp_path / "survivor.mp3", metadata={}, ephemeral=False)
+
+    _release_superseded_continuity_audio(app.state, state, prior_queue=[], prior_slot=ordinary)
+
+    assert not ordinary.released
+
+
+def test_continuity_slot_status_does_not_advertise_a_released_slot(tmp_path):
+    from mammamiradio.web.streamer import _continuity_slot_status
+
+    state = StationState()
+    audio = tmp_path / "clip.mp3"
+    audio.write_bytes(b"audio" * 256)
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=audio,
+        duration_sec=4.4,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+    assert _continuity_slot_status(state) is not None
+
+    slot.release()
+
+    assert _continuity_slot_status(state) is None

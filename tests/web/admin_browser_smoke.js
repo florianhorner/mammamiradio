@@ -7,6 +7,263 @@ async (page) => {
     if (!condition) throw new Error(`admin-browser-smoke: ${message}`);
   }
 
+  async function exerciseBoundaryImaging() {
+    return page.evaluate(async () => {
+      const saved = { api, fetchAdminJson, st: _st, hostsOk: _hostsOk, toast };
+      const checkbox = document.getElementById('boundaryImagingToggle');
+      const reset = document.getElementById('boundaryImagingReset');
+      const count = document.getElementById('boundaryImagingCount');
+      const prior = { checked: checkbox.checked, hidden: reset.hidden, count: count.textContent };
+      const checks = [];
+      const messages = [];
+      let releaseStatus;
+      let heldPoll;
+      const check = (condition, message) => {
+        if (!condition) throw new Error(`Transitions: ${message}`);
+        checks.push(message);
+      };
+      try {
+        toast = (message) => messages.push(message);
+        reset.hidden = false;
+        api = async () => { throw new Error('initial load unavailable'); };
+        await loadBoundaryImagingToggle();
+        check(!reset.hidden && !checkbox.disabled, 'failed initial load preserves conditional restart notice');
+
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { carts_aired: 3 } } }, _caps);
+        updateEngineRoom({ ...saved.st, runtime_health: {} }, _caps);
+        check(count.textContent === 'Aired 3 times this session', 'missing status preserves a known count');
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { carts_aired: 0 } } }, _caps);
+        check(count.textContent === 'Aired 0 times this session', 'explicit zero replaces the previous count');
+
+        for (const resetsOnRestart of [true, false]) {
+          api = async () => ({ ok: true, resets_on_restart: resetsOnRestart });
+          checkbox.checked = resetsOnRestart;
+          await toggleBoundaryImaging(checkbox);
+          check(reset.hidden === !resetsOnRestart, `successful save refreshes restart notice: ${resetsOnRestart}`);
+        }
+
+        let finishSave;
+        api = () => new Promise((resolve) => { finishSave = resolve; });
+        checkbox.checked = true;
+        const saving = toggleBoundaryImaging(checkbox);
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { enabled: false } } }, _caps);
+        check(checkbox.disabled && checkbox.checked, 'poll cannot overwrite a pending choice');
+        finishSave({ ok: true, resets_on_restart: false });
+        await saving;
+
+        _hostsOk = true;
+        fetchAdminJson = async (path) => path.startsWith('/status')
+          ? new Promise((resolve) => { releaseStatus = resolve; }) : [];
+        heldPoll = refreshFast();
+        check(typeof releaseStatus === 'function', 'old status request is held before saving');
+        checkbox.blur();
+        checkbox.checked = true;
+        api = async () => ({ ok: true, resets_on_restart: false });
+        await toggleBoundaryImaging(checkbox);
+        releaseStatus({ ...saved.st, runtime_health: { boundary_imaging: { enabled: false, carts_aired: 0 } } });
+        await heldPoll;
+        check(checkbox.checked, 'late status cannot contradict a completed save without focus');
+
+        api = async () => ({ ok: false });
+        checkbox.checked = false;
+        await toggleBoundaryImaging(checkbox);
+        check(checkbox.checked && !checkbox.disabled, 'declined save restores the prior choice');
+        check(messages.at(-1) === wayOut('change the transitions'), 'declined save uses shared recovery copy');
+        api = async () => { throw new Error('offline'); };
+        checkbox.checked = false;
+        await toggleBoundaryImaging(checkbox);
+        check(checkbox.checked && !checkbox.disabled, 'offline save restores the prior choice');
+        check(messages.at(-1) === offlineMsg(), 'offline save uses shared recovery copy');
+        return { checks: checks.length };
+      } finally {
+        ++_fastPollGeneration;
+        if (releaseStatus) releaseStatus(saved.st);
+        if (heldPoll) await heldPoll;
+        api = saved.api;
+        fetchAdminJson = saved.fetchAdminJson;
+        _st = saved.st;
+        _hostsOk = saved.hostsOk;
+        toast = saved.toast;
+        checkbox.checked = prior.checked;
+        checkbox.disabled = false;
+        reset.hidden = prior.hidden;
+        count.textContent = prior.count;
+      }
+    });
+  }
+
+  async function exerciseMacFlow() {
+    const result = await page.evaluate(async () => {
+      const saved = { st: _st, ui: { ..._firstListenUi }, entry: document.body.dataset.firstListenEntry,
+        api, refreshFast, filter: _programmeFilter, purge: _pendingPurge,
+        timeout: window.setTimeout, clear: window.clearTimeout, undo: window.undoableToast };
+      const calls = [], timers = [];
+      let refreshes = 0;
+      const check = (condition, message) => { if (!condition) throw new Error(message); };
+      try {
+        check(document.getElementById('runtimeVersion')?.textContent.startsWith('Version '),
+          'Admin lost its runtime version and build identity');
+        const setup = { ...saved.ui.projection, guided_setup: { ...saved.ui.projection?.guided_setup,
+          first_listen: { bootstrap_ready: true, install_origin: 'fresh', fresh_install: true,
+            audio_complete: true, privacy_complete: true, continuity_available: true },
+          privacy: { reviewed: true, enabled: false } } };
+        _lastSetupJson = ''; renderSetup(setup); showAdminTab('motore');
+        restartFirstListen();
+        check(_firstListenUi.restarting && !document.getElementById('tab-setup').hidden, 'replay did not open First Listen');
+        openFirstListenStation();
+        check(!_firstListenUi.restarting && document.getElementById('tab-setup').hidden
+          && document.body.dataset.firstListenEntry === 'complete', 'leaving replay did not restore saved completion');
+        check(_firstListenUi.projection.guided_setup.first_listen.audio_complete, 'leaving replay discarded the saved audio receipt');
+        check([...document.querySelectorAll('#adminTabs button')].filter((tab) => !tab.hidden)
+          .map((tab) => tab.dataset.tab).join(',') === 'scaletta,diretta,rotazione,conduttori,archivio,motore',
+        'completed setup left the wrong tab order');
+        setup.guided_setup.first_listen.audio_complete = false;
+        _lastSetupJson = ''; renderSetup(setup); showAdminTab('setup');
+        openSetupPanel('music-sources');
+        check(_activeTab === 'rotazione' && document.getElementById('musicSourceSettings').open
+          && document.querySelector('#rotation-pool #jamendoSettings')
+          && document.querySelectorAll('#jamendoSettings').length === 1, 'Jamendo setup escaped Rotazione');
+        renderJamendoStatus({ state: 'ready', enabled: true, noncommercial_acknowledged: true });
+        check([...document.querySelectorAll('#jamendoSourceActions button')].some((button) => button.textContent === 'Settings'),
+          'working Jamendo lost its settings action');
+        check(firstListenSourceStatus('recovery', 'configured_unchecked').state === 'idle'
+          && firstListenSourceStatus('recovery', 'configured_unchecked').label === 'Backup audio not checked',
+          'unknown backup evidence claimed active checking');
+        updateListenerRequests([{ type: 'shoutout', name: 'Listener', message: 'Hello', age_s: 0 }],
+          [{ type: 'shoutout', name: 'Listener', message: 'Prepared', status: 'sent_to_hosts', age_s: 1 }]);
+        check(document.getElementById('lrBody').textContent.includes('Waiting for hosts')
+          && document.getElementById('lrBody').textContent.includes('airtime unconfirmed'), 'dedication acknowledgment promised airtime');
+        showAdminTab('scaletta');
+        _programmeFilter = 'all'; _pendingPurge = false;
+        _st = { ...saved.st, upcoming: [{ id: 'mac-undo', type: 'music', label: 'Artist — Song',
+          source: 'rendered_queue', duration_ms: 180000 }] };
+        api = async (...args) => { calls.push(args); return { ok: true }; };
+        refreshFast = async () => { refreshes++; };
+        window.setTimeout = (callback, delay, ...args) => {
+          if (delay !== 5000) return saved.timeout.call(window, callback, delay, ...args);
+          timers.push(callback); return -timers.length;
+        };
+        window.clearTimeout = (id) => { if (id >= 0) saved.clear.call(window, id); };
+        const row = () => document.querySelector('[data-queue-remove-id="mac-undo"]');
+        _lastProgrammeHash = ''; renderProgramme(_st);
+        for (let cycle = 0; cycle < 10; cycle++) {
+          const button = row();
+          check(button, 'Undo fixture did not expose a removable queue item');
+          await removeQueueItem('mac-undo', button);
+          await removeQueueItem('mac-undo', button);
+          _lastProgrammeHash = ''; renderProgramme({ ..._st });
+          check(!row(), 'poll restored a pending removal before Undo');
+          const undoButton = document.querySelector('#undoStack .undo-toast:last-child .undo-toast-btn');
+          undoButton.click();
+          timers[timers.length - 1](); // Also simulate an already-dispatched timer after cancellation.
+          check(row() && _pendingRemovals.size === 0, 'Undo did not restore the same stable queue item');
+        }
+        check(calls.length === 0 && refreshes === 0, 'repeated Undo sent deletion requests');
+        await removeQueueItem('mac-undo', row());
+        const expiredUndo = document.querySelector('#undoStack .undo-toast:last-child .undo-toast-btn');
+        timers[timers.length - 1]();
+        await Promise.resolve(); await Promise.resolve();
+        expiredUndo.click(); timers[timers.length - 1]();
+        check(calls.length === 1 && calls[0][0] === 'POST' && calls[0][1] === '/api/queue/remove'
+          && calls[0][2].id === 'mac-undo' && refreshes === 1, 'expired removal did not commit exactly one stable ID');
+        window.undoableToast = undefined;
+        _lastProgrammeHash = ''; renderProgramme(_st);
+        await removeQueueItem('mac-undo', row());
+        check(calls.length === 1 && _pendingRemovals.size === 0, 'missing Undo helper deleted a segment');
+        window.undoableToast = saved.undo;
+        _st.upcoming = Array.from({ length: 6 }, (_, index) => ({ id: `overflow-${index}`,
+          type: 'music', label: `Song ${index}`, source: 'rendered_queue', duration_ms: 180000 }));
+        _lastProgrammeHash = ''; renderProgramme(_st);
+        const overflowStart = timers.length;
+        for (const item of _st.upcoming) {
+          await removeQueueItem(item.id, document.querySelector(`[data-queue-remove-id="${item.id}"]`));
+        }
+        await Promise.resolve(); await Promise.resolve();
+        document.querySelectorAll('#undoStack .undo-toast-btn').forEach(button => button.click());
+        timers.slice(overflowStart).forEach(callback => callback());
+        check(calls.length === 2 && calls[1][2].id === 'overflow-0' && _pendingRemovals.size === 0,
+          'toast overflow committed a cancelled removal');
+        return { cancelledCycles: 10, overflowCancellations: 5, committedRemovals: calls.length };
+      } finally {
+        api = saved.api; refreshFast = saved.refreshFast;
+        window.setTimeout = saved.timeout; window.clearTimeout = saved.clear; window.undoableToast = saved.undo;
+        _st = saved.st; Object.assign(_firstListenUi, saved.ui);
+        _programmeFilter = saved.filter; _pendingPurge = saved.purge;
+        document.body.dataset.firstListenEntry = saved.entry;
+        syncFirstListenSetupMount(); _lastSetupJson = ''; _lastProgrammeHash = '';
+        showAdminTab('scaletta');
+      }
+    });
+    for (const width of [375, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(() => { showAdminTab('rotazione'); document.getElementById('libraryTools').open = true; });
+      const geometry = await page.evaluate(() => {
+        const status = document.querySelector('.record-hunt-status').getBoundingClientRect();
+        const form = document.getElementById('directionControls').getBoundingClientRect();
+        return { statusBeforeForm: status.bottom <= form.top,
+          fits: document.documentElement.scrollWidth <= window.innerWidth,
+          toolsColumns: getComputedStyle(document.querySelector('.library-tools-body')).gridTemplateColumns };
+      });
+      assert(geometry.statusBeforeForm && geometry.fits && !geometry.toolsColumns.includes(' '),
+        `Mac admin flow lost its responsive hierarchy at ${width}: ${JSON.stringify(geometry)}`);
+    }
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.evaluate(() => showAdminTab('scaletta'));
+    return result;
+  }
+
+  async function exerciseMotoreSettingsTypography() {
+    const originalViewport = page.viewportSize();
+    for (const width of [320, 600, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      const metrics = await page.evaluate(() => {
+        const panel = document.getElementById('drawer-diagnostics');
+        const button = document.getElementById('firstListenRestartBtn');
+        const note = document.getElementById(button.getAttribute('aria-describedby'));
+        const group = button.parentElement;
+        const title = panel.querySelector('header h2');
+        const style = (element) => {
+          const css = getComputedStyle(element);
+          return {
+            font: css.fontFamily, size: parseFloat(css.fontSize), italic: css.fontStyle,
+            letterSpacing: parseFloat(css.letterSpacing),
+          };
+        };
+        const fits = (element) => {
+          const rect = element.getBoundingClientRect();
+          const bounds = panel.getBoundingClientRect();
+          return rect.width > 0 && rect.left >= bounds.left && rect.right <= bounds.right
+            && element.scrollWidth <= element.clientWidth + 1;
+        };
+        return {
+          button: style(button), note: note && style(note), title: style(title),
+          labels: [...panel.querySelectorAll('.card-label,.ttl-eyebrow')].map(style),
+          grouped: Boolean(note && group.contains(note)),
+          uniqueNote: Boolean(note && document.querySelectorAll(`[id="${note.id}"]`).length === 1),
+          noteText: note?.textContent,
+          fits: Boolean(note && [group, button, note].every(fits)),
+          touchHeight: button.getBoundingClientRect().height,
+          healthGap: panel.querySelector('.card-label').getBoundingClientRect().top
+            - group.getBoundingClientRect().bottom,
+        };
+      });
+      assert(metrics.grouped && metrics.uniqueNote && metrics.noteText.includes('Your settings stay saved.'),
+        'Motore restart lost its grouped, accessible settings reassurance');
+      assert(metrics.button.font.includes('Outfit') && metrics.note.font.includes('Outfit')
+        && metrics.button.size === 13 && metrics.note.size === 13,
+      `Motore restart copy escaped the utility type scale at ${width}: ${JSON.stringify(metrics)}`);
+      assert(metrics.labels.every(({ font }) => font.includes('Outfit')),
+        `Motore section labels reverted to diagnostic typography at ${width}`);
+      assert(metrics.labels.every(({ size, letterSpacing }) => Math.abs(letterSpacing - size * 0.18) < 0.01),
+        `Motore section labels lost 0.18em tracking at ${width}: ${JSON.stringify(metrics.labels)}`);
+      assert(metrics.title.font.includes('Playfair') && metrics.title.italic === 'italic',
+        'Motore lost its established display heading');
+      assert(metrics.fits && metrics.touchHeight >= 44 && metrics.healthGap >= 24,
+        `Motore restart lost responsive spacing or touch size at ${width}: ${JSON.stringify(metrics)}`);
+    }
+    if (originalViewport) await page.setViewportSize(originalViewport);
+  }
+
   async function exerciseListenerSongFailureRows() {
     const failureCases = [
       ['low_confidence', 'needs exact title + artist', 'Try exact title + artist'],
@@ -161,13 +418,534 @@ async (page) => {
   // console hidden until the operator picks a surface. This smoke exercises the
   // producer desk, so open it the way the operator does — through the page's
   // own tab navigation (render-free, exactly like initTabs' landing call).
+  await page.evaluate(() => showAdminTab('motore', { render: false, persist: false }));
+  await exerciseMotoreSettingsTypography();
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
+  const stationCategoryRow = await page.evaluate(() => {
+    document.body.removeAttribute('data-stopped');
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-station-id',
+        type: 'station_id',
+        label: 'Station ID',
+        metadata: {},
+        source: 'rendered_queue',
+        duration_ms: 7000,
+      }],
+      current_source: { kind: 'demo', label: 'Demo Radio' },
+      playlist_source: { kind: 'demo', label: 'Demo Radio' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      badge: row?.cells[1]?.textContent.trim() || '',
+      title: row?.cells[2]?.textContent.trim() || '',
+      rowText: row?.textContent.trim() || '',
+    };
+  });
+  const stationCategoryCount = (stationCategoryRow.rowText.match(/station id/gi) || []).length;
+  assert(
+    stationCategoryRow.badge.toLowerCase().includes('station id')
+      && stationCategoryRow.title === ''
+      && stationCategoryCount === 1,
+    `station category labels are not duplicated: ${JSON.stringify(stationCategoryRow)}`,
+  );
+  const localQueueRow = await page.evaluate(() => {
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-local-track',
+        type: 'music',
+        label: ' – Salvatore On Everything',
+        source_kind: 'local',
+        source: 'rendered_queue',
+        duration_ms: 240000,
+      }],
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    });
+    const row = document.querySelector('#programmeList tbody tr');
+    return {
+      title: row?.cells[2]?.firstChild?.textContent.trim() || '',
+      source: row?.cells[3]?.textContent.trim() || '',
+    };
+  });
+  assert(
+    localQueueRow.title === 'Salvatore On Everything' && localQueueRow.source === 'Local music',
+    `local queue metadata was not rendered title-only: ${JSON.stringify(localQueueRow)}`,
+  );
+
+  // Scaletta source mapping matrix: display labels are deliberately independent
+  // from the rendered_queue action contract.
+  async function exerciseScalettaPresentation() {
+    const scalettaState = {
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    };
+    const renderRows = async (upcoming) => page.evaluate((state) => {
+      renderProgramme(state);
+      return [...document.querySelectorAll('#programmeList tbody tr')].map((row) => {
+        const titleCell = row.cells[2];
+        return {
+          title: titleCell?.childNodes[0]?.textContent.trim() || '',
+          subtitle: titleCell?.querySelector('.prog-subtitle')?.textContent.trim() || '',
+          source: row.cells[3]?.textContent.trim() || '',
+          actionId: row.querySelector('[data-queue-remove-id]')?.getAttribute('data-queue-remove-id') || null,
+          playlistLink: row.getAttribute('data-playlist-link'),
+          playlistIndex: row.getAttribute('data-playlist-index'),
+          spotifyId: row.getAttribute('data-spotify-id'),
+          className: row.className,
+          text: row.textContent.trim(),
+        };
+      });
+    }, { ...scalettaState, upcoming });
+
+    const sourceRows = await renderRows([
+      { id: 'source-local', type: 'music', label: 'Local Artist – Local Title', source_kind: ' LOCAL ', source: 'rendered_queue', playlist_index: 4, duration_ms: 240000 },
+      { id: 'source-jamendo', type: 'music', label: 'Jamendo Artist – Jamendo Title', source_kind: 'local', metadata: { source_kind: '  JAmEnDo  ' }, source: 'rendered_queue', spotify_id: 'spotify-jamendo', duration_ms: 240000 },
+      { id: 'source-starter', type: 'music', label: 'Starter Artist – Starter Title', source_kind: ' starter ', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-youtube', type: 'music', label: 'Download Artist – Download Title', source_kind: ' YOUTUBE ', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-external', type: 'music', label: 'External Artist – External Title', metadata: { source_kind: 'external' }, source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-empty-metadata', type: 'music', label: 'Fallback Artist – Fallback Title', source_kind: 'local', metadata: { source_kind: '' }, source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-fallback-music', type: 'music', label: 'Fallback Music Artist – Fallback Music Title', source_kind: 'mystery', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-planned', type: 'music', label: 'Planned Artist – Planned Title', source_kind: 'mystery', source: 'forecast', predicted: true, duration_ms: 240000 },
+    ]);
+    assert(
+      sourceRows.length === 8
+        && sourceRows.map(({ source }) => source).join('|') === 'Local music|Jamendo|Starter crate|Download|Download|Local music|Music|Planned',
+      `Scaletta source mapping matrix drifted: ${JSON.stringify(sourceRows)}`,
+    );
+    assert(
+      sourceRows.slice(0, 7).every(({ actionId }) => actionId)
+        && !sourceRows[7].actionId && sourceRows[7].className.includes('predicted')
+        && sourceRows[0].actionId === 'source-local'
+        && sourceRows[0].playlistLink === 'true' && sourceRows[0].playlistIndex === '4'
+        && sourceRows[1].playlistLink === 'true' && sourceRows[1].spotifyId === 'spotify-jamendo',
+      `Scaletta actionability or stable playlist links drifted: ${JSON.stringify(sourceRows)}`,
+    );
+
+    const sourceCompatibilityRows = await renderRows([
+      { id: 'source-download', type: 'music', label: 'Download Artist – Download Title', source_kind: ' DOWNLOAD ', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'source-empty-kind', type: 'music', label: 'Empty Artist – Empty Title', source_kind: '', source: 'rendered_queue', duration_ms: 240000 },
+    ]);
+    assert(
+      sourceCompatibilityRows.length === 2
+        && sourceCompatibilityRows.map(({ source }) => source).join('|') === 'Download|Music',
+      `Scaletta compatibility source mapping drifted: ${JSON.stringify(sourceCompatibilityRows)}`,
+    );
+
+    const sourceFallbackRows = await renderRows([
+      { id: 'source-studio', type: 'banter', label: 'Host break', source_kind: 'mystery', source: 'rendered_queue' },
+      { id: 'source-planned-studio', type: 'banter', label: 'Forecast break', source_kind: 'mystery', source: 'forecast', predicted: true },
+      { id: 'source-unsafe-kind', type: 'music', label: 'Unsafe Artist – Unsafe Title', source_kind: '<img src=x>', source: 'rendered_queue' },
+      { id: 'source-constructor-kind', type: 'music', label: 'Constructor Artist – Constructor Title', source_kind: 'constructor', source: 'rendered_queue' },
+      { id: 'source-known-nonmusic', type: 'ad', label: 'Sponsor break', metadata: { source_kind: ' JAMENDO ' }, source: 'forecast', predicted: true },
+      { id: 'source-unsafe-action', type: 'music', label: 'No action Artist – No action Title', source_kind: 'mystery', source: '<img src=x>', predicted: true },
+      { id: 'source-demo-fallback', type: 'music', label: 'Demo Artist – Demo Title', source_kind: 'demo', source: 'rendered_queue' },
+      { id: 'source-classic-fallback', type: 'music', label: 'Classic Artist – Classic Title', source_kind: 'classic', source: 'forecast', predicted: true },
+    ]);
+    const sourceMarkup = await page.evaluate(() => document.querySelector('#programmeList')?.innerHTML || '');
+    const sourceImageCount = await page.evaluate(() => document.querySelectorAll('#programmeList img').length);
+    assert(
+      sourceFallbackRows.map(({ source }) => source).join('|') === 'Studio|Planned|Music|Music|Planned|Planned|Music|Planned'
+        && !sourceMarkup.includes('<img') && sourceImageCount === 0,
+      `unknown or unsafe source values escaped their safe fallback: ${JSON.stringify({ sourceFallbackRows, sourceMarkup })}`,
+    );
+
+    const artistRows = await renderRows([
+      { id: 'artist-em-dash', type: 'music', label: 'Em Artist — Em Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-en-dash', type: 'music', label: 'En Artist – En Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-hyphen', type: 'music', label: 'Hyphen Artist - Hyphen Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-metadata', type: 'music', label: 'Ignored label', metadata: { title_only: 'Metadata Title', artist: 'Metadata Artist' }, source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-unknown', type: 'music', label: 'Unknown – Local Title', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-html', type: 'music', label: '<img src=x> – <b>Unsafe Title</b>', source_kind: 'local', source: 'rendered_queue' },
+      { id: 'artist-later', type: 'music', label: 'Later Artist – Later Title', source_kind: 'local', source: 'rendered_queue' },
+    ]);
+    assert(
+      artistRows.length === 7
+        && artistRows[0].title === 'Em Title' && artistRows[0].subtitle === 'Em Artist'
+        && artistRows[1].title === 'En Title' && artistRows[1].subtitle === 'En Artist'
+        && artistRows[2].title === 'Hyphen Title' && artistRows[2].subtitle === 'Hyphen Artist'
+        && artistRows[3].title === 'Metadata Title' && artistRows[3].subtitle === 'Metadata Artist'
+        && artistRows[4].title === 'Local Title' && artistRows[4].subtitle === ''
+        && artistRows[5].title === '<b>Unsafe Title</b>' && artistRows[5].subtitle === '<img src=x>'
+        && artistRows[6].subtitle === 'Later Artist'
+        && artistRows.every(({ source }) => source === 'Local music'),
+      `artist subtitles stayed visible on later music rows or parsing changed: ${JSON.stringify(artistRows)}`,
+    );
+    const artistMarkup = await page.evaluate(() => document.querySelector('#programmeList')?.innerHTML || '');
+    assert(
+      artistMarkup.includes('&lt;img src=x&gt;') && artistMarkup.includes('&lt;b&gt;Unsafe Title&lt;/b&gt;')
+        && !artistMarkup.includes('<img') && !artistMarkup.includes('<b>'),
+      `music title or artist content was not safely escaped: ${artistMarkup}`,
+    );
+
+    const nonMusicRows = await renderRows([
+      { id: 'nonmusic-banter-next', type: 'banter', label: 'Banter: behind the scenes', metadata: { title: 'Host context' }, source_kind: 'mystery', source: 'rendered_queue' },
+      { id: 'nonmusic-ad-later', type: 'ad', label: 'Ad: Partner +30s', metadata: {}, source_kind: 'mystery', source: 'forecast', predicted: true },
+      { id: 'nonmusic-news-later', type: 'news_flash', label: 'News brief', metadata: { category: 'world' }, source_kind: 'mystery', source: 'forecast', predicted: true },
+      { id: 'nonmusic-station-id', type: 'station_id', label: 'Station ID', metadata: {}, source_kind: 'mystery', source: 'forecast', predicted: true },
+    ]);
+    const stationCount = (nonMusicRows[3].text.match(/station id/gi) || []).length;
+    assert(
+      nonMusicRows[0].subtitle === 'Host context'
+        && nonMusicRows[1].subtitle === '' && nonMusicRows[2].subtitle === ''
+        && nonMusicRows[3].title === '' && nonMusicRows[3].subtitle === '' && stationCount === 1,
+      `non-music subtitles or Station ID suppression changed: ${JSON.stringify(nonMusicRows)}`,
+    );
+    const nextNewsRows = await renderRows([
+      { id: 'nonmusic-news-next', type: 'news_flash', label: 'News brief', metadata: { category: 'weather' }, source_kind: 'mystery', source: 'rendered_queue' },
+    ]);
+    assert(nextNewsRows[0].subtitle === 'weather', `NEXT news category subtitle changed: ${JSON.stringify(nextNewsRows)}`);
+
+    const cacheResults = await page.evaluate((state) => {
+      const read = () => {
+        const row = document.querySelector('#programmeList tbody tr');
+        return {
+          title: row?.cells[2]?.childNodes[0]?.textContent.trim() || '',
+          subtitle: row?.cells[2]?.querySelector('.prog-subtitle')?.textContent.trim() || '',
+          source: row?.cells[3]?.textContent.trim() || '',
+          duration: row?.cells[4]?.textContent.trim() || '',
+          playlistLink: row?.getAttribute('data-playlist-link') || null,
+          spotifyId: row?.getAttribute('data-spotify-id') || null,
+        };
+      };
+      const pair = (item, update) => {
+        const next = { ...state, upcoming: [item] };
+        renderProgramme(next);
+        update(item);
+        renderProgramme(next);
+        return read();
+      };
+      const titleItem = { id: 'cache-title', type: 'music', label: 'Old Artist – Old Title', metadata: { title_only: 'Old Title', artist: 'Old Artist', source_kind: 'local' }, source_kind: 'local', source: 'rendered_queue' };
+      const artistItem = { id: 'cache-artist', type: 'music', label: 'Old Artist – Old Title', metadata: { title_only: 'Old Title', artist: 'Old Artist', source_kind: 'local' }, source_kind: 'local', source: 'rendered_queue' };
+      const sourceItem = { id: 'cache-source', type: 'music', label: 'Source Artist – Source Title', metadata: { source_kind: 'local', artist: 'Source Artist' }, source_kind: 'local', source: 'rendered_queue' };
+      const linkItem = { id: 'cache-link', type: 'music', label: 'Link Artist – Link Title', source_kind: 'local', source: 'rendered_queue', spotify_id: 'old-spotify' };
+      const durationItem = { id: 'cache-duration', type: 'music', label: 'Duration Artist – Duration Title', source_kind: 'local', source: 'rendered_queue', duration_sec: 60 };
+      const titleNonMusicItem = { id: 'cache-nonmusic-title', type: 'banter', label: 'Banter: context', metadata: { title: 'Old context' }, source: 'rendered_queue' };
+      const categoryItem = { id: 'cache-category', type: 'news_flash', label: 'News brief', metadata: { category: 'old category' }, source: 'rendered_queue' };
+      return {
+        title: pair(titleItem, (item) => { item.metadata.title_only = 'Updated title'; }),
+        artist: pair(artistItem, (item) => { item.metadata.artist = 'Updated artist'; }),
+        source: pair(sourceItem, (item) => { item.metadata.source_kind = 'jamendo'; }),
+        link: pair(linkItem, (item) => { item.spotify_id = 'new-spotify'; }),
+        duration: pair(durationItem, (item) => { item.duration_sec = 120; }),
+        nonMusicTitle: pair(titleNonMusicItem, (item) => { item.metadata.title = 'Updated context'; }),
+        category: pair(categoryItem, (item) => { item.metadata.category = 'updated category'; }),
+      };
+    }, scalettaState);
+    assert(
+      cacheResults.title.title === 'Updated title'
+        && cacheResults.artist.subtitle === 'Updated artist'
+        && cacheResults.source.source === 'Jamendo'
+        && cacheResults.link.playlistLink === 'true' && cacheResults.link.spotifyId === 'new-spotify'
+        && cacheResults.duration.duration === '2:00'
+        && cacheResults.nonMusicTitle.subtitle === 'Updated context'
+        && cacheResults.category.subtitle === 'updated category',
+      `same-ID metadata update did not invalidate the render cache: ${JSON.stringify(cacheResults)}`,
+    );
+
+    const truncationAndFilter = await page.evaluate((state) => {
+      const rowIds = () => [...document.querySelectorAll('#programmeList tbody tr:not(.prog-more)')]
+        .map((row) => row.querySelector('[data-queue-remove-id]')?.getAttribute('data-queue-remove-id') || row.cells[2]?.textContent.trim() || '');
+      _programmeFilter = 'all';
+      const ten = Array.from({ length: 10 }, (_, index) => ({
+        id: `truncation-${index}`,
+        type: 'music',
+        label: `Artist ${index} – Title ${index}`,
+        source_kind: 'local',
+        source: 'rendered_queue',
+      }));
+      renderProgramme({ ...state, upcoming: ten });
+      const truncation = {
+        count: document.querySelectorAll('#programmeList tbody tr:not(.prog-more)').length,
+        ids: rowIds(),
+        more: document.querySelector('#programmeList .prog-more')?.textContent.trim() || '',
+      };
+      const mixed = [
+        { id: 'filter-banter', type: 'banter', label: 'Banter: opener', source: 'rendered_queue' },
+        { id: 'filter-music-1', type: 'music', label: 'Artist one – Title one', source_kind: 'local', source: 'rendered_queue' },
+        { id: 'filter-ad', type: 'ad', label: 'Ad: partner +30s', source: 'forecast', predicted: true },
+        { id: 'filter-music-2', type: 'music', label: 'Artist two – Title two', source_kind: 'local', source: 'rendered_queue' },
+        { id: 'filter-music-3', type: 'music', label: 'Artist three – Title three', source_kind: 'local', source: 'rendered_queue' },
+      ];
+      _programmeFilter = 'music';
+      renderProgramme({ ...state, upcoming: mixed });
+      const filteredRows = [...document.querySelectorAll('#programmeList tbody tr:not(.prog-more)')];
+      const filtered = {
+        count: filteredRows.length,
+        ids: rowIds(),
+        firstRelativeLabel: filteredRows[0]?.cells[0]?.textContent.trim() || '',
+        more: document.querySelector('#programmeList .prog-more')?.textContent.trim() || '',
+      };
+      _programmeFilter = 'all';
+      renderProgramme({ ...state, upcoming: [] });
+      return { truncation, filtered };
+    }, scalettaState);
+    assert(
+      truncationAndFilter.truncation.count === 8
+        && truncationAndFilter.truncation.ids.join('|') === 'truncation-0|truncation-1|truncation-2|truncation-3|truncation-4|truncation-5|truncation-6|truncation-7'
+        && truncationAndFilter.truncation.more === '+ 2 more segments'
+        && truncationAndFilter.filtered.count === 3
+        && truncationAndFilter.filtered.ids.join('|') === 'filter-music-1|filter-music-2|filter-music-3'
+        && truncationAndFilter.filtered.firstRelativeLabel === 'after'
+        && truncationAndFilter.filtered.more === '',
+      `Scaletta filtering or <=8 truncation changed: ${JSON.stringify(truncationAndFilter)}`,
+    );
+
+    const geometryFixture = [
+      { id: 'geometry-long', type: 'music', label: 'An exceptionally long artist name for responsive proof – A deliberately long title that must remain readable without pushing the table wider', source_kind: 'local', source: 'rendered_queue', duration_ms: 240000 },
+      { id: 'geometry-second', type: 'music', label: 'Second Artist – Second Title', source_kind: 'jamendo', source: 'rendered_queue', duration_ms: 180000 },
+      { id: 'geometry-planned', type: 'music', label: 'Planned Artist – Planned Title', source_kind: 'mystery', source: 'forecast', predicted: true, duration_ms: 120000 },
+    ];
+    const geometry = [];
+    for (const width of [1280, 1024, 1023, 900, 880, 769, 768, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const metrics = await page.evaluate((state) => {
+        _programmeFilter = 'all';
+        renderProgramme(state);
+        const visible = (element) => {
+          if (!element) return false;
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const table = document.querySelector('#programmeList table');
+        const firstRow = document.querySelector('#programmeList tbody tr:not(.prog-more)');
+        const heads = [...document.querySelectorAll('#programmeList thead th')].map((element) => {
+          const rect = element.getBoundingClientRect();
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const textRect = range.getBoundingClientRect();
+          return { text: element.textContent.trim(), visible: visible(element), left: rect.left, right: rect.right, textLeft: textRect.left, textRight: textRect.right };
+        });
+        const visibleHeads = heads.filter(({ visible: isVisible }) => isVisible);
+        const headingTextFits = visibleHeads.length === 0 || (visibleHeads.length >= 2
+          && visibleHeads[0].textLeft >= visibleHeads[0].left - 1
+          && visibleHeads[0].textRight <= visibleHeads[0].right + 1
+          && visibleHeads[0].textRight <= visibleHeads[1].textLeft + 1);
+        const source = firstRow?.querySelector('td.ho');
+        const duration = firstRow?.querySelector('td.du');
+        const subtitle = firstRow?.querySelector('.prog-subtitle');
+        const actions = [...document.querySelectorAll('#programmeList [data-queue-remove-id]')].map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { visible: visible(element), width: rect.width, height: rect.height };
+        });
+        const firstRowRect = firstRow?.getBoundingClientRect();
+        return {
+          tableDisplay: table ? getComputedStyle(table).display : '',
+          tableWidth: table?.clientWidth || 0,
+          tableScrollWidth: table?.scrollWidth || 0,
+          rowScrollWidth: firstRow?.scrollWidth || 0,
+          rowWidth: firstRow?.clientWidth || 0,
+          headersVisible: visibleHeads,
+          headingTextFits,
+          sourceVisible: visible(source),
+          durationVisible: visible(duration),
+          subtitleVisible: visible(subtitle),
+          subtitleText: subtitle?.textContent.trim() || '',
+          actionGeometry: actions,
+          firstRowInsideViewport: !firstRowRect || (firstRowRect.left >= -0.5 && firstRowRect.right <= innerWidth + 0.5),
+          documentClientWidth: document.documentElement.clientWidth,
+          documentScrollWidth: document.documentElement.scrollWidth,
+        };
+      }, { ...scalettaState, upcoming: geometryFixture });
+      geometry.push({ width, ...metrics });
+      assert(
+        metrics.documentScrollWidth <= metrics.documentClientWidth
+          && metrics.tableScrollWidth <= metrics.tableWidth + 1
+          && metrics.rowScrollWidth <= metrics.rowWidth + 1
+          && metrics.firstRowInsideViewport
+          && metrics.headingTextFits
+          && metrics.subtitleVisible
+          && metrics.subtitleText === 'An exceptionally long artist name for responsive proof'
+          && metrics.actionGeometry.every(({ visible: isVisible, width: controlWidth, height }) => !isVisible || (controlWidth >= 44 && height >= 44)),
+        `${width}px Scaletta geometry or artist visibility regressed: ${JSON.stringify(metrics)}`,
+      );
+      if (width >= 1024) {
+        assert(
+          metrics.headersVisible.length === 6
+            && metrics.sourceVisible && metrics.durationVisible
+            && metrics.headersVisible[0].right <= metrics.headersVisible[1].left + 1,
+          `${width}px Quando overlapped Tipo or a desktop column disappeared: ${JSON.stringify(metrics)}`,
+        );
+      } else if (width >= 881) {
+        assert(
+          metrics.headersVisible.length === 5 && !metrics.sourceVisible && metrics.durationVisible,
+          `${width}px tablet source/duration visibility changed: ${JSON.stringify(metrics)}`,
+        );
+      } else if (width >= 769) {
+        assert(
+          metrics.headersVisible.length === 4 && !metrics.sourceVisible && !metrics.durationVisible,
+          `${width}px narrow-tablet source/duration visibility changed: ${JSON.stringify(metrics)}`,
+        );
+      } else {
+        assert(
+          metrics.tableDisplay === 'block' && metrics.headersVisible.length === 0
+            && metrics.sourceVisible && metrics.durationVisible,
+          `${width}px phone Scaletta card layout changed: ${JSON.stringify(metrics)}`,
+        );
+      }
+    }
+    const screenshotDir = 'tmp/listening-slice-d-qa';
+    // run-code executes in Playwright's VM context, so use its file-writing
+    // API to create the parent directory without relying on Node globals.
+    await page.context().storageState({ path: `${screenshotDir}/.browser-state.json` });
+    for (const width of [1280, 900, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate((state) => renderProgramme(state), { ...scalettaState, upcoming: geometryFixture });
+      await page.screenshot({ path: `${screenshotDir}/slice-d-after-${width}.png`, fullPage: true });
+    }
+    await page.setViewportSize({ width: 1024, height: 900 });
+    return { sourceRows, sourceCompatibilityRows, sourceFallbackRows, artistRows, nonMusicRows, cacheResults, truncationAndFilter, geometry };
+  }
+  const scalettaPresentation = await exerciseScalettaPresentation();
   await exerciseListenerSongFailureRows();
   const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Music','ready','Ready'],['Sources','checking','Checking'],['Hosts','waiting_ai','Waiting for AI'],['Setup','blocked','Blocked'],['AI','not_configured','Optional']].map(([label,status,display_status])=>({label,status,display_status,shape:'BAD'}))}}};
   const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent,name:el.getAttribute('aria-label')}))},setupStatusFixture);
   assert(setupChips.map(({state})=>state).join('|')==='ready|working|degraded|blocked|idle'&&setupChips.every(({children,text,name})=>children===0&&!text.includes('BAD')&&name===null)&&setupChips[2].text==='Hosts: Waiting for AI'&&setupChips[4].text==='AI: Optional',`setup status chips lost semantic mapping or accessible names: ${JSON.stringify(setupChips)}`);
   await page.emulateMedia({forcedColors:'active'});const forcedGlyphs=await page.evaluate(()=>[...setupStripChips.children].map((el)=>getComputedStyle(el,'::before').content));assert(forcedGlyphs.every((glyph)=>!['none','normal','""'].includes(glyph)),`forced colors hid setup status glyphs: ${JSON.stringify(forcedGlyphs)}`);
   await page.emulateMedia({forcedColors:'none'});await page.evaluate(()=>renderGuidedSetupStrip({}));
+
+  const adminTypeMetrics = await page.evaluate(() => {
+    const probe = document.createElement('p');
+    probe.className = 'host-style';
+    probe.textContent = 'A long host description should read like body copy.';
+    document.body.appendChild(probe);
+    const style = getComputedStyle(probe);
+    const metrics = {
+      colorScheme: getComputedStyle(document.documentElement).colorScheme,
+      fontSize: parseFloat(style.fontSize),
+      lineHeight: parseFloat(style.lineHeight),
+    };
+    probe.remove();
+    return metrics;
+  });
+  assert(adminTypeMetrics.colorScheme === 'dark', `admin native controls did not declare dark color scheme: ${JSON.stringify(adminTypeMetrics)}`);
+  assert(
+    adminTypeMetrics.fontSize >= 14 && adminTypeMetrics.lineHeight >= 21,
+    `host descriptions stayed below readable body size: ${JSON.stringify(adminTypeMetrics)}`,
+  );
+
+  const privacyReceiptStates = await page.evaluate(() => ({
+    untouched: firstListenPendingPrivacyChoice({
+      heard: false,
+      privacyReviewed: false,
+      privacy: { choice_explicit: true },
+      privacyEnabled: true,
+    }, null),
+    recovered: firstListenPendingPrivacyChoice({
+      heard: true,
+      privacyReviewed: false,
+      privacy: { choice_explicit: true },
+      privacyEnabled: true,
+    }, null),
+    failedPrivateSave: firstListenPendingPrivacyChoice({
+      heard: false,
+      privacyReviewed: false,
+      privacy: { choice_explicit: false },
+      privacyEnabled: true,
+    }, false),
+  }));
+  assert(privacyReceiptStates.untouched === null, `untouched privacy default looked unsaved: ${JSON.stringify(privacyReceiptStates)}`);
+  assert(privacyReceiptStates.recovered === true, `heard-session privacy recovery disappeared: ${JSON.stringify(privacyReceiptStates)}`);
+  assert(privacyReceiptStates.failedPrivateSave === false, `same-page privacy save failure disappeared: ${JSON.stringify(privacyReceiptStates)}`);
+
+  const hostPipelineStates = await page.evaluate(() => {
+    const status = {
+      runtime_status: { station_on_air: false, health_state: 'ready' },
+      golden_path: { blocking: false },
+    };
+    const cases = {
+      demo: { script_llm: false, anthropic_key: false, openai: false },
+      valid: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', openai: false },
+      checking: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'unverified', provider_probe_in_flight: true },
+      inconclusive: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'unverified', provider_probe_in_flight: false },
+      openaiDegraded: { script_llm: true, anthropic_key: false, openai: true, openai_key_status: 'valid', openai_degraded: true },
+      backup: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: false },
+      rejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'rejected', openai: false },
+      rejectedDegraded: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'rejected',
+        anthropic_degraded: true,
+        openai: false,
+      },
+      rejectedChecking: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'rejected',
+        anthropic_degraded: true,
+        openai: true,
+        openai_key_status: 'unverified',
+        provider_probe_in_flight: true,
+      },
+      rejectedInconclusive: { script_llm: true, anthropic_key: true, anthropic_key_status: 'rejected', openai: true, openai_key_status: 'unverified', provider_probe_in_flight: false },
+      backupWithRejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: true, openai_key_status: 'rejected' },
+      degradedUnverified: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'unverified',
+        anthropic_degraded: true,
+        openai: false,
+      },
+      degradedMaskedByUnrelatedProbe: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'valid',
+        anthropic_degraded: true,
+        openai: true,
+        openai_key_status: 'unverified',
+      },
+      fallback: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'rejected',
+        openai: true,
+        openai_key_status: 'valid',
+      },
+    };
+    return Object.fromEntries(Object.entries(cases).map(([name, capabilities]) => {
+      updatePipelineStatus({ capabilities, golden_path: status.golden_path }, status);
+      const chip = document.querySelector('#pipelineStatus .srow:first-child .status-chip');
+      return [name, { state: chip?.classList[1] || '', text: chip?.textContent.trim() || '', checkVisible: !document.getElementById('pipelineAiCheck').hidden }];
+    }));
+  });
+  assert(
+    hostPipelineStates.demo.state === 'ready' && hostPipelineStates.demo.text.includes('Demo Radio'),
+    `Demo Radio provider state was not ready: ${JSON.stringify(hostPipelineStates.demo)}`,
+  );
+  assert(hostPipelineStates.valid.state === 'ready', `valid AI provider was not ready: ${JSON.stringify(hostPipelineStates.valid)}`);
+  assert(hostPipelineStates.checking.state === 'working', `unverified AI provider was not checking: ${JSON.stringify(hostPipelineStates.checking)}`);
+  assert(hostPipelineStates.inconclusive.state === 'degraded' && hostPipelineStates.inconclusive.checkVisible, `completed inconclusive probe stayed checking or hid the retry action: ${JSON.stringify(hostPipelineStates.inconclusive)}`);
+  assert(hostPipelineStates.openaiDegraded.state === 'degraded', `OpenAI runtime failure kept claiming AI hosts ready: ${JSON.stringify(hostPipelineStates.openaiDegraded)}`);
+  assert(hostPipelineStates.backup.state === 'degraded', `backed-up AI provider lost degraded truth: ${JSON.stringify(hostPipelineStates.backup)}`);
+  assert(hostPipelineStates.rejected.state === 'blocked', `rejected AI provider was not blocked: ${JSON.stringify(hostPipelineStates.rejected)}`);
+  assert(hostPipelineStates.rejectedDegraded.state === 'blocked', `rejected AI provider was masked by cooldown: ${JSON.stringify(hostPipelineStates.rejectedDegraded)}`);
+  assert(hostPipelineStates.rejectedChecking.state === 'working', `unverified fallback provider was masked by rejection: ${JSON.stringify(hostPipelineStates.rejectedChecking)}`);
+  assert(hostPipelineStates.rejectedInconclusive.state === 'degraded', `inconclusive second provider was treated as another rejected key: ${JSON.stringify(hostPipelineStates.rejectedInconclusive)}`);
+  assert(hostPipelineStates.backupWithRejected.state === 'degraded', `valid provider cooldown was masked by rejected fallback: ${JSON.stringify(hostPipelineStates.backupWithRejected)}`);
+  assert(
+    hostPipelineStates.degradedUnverified.state === 'degraded',
+    `circuit-breaker cooldown was masked by an inconclusive probe stuck at unverified: ${JSON.stringify(hostPipelineStates.degradedUnverified)}`,
+  );
+  assert(
+    hostPipelineStates.degradedMaskedByUnrelatedProbe.state === 'degraded',
+    `known-degraded provider was masked by an unrelated provider's own still-checking probe: ${JSON.stringify(hostPipelineStates.degradedMaskedByUnrelatedProbe)}`,
+  );
+  assert(hostPipelineStates.fallback.state === 'ready', `valid fallback provider did not keep AI hosts ready: ${JSON.stringify(hostPipelineStates.fallback)}`);
+
+  const aiCheckAction = await page.evaluate(async () => {
+    const oldApi = apiResponse, oldRefresh = refreshSlow, oldCaps = _caps, button = document.getElementById('pipelineAiCheck'); let calls = 0, busy = false;
+    try {
+      _caps = { capabilities: { openai: true, openai_key_status: 'unverified' } }; apiResponse = async (method, path, body) => { calls += 1; busy = button.disabled && button.getAttribute('aria-busy') === 'true'; if (method !== 'POST' || path !== '/api/setup/provider-check' || Object.keys(body).length) throw new Error('wrong check route'); return { response: { ok: true }, payload: { providers: { openai_chat: { ok: true } } } }; };
+      refreshSlow = async () => { _caps.capabilities.openai_key_status = 'valid'; };
+      await checkAiConnection(button); return { calls, busy, restored: !button.disabled && !button.hasAttribute('aria-busy') };
+    } finally { apiResponse = oldApi; refreshSlow = oldRefresh; _caps = oldCaps; }
+  });
+  assert(aiCheckAction.calls === 1 && aiCheckAction.busy && aiCheckAction.restored,
+    `AI connection action did not use the shared probe or recover its button: ${JSON.stringify(aiCheckAction)}`);
 
   const jamendoControls=await page.evaluate(async()=>{const status=(source,shared,enabled=true,acknowledged=true)=>({enabled,noncommercial_acknowledged:acknowledged,client_id_configured:Boolean(source),client_id_source:source,shared_access_available:shared}),view=()=>({label:jamendoSecretLabel.textContent,action:jamendoOwnClientIdAction.textContent,fieldHidden:jamendoClientField.hidden,clearHidden:jamendoClearClientId.hidden,help:jamendoAccessHelp.textContent});
     let confirmations=0,requests=[],responseStatus=status('bundled',true);const originalConfirm=window.confirm,originalRequest=window.mediaSourceRequest;window.confirm=()=>{confirmations+=1;return true};window.mediaSourceRequest=async(method,path,payload)=>{requests.push({method,path,payload});return{ok:true,status:200,data:{ok:true,status:responseStatus}}};
@@ -176,10 +954,10 @@ async (page) => {
       const includedMessage=jamendoFormMessage.textContent;responseStatus=status('bundled',true,false,false);_st.jamendo=status('operator',true);renderJamendoSettings(_st.jamendo,true);await clearJamendoClientId(jamendoClearClientId);return{bundled,guarded,required,operator,confirmations,request:requests[0],includedMessage,offMessage:jamendoFormMessage.textContent};
     }finally{window.confirm=originalConfirm;window.mediaSourceRequest=originalRequest}
   });
-  assert(jamendoControls.bundled.label.includes('included')&&jamendoControls.bundled.action==='Use own ID'&&jamendoControls.bundled.fieldHidden&&jamendoControls.bundled.clearHidden,`bundled Jamendo controls exposed credential work: ${JSON.stringify(jamendoControls.bundled)}`);
+  assert(jamendoControls.bundled.label.includes('included')&&jamendoControls.bundled.action==='Use my Jamendo ID'&&jamendoControls.bundled.fieldHidden&&jamendoControls.bundled.clearHidden,`bundled Jamendo controls exposed credential work: ${JSON.stringify(jamendoControls.bundled)}`);
   assert(jamendoControls.guarded.confirmations===0&&jamendoControls.guarded.requests===0&&jamendoControls.guarded.message.includes('turn Jamendo off'),`bundled Jamendo Clear reached confirmation or network: ${JSON.stringify(jamendoControls.guarded)}`);
   assert(!jamendoControls.required.fieldHidden&&jamendoControls.required.help.startsWith('Add your own'),`missing Jamendo access did not request an operator ID: ${JSON.stringify(jamendoControls.required)}`);
-  assert(jamendoControls.operator.label.includes('your own')&&jamendoControls.operator.action==='Replace'&&!jamendoControls.operator.clearHidden&&jamendoControls.confirmations===2&&JSON.stringify(jamendoControls.request)===JSON.stringify({method:'PUT',path:'/api/media-sources/jamendo',payload:{enabled:true,noncommercial_acknowledged:true,clear_client_id:true}})&&jamendoControls.includedMessage==='Using Mamma Mi Radio’s included Jamendo access. Settings are up to date.'&&jamendoControls.offMessage==='Jamendo is off. Settings are up to date.',`operator Jamendo Clear lost its credential-removal contract: ${JSON.stringify(jamendoControls)}`);
+  assert(jamendoControls.operator.label.includes('your own')&&jamendoControls.operator.action==='Replace my Jamendo ID'&&!jamendoControls.operator.clearHidden&&jamendoControls.confirmations===2&&JSON.stringify(jamendoControls.request)===JSON.stringify({method:'PUT',path:'/api/media-sources/jamendo',payload:{enabled:true,noncommercial_acknowledged:true,clear_client_id:true}})&&jamendoControls.includedMessage==='Using Mamma Mi Radio’s included Jamendo access. Settings are up to date.'&&jamendoControls.offMessage==='Jamendo is off. Settings are up to date.',`operator Jamendo Clear lost its credential-removal contract: ${JSON.stringify(jamendoControls)}`);
 
   const seededStoppedFirstPaint = await page.evaluate(() => {
     document.body.setAttribute('data-stopped', 'true');
@@ -334,7 +1112,11 @@ async (page) => {
       });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"bridged":false}' });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, bridged: skipScenario === 'bridged' }),
+    });
   });
   await page.route('**/api/resume*', async (route) => {
     const request = route.request();
@@ -831,8 +1613,73 @@ async (page) => {
   skipScenario = 'success';
   await page.evaluate(() => doSkip(skipBtn));
   assert(
-    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'Skip — moving to the next segment',
+    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'DJ handoff in progress — next segment queued.',
     'successful skip lost its confirmation',
+  );
+  skipScenario = 'bridged';
+  await page.evaluate(() => doSkip(skipBtn));
+  const bridgedSkipToast = await page.evaluate(() => window.__adminSmokeToasts.at(-1));
+  assert(
+    bridgedSkipToast === 'DJ handoff in progress — cueing the next segment.',
+    `bridged skip falsely claimed playable runway: ${bridgedSkipToast}`,
+  );
+  assert(
+    !bridgedSkipToast.toLowerCase().includes('queued')
+      && !bridgedSkipToast.toLowerCase().includes('audible'),
+    `bridged skip claimed queued or audible delivery: ${bridgedSkipToast}`,
+  );
+  skipScenario = 'success';
+  await page.evaluate(() => doSkip(skipBtn));
+
+  // Truthful handoff theater: success means the next segment is queued, not that
+  // it is already audible. The skipping chip and queue row must stay honest.
+  const handoffUi = await page.evaluate(() => {
+    updateStopState(false);
+    updateNow({ type: 'skipping', label: 'Skipping...', started: Date.now() / 1000, metadata: {} });
+    renderProgramme({
+      upcoming: [{
+        id: 'admin-smoke-skip-next',
+        type: 'music',
+        label: 'Queued Next Segment Song',
+        source_kind: 'local',
+        source: 'rendered_queue',
+        duration_ms: 180000,
+      }],
+      current_source: { kind: 'local', label: 'Local music' },
+      playlist_source: { kind: 'local', label: 'Local music' },
+      listeners: { active: 1 },
+    });
+    const skip = document.getElementById('skipBtn');
+    const queueRow = document.querySelector('#programmeList tbody tr');
+    return {
+      toast: window.__adminSmokeToasts.at(-1),
+      skipTitle: skip ? skip.getAttribute('title') : '',
+      skipAria: skip ? skip.getAttribute('aria-label') : '',
+      typeText: document.getElementById('nowType')?.textContent || '',
+      typeAria: document.getElementById('nowType')?.getAttribute('aria-label') || '',
+      nowTitle: document.getElementById('nowTitle')?.textContent || '',
+      queueWhen: queueRow?.cells[0]?.textContent.trim() || '',
+      queueTitle: queueRow?.cells[2]?.firstChild?.textContent.trim() || '',
+    };
+  });
+  assert(handoffUi.skipTitle === 'Next segment', `skip control still says track: ${handoffUi.skipTitle}`);
+  assert(
+    handoffUi.skipAria === 'Skip to next segment',
+    `skip control lost its segment aria-label: ${handoffUi.skipAria}`,
+  );
+  assert(handoffUi.typeText === 'Switching…', `skipping chip drifted: ${handoffUi.typeText}`);
+  assert(handoffUi.typeAria === 'status: working', `skipping chip lost working status: ${handoffUi.typeAria}`);
+  assert(
+    handoffUi.nowTitle === 'Skipping...' && !handoffUi.nowTitle.includes('Queued Next Segment Song'),
+    `skipping now-playing falsely presented the queued item as audible: ${handoffUi.nowTitle}`,
+  );
+  assert(
+    handoffUi.queueWhen === 'next' && handoffUi.queueTitle === 'Queued Next Segment Song',
+    `queued next segment was not shown as upcoming during handoff: ${JSON.stringify(handoffUi)}`,
+  );
+  assert(
+    handoffUi.toast.includes('queued') && !handoffUi.toast.toLowerCase().includes('audible'),
+    `skip toast claimed audibility instead of a queued handoff: ${handoffUi.toast}`,
   );
 
   const searchResponseQueue = [];
@@ -1274,9 +2121,11 @@ async (page) => {
     text: emptyPoolRecoveryText.textContent,
     libraryHidden: emptyPoolLibraryBtn.hidden,
     setupHidden: emptyPoolSetupBtn.hidden,
+    sourceGroupDisplay: getComputedStyle(sourceImportGroup).display,
   }));
   assert(noSourceRecovery.text.includes('Set a music source from setup.'), 'no-source recovery lost actionable golden-path guidance');
   assert(noSourceRecovery.libraryHidden && !noSourceRecovery.setupHidden, 'no-source recovery exposed the wrong action');
+  assert(noSourceRecovery.sourceGroupDisplay === 'none', 'unavailable source tools left an empty labelled row');
 
   recoveryCapabilities = 'failure';
   await page.evaluate((status) => {
@@ -1382,6 +2231,9 @@ async (page) => {
   assert(escapedShell.deckVisible && escapedShell.rotationTabVisible,
     'the Station controls escape did not restore the producer desk tab bar');
 
+  const boundaryImaging = await exerciseBoundaryImaging();
+  const macFlow = await exerciseMacFlow();
+
   const stoppedControls = await page.evaluate(() => {
     updateStopState(true);
     const airNext = document.querySelector('.mmr-console-triggers .a-trigger');
@@ -1469,6 +2321,68 @@ async (page) => {
     null,
     { timeout: 2000 },
   );
+
+  const localLibrary = await page.evaluate(() => {
+    renderLocalLibraryStatus({
+      complete: true, active: 3, files_found: 4, added: 1, removed: 1,
+      ignored: {unsupported_format: 1},
+      finished_at: Date.now() / 1000,
+      roots: ['/data/music'],
+    });
+    const issues = {complete: false, active: 2, roots: ['/data/music']};
+    const missing = {
+      complete: false, active: 0, files_found: 0,
+      folder_missing: true, roots: ['/media/mammamiradio'],
+    };
+    const unreadable = {complete: false, active: 0, files_found: 0, roots: ['/media/crate']};
+    return {
+      label: document.getElementById('localSourceLabel').textContent,
+      detail: document.getElementById('localSourceDetail').textContent,
+      whiteSpace: getComputedStyle(document.getElementById('localSourceDetail')).whiteSpace,
+      scan: document.getElementById('localSourceScanBtn').textContent,
+      uploadControls: document.querySelectorAll('#localSourceRow input[type="file"], #localSourceRow [data-action="delete"]').length,
+      scanning: localLibraryPresentation({in_progress: true, roots: ['/data/music']}),
+      issues: localLibraryPresentation(issues),
+      issueToast: localLibraryScanToast(issues),
+      missing: localLibraryPresentation(missing),
+      missingToast: localLibraryScanToast(missing),
+      unreadable: localLibraryPresentation(unreadable),
+      unreadableToast: localLibraryScanToast(unreadable),
+    };
+  });
+  assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
+  assert(localLibrary.detail.startsWith('Add files in /data/music.'),
+    `local library row did not lead with the music place: ${localLibrary.detail}`);
+  assert(localLibrary.detail.split('\n').length === 2
+      && localLibrary.detail.split('\n')[0] === 'Add files in /data/music.',
+    'local library place and state did not render on separate lines');
+  assert(localLibrary.whiteSpace === 'pre-line', 'local library detail did not preserve the place line break');
+  assert(localLibrary.detail.includes('4 files found') && localLibrary.detail.includes('3 active')
+      && localLibrary.detail.includes('Joins the current rotation'),
+    `local library row hid scan counts: ${localLibrary.detail}`);
+  assert(localLibrary.scanning.label === 'Scanning local music'
+      && localLibrary.scanning.detail === 'Add files in /data/music.',
+    'a running scan buried the music place');
+  assert(localLibrary.scan === 'Scan now' && localLibrary.uploadControls === 0,
+    'local library row lost its explicit scan action; local library row rebuilt upload/delete controls');
+  assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.detail.includes('Existing tracks kept')
+      && localLibrary.issues.detail.includes('Scan now'), 'incomplete scan lost its recovery');
+  assert(localLibrary.issueToast.includes('Existing tracks kept') && localLibrary.issueToast.includes('Scan now'),
+    'incomplete scan toast lost its recovery');
+  assert(localLibrary.missing.state === 'blocked'
+      && localLibrary.missing.label === 'Local music · folder missing'
+      && localLibrary.missing.detail.startsWith('Add files in Media → mammamiradio.')
+      && localLibrary.missing.detail.includes('That folder is not there yet. Add a song, then Scan now.'),
+    'a missing music folder was described as an incomplete scan');
+  assert(localLibrary.missingToast === 'That folder is not there yet. Add a song, then Scan now.',
+    'Scan now toast did not match the missing-folder card');
+  assert(localLibrary.unreadable.state === 'degraded'
+      && !localLibrary.unreadable.detail.includes('folder is not there')
+      && !localLibrary.unreadable.detail.includes('Existing tracks kept'),
+    'an unreadable music folder was mislabeled missing');
+  assert(!localLibrary.unreadableToast.includes('folder is not there')
+      && !localLibrary.unreadableToast.includes('Existing tracks kept'),
+    'an unreadable scan toast was mislabeled missing');
 
   for (const width of [320, 375, 414, 600, 768]) {
     await page.setViewportSize({ width, height: 900 });
@@ -1645,6 +2559,135 @@ async (page) => {
   const desktopCatalogue=await page.evaluate(()=>{const grip=document.querySelector('.pl-grip'),style=getComputedStyle(document.getElementById('plBody'));return{gripVisible:Boolean(grip?.getClientRects().length),maxHeight:style.maxHeight,overflowY:style.overflowY}});
   assert(desktopCatalogue.gripVisible&&desktopCatalogue.maxHeight==='400px'&&desktopCatalogue.overflowY==='auto',`desktop catalogue lost drag or bounded scrolling: ${JSON.stringify(desktopCatalogue)}`);
 
+  // The live deck's backdrop is state-driven: transparent while the page sits
+  // at rest so the html atmosphere runs through it, opaque once real content
+  // passes underneath. CSS-source assertions cannot tell those two states
+  // apart, so this drives the real observer and reads the rendered colour.
+  // The reservation is written by a resize listener and a ResizeObserver, both
+  // of which are delivered a frame or more after setViewportSize resolves.
+  // Sample it without waiting and the read races the write.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  // Returning to the top also queues the IntersectionObserver that disarms
+  // the backdrop; existing scroll padding does not prove that callback ran.
+  try {
+    await page.waitForFunction(() => {
+      const deck = document.querySelector('.mmr-deck');
+      return window.scrollY === 0 && deck && !deck.classList.contains('is-pinned');
+    }, null, { timeout: 5000 });
+  } catch (error) {
+    throw new Error('admin-browser-smoke: the deck armed its backdrop at scrollTop 0, where nothing is behind it');
+  }
+  try {
+    await page.waitForFunction(
+      () => getComputedStyle(document.querySelector('.mmr-deck')).position !== 'sticky'
+        || getComputedStyle(document.documentElement).scrollPaddingTop.endsWith('px'),
+      null,
+      { timeout: 5000 },
+    );
+  } catch (error) {
+    throw new Error('admin-browser-smoke: the sticky deck never reserved scroll padding, so keyboard focus lands underneath it');
+  }
+  const deckAtRest = await page.evaluate(() => {
+    const deck = document.querySelector('.mmr-deck');
+    const style = getComputedStyle(deck);
+    return {
+      sticky: style.position === 'sticky',
+      pinned: deck.classList.contains('is-pinned'),
+      background: style.backgroundColor,
+      scrollPadding: getComputedStyle(document.documentElement).scrollPaddingTop,
+      deckHeight: Math.round(deck.getBoundingClientRect().height),
+      scrollable: document.documentElement.scrollHeight - window.innerHeight,
+    };
+  });
+  assert(deckAtRest.sticky, 'the desktop deck is not sticky, so the pinned-state check below proves nothing');
+  assert(deckAtRest.scrollable > 200, `admin page is not scrollable enough to pin the deck: ${JSON.stringify(deckAtRest)}`);
+  assert(!deckAtRest.pinned, 'the deck armed its backdrop at scrollTop 0, where nothing is behind it');
+  assert(
+    /rgba\(\d+,\s*\d+,\s*\d+,\s*0\)|transparent/.test(deckAtRest.background),
+    `the resting deck painted an opaque backdrop over the page atmosphere: ${deckAtRest.background}`,
+  );
+  // scroll-padding-top must track the live deck, not a hardcoded number, or
+  // tabbing into a scrolled panel parks the focused control under the deck.
+  const restPadding = parseFloat(deckAtRest.scrollPadding);
+  assert(
+    Number.isFinite(restPadding) && restPadding >= deckAtRest.deckHeight,
+    `scroll padding did not reserve the deck height: ${JSON.stringify(deckAtRest)}`,
+  );
+
+  await page.evaluate(() => window.scrollTo(0, 400));
+  try {
+    await page.waitForFunction(() => document.querySelector('.mmr-deck')?.classList.contains('is-pinned'), null, { timeout: 5000 });
+  } catch (error) {
+    throw new Error('admin-browser-smoke: scrolling past the sentinel never armed the deck backdrop');
+  }
+  const deckPinned = await page.evaluate(() => {
+    const style = getComputedStyle(document.querySelector('.mmr-deck'));
+    return { background: style.backgroundColor, shadow: style.boxShadow, transition: style.transition };
+  });
+  const pinnedAlpha = deckPinned.background.match(/rgba?\(([^)]*)\)/);
+  const pinnedParts = pinnedAlpha ? pinnedAlpha[1].split(',').map((part) => part.trim()) : [];
+  assert(
+    pinnedParts.length === 3 || pinnedParts[3] === '1',
+    `the pinned deck did not paint a fully opaque mask: ${deckPinned.background}`,
+  );
+  assert(deckPinned.shadow && deckPinned.shadow !== 'none', 'the pinned deck lost its elevation cue');
+  // The mask must snap. .mmr-tabbar has no background of its own, so a fading
+  // fill lets the page scroll through the tab row for the length of the fade.
+  assert(
+    !/background/.test(deckPinned.transition),
+    `the deck cross-fades its mask, so content bleeds through the tab bar: ${deckPinned.transition}`,
+  );
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  try {
+    await page.waitForFunction(() => {
+      const deck = document.querySelector('.mmr-deck');
+      return window.scrollY === 0 && deck && !deck.classList.contains('is-pinned');
+    }, null, { timeout: 5000 });
+  } catch (error) {
+    throw new Error('admin-browser-smoke: returning to the top left the deck backdrop armed over the page atmosphere');
+  }
+
+  // The reservation must stay derived from the live deck rather than frozen at
+  // the height the page loaded with: the console collapses and expands with
+  // is-idle, so one hardcoded number is right in one state and wrong in the
+  // other. Which product transition actually moves the deck depends on which
+  // console column is taller at the time, so this exercises the wiring itself.
+  // Grow the deck by a known amount; the reservation has to grow with it.
+  const deckBefore = await page.evaluate(() => ({
+    height: Math.round(document.querySelector('.mmr-deck').getBoundingClientRect().height),
+    padding: getComputedStyle(document.documentElement).scrollPaddingTop,
+  }));
+  await page.evaluate(() => {
+    const probe = document.createElement('div');
+    probe.id = 'deck-height-probe';
+    probe.style.height = '60px';
+    document.querySelector('.mmr-deck').appendChild(probe);
+  });
+  try {
+    await page.waitForFunction(
+      (before) => getComputedStyle(document.documentElement).scrollPaddingTop !== before.padding,
+      deckBefore,
+      { timeout: 5000 },
+    );
+  } catch (error) {
+    throw new Error(`admin-browser-smoke: scroll padding did not follow the deck growing, so it goes stale whenever the console changes height: ${JSON.stringify(deckBefore)}`);
+  }
+  const deckGrown = await page.evaluate(() => ({
+    height: Math.round(document.querySelector('.mmr-deck').getBoundingClientRect().height),
+    padding: getComputedStyle(document.documentElement).scrollPaddingTop,
+  }));
+  assert(
+    deckGrown.height > deckBefore.height && parseFloat(deckGrown.padding) >= deckGrown.height,
+    `scroll padding stopped covering the grown deck: ${JSON.stringify({ deckBefore, deckGrown })}`,
+  );
+  await page.evaluate(() => document.getElementById('deck-height-probe').remove());
+  await page.waitForFunction(
+    (before) => getComputedStyle(document.documentElement).scrollPaddingTop === before.padding,
+    deckBefore,
+    { timeout: 5000 },
+  );
+
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const normalMotionRows = await page.evaluate(() => {
     updateRecent({
@@ -1698,9 +2741,20 @@ async (page) => {
   assert(pageErrors.length === 0, `uncaught page errors: ${pageErrors.join(' | ')}`);
 
   return {
+    boundary_imaging: boundaryImaging,
+    mac_flow: macFlow,
     ok: true,
-    checks: 57,
+    checks: 87,
     viewports: [320, 375, 414, 600, 768],
+    scaletta: {
+      checks: 26,
+      source_rows: scalettaPresentation.sourceRows.length,
+      compatibility_rows: scalettaPresentation.sourceCompatibilityRows.length,
+      fallback_rows: scalettaPresentation.sourceFallbackRows.length,
+      artist_rows: scalettaPresentation.artistRows.length,
+      geometry_viewports: scalettaPresentation.geometry.map(({ width }) => width),
+      screenshots: [1280, 900, 390].map((width) => `tmp/listening-slice-d-qa/slice-d-after-${width}.png`),
+    },
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,
     blocked_off_origin_requests: [...new Set(blockedOffOriginRequests)],

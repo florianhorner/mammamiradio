@@ -20,13 +20,13 @@ Click Start. Watch the log for:
 
 The add-on starts from its attributed 12-track starter catalog: no music
 provider key, download, or outbound network is required. Without an AI key, the
-hosts use stock copy and fallback voices. Operator-supplied MP3s can also live
-in persistent `/data/music`, and packaged recovery audio can prove the speaker
-transport while a damaged music source is repaired without reporting that
-source as healthy. A successful process start shows `Producer started` in the
-log. `/readyz` remains HTTP `503` with `status: "starting"` until a listener
-actually accepts audio; queued work and elapsed startup time do not make the
-station ready by themselves.
+hosts use stock copy and fallback voices. Operator-supplied audio is
+discovered without a restart. When Home Assistant mounts Media, the station
+reads the Music folder setting (default `mammamiradio`, shown as Media →
+mammamiradio). When Media is not mounted, it reads `/data/music`. Packaged
+recovery audio can prove transport without reporting a damaged source healthy.
+A successful start logs `Producer started`; `/readyz` stays `503 starting`
+until a listener connects.
 
 ### 3. Install the HACS integration
 
@@ -47,15 +47,15 @@ install opens directly on **First Listen** before the control room. Follow its
 vertical path; completed and existing installs keep their normal control-room
 landing, with review and repair under **Motore → Setup**:
 
-1. The opening card leads with a 27-second authored mini-show: an original music
-   bed, a privacy-aware Marco/Giulia welcome, then a handoff to the live stream.
-   No AI key or Home context is used. Source truth for live charts, Jamendo,
-   local music, bundled demo music, and recovery cover says whether primary
-   music, recovery cover, or a music repair follows the opening. Recovery audio
-   can keep the stream audible, but it is not a music rotation; bundled demo
-   music is not a promised song library.
-2. Select **Start sound check**. Confirm **Yes, I hear it** only after you hear
-   the opening, or **Not yet** for
+1. The opening card plays a reviewed English welcome from Marco and Giulia of
+   about 15 seconds, then hands off to the live stream. No AI key or Home
+   context is used. **Music details** says whether the starter collection,
+   local music, optional Jamendo, or recovery cover follows the opening, or
+   whether music needs a repair. Recovery audio can keep the stream audible,
+   but it is not a music rotation; bundled demo music is not a promised song
+   library.
+2. Select **Start my station**. Select **I can hear it** only after you hear
+   the opening, or **I can't hear you** for
    [this-device repair](../../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
    Home Assistant speakers remain an
    [optional later route](../../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
@@ -66,8 +66,12 @@ See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen
 
 On a fresh install, **Host home context** is omitted from saved add-on options
 and remains off. After you confirm you heard the station on this device,
-select **Keep Home private** without reading Home state, or select **See what
-the hosts would receive** before **Let Marco and Giulia use these details**.
+**Make it yours** starts with a recorded evening scene that uses no details
+from your home. Select **Keep Home private** without reading Home state, or
+**Set up AI and Home** after the scene (**Skip this example** goes straight
+there). In AI setup, add a writing key and select **Choose my Home details**,
+or select **Skip AI, choose Home details**; then select **Preview my Home**
+before **Share these details**.
 The preview is a fresh, detached Home
 Assistant read: it is not published into host scripts and is not sent to an AI
 provider. A preview containing only generic daylight is disclosed as
@@ -78,11 +82,11 @@ any entity locally if needed. Enabling requires that fresh preview.
 If that live privacy choice applies but the setup review cannot be saved, the
 choice is not rolled back. The private path offers **Save private choice again**
 without reading Home state. An enabled choice remains active but requires a
-fresh filtered preview before **Save shared choice again**. AI-host setup remains
-locked until the review receipt is saved.
+fresh filtered preview before **Save shared choice again**.
 
-Under **Optional enhancement**, select **Set up new conversations** to save
-either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
+**Set up AI and Home** during First Listen, or **Add new host conversations**
+under **Motore → Setup** later, saves either `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
 admin writes the key to `/config/secrets.env`, applies it live, and checks the
 provider without interrupting audio. First audio never needs it.
 
@@ -200,15 +204,22 @@ HA Supervisor
   |           +-- playback task (streams segments to listeners)
   |           +-- packaged starter catalog (read-only, attributed music)
   |
-  +-- /data/ (persistent across restarts)
+  +-- /media/ (Home Assistant Media storage; outside the app backup)
+  |     +-- <Music folder>/ (operator songs; default mammamiradio)
+  |
+  +-- /data/ (persistent app data across restarts)
         +-- cache/   (eligible local/generated audio — survives restarts)
         |     +-- keepsakes/ (moments kept with "Keep this" — never expire)
-        +-- music/   (operator-supplied MP3s)
+        +-- music/   (fallback local songs when Media is not mounted; scanned in place)
         +-- tmp/     (rendered segments — ephemeral)
 ```
 
 Jamendo's one prepared artifact is transient and is excluded from both
 persistent paths above.
+
+When Home Assistant mounts Media, operator songs live in `/media/<folder>`
+(the Music folder setting, default `mammamiradio`). The app does not own that
+folder's upload, disk, or backup.
 
 Supervisor's stored app options are the sole durable authority for Super
 Italian, Chaos, Festival, AI Quality, On-Air Sound, and pacing. Control-room
@@ -224,15 +235,21 @@ playing.
 
 - **Keeps playing:** the app does not stop for a backup.
 - **Stays with you:** app settings, provider keys, station memory and state,
-  retained history, moments you kept with **Keep this**, and files stored in
+  retained history, moments you kept with **Keep this**, and files in
   `/data/music`.
 - **Builds again:** temporary renders, downloaded and normalized cache audio,
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.
 
-Files in `/data/music` are your local music library: the station reads MP3s
-from that folder as a music source, and a restore brings the library back
-ready to play.
+The station scans its music folder every minute; use **Rotazione → Local music →
+Scan now** to refresh immediately. Files are read in place and never moved.
+Songs in the Home Assistant Media panel are outside this app's backup. A Home
+Assistant backup includes local Media songs when that backup includes Media;
+back up a NAS library separately. `/data/music` stays in the app backup for the
+fallback path and for any songs already stored there. The station does not move
+files between the two.
+When Media is not mounted and `/data` cannot be written, the
+`/tmp/mammamiradio-data/music` fallback is not persisted in either backup.
 
 A hot backup copies retained files while the station is active, so it is not a
 copy taken from one single exact moment. After a restore, confirm
@@ -251,9 +268,12 @@ its files by hand.
    enablement settings are ignored.
 4. `mammamiradio/main.py` loads `radio.toml`, validates the packaged starter
    manifest, and makes its direct pre-normalized files available.
-5. Producer and playback tasks start from starter/local music. All twelve
+5. The local-library worker scans the music directory chosen at startup — the
+   Media folder when `/media` is mounted, otherwise `/data/music` — at startup
+   and every minute. A manual scan refreshes it without restarting audio.
+6. Producer and playback tasks start from starter/local music. All twelve
    starter tracks complete before any starter track repeats.
-6. If Jamendo was explicitly enabled and acknowledged, its bounded preparation
+7. If Jamendo was explicitly enabled and acknowledged, its bounded preparation
    may run in the background without delaying base music.
 
 **Startup timeout**: `config.yaml` sets `timeout: 240`. Starter playback does
@@ -419,7 +439,11 @@ Inputs to run.sh
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
   |
   +-- run.sh sets add-on containment and runtime defaults
-  |     MAMMAMIRADIO_MUSIC_DIR=/data/music
+  |     MAMMAMIRADIO_MUSIC_DIR is chosen at startup: `/media/<Music folder>` when
+  |     `/media` is a mount (default folder `mammamiradio`), `/data/music` when
+  |     Media is not mounted or the chosen folder is a symlink, or
+  |     `/tmp/mammamiradio-data/music` when Media is not mounted and `/data`
+  |     cannot be created
   |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
   |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
   |     MAMMAMIRADIO_ALLOW_YTDLP=false

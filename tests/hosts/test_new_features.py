@@ -90,6 +90,7 @@ async def test_write_news_flash_each_category(category):
 
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "test-key"
+    config.openai_api_key = ""
     # The assertion is about category routing and response shape; preserve the
     # pre-policy exact fixture while opting this test into the explicit Italian mode.
     config.super_italian_mode = True
@@ -102,6 +103,7 @@ async def test_write_news_flash_each_category(category):
 
     with (
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_auth_blocked_key", ""),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
         host, text, cat = await write_news_flash(state, config, category=category)
@@ -118,6 +120,7 @@ async def test_write_news_flash_sports_does_not_force_most_energetic_host():
 
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "test-key"
+    config.openai_api_key = ""
     config.hosts = [
         HostPersonality(
             name="Calm",
@@ -146,6 +149,7 @@ async def test_write_news_flash_sports_does_not_force_most_energetic_host():
 
     with (
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._anthropic_auth_blocked_key", ""),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
         host, _text, _cat = await write_news_flash(state, config, category="sports")
@@ -424,8 +428,13 @@ async def test_trigger_endpoint_banter():
 
 @pytest.mark.asyncio
 async def test_trigger_endpoint_ad():
-    """POST /api/trigger with type=ad should work."""
+    """POST /api/trigger with type=ad should work on a station that can write an ad.
+
+    Without an AI key the route refuses instead; that path is covered in
+    tests/web/test_streamer_routes.py.
+    """
     app = _make_test_app()
+    app.state.config.anthropic_api_key = "test-key"
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/trigger", json={"type": "ad"})
@@ -479,7 +488,7 @@ async def test_synthesize_dialogue_passes_loudnorm_false(tmp_path):
     mock_comm_instance.save = AsyncMock(side_effect=lambda p: _touch(p))
     mock_communicate = MagicMock(return_value=mock_comm_instance)
 
-    def _normalize_side_effect(input_path, output_path, config=None, *, loudnorm=True, music_eq=False):
+    def _normalize_side_effect(input_path, output_path, config=None, **kwargs):
         _touch(output_path)
         return output_path
 

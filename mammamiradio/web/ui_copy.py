@@ -2,8 +2,8 @@
 
 Decorative Italian (station-feel headlines, brand idioms, section names) lives
 in the templates verbatim and stays Italian regardless of mode. This module
-holds only the **swappable** strings — buttons, form labels/placeholders, and
-JS-side dynamic labels — that flip between English (default, OFF) and Italian
+holds the swappable explanations, buttons, form labels/placeholders, and
+JS-side dynamic labels that flip between English (default, OFF) and Italian
 (Super Italian Mode, ON).
 
 Admin UI is intentionally not routed through this module; it always renders
@@ -14,13 +14,25 @@ from __future__ import annotations
 
 COPY: dict[str, dict[str, str]] = {
     "en": {
+        "hero_tagline": "Your evening, on the air.",
+        "hero_about": "Music, familiar hosts, and a little Italian theatre. Made for the room you’re in.",
+        "about_programme": "Music, host conversations, fictional ads and news, woven into one continuous station.",
+        "about_voices": "Recurring characters brought to life through recorded and synthesized voices.",
+        "about_music": "The starter collection, local files and enabled music sources shape the rotation.",
+        "about_code": "Open source on GitHub.",
+        "about_app": "Installable app.",
+        "about_home": "Home Assistant integration.",
+        "about_ai": "AI scriptwriter.",
+        "form_airtime_hint": "Airtime is not confirmed when you send a dedication.",
         # Listener page — buttons, CTAs, aria labels
         "listen_now": "Listen Now",
         "listen_pause": "Pause",
         "listen_stopped": "Station paused",
+        "listen_reload": "Reload player",
         "listen_now_aria": "Listen now",
         "listen_pause_aria": "Pause station",
         "listen_paused_aria": "Station paused",
+        "admin_view": "Admin",
         "share_clip": "Share clip",
         "share_clip_aria": "Share the current clip",
         "schedule_button": "Schedule",
@@ -66,7 +78,7 @@ COPY: dict[str, dict[str, str]] = {
         "form_message_required": "Write a message first, then send it to the DJ.",
         "form_submit": "Send with a kiss",
         "form_success_song": "Request received. We’re checking the catalogue for a matching recording…",
-        "form_success_shoutout": "Dedication received! The hosts will read it soon.",
+        "form_success_shoutout": "Dedication received. It’s waiting for the hosts; airtime isn’t confirmed.",
         "form_song_searching": "Request received. We’re checking the catalogue for a matching recording…",
         "form_song_matched": "We found {track}. It’s ready for the hosts to introduce.",
         "form_song_matched_generic": "We found a match. It’s ready for the hosts to introduce.",
@@ -128,17 +140,32 @@ COPY: dict[str, dict[str, str]] = {
         "clip_copied": "Link copied — paste it anywhere to share.",
         "clip_rate_limited": "The tape decks are still spooling your last clip — give them {s}s and tap again.",
         "clip_no_audio": "Nothing to clip just yet — let the radio play for a moment, then tap Share.",
-        "music_share_unavailable": "A complete included track has to finish before it can be shared.",
+        "music_share_unavailable": (
+            "Only included tracks can be shared. Keep the radio playing, and tap Share "
+            "right after the next included track ends."
+        ),
         "clip_error": "That clip didn't take — give it a moment and tap Share again.",
         "clip_copy_prompt": "Copy this link:",
     },
     "it": {
+        "hero_tagline": "La tua serata, in onda.",
+        "hero_about": "Musica, voci familiari e un po’ di teatro italiano. La radio per la stanza in cui sei.",
+        "about_programme": "Musica, conversazioni, pubblicità inventate e notizie, intrecciate in una radio continua.",
+        "about_voices": "Personaggi ricorrenti prendono vita con voci registrate e sintetizzate.",
+        "about_music": "La raccolta inclusa, i file locali e le fonti musicali abilitate danno forma alla rotazione.",
+        "about_code": "Codice aperto su GitHub.",
+        "about_app": "App installabile.",
+        "about_home": "Integrazione Home Assistant.",
+        "about_ai": "Testi scritti con IA.",
+        "form_airtime_hint": "Quando invii una dedica, la messa in onda non è ancora confermata.",
         "listen_now": "Ascolta Ora",
         "listen_pause": "Pausa",
         "listen_stopped": "Radio in pausa",
+        "listen_reload": "Ricarica il player",
         "listen_now_aria": "Ascolta ora",
         "listen_pause_aria": "Metti in pausa la radio",
         "listen_paused_aria": "Radio in pausa",
+        "admin_view": "Regia",
         "share_clip": "Condividi clip",
         "share_clip_aria": "Condividi la clip corrente",
         "schedule_button": "Il Palinsesto",
@@ -185,7 +212,7 @@ COPY: dict[str, dict[str, str]] = {
         "form_message_required": "Scrivi prima un messaggio, poi spediscilo al DJ.",
         "form_submit": "Spedisci con un bacio",
         "form_success_song": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
-        "form_success_shoutout": "Dedica ricevuta! I conduttori la leggeranno presto.",
+        "form_success_shoutout": "Dedica ricevuta. È in attesa dei conduttori; la messa in onda non è confermata.",
         "form_song_searching": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
         "form_song_matched": "Abbiamo trovato {track}. I conduttori ora possono presentarla.",
         "form_song_matched_generic": "Abbiamo trovato una corrispondenza. I conduttori ora possono presentarla.",
@@ -246,7 +273,10 @@ COPY: dict[str, dict[str, str]] = {
         "clip_copied": "Link copiato — incollalo dove vuoi per condividerlo.",
         "clip_rate_limited": "I registratori stanno ancora montando l'ultima clip — aspetta {s}s e ritocca.",
         "clip_no_audio": "Ancora niente da clippare — lascia suonare la radio un attimo, poi tocca Condividi.",
-        "music_share_unavailable": "Prima di condividerlo, lascia finire un brano incluso completo.",
+        "music_share_unavailable": (
+            "Puoi condividere solo i brani inclusi. Lascia suonare la radio e tocca "
+            "Condividi appena finisce il prossimo brano incluso."
+        ),
         "clip_error": "La clip non è partita — aspetta un attimo e ritocca Condividi.",
         "clip_copy_prompt": "Copia il link:",
     },

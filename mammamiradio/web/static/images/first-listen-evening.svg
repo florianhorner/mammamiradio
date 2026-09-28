@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="title">
+  <!-- SPDX-License-Identifier: Apache-2.0
+       Original SVG drawn for Mamma Mi Radio by Codex on 2026-09-23.
+       Built from SVG shapes in this repository; no external image or traced source. -->
+  <title id="title">A small radio sends golden sound toward a lit home at dusk</title>
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1">
+      <stop stop-color="#1c1714"/>
+      <stop offset=".68" stop-color="#34241e"/>
+      <stop offset="1" stop-color="#67402a"/>
+    </linearGradient>
+    <radialGradient id="horizon">
+      <stop stop-color="#e8a030" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#e8a030" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="radio" x2="0" y2="1">
+      <stop stop-color="#9b6650"/>
+      <stop offset="1" stop-color="#5d3d32"/>
+    </linearGradient>
+    <linearGradient id="window" x2="0" y2="1">
+      <stop stop-color="#f4d048"/>
+      <stop offset="1" stop-color="#e8a030"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#sky)"/>
+  <ellipse cx="1010" cy="510" rx="540" ry="300" fill="url(#horizon)"/>
+  <path d="M0 470 Q210 385 450 452 T840 449 T1280 430 V640 H0Z" fill="#29201b" opacity=".64"/>
+  <path d="M0 540 Q330 470 650 532 T1280 510 V640 H0Z" fill="#241b17"/>
+
+  <path d="M980 94a45 45 0 1 0 61 61 51 51 0 1 1-61-61Z" fill="#f5edd8"/>
+  <g fill="#f5edd8" opacity=".56">
+    <circle cx="766" cy="106" r="2"/><circle cx="1125" cy="84" r="2"/>
+    <circle cx="895" cy="205" r="1.5"/><circle cx="1198" cy="202" r="1.5"/>
+  </g>
+
+  <g fill="none" stroke="#f4d048" stroke-linecap="round">
+    <path d="M484 349 Q630 270 771 349" stroke-width="5" opacity=".72"/>
+    <path d="M509 389 Q633 326 746 389" stroke-width="4" opacity=".55"/>
+    <path d="M536 426 Q636 382 718 426" stroke-width="3" opacity=".4"/>
+  </g>
+  <circle cx="629" cy="361" r="5" fill="#f4d048" opacity=".72"/>
+
+  <g>
+    <path d="M798 350 978 229l180 121v189H798Z" fill="#3c2b24"/>
+    <path d="m772 359 206-148 206 148" fill="none" stroke="#ad7751" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M817 363h322v176H817Z" fill="#493228"/>
+    <path d="M877 384h92v107h-92Z" fill="url(#window)"/>
+    <path d="M923 384v107M877 436h92" stroke="#67402a" stroke-width="8"/>
+    <path d="M1030 425h73v114h-73Z" fill="#271d19" stroke="#79503a" stroke-width="6"/>
+    <circle cx="1088" cy="484" r="4" fill="#eccc30"/>
+    <path d="M836 539h322" stroke="#bd8151" stroke-width="8"/>
+  </g>
+
+  <g>
+    <path d="m161 327 49-101" stroke="#cbb9a6" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="210" cy="225" r="7" fill="#f5edd8"/>
+    <rect x="105" y="340" width="365" height="200" rx="32" fill="url(#radio)" stroke="#c18b60" stroke-width="7"/>
+    <rect x="128" y="364" width="319" height="151" rx="19" fill="#29201b"/>
+    <circle cx="234" cy="439" r="55" fill="#352720" stroke="#ad7751" stroke-width="5"/>
+    <circle cx="234" cy="439" r="36" fill="none" stroke="#b78b62" stroke-width="3" opacity=".7"/>
+    <circle cx="234" cy="439" r="16" fill="none" stroke="#b78b62" stroke-width="3" opacity=".6"/>
+    <rect x="321" y="391" width="96" height="31" rx="8" fill="#574031" stroke="#d9aa71" stroke-width="3"/>
+    <path d="M335 408h69" stroke="#f4d048" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="352" cy="465" r="20" fill="#c18b60"/>
+    <circle cx="352" cy="465" r="8" fill="#f5edd8"/>
+    <circle cx="404" cy="465" r="10" fill="#c18b60"/>
+    <path d="M144 539v11m284-11v11" stroke="#ad7751" stroke-width="19" stroke-linecap="round"/>
+  </g>
+</svg>

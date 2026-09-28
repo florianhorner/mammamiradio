@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "bundle": "first-listen-free-voices",
+  "render_provider": "edge",
+  "render_receipt": {
+    "schema_version": 1,
+    "source": "radio.toml",
+    "provider": "edge",
+    "hosts": [
+      {
+        "name": "Marco",
+        "voice_id": "it-IT-GiuseppeMultilingualNeural",
+        "rate": "+0%",
+        "pitch": "+0Hz"
+      },
+      {
+        "name": "Giulia",
+        "voice_id": "it-IT-IsabellaNeural",
+        "rate": "+0%",
+        "pitch": "+0Hz"
+      }
+    ]
+  },
+  "assets": [
+    {
+      "path": "free-voices.mp3",
+      "sha256": "eff2f05076122dd021d0f6cba9d73f21f17983885bf35c8dcaf33d38b12f494e",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Mah… Giulia, somebody’s changed my microphone. My cousin says it’s the future. Giulia: Same us. Different voices. And your cousin still owes us the old microphone.",
+      "duration_seconds": 12.192,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    }
+  ]
+}

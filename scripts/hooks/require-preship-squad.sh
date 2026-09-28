@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash) guard — two rules:
+# PreToolUse(Bash) guard — raw merges must go through the landing wrapper.
 #
-#   1. `gh pr create` requires a pre-ship review squad entry for this code.
-#      /ship logs the squad as a review-log entry with skill="review" (Step 9)
-#      or "adversarial-review" (Step 11); this guard requires such an entry
-#      whose commit is in HEAD's recent (<=2h) history.
-#   2. Raw merge attempts are denied OUTRIGHT — landing goes through
+# Review remains mandatory through /ship, but local ledgers and committed
+# review receipts are not PR admission requirements.
+#
+# Raw merge attempts are denied OUTRIGHT — landing goes through
 #      scripts/land-pr.sh (the landing contract in CLAUDE.md "Quality gates").
 #      This blocks `gh pr merge` and mutating `gh api` merge calls (REST
 #      /pulls/<n>/merge PUT, plus GraphQL mergePullRequest/auto-merge
-#      mutations). The wrapper does its own squad check with code-state
-#      freshness (entry commit covers the PR head AND nothing was pushed after
-#      the entry), so soaked PRs land without ritual review re-runs. The
+#      mutations). The wrapper checks branch freshness, bot threads and cut
+#      admission before head-matched arming. The
 #      wrapper's internal gh calls run inside its own process and never hit this
 #      hook.
 #      Exception: `gh pr merge --disable-auto` (disarming a queued merge) is
 #      a cancel operation and passes.
 #
-# Why this exists: on the god-module refactor, PRs were opened with bare
+# History of the retired PR rule: on the god-module refactor, PRs were opened with bare
 # `gh pr create` (skipping /ship), so the mandatory pre-ship squad — including its
 # docs/config-consistency check — never ran, and a doc-sync hard-rule violation
 # reached a green, mergeable PR undetected. The merge rule was added 2026-06-12
@@ -32,7 +30,7 @@
 # accepted — reword the content or write it via the Write tool. A token-aware
 # parse belongs in permission-guard.py, not here.
 #
-# FAILS OPEN: any internal error (no jq, not a git repo, no gstack, parse failure)
+# FAILS OPEN: an internal input/parsing error
 # exits 0 (allow). A bug in this guard can never block a PR. The ONLY paths that
 # block are the explicit deny families below.
 
@@ -41,7 +39,7 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)" ||
 
 deny_raw_merge() {
   cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw GitHub merge commands are retired. Land via scripts/land-pr.sh <PR#> — it verifies the pre-ship squad against the PR head, updates the branch if behind (CI re-runs), and arms auto-merge pinned to the exact reviewed head (--match-head-commit). This hook denies gh pr merge and mutating gh api merge attempts. Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw GitHub merge commands are retired. Land via scripts/land-pr.sh <PR#> — it refuses behind/conflicted branches, checks blocking reviews and cut admission, and arms auto-merge with --match-head-commit. This hook denies gh pr merge and mutating gh api merge attempts. Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
 JSON
   exit 0
 }
@@ -105,11 +103,11 @@ graphql_file_payload_mentions_merge() {
 }
 
 # Rule 2: deny raw `gh pr merge` (except --disable-auto). Landing = land-pr.sh.
-if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'; then
   # --disable-auto must be an argument OF the merge command itself (no shell
   # operator between them) — `... merge 5 && echo "--disable-auto"` is a
   # bypass attempt, not a disarm.
-  if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?[[:space:]]--disable-auto([[:space:]]|$|[^-A-Za-z])'; then
+  if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|()]*)?[[:space:]]--disable-auto([[:space:]]|$|[^-A-Za-z])'; then
     exit 0
   fi
   deny_raw_merge
@@ -117,59 +115,224 @@ fi
 
 # Rule 2b: deny raw GitHub API merge attempts. Read-only `gh api` calls still
 # pass; the REST deny requires the pull merge endpoint AND an explicit PUT.
-if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+api([[:space:]]|$)'; then
+if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+api([[:space:]]|$)'; then
   if printf '%s' "$cmd" | grep -Eq '/pulls/[0-9]+/merge([^[:alnum:]_-]|$)' \
     && printf '%s' "$cmd" | grep -Eiq '(^|[[:space:]])((--method)(=|[[:space:]]+)PUT|-X(=|[[:space:]]*)PUT)([^A-Za-z]|$)'; then
     deny_raw_merge
   fi
 
-  if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+api[[:space:]]+graphql([[:space:]]|$)' \
+  if printf '%s' "$cmd" | grep -Eq '(^|[;&|()[:space:]])gh[[:space:]]+api[[:space:]]+graphql([[:space:]]|$)' \
     && { printf '%s' "$cmd" | grep -Eq "$_graphql_merge_pattern" || graphql_file_payload_mentions_merge; }; then
     deny_raw_merge
   fi
 fi
 
-# Rule 1: only guard `gh pr create` beyond this point. Everything else (incl.
-# `gh pr view`, `gh pr checks`, `gh pr list`) passes untouched.
-printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' || exit 0
+# Retired argument-reader helpers remain for their standalone regression
+# tests. Admission does not invoke them or read a ledger/receipt.
 
-head="$(git rev-parse --short HEAD 2>/dev/null)" || exit 0
-[ -z "$head" ] && exit 0
+# Reads the PR-opening command's argument vector, in one of two modes.
+#
+# Shared by the scope check below and the --base lookup further down, so the two
+# cannot drift: the tokenizer is the delicate part (see the --base comment on why
+# word-splitting $cmd is wrong) and having one copy of it means a fix lands in
+# both places at once.
+#
+# Word-splitting $cmd loses quoting, so `--body 'see --base foo'` would hand back
+# `foo`. Tokenize the way the shell would, isolate each matched command's argv,
+# stop at a shell operator OR A NEWLINE, and step over option VALUES so prose is
+# never scanned. Unbalanced quotes print nothing.
+#
+# The newline half was a bypass. shlex with whitespace_split folds a newline into
+# whitespace, and the argv scan stopped only on `;&|`, so in
+#
+#     gh pr create --fill
+#     gh pr create --repo other/repo --fill
+#
+# the FIRST (local, flagless) command absorbed the second command's target, both
+# records read foreign, and the guard stood aside for a local PR. Three review
+# bots found it independently. Commands are therefore split per line first; a
+# trailing backslash still continues a line, as the shell does.
+#
+#   option <name>  first opening command, first match -- the pre-existing --base
+#                  behaviour, unchanged and differentially verified against it.
+#   targets        ONE LINE PER opening command in the whole command string,
+#                  holding that command's target repo or empty for none. Two
+#                  things the option mode deliberately does not do, both of which
+#                  were live bypasses:
+#                    * the real CLI is LAST-wins on a repeated flag, so
+#                      `--repo foreign --repo local` lands locally while a
+#                      first-match read calls it foreign;
+#                    * a command string can hold several opening commands, and
+#                      reading only the first let a foreign one exempt a local
+#                      one behind `&&`.
+gh_create_args() {
+  printf '%s' "$cmd" | ARG_MODE="$1" ARG_NAME="${2:-}" python3 -c '
+import os, re, shlex, sys
 
-# Reader is overridable via env for testing only; defaults to the real gstack log.
-reader="${MMR_PRESHIP_REVIEW_READER:-$HOME/.claude/skills/gstack/bin/gstack-review-read}"
-[ -x "$reader" ] || exit 0   # no gstack review log here -> out of scope, allow
+mode = os.environ["ARG_MODE"]
+name = os.environ.get("ARG_NAME", "")
+raw = sys.stdin.read()
+# A newline ends a command. A backslash-newline is deleted outright,
+# as the shell does, so a token split across lines rejoins.
+raw = re.sub(r"\\\n", "", raw)   # POSIX deletes the pair; a space splits a token
+tokens = []
+for line in raw.split("\n"):
+    if not line.strip():
+        continue
+    try:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        line_tokens = list(lexer)
+    except ValueError:
+        sys.exit(0)      # unbalanced quotes: let the caller default stand
+    if tokens:
+        tokens.append(";")   # the newline itself, as the operator it is
+    tokens.extend(line_tokens)
 
-now="$(date +%s)"
-ok=0
-while IFS= read -r line; do
-  case "$line" in ---CONFIG---*) break ;; esac
-  skill="$(printf '%s' "$line" | jq -r '.skill // ""' 2>/dev/null)" || continue
-  case "$skill" in review | adversarial-review) ;; *) continue ;; esac
-  rc="$(printf '%s' "$line" | jq -r '.commit // ""' 2>/dev/null)"
-  { [ -z "$rc" ] || [ "$rc" = "null" ]; } && continue
-  ts="$(printf '%s' "$line" | jq -r '.timestamp // ""' 2>/dev/null)"
-  # Parse the trailing-Z timestamp as UTC. macOS `date -j -f` ignores the Z and
-  # reads local time without -u, which offsets the 2h window by the local UTC
-  # offset (caught a non-UTC false-stale that blocked legit PRs). GNU `date -d`
-  # honors the Z; -u there is harmless.
-  es="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || date -u -d "$ts" +%s 2>/dev/null || echo 0)"
-  # The entry must fall inside a +/-2h window around now. Reject unverifiable
-  # (unparseable/zero/non-numeric), far-future (clock skew or a forged-ahead
-  # timestamp >2h out), and stale (>2h old). A guard fails toward "not authorized"
-  # on data whose freshness it cannot trust; a few seconds of benign skew stays valid.
-  if ! [ "$es" -gt 0 ] 2>/dev/null || [ "$((es - now))" -gt 7200 ] || [ "$((now - es))" -gt 7200 ]; then
-    continue # unverifiable, far-future, or stale — outside the 2h work-session window
-  fi
-  if [ "$rc" = "$head" ] || git merge-base --is-ancestor "$rc" HEAD 2>/dev/null; then
-    ok=1
-    break
-  fi
-done < <("$reader" 2>/dev/null)
+# Every value-taking flag of the opening command, long and short, verified
+# against its own --help. A flag missing from this set lets its VALUE be read as
+# an option: "--label --repo=other/repo" made the scan report a foreign target
+# while the CLI landed the PR here. Boolean flags (--draft, --fill, --web, ...)
+# are deliberately absent. The "--flag=value" form is one token and consumes
+# nothing, so only an exact bare match skips the next token.
+SKIP = {
+    "--assignee", "-a", "--base", "-B", "--body", "-b", "--body-file", "-F",
+    "--head", "-H", "--label", "-l", "--milestone", "-m", "--project", "-p",
+    "--recover", "--reviewer", "-r", "--template", "-T", "--title", "-t",
+}
 
-[ "$ok" = "1" ] && exit 0
 
-cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"No pre-ship review squad logged for HEAD. Open the PR via /ship (it runs the mandatory squad, incl. the docs/config-consistency check) instead of a bare gh pr create. CLAUDE.md: 'Pre-ship review squad (mandatory in every worktree).'"}}
-JSON
-exit 0
+def is_operator(tok):
+    return bool(tok) and all(char in ";&|" for char in tok)
+
+
+def starts():
+    return [i for i in range(len(tokens) - 2)
+            if tokens[i:i + 3] == ["gh", "pr", "create"]]
+
+
+def argv_after(start):
+    """Tokens of one opening command, up to the next shell operator."""
+    out = []
+    for tok in tokens[start + 3:]:
+        if is_operator(tok):
+            break
+        out.append(tok)
+    return out
+
+
+if mode == "option":
+    positions = starts()
+    if not positions:
+        sys.exit(0)
+    argv = argv_after(positions[0])
+    # A caller asks for the long name; the CLI also accepts the shorthand, and
+    # a value given as -B was never returned at all. Silent before this branch
+    # existed, and silently SKIPPED once the short forms joined SKIP.
+    wanted = {name} | {"--base": {"-B"}, "--repo": {"-R"}}.get(name, set())
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":      # end of options; nothing after it is a flag
+            break
+        # The requested name wins over SKIP. Both sets overlap now that SKIP
+        # holds every value-taking flag, and skipping first meant asking for
+        # --base returned nothing at all -- so base_ref fell back to "main" and
+        # a stacked PR was verified against an older fork point than its own.
+        if tok in SKIP and tok not in wanted:
+            i += 2           # step over the value so prose is never scanned
+            continue
+        hit = next((w for w in wanted if tok.startswith(w + "=")), None)
+        if hit:
+            print(tok.split("=", 1)[1])
+            break
+        if tok in wanted and i + 1 < len(argv):
+            print(argv[i + 1])
+            break
+        i += 1
+    sys.exit(0)
+
+if mode == "targets":
+    positions = starts()
+    if not positions:
+        sys.exit(0)
+    for start in positions:
+        argv = argv_after(start)
+        found = ""
+        i = 0
+        while i < len(argv):
+            tok = argv[i]
+            if tok == "--":  # end of options; nothing after it is a flag
+                break
+            if tok in SKIP:
+                i += 2
+                continue
+            # Last-wins, matching the CLI: keep scanning rather than breaking.
+            if tok.startswith("--repo="):
+                found = tok.split("=", 1)[1]
+            elif tok in ("--repo", "-R") and i + 1 < len(argv):
+                found = argv[i + 1]
+                i += 2
+                continue
+            elif tok.startswith("-R") and len(tok) > 2 and not tok.startswith("-R-"):
+                # Attached shorthand, -Rowner/repo. pflag also accepts -R=owner/repo
+                # and strips that one "="; keeping it made the value never match
+                # this repo, so the guard stood aside for a PR landing here.
+                rest = tok[2:]
+                found = rest[1:] if rest.startswith("=") else rest
+            i += 1
+        # Prefixed because an empty record is meaningful and command
+        # substitution eats a trailing blank line, which silently dropped a
+        # flagless command sitting last in a chain.
+        print("target:" + found)
+    sys.exit(0)
+' 2>/dev/null
+}
+
+# Canonical owner/repo, or empty when the input names no repository.
+#
+# One normalizer for both sides of the comparison, because the CLI accepts far
+# more spellings than `owner/repo` and `https://host/owner/repo`: a bare
+# `host/owner/repo`, `http://`, `ssh://git@host/owner/repo.git`, and a `host:port`
+# form all reach the same repository. Each spelling this failed to reduce was a
+# silent bypass in one direction and, on a non-https `origin`, a silently
+# disarmed guard for this very repo in the other.
+#
+# Taking the LAST TWO path segments over-normalizes rather than under-normalizes:
+# a same-named repo on a different host compares equal and the guard stays on.
+# That is the direction to be wrong in.
+norm_repo() {
+  printf '%s' "$1" \
+    | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^/]*@##; s#^([^/]*):#\1/#; s#/+$##' \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's#\.git$##; s#/+$##' \
+    | awk -F/ 'NF >= 2 { printf "%s/%s", $(NF - 1), $NF }'
+}
+
+# Canonical owner/repo for the CHECKOUT, or empty when this remote does not name
+# a hosted repository at all.
+#
+# norm_repo alone reduces any string with two path segments, so a local clone
+# (`file:///tmp/mammamiradio`, or a plain path) yielded `tmp/mammamiradio` and
+# then mismatched its own `--repo florianhorner/mammamiradio` — switching the
+# guard OFF for its own repo, which is the one direction that must never happen.
+# A local remote carries no owner/repo, so the honest answer is "unknown", and
+# unknown keeps the guard on.
+origin_repo() {
+  local url="$1"
+  case "$url" in
+    file://*|/*|.*|~*) return 0 ;;          # local clone: no owner/repo to know
+    *://*)
+      # A scheme needs a non-empty authority before the path.
+      printf '%s' "$url" | grep -Eq '^[A-Za-z][A-Za-z0-9+.-]*://[^/]+/' || return 0
+      ;;
+    *@*:*) : ;;                             # scp-like: user@host:owner/repo
+    *)     return 0 ;;                      # anything else names no host, so no
+                                            # owner/repo: a bare `repos/foo` is a
+                                            # relative path, not a repository
+  esac
+  norm_repo "$url"
+}
+
+# PR creation has no repository-local receipt/ledger admission gate.

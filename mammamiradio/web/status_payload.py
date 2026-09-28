@@ -28,6 +28,7 @@ from mammamiradio.core.models import (
     Track,
     safe_media_attribution_dict,
 )
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
 
@@ -74,6 +75,8 @@ def _readiness_status(kind: str, entry: SourceReadinessEntry) -> str:
     if entry.on_air:
         return "on_air"
     if kind == "recovery":
+        if entry.bundled is None and not entry.configured:
+            return "configured_unchecked"
         return "cover_only" if entry.bundled or entry.configured else "not_bundled"
     if kind == "demo" and entry.bundled is False:
         return "not_bundled"
@@ -102,6 +105,10 @@ def _readiness_detail(kind: str, status: str, entry: SourceReadinessEntry) -> st
         "cover_only": "Available only to keep the stream audible while music recovers.",
     }
     detail = details[status]
+    if kind == "recovery" and status == "configured_unchecked":
+        return "Backup audio has not been checked yet."
+    if kind == "recovery" and status == "not_bundled":
+        return "No verified backup audio is available in this installation."
     if kind == "recovery" and status == "on_air":
         return "Recovery cover is on air; this proves transport, not a healthy music source."
     if status == "unavailable" and entry.failure:
@@ -231,6 +238,53 @@ def _cached_cache_size_mb(cache_dir: Path) -> float:
     return _cache_size_mb_val
 
 
+def local_music_place(music_dir: object) -> str:
+    """Human place for the music directory the station is using.
+
+    A path strictly under ``/media`` reads as ``Media → <folder>``. Every other
+    path is shown as itself, including the ``/data`` and ``/tmp`` homes.
+    """
+    if isinstance(music_dir, Path):
+        text = music_dir.as_posix()
+    elif isinstance(music_dir, str):
+        text = music_dir.strip()
+    else:
+        return "the configured music folder"
+    absolute = text.startswith("/")
+    parts: list[str] = []
+    for part in text.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    text = ("/" if absolute else "") + "/".join(parts)
+    prefix = "/media/"
+    if text.startswith(prefix) and text[len(prefix) :]:
+        return "Media → " + text[len(prefix) :]
+    if not text:
+        return "the configured music folder"
+    return text
+
+
+def local_library_admin_status(status: dict | None, music_dir: object) -> dict:
+    """Copy the scanner status and add the place the control room should name."""
+    library = dict(status if isinstance(status, dict) else {"in_progress": False, "roots": []})
+    root = None
+    roots = library.get("roots")
+    if isinstance(roots, list):
+        for item in roots:
+            if item:
+                root = item
+                break
+    if root is None:
+        root = music_dir
+    library["place"] = local_music_place(root)
+    return library
+
+
 def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     """Compatibility view derived from canonical, event-driven source truth."""
     global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
@@ -326,11 +380,11 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         "detail": (
             "Backup audio is ready to keep the route audible, but primary music still needs attention."
             if readiness["recovery_cover_available"]
-            else "Enable live charts, configure Jamendo, or add local MP3 files."
+            else "Enable live charts, configure Jamendo, or add local audio files."
         ),
         "steps": [
             "Enable live charts or configure Jamendo, or",
-            "Place MP3 files in the configured local music directory.",
+            "Add files in the configured music folder.",
         ],
         **shared,
     }
@@ -740,6 +794,7 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
         "clip_audio_class",
         # Render-scoped playlist identity keeps provider truth stable across a
         # metadata-only source swap. It is operational bookkeeping, not part of

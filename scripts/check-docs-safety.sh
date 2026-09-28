@@ -7,6 +7,8 @@
 #   - stale Edge release promises,
 #   - direct durability claims about Supervisor-generated options.json, and
 #   - relative Markdown links whose target or fragment does not exist.
+# Maintained release guides also reject retired review-receipt requirements;
+# selected public examples require synthetic person, tracker, and lock IDs.
 #
 # Run locally: bash scripts/check-docs-safety.sh
 # Tests may pass explicit Markdown files as arguments.
@@ -75,6 +77,21 @@ DEFAULT_LISTING_FILES=(
   ha-addon/mammamiradio-edge/README.md
 )
 
+DEFAULT_RELEASE_POLICY_FILES=(
+  docs/runbooks/ha-addon.md
+  docs/release-process.md
+  docs/music-sources.md
+)
+
+# Keep this explicit: coupled legacy runtime fixtures are a separate migration.
+DEFAULT_PUBLIC_EXAMPLE_FILES=(
+  docs/2026-05-30-ha-context-ingestion-pipeline.md
+  scripts/showreel/README.md
+  scripts/showreel_out/door-bentornato-fable-v2-notes.md
+  scripts/showreel_out/ma-pr-3836-notes.md
+  proof/h4-journey-validation.md
+)
+
 if [ "$#" -gt 0 ]; then
   COPY_FILES=("$@")
   INSTALL_FILES=("$@")
@@ -91,12 +108,16 @@ if [ "$#" -gt 0 ]; then
       fi
     done
   done
+  RELEASE_POLICY_FILES=("$@")
+  PUBLIC_EXAMPLE_FILES=("$@")
 else
   COPY_FILES=("${DEFAULT_COPY_FILES[@]}")
   INSTALL_FILES=("${DEFAULT_INSTALL_FILES[@]}")
   LINK_FILES=("${DEFAULT_LINK_FILES[@]}")
   PERSISTENCE_FILES=("${DEFAULT_PERSISTENCE_FILES[@]}")
   LISTING_FILES=("${DEFAULT_LISTING_FILES[@]}")
+  RELEASE_POLICY_FILES=("${DEFAULT_RELEASE_POLICY_FILES[@]}")
+  PUBLIC_EXAMPLE_FILES=("${DEFAULT_PUBLIC_EXAMPLE_FILES[@]}")
 fi
 
 cd "$REPO_ROOT"
@@ -107,6 +128,8 @@ EXISTING_COPY_FILES=()
 EXISTING_LINK_FILES=()
 EXISTING_PERSISTENCE_FILES=()
 EXISTING_LISTING_FILES=()
+EXISTING_RELEASE_POLICY_FILES=()
+EXISTING_PUBLIC_EXAMPLE_FILES=()
 MISSING_FILES=()
 
 record_missing_file() {
@@ -184,12 +207,30 @@ for FILE in "${LISTING_FILES[@]+"${LISTING_FILES[@]}"}"; do
   EXISTING_LISTING_FILES+=("$FILE")
 done
 
+for FILE in "${RELEASE_POLICY_FILES[@]}"; do
+  if [ ! -f "$FILE" ]; then
+    record_missing_file "$FILE"
+    continue
+  fi
+  EXISTING_RELEASE_POLICY_FILES+=("$FILE")
+done
+
+for FILE in "${PUBLIC_EXAMPLE_FILES[@]}"; do
+  if [ ! -f "$FILE" ]; then
+    record_missing_file "$FILE"
+    continue
+  fi
+  EXISTING_PUBLIC_EXAMPLE_FILES+=("$FILE")
+done
+
 STRUCTURAL_OUTPUT=""
 if ! STRUCTURAL_OUTPUT=$(python3 "$SCRIPT_DIR/docs_safety.py" \
   --copy "${EXISTING_COPY_FILES[@]+"${EXISTING_COPY_FILES[@]}"}" \
   --links "${EXISTING_LINK_FILES[@]+"${EXISTING_LINK_FILES[@]}"}" \
   --persistence "${EXISTING_PERSISTENCE_FILES[@]+"${EXISTING_PERSISTENCE_FILES[@]}"}" \
-  --listing "${EXISTING_LISTING_FILES[@]+"${EXISTING_LISTING_FILES[@]}"}" 2>&1); then
+  --listing "${EXISTING_LISTING_FILES[@]+"${EXISTING_LISTING_FILES[@]}"}" \
+  --release-policy "${EXISTING_RELEASE_POLICY_FILES[@]+"${EXISTING_RELEASE_POLICY_FILES[@]}"}" \
+  --public-examples "${EXISTING_PUBLIC_EXAMPLE_FILES[@]+"${EXISTING_PUBLIC_EXAMPLE_FILES[@]}"}" 2>&1); then
   printf '%s\n' "$STRUCTURAL_OUTPUT"
   STRUCTURAL_HITS=$(printf '%s\n' "$STRUCTURAL_OUTPUT" | grep -c '^FAIL:' || true)
   if [ "$STRUCTURAL_HITS" -eq 0 ]; then

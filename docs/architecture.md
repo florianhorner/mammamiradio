@@ -14,6 +14,32 @@ startup render or network dependency. Because it never enters
 producer remain untouched. Completed and pre-feature installs go straight to
 the live hub.
 
+The Admin's single **Start my station** action opens that real stream, waits for
+its media `playing` event, then reveals sound confirmation and a staged
+weather/daylight proof. Natural completion leaves the scene and Replay in place
+and offers the next recorded example: laundry, arrival, then coffee. Each next
+recording starts only from its own click. The setup action remains available
+after the first example; the listener need not complete the pack. Previous
+examples can be revisited without autoplay. Selection and completed recordings
+belong to the current browser journey and reset for a new sound check. The
+shared narration player retains ownership of playback, interruption and music
+ducking. The richer recordings explicitly disclose that their household
+features are unavailable on new installations; they do not widen the narrow
+weather/daylight authorization. All scenes retain their reviewed transcripts,
+audio hashes and manifest reachability.
+Skipping or continuing opens a compact recorded-versus-fresh writing comparison.
+Writing depends on sound confirmation, not Home consent. Voice auditions are
+optional, and the existing exact Home preview/consent boundary remains separate;
+the staged proof reads no Home state and grants no authorization.
+
+Saved sound proof is not current playback: a reload exposes **Resume station**
+without autoplay, rejoining the live stream without repeating confirmation.
+An explicit new sound check renews the stream; it does not force the packaged
+opening after the server has durable heard proof. Connection status has one UI
+owner, distinguishes saved/unverified from working keys, preserves unfinished
+input during polling, and uses the existing bounded provider-check endpoint for
+an explicit retry. No new backend, Home grant, or Home Profile policy is added.
+
 ## Runtime overview
 
 ```text
@@ -56,6 +82,8 @@ standalone external-media-/  (optional; absent from both add-ons)
                 +-> /status (admin-only anonymous session diagnostics)
 ```
 
+The playback loop may also broadcast one packaged boundary asset immediately before a segment. That asset is not a queue item and is excluded from programme accounting and keepsakes. Both `/status` and `/public-status` report `runtime_health.boundary_imaging` with `enabled`, completed `carts_aired`, and per-reason `skips`.
+
 The listener revalidates `/public-status` with a weak semantic ETag; live/idle/stopped tabs poll every 3/3.5 seconds when visible and 30/60 seconds when hidden.
 Matching validators return bodyless 304s while one monotonic anchor advances listener clocks; payload, anchor, and ETag share a generation guard.
 
@@ -66,7 +94,9 @@ authority for admin modes and pacing. Supervisor materializes
 `/data/options.json` as a generated, read-only startup projection; the runtime
 reads that projection but never writes it directly. A value selected only in
 process memory by a pre-fix build cannot be reconstructed after an upgrade
-rematerializes an older Supervisor value.
+rematerializes an older Supervisor value. Transitions is session-only on the
+add-on, has no Supervisor option, and returns to its configured startup value
+(on by default) after restart.
 
 `mammamiradio.main:startup()` does ten things:
 
@@ -74,7 +104,7 @@ rematerializes an older Supervisor value.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
 3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
-5. Restores an eligible persisted base selection. A retired `jamendo://` source is rewritten to the current base; add-on-external selections cannot restore extractor authority. Without an eligible selection, operator-owned local `music/` files win when present, otherwise the hash-pinned attributed starter catalog is the offline base.
+5. Restores an eligible persisted base selection without scanning local files; otherwise the hash-pinned attributed starter catalog is the offline base. A retired `jamendo://` source is rewritten, and add-on-external selections cannot restore extractor authority. Local discovery starts after audio and overlays future rotation. Mixed starter and local pools use weighted selection with a `2×` local lift, while starter-only pools keep bag order. The continuity bridge restricts recovery selection to starter media.
 6. Initializes the clip ring buffer for WTF clip sharing.
 7. Restores `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or the HA add-on's Supervisor-generated, read-only `/data/options.json` startup projection without arming a first strike.
 8. Creates shared app state, then synchronously admits any safe, receipted,
@@ -110,7 +140,7 @@ the shared audio queue:
   (`record_accepted_playback` returns early on `is_complete_listener_proof`).
   Browser-local confirmation presents no attempt id at all.
 - If the audible moment happened but the receipt write failed, the app keeps
-  only a process-local recovery handle so **Restore sound check** can retry the
+  only a process-local recovery handle so **Save my sound check** can retry the
   same fact without replaying audio.
 - Feature-era install origin uses two agreeing witnesses: the owner-only
   `cache/state/first_listen_install_origin_v1.json` sidecar and the private
@@ -124,6 +154,12 @@ the shared audio queue:
   fresh install without audible proof. The `/stream` generator sends it directly
   to that client before joining `LiveStreamHub`; it never becomes a `Segment` or
   changes shared now-playing state.
+
+`FIRST_LISTEN_HOME_PROOF_KEY` selects one day-one scene from the hash-bound
+`HOUSEHOLD_EXAMPLES` map. It is `quiet` while fresh installs expose only weather
+and daylight; a later Home Profile grant can replace the scene without changing
+the arrival, sound-check, key, or consent progression. Validation rejects a
+selected scene that is not day-one reachable.
 
 `StationState.source_readiness` is event evidence, not a filesystem scan on each
 status request. The `golden_path.source_readiness` object from `/status` and the
@@ -238,7 +274,19 @@ always remains best-effort and never blocks or delays audio.
 `scheduler.py` is the single source of truth for pacing:
 
 - the first segment is always music
-- ad breaks trigger when `songs_since_ad >= songs_between_ads`
+- ad breaks trigger when `songs_since_ad >= songs_between_ads` and an active-mode
+  packaged bank or usable live-writing route is available. `ad_programme_block()`
+  is shared by scheduling, `/status`'s `pacing.ad_block`, and manual **Ad break**.
+  Without either source, it names the missing live brand/cast, accepted AI key,
+  or ad model route; the UI shows **Ads paused** and music continues with the
+  natural break held at its due threshold. Availability refreshes on producer
+  ticks, pacing decisions, boot/prewarm, and forced-ad admission. Healthy live
+  writing remains first choice. A key/route outage or failed live render tries
+  an approved packaged ad before continuity recovery; it never synthesizes the
+  old brand/tagline placeholder. Failed or unheard ads remain owed, with failed
+  natural attempts deferred until music. Reservations prevent duplicate pending
+  breaks; only the first listener-accepted chunk commits pacing and ad history.
+  The frozen v1 integration preview retains its existing prediction semantics.
 - banter triggers when `songs_since_banter` crosses the configured threshold, with a small random jitter outside preview mode
 - after a natural pacing decision, `producer.py` applies a runway governor to optional speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`): if the real queued audio is below 240 seconds and the bounded queue can still build more runway, that pick becomes `MUSIC`; if the queue is effectively saturated below the floor, the due speech is allowed; operator forces, chaos first-strike, release-campaign forced banter, bridges, and error recovery stay outside that gate
 
@@ -306,7 +354,7 @@ packaged or synthetic talk bed, never the outgoing song from its beginning.
 Restart-handoff spooling also ignores a shortened private head, preserving only
 ordinary full music entries for a future boot.
 
-Every finished segment then passes a final **loudness-reconciliation** step: it is
+Every newly rendered segment passes a final **loudness-reconciliation** step: it is
 measured (`measure_lufs`, EBU R128) and nudged with a single corrective `volume`
 gain so music, hosts, beds, and ads all air at one integrated-LUFS target
 (`[audio] lufs_target`, with ads at `ad_lufs_target` — 1 LU hotter). This holds
@@ -324,16 +372,16 @@ existed (which otherwise aired at their old, quieter level) one play at a time.
 
 ### Egress FX pipeline (the transmitter, applied last)
 
-Every segment reaches the playback queue through one funnel —
-`_enqueue_with_egress()` in `scheduling/producer.py` — so music, dialogue, ads, and
-bridges all leave through a single chokepoint after every mix, concat, and
-transition-sting merge is done. The funnel runs an ordered egress FX pipeline whose
+Segments reach the playback queue through `_enqueue_with_egress()` in
+`scheduling/producer.py`; direct attributed music and approved packaged ads skip
+its FX passes to preserve exact bytes. Other segments leave after every mix and
+concat is done. Boundary stings are added at playback, outside this funnel. The funnel runs an ordered egress FX pipeline whose
 optional final stage is the **FM broadcast chain** (`apply_broadcast_chain()` in
 `audio/normalizer.py`): one extra FFmpeg pass that colours the finished audio like an
 over-the-air FM signal — a gentle pre-emphasis HF shelf, the ~15 kHz channel band-limit,
-and a flat loudness-offset trim (no stereo swirl, no dynamics). Voice and music exit
-through the same final stage, so there is no "FM music next to studio-clean voice"
-seam. Toggle it with `[audio] broadcast_chain` (default off — studio-clean) — or, on the HA add-on,
+and a flat loudness-offset trim (no stereo swirl, no dynamics). Eligible voice and
+music use the same final stage; exact-byte packaged audio remains unchanged.
+Toggle it with `[audio] broadcast_chain` (default off — studio-clean) — or, on the HA add-on,
 the **On-Air Sound** option (`MAMMAMIRADIO_BROADCAST_CHAIN`, env > toml) so operators
 can switch to studio-clean without rebuilding the baked-in `radio.toml`. It is also
 operator-toggleable **live** from the admin Engine Room On-Air Sound dial
@@ -388,7 +436,7 @@ per-play tmp.
 
 **Synthetic layer cache.** Generated ad and imaging layers that do have stable
 inputs are cached separately as `synth_*.mp3` under `cache_dir`: ad music beds,
-environment beds, foley, brand motifs, transition stings, sweeper stings, and
+environment beds, foley, brand motifs, sweeper stings, and
 synthetic talk-bed fallback. The key includes the synthetic kind, generator cache
 version, normalized parameters (the rounded-up duration bucket is one such param),
 MP3 output arguments, and variant. The cache publishes atomically through a hidden
@@ -423,10 +471,11 @@ audition procedure is in
 [Operations](operations.md#audition-the-modern-night-drive-imaging-pack).
 
 Setting `[imaging].assets_dir` replaces the packaged root with a custom root.
-When the custom root lacks an asset, the runtime uses its procedural or cached
-fallback. It does not read the missing asset from the packaged root. Within the
-selected root, a transition tries `stingers/{from}_{to}.mp3` before the generic
-directional stinger. Talk beds use eligible adjacent music first, followed by a
+Playback boundary carts use only the four fixed paths described below. A
+missing or invalid cart is a clean cut; it never synthesizes or reads from the
+bundled root as a fallback. Producer-rendered beds and live-ad bumpers retain
+their procedural or cached fallbacks within the selected root. Talk beds use
+eligible adjacent music first, followed by a
 bundled bed or synthetic drone. For ads, a configured `[ads].sfx_dir` takes
 priority over the selected root's `sfx/` directory. A resolved recipe uses its
 declared bed and no more than two cue files. A missing or corrupt recipe falls
@@ -454,6 +503,8 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Outer error-recovery rescue (`rescue=True`, built in the loop body) | yes | yes (epilogue) | yes\* | **skipped (rescue)** | append | **yes** |
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **yes** |
 | Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **yes** |
+
+The egress column excludes direct attributed music and approved packaged ads, which preserve their exact bytes.
 
 - The **main-loop** stale gate checks `source_revision` on its own axis, then treats
   `state.playlist_revision` as a cheap pre-filter: a bump only discards when
@@ -630,8 +681,9 @@ half-running session. Startup restores the stopped state from the same marker.
 
 Resume is the inverse, with audio readiness before state publication. While the
 session is still stopped it reserves immediately playable runway: eligible
-norm-cache music first, the manifested `continuity_1.mp3` clip on a cold cache,
-then the manifested two-second `emergency_tone.mp3` last rung. If no readable
+norm-cache music first, a verified starter catalog song when that is the active
+source, the manifested `continuity_1.mp3` clip on a cold cache, then the
+manifested two-second `emergency_tone.mp3` last rung. If no readable
 runway exists, normal Resume returns `503` with `force_available: true` and
 keeps the marker. The admin may then explicitly confirm Force Start, which
 removes the marker before touching live state, clears `session_stopped`, sets
@@ -732,15 +784,16 @@ Script generation never names a model in code. Each call site asks for a model b
 | Profile | Anthropic creative | OpenAI creative | Fast routes |
 | --- | --- | --- | --- |
 | Premium | `opus` | `large` | `haiku` / `small` |
-| Balanced (default) | `sonnet` | `small` | `haiku` / `small` |
+| Balanced (default) | `sonnet` | `mid` | `haiku` / `small` |
 | Economy | `haiku` | `small` | `haiku` / `small` |
 
 - `model_registry.toml` is the canonical place provider model IDs and token prices
   live: a per-provider `catalog`, a `routing` map (task→role), named `profiles`
   (the admin "quality dial": `premium` | `balanced` | `economy`), the OpenAI
-  TTS model, and catalog-keyed pricing. `radio.toml` no longer owns model
-  selection; a legacy `[models]` block is compatibility input only and emits a
-  deprecation warning.
+  TTS model, catalog-keyed pricing, and optional catalog-keyed Anthropic effort.
+  The shipped Opus and Sonnet creative routes use `medium`; fast routes and
+  Haiku omit effort. `radio.toml` no longer owns model selection; a legacy
+  `[models]` block is compatibility input only and emits a deprecation warning.
 - `resolve_model()` is **total** — it tries the active profile, then
   `default_profile`, and returns `None` instead of raising when a registry route
   is unavailable. Callers degrade to stock copy or Edge TTS rather than making an
@@ -765,11 +818,18 @@ Script generation never names a model in code. Each call site asks for a model b
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may add transition stings at
-music/speech boundaries or mix an electronic scene recipe around ad dialogue.
-It also mixes identity stings under sweepers. Modern Night Drive is the default
-root, and a custom root can replace it. Generated stings and beds provide the
-legacy fallback and reuse matching `synth_` cache renders.
+Before queueing, `mammamiradio/audio/imaging.py` may mix an electronic scene
+recipe around ad dialogue or identity stings under sweepers. Modern Night Drive
+is the default root, and a custom root can replace it. Live-ad bumpers retain
+their procedural fallback; generated beds reuse matching `synth_` cache renders.
+
+Song/talk boundary stings belong to playback, so the live Transitions dial also
+affects already-queued local talk. `scheduling/boundary_glue.py` selects
+`stingers/music_to_speech.mp3` or `stingers/speech_to_music.mp3`; only packaged
+ad spots receive `bumpers/ad_in.mp3` and `bumpers/ad_out.mp3`, since live breaks
+contain their own bumpers. The cart airs outside programme accounting and
+keepsakes, without FFmpeg or loudness reconciliation. Rescue fills, reserved
+music tails, and urgent interrupts take their existing paths without a cart.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
@@ -781,7 +841,7 @@ counts in memory, so they reset on restart and add no playback-path I/O.
 `/public-status.ad_experiment` exposes the payload, which `/status` reuses.
 These counts are experimental and unsuitable for advertiser analytics.
 
-**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Durable listener persona and song-cue extraction are a separate post-air path, so queue-time gag bookkeeping can still happen without treating unheard banter as long-term memory. Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
+**Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Banter planting and news-flash reuse commit at queue admission; ad reuse commits only on first listener-accepted audio, so an unheard ad never burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Durable listener persona and song-cue extraction are a separate post-air path, so queue-time gag bookkeeping can still happen without treating unheard banter as long-term memory. Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
 
 **Evening running gags (HA-event callbacks).** `home/evening_memory.py`'s `EveningLedger` tallies repeated discrete home toggles across an evening and surfaces a deferred, approximate callback ("the coffee machine, on again tonight") into banter via the STASERA prompt block. Gag-candidacy is decided by device **domain** (not hardcoded entity_ids), so it works on any operator's home out of the box: `switch`/`fan`/`lock`/`vacuum`/`binary_sensor` toggles are gag-worthy, while `sensor`/`climate`/`media_player`/`weather`/`light` and `person.*` are not. Operators tune this via `[home.running_gags]` in `radio.toml` (`domain_allowlist` replaces the default domain set; `entity_allowlist` restricts to specific entity_ids; `entity_denylist` silences chatty entities) — parsed into `core/config.EveningGagsSection`, degrade-to-default on malformed input. An evening "session" ends after `EVENING_GAP_SECONDS` (3.5h) with no real home activity — `last_active` advances only on real activity (excluding numeric drift, `person.*`, device-availability flaps, and passive `weather`/`sun` changes), so neither radio-cadence polling nor passive environmental events can keep a quiet evening alive forever — or at the 4am day rollover.
 
@@ -853,8 +913,17 @@ The timeline is deliberately **continuous across natural segment boundaries**:
 music → station ID → ad → banter → music share one origin, so the lead is not
 re-accrued at each transition (which would add silence and drift). The pacer
 resets only on a true discontinuity — no listeners (including a subsequent
-mid-segment room refill), playback stop/resume, a real queue gap / fallback, or
-an explicit skip — via a named `reset_timeline(reason)` call.
+mid-segment room refill), playback stop/resume, or a real queue gap / fallback —
+via a named `reset_timeline(reason)` call.
+
+An **explicit skip is not one of them**, and that is load-bearing. The socket
+stays open and every already-delivered byte still plays, so the lead the
+listener holds is real; resetting would re-anchor it to zero by fiat and
+re-accrue a second cushion on top of audio already in their queue. At the 32-of-
+128-slot arithmetic above, four consecutive skips reach the 16 s queue ceiling,
+and `LiveStreamHub.broadcast` does not drop the overflowing packet — it drops
+the listener. Skip-to-audible latency would also degrade 4 s → 8 s → 12 s as the
+buffer inflated. Pinned by `test_repeated_skips_do_not_accumulate_delivery_cushions`.
 
 If a pause is longer than the whole lead, the pacer uses **at most a three-packet
 recovery phase**, then rebases the pacing origin once and records the deficit as
@@ -919,9 +988,8 @@ durable base; Jamendo is deliberately outside this function:
    external selection may restore. A legacy `jamendo://` selection is retired and
    rewritten to the current base. Both add-ons reject any persisted selection that
    would require extractor authority.
-2. **Operator local files.** MP3s under `music/` become the base when present.
-   They receive no project license claim; the operator owns their provenance and
-   permitted use.
+2. **Operator local files.** Direct callers may use them as a base; production overlays after startup.
+   They receive no project license claim; the operator owns their provenance and permitted use.
 3. **Bundled starter catalog.** With no local base, runtime loads the twelve
    hash-pinned attribution-only derivatives from the canonical manifest
    (Incompetech under CC BY 4.0, Jamendo under CC BY 3.0).
@@ -987,11 +1055,11 @@ literal. The full candidate credit and verified guest identity remain
 admission-time blocklist aliases; a guest tail stays whole so a band name such as
 `Earth, Wind & Fire` is never guessed to be three individual performers.
 
-`core.song_identity.song_identity_key_is_blocklisted` is the shared hard-policy comparison. `playlist.filter_blocklisted` wraps it at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and bulk source loads. External/listener download commit, restart handoff, producer admission, continuity selection, playback's last-mile fence, and norm-cache **rescue** call the same comparison directly because they can serve audio without passing through `state.playlist`; a banned song therefore cannot re-enter through cached, queued, or post-restart audio under an equivalent spelling. The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. Dropping a segment can expose a different queue tail; `_apply_ban` and manual `/api/queue/remove` both re-verify that newly exposed tail (`_reconcile_queue_tail_adjacency`) rather than trust it blindly, since only rescue/recycled music can safely re-anchor speech-bed adjacency — ordinary rendered music may carry an egress-processed path. A last-mile fence in the playback loop itself covers the remaining race, where a banned track was already pulled off the queue before a ban's synchronous purge reached it: playback discards that segment immediately, before any bytes reach air, and runs the same tail-adjacency reconciliation. That same playback-owned case leaves a listener-request token behind: a promised file already claimed by playback is out of the queue, so `drop_matching_segments` never releases its `listener_request_admitted_reservations` entry. `_apply_ban` therefore filters that map with the same canonical predicate as its last step — after the purge, so a still-queued dedication and its linked song settle through the normal paired mutation first. Without it, a pre-first-byte failure would call `restore_listener_request_handoff_before_first_byte` and re-arm the banned promise as a retry *after* the retry filter ran (a stuck exclusive promise the producer can only answer with `BLOCKLIST_GATE`), and `listener_track_reservations()` would keep suppressing cache and recovery audio for a recording that may never air again. Recovery paths carry a matching guard one level up: error recovery, the quality-gate circuit breaker's last-known-good recycling, and speech-bed adjacency selection all resolve their candidate through `_blocklist_safe_last_music`, which requires a durable `{artist, title}` identity and rejects it outright — even when unidentified — while any ban is active, so none of those paths can reintroduce an operator-banned song through a cached or adjacency-based route. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label, so it bans even a rescue-cache or one-off song that never entered `state.playlist`), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, a bridge to forced music whenever no immediately playable runway remains — not just an empty queue, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge sees the post-purge, playback-verified runway state and still force-bridges to music if nothing left in the queue can actually play — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
+`core.song_identity.song_identity_key_is_blocklisted` is the shared hard-policy comparison. `playlist.filter_blocklisted` wraps it at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and bulk source loads. For a **local** file that doorway (and `reconcile_local_library`, the other one) resolves through `local_library.local_track_is_blocklisted`, which checks the current identity and, additionally, the identity the file carried before the scanner started reading embedded tags (`legacy_local_identity_key`, derived from the path alone by reproducing the former `stem.split(" - ")`-or-`Unknown` rule). Reading tags moves a file's `(artist, title)` and nothing on disk records the old pair, so without this a durable ban placed before that release would silently stop matching on the first rescan. The other gates below still compare the current identity only; they stay correct by containment, because a legacy-banned local file never reaches `state.playlist` and a norm-cache sidecar written before the upgrade already carries the old identity. External/listener download commit, restart handoff, producer admission, continuity selection, playback's last-mile fence, and norm-cache **rescue** call the same comparison directly because they can serve audio without passing through `state.playlist`; a banned song therefore cannot re-enter through cached, queued, or post-restart audio under an equivalent spelling. The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. Dropping a segment can expose a different queue tail; `_apply_ban` and manual `/api/queue/remove` both re-verify that newly exposed tail (`_reconcile_queue_tail_adjacency`) rather than trust it blindly, since only rescue/recycled music can safely re-anchor speech-bed adjacency — ordinary rendered music may carry an egress-processed path. A last-mile fence in the playback loop itself covers the remaining race, where a banned track was already pulled off the queue before a ban's synchronous purge reached it: playback discards that segment immediately, before any bytes reach air, and runs the same tail-adjacency reconciliation. That same playback-owned case leaves a listener-request token behind: a promised file already claimed by playback is out of the queue, so `drop_matching_segments` never releases its `listener_request_admitted_reservations` entry. `_apply_ban` therefore filters that map with the same canonical predicate as its last step — after the purge, so a still-queued dedication and its linked song settle through the normal paired mutation first. Without it, a pre-first-byte failure would call `restore_listener_request_handoff_before_first_byte` and re-arm the banned promise as a retry *after* the retry filter ran (a stuck exclusive promise the producer can only answer with `BLOCKLIST_GATE`), and `listener_track_reservations()` would keep suppressing cache and recovery audio for a recording that may never air again. Recovery paths carry a matching guard one level up: error recovery, the quality-gate circuit breaker's last-known-good recycling, and speech-bed adjacency selection all resolve their candidate through `_blocklist_safe_last_music`, which requires a durable `{artist, title}` identity and rejects it outright — even when unidentified — while any ban is active, so none of those paths can reintroduce an operator-banned song through a cached or adjacency-based route. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label **only when no title was resolved at all**, so it bans even a rescue-cache or one-off song that never entered `state.playlist`; an untagged local song legitimately has no artist, and splitting its label would invent one out of a title that merely contains a dash. A music segment whose title cannot be resolved is refused with a message naming that situation rather than claiming nothing is on air), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, a bridge to forced music whenever no immediately playable runway remains — not just an empty queue, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge sees the post-purge, playback-verified runway state and still force-bridges to music if nothing left in the queue can actually play — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
 
 ### Operator song preferences
 
-Operator song preferences are soft taste hints, not bans. They persist to `cache_dir/song_preferences.json` as `{serialized_key: {score, display, updated_at, updated_by}}`, keyed by the same `normalized_track_key(track)` identity as the blocklist. Scores are `1` for thumbs-up and `-1` for thumbs-down; clearing a preference removes the row. Loading is missing/corrupt tolerant and writes are best-effort atomic (`tmp` + `os.replace`) so a bad preference file cannot stop audio.
+Operator song preferences are soft taste hints, not bans. They persist to `cache_dir/song_preferences.json` as `{serialized_key: {score, display, updated_at, updated_by}}`, keyed by the same `normalized_track_key(track)` identity as the blocklist. Scores are `1` for thumbs-up and `-1` for thumbs-down; clearing a preference removes the row. Loading is missing/corrupt tolerant and writes are best-effort atomic (`tmp` + `os.replace`) so a bad preference file cannot stop audio. `reconcile_local_library` is a second, narrow writer: when a local file's identity moved because the scanner began reading its embedded tags, `_migrate_local_preferences` MOVES an existing vote from the pre-upgrade identity onto the new one (removing the legacy row) and bumps `song_preferences_revision`. Moving rather than copying is the point: a copied legacy row is re-applied by the next 60-second scan, so clearing the vote deletes only the new key and the old one puts it straight back — a vote the operator cannot take off. It only ever adds a row for a track currently in rotation, never overwrites an existing vote, and is re-derived on each scan, so it self-heals rather than depending on a one-shot disk migration.
 
 `StationState.song_preferences` is loaded at startup and exposed only on admin JSON. `POST /api/track/preference` accepts `vote: "up"|"down"|"clear"` plus exactly one target: `now_playing: true`, `index`, or `key: [artist, title]`. The route only mutates `song_preferences`: it does not call skip, purge queue entries, remove tracks, or change `state.blocklist`. `GET /api/track/preferences` lists the full rows and counts for the admin panel. `/status` includes only the current track's preference and playlist row scores; the full row list stays behind `/api/track/preferences`. `/public-status` and the Home Assistant now-playing APIs intentionally omit preferences.
 
@@ -1033,6 +1101,50 @@ A session's blended TTS estimate records a confirmed paid-provider response befo
 
 A singleton OpenAI client is reused across OpenAI TTS calls for connection pool efficiency.
 
+### Ad fine print (the fast-talking disclaimer)
+
+**Only brands with lawyers carry fine print.** `brand_has_fine_print()` in
+`hosts/ad_creative.py` is a pure lookup: true when the brand's category is in
+`FINE_PRINT_CATEGORIES` (pharma, health, banking — the categories real radio
+actually buries a legal tail under), or when a campaign's owned character *is*
+the disclaimer voice. The shipped `radio.toml` gives those categories a configured
+weighted share of 12/88 (13.6%). Recent-brand exclusions, break composition and
+generation fallbacks mean this is not a guaranteed aired rate. The gate itself
+has no scheduler state, cooldown or randomness; retuning it means editing one
+frozenset.
+
+The flag drives three things together, and they must never disagree: whether
+`DISCLAIMER_ROLE` appears in the prompt's SPEAKERS block, whether the JSON example
+asks for a fine-print line, and whether the format description carries
+`AD_FORMAT_DISCLAIMER_SUFFIX`. Listing the role without using it, or the reverse,
+is a self-contradicting prompt — the condition that previously made the model
+return roles the cast did not contain. For a brand with no fine print,
+`_cap_disclaimer_parts(..., allowed=False)` then removes any disclaimer the model
+wrote regardless; a script that is *entirely* fine print is demoted to the
+spot's own role instead, since for that brand the lines are simply ad copy.
+
+An earlier release said the opposite. Ad speed was originally scoped by ad format
+(`CHANGELOG.md [2.12.3]`), then #1129 made the tempo gate role-based so the fast
+tail reached every format — correctly fixing a real bug while the prompt still
+requested fine print for every brand. This change keeps #1129's gate
+exactly as it is and moves the decision one level up, to which brands write fine
+print at all.
+
+The parser normalizes decorated model output onto the role token, while
+unrecognized roles retain the existing default-voice fallback. `_FORMAT_ROLES`
+remains the casting contract and is unchanged; formats without a dedicated
+disclaimer voice use their opening voice, and `classic_pitch` still casts a
+goblin that simply has no line when the brand carries no fine print.
+
+`audio/tts.py` applies `DISCLAIMER_TEMPO` through the existing `normalize()`
+FFmpeg pass on every engine. Internal breath gaps are removed before `atempo`,
+whose factors stay within the range supported by older FFmpeg builds. Invalid
+tempo values use the complete normal-speed path, and failed or unusable
+compressed renders retry once without compression. SSML `rate` remains reserved
+for host prosody.
+
+Pharma ads replace model-written fine print with one canonical medicine tail.
+
 ## Compounding station memory and truthful listener sessions
 
 `core/listener_session.py` maintains an in-memory, identity-free station epoch. The stream hub remains authoritative for raw HTTP connection membership, while the session state machine records only station-level presence:
@@ -1056,7 +1168,26 @@ The hot `write_banter` contract does not write persona memory. Instead, `scriptw
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
 
-Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/welcome MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Missing, unlisted, changed, malformed, or truth-unsafe speech invalidates the inventory. Runtime playback admits approved recovery and neutral banter speech; welcome copy and unmanifested directory discovery remain disabled. The release-invariants gate validates this manifest.
+Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/First Listen/ads MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Banter rows also declare Normal vs Super Italian Mode, an optional exact predecessor starter id, and whether the clip is a rare fourth-wall special. Ad rows declare their mode, title, cast, and a `duration_seconds` inside 25 to 40 seconds that must match the measured audio, and carry no adjacency or special tier. The release boundary rejects missing, unlisted, changed, malformed, truth-unsafe, undecodable, off-loudness, or oversized inventory; runtime admission parses the policy-valid manifest snapshot and hashes only the selected file, keeping whole-bank I/O off first-byte and recovery paths. Exact-track banter requires both a matching starter queue tail at selection and the same actual listener-audible predecessor at playback. Forced, urgent, fallback, and uncertain paths use evergreen copy, fourth-wall specials are rare natural breaks, and long packaged banter does not repeat after its mode-safe bank is exhausted. Unmanifested directory discovery remains disabled.
+
+Packaged advertisements live directly under `assets/demo/ads/`: seven English
+Normal spots and four Italian Super Italian spots are required by the release
+inventory. They have no song adjacency or rare-special tier. Each MP3 must be
+25–40 seconds and at most 4 MiB; the frame-measured duration must agree with its
+manifest within 0.1 seconds. The release validator additionally checks 48 kHz
+stereo/192 kbps, -15 LUFS ±1, peak at most -1 dBTP, silence at most 25%, no gap
+over 2.5 seconds, package-resource hash equality, and a 12 MiB ad-bank ceiling.
+These measurements do not replace human approval of the exact voices and mix.
+
+The producer queues the retained file directly with `ephemeral=False`, reviewed
+metadata, packaged provenance, and zero generation cost. No runtime LLM, TTS,
+wrapper, or mix is needed. Selection hashes candidates off-loop; file/manifest
+identities and the active mode are checked again before playback. A changed or
+wrong-mode queued asset cannot air. Admission reserves the spot; discard releases
+it without forgiving the break, and first-audible delivery commits history once.
+Selection avoids the most recently aired spot whenever another unreserved
+candidate exists. Only ads require duration/title/cast fields, so missing ad
+metadata cannot remove a recovery clip from the rescue ladder.
 
 Anonymous listener-session diagnostics and legacy aggregate listener counters appear only on authenticated `/status`. `/public-status` retains its existing schema and exposes neither session diagnostics, cue metadata, nor listener counters.
 
@@ -1081,6 +1212,31 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - authorization mode travels with every `HomeContext`. Fresh, stale, timeout, and module-cache paths reject a context stamped for the other mode. Hard mutes apply both to a raw ambient source and to its synthetic ID.
 - narrow mode skips registry/name loading, generated labels, event diffs, radio-event and ritual matchers, timer interrupts, mood derivation, weather forecast arcs, first-home directives, evening gags, and Moment Receipt projections. `/public-status` and `/status` do not replay persisted household moments, and the manual label-regeneration route reports no candidates.
 - exact-manifest sealing runs once at a time in a tracked background thread so file and directory `fsync` calls never stall the producer event loop. Only an authoritative legacy install receives that observer.
+
+The compatibility update additionally exports `cache/state/home_profile_v1.json`
+through `home/profile.py`. This owner-only snapshot contains the ordered curated
+inventory, bilingual labels, semantic roles, scopes, priorities, trigger rules,
+cooldowns, and anonymous resident/pet bindings. It contains no observed states,
+HA friendly names, credentials, or generated labels. Matching install-origin
+witnesses and valid sealed provenance are prerequisites. An already-sealed
+installation can export at boot without contacting HA.
+
+The database first reserves a random export identity with no digest. This
+pending intent is never ready. File publication and filesystem synchronization
+precede the final binding of the complete canonical document digest; an
+interrupted export can finish only when the file matches the database's own
+intent and the entire compiled snapshot. Conflicting evidence is preserved
+and reported as unready. Export runs once at a time after audio tasks start, and
+retries after a failure on the next observation or boot. This update does not
+consume the snapshot, change authorization, or remove built-in mappings. Schema
+1 preserves the existing fixed mood/formatting semantics; it introduces no new
+consent grants. LEGACY still processes the full filtered HA snapshot, not only
+the curated inventory.
+
+A golden hash pins the complete compiled snapshot, excluding its random identity.
+Keep these constants frozen until the next update can consume existing profiles
+without recompiling them. Semantic roles identify the existing mood/formatting
+rules; their numeric thresholds and ordered logic still live in runtime code.
 
 - `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
@@ -1216,31 +1372,46 @@ This is opportunistic context, not a hard dependency. Failures there should not 
 
 ### Timer interrupt flow
 
-When a HA timer fires, the station interrupts playback with a pissed/urgent host
-segment whenever a packaged bridge is available:
+`_fire_interrupt` supports three mechanisms. Configured HA timers reach it from
+the lightweight timer poll and the main segment cycle through
+`check_reactive_triggers`. Both paths share the `timer:<entity_id>` cooldown key.
+The admin-authenticated `POST /api/interrupt` endpoint supports direct and Home
+Assistant automation callers. A third call site accepts caller-supplied ritual
+recipes, but the shipped catalog contains no interrupt-lane recipe.
+
+The retired `safety_saves` recipe treated safety sensors and some door
+transitions as urgent radio cut-ins. An ordinary door could therefore cut a song
+and play the emergency bridge before a host explanation was ready. Home Assistant
+remains responsible for safety alerts. A catalog test keeps the shipped
+`interrupt` lane and `urgent` urgency empty without restricting custom recipe
+sequences.
+
+When a configured HA timer fires, the station interrupts playback with a
+pissed/urgent host segment whenever the packaged bridge is available:
 
 ```text
-HA timer fires (timer.xyz → idle, with recent finished_at)
-    ↓
+HA timer fires (timer.xyz -> idle, with recent finished_at)
+    ->
 ha_context.py: lightweight 5s poll detects idle transition (separate from the default 300s full-state prompt-context fetch).
     Cancel/reset filter: only fire when finished_at is set and within the last 30s.
-    ↓
-check_reactive_triggers() → InterruptSpec(directive, urgency, cooldown)
-    ↓
+    ->
+check_reactive_triggers() -> InterruptSpec(directive, urgency, cooldown)
+    ->
 producer.py: _fire_interrupt(state, spec, queue, skip_event)
-  1. Commit assets/sfx/alert.mp3, or the approved packaged emergency tone,
-     to state.interrupt_slot. If neither exists, abort before draining or skipping.
-  2. Drain lookahead queue and clear stale continuity/music adjacency.
-  3. Demote any directive receipt being superseded, then store spec.directive.
-  4. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT  (pissed tone)
-  5. Clear superseded operator Air Next attribution and set a revision-owned
+  1. Validate the packaged emergency tone. Abort without changing cooldown,
+     continuity, interrupt state, queue contents, or playback when it is unavailable.
+  2. Commit the tone to state.interrupt_slot for every interrupt source.
+  3. Drain lookahead queue and clear stale continuity/music adjacency.
+  4. Demote any directive receipt being superseded, then store spec.directive.
+  5. state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT (pissed tone)
+  6. Clear superseded operator Air Next attribution and set a revision-owned
      BANTER force as the urgent safety belt.
-  6. state.chaos_cutover_epoch += 1; skip_event.set() cuts the current segment.
-    ↓
-run_playback_loop: interrupt_slot checked before queue.get() → bridge plays (≤2s)
-    ↓
+  7. state.chaos_cutover_epoch += 1; skip_event.set() cuts the current segment.
+    ->
+run_playback_loop: interrupt_slot checked before queue.get() -> bridge plays within 2s
+    ->
 Producer generates URGENT_INTERRUPT banter with directive (async, LLM)
-    ↓
+    ->
 Pissed banter plays after bridge
 ```
 
@@ -1250,9 +1421,13 @@ remove any ephemeral bridge, advance the cutover epoch, and mark its Moment
 Receipt dropped. That ownership check never mistakes a newer force for the
 urgent one; Panic then publishes recovery `MUSIC`, while Stop clears all forces.
 
-Timer interrupts are configured via `[[homeassistant.timer_interrupt]]` blocks in `radio.toml`. The dedicated timer poll reads those entity IDs without mutating the module-level HA entity lists.
+Timer interrupts are configured with `[[homeassistant.timer_interrupt]]` blocks
+in `radio.toml`. The parser stores them in the internal `timer_interrupts` field.
+The dedicated timer poll reads those entity IDs without mutating the module-level
+HA entity lists.
 
-The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 60s cooldown) — any HA automation can inject a custom directive without `radio.toml` configuration.
+The admin-authenticated `POST /api/interrupt` endpoint applies a 60-second
+cooldown and accepts custom directives without `radio.toml` configuration.
 
 ## Access model
 
@@ -1315,9 +1490,9 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
-| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped |
+| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped. `?first_listen=live` keeps that resume wait but suppresses the packaged prelude, so the browser that already heard the opening rejoins the live hub on an explicit transport click instead of replaying it while human confirmation is still pending |
 | `/healthz` | GET | Public | Runtime-health probe with process uptime; prolonged silence with active listeners returns `503`, while an intentional Stop remains healthy |
-| `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped` |
+| `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped`. The packaged First Listen prelude counts as accepted audio: it is paced in real time, so on a cold install no listener reaches the shared hub for roughly 23 seconds, and a station audibly covering the speaker must not report `starting` (or trip the silence watchdog) for that whole opening |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), process-local `ad_experiment` completion counts, `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `rescue_rotation` cached-music cooldown telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin (active setup) | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and `first_listen`, `source_readiness`, `speaker`, `verification`, and `privacy` projections |
@@ -1357,11 +1532,13 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/chaos` | POST | Admin | Toggle Chaos Mode with `{"enabled": bool}`; persists `chaos_mode_active` to `.env` or Supervisor's stored HA add-on options |
 | `/api/party` | GET | Admin | Return `{"active": bool, "mode": str\|null}` for Festival Mode |
 | `/api/party` | POST | Admin | Toggle Festival Mode with `{"action": "enable"\|"disable", "mode": "festival"}`; persists `festival_mode` to `.env` or Supervisor's stored HA add-on options; purges queue and arms first-strike banter on enable |
+| `/api/boundary-imaging` | GET | Admin | Return the live `boundary_imaging` boolean, `resets_on_restart`, and session `carts_aired` count |
+| `/api/boundary-imaging` | POST | Admin | Set `{"boundary_imaging": true\|false}` for the next seam without purging the queue; standalone persists `MAMMAMIRADIO_BOUNDARY_IMAGING` to `.env`, add-on changes last for the session; records `operator_action` |
 | `/api/quality` | GET | Admin | Return `{"active_profile": str, "profiles": [str]}` for the model quality dial |
 | `/api/quality` | POST | Admin | Set the active model profile with `{"quality_profile": "premium"\|"balanced"\|"economy"}`; hot-swaps live with no restart and no queue purge; persists `MAMMAMIRADIO_QUALITY` to `.env` or `quality_profile` through Supervisor |
 | `/api/trigger` | POST | Admin | Trigger segment production |
 | `/api/stop` | POST | Admin | Persist the stop marker first, then invalidate stale work, cut, purge, and pause producer until `/api/resume`; persistence failure changes nothing |
-| `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
+| `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. On a starter-catalog source the reservation verifies one starter song off the event loop first, so a Stop accepted during that wait answers `409` and stays paused; any other concurrent control only drops the starter candidate and still reserves the packaged ladder. Verification is bounded at 2 seconds and falls back to that ladder without cancelling the verification or starting a second one, and both Resume entry points share one lock: a second Resume waits up to 3 seconds for the first, then answers `409` without `force_available`, and also answers `409` if a Stop landed while it waited. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 | `/api/clip` | POST | Public | Capture eligible material; music requires a complete bundled-starter-only window, otherwise `403 music_share_unavailable` |
 | `/api/clip/keep` | POST | Admin | Keep the airing voice segment (or the one just ended) durably in `cache_dir/keepsakes/`. Refusal reasons: `music`, `music_tail`, `not_on_air`, `too_early`, `not_keepable`, `archive_full`, `no_room`, `write_failed` |
@@ -1513,9 +1690,9 @@ after the switch.
 This repo is biased toward "keep the station on air."
 
 - producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; packaged recovery clips are non-ephemeral package resources and every producer/playback segment-cleanup path guards `mammamiradio/assets/demo/` before unlinking; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
-- script generation failures fall back to OpenAI when configured, then to stock copy; a temporary Anthropic overload or rate limit briefly benches its writer (respecting a bounded `Retry-After` when present) so affected later segments go straight to OpenAI, then retry Anthropic automatically after the short cooldown
+- script generation failures fall back to OpenAI when configured, then to stock copy except for ads, which try approved packaged audio before continuity recovery; a temporary Anthropic overload or rate limit briefly benches its writer (respecting a bounded `Retry-After` when present) so affected later segments go straight to OpenAI, then retry Anthropic automatically after the short cooldown
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
-- required speech fails closed: if every configured provider and Edge fallback is unavailable, partial files are removed and `TTSUnavailableError` reaches the producer rescue ladder; owned dialogue, ID, time-check, and ad fan-outs settle before scratch cleanup, while optional promo tags may still be omitted
+- required speech fails closed: if every configured provider and Edge fallback is unavailable, partial files are removed and `TTSUnavailableError` reaches the producer, which tries approved packaged audio for ads before the rescue ladder; owned dialogue, ID, time-check, and ad fan-outs settle before scratch cleanup, while optional promo tags may still be omitted
 - missing or disabled `external-media` leaves the local-or-starter base untouched;
   external-only standalone operations report the capability boundary, and
   add-ons return the locked actionable `403` without importing or executing
@@ -1524,7 +1701,7 @@ This repo is biased toward "keep the station on air."
   cancellation, or restart failures destroy the single-use artifact/lease and
   immediately continue with local/starter music
 - missing Home Assistant context is ignored
-- missing ad brands disables ads rather than killing startup
+- missing ad brands disables live ads; an approved active-mode packaged bank can still fill the break
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
@@ -1551,6 +1728,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/playlist/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
 | `mammamiradio/scheduling/scheduler.py` | pacing rules and upcoming preview |
 | `mammamiradio/scheduling/producer.py` | segment generation pipeline |
+| `mammamiradio/scheduling/boundary_glue.py` | packaged playback cart selection and validation |
 | `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup; keepsake eligibility gates, exact-segment extraction, durable keepsake save |
 | `mammamiradio/release_campaign.py` | Packaged release-beat manifest loading and bounded on-air campaign state (`cache/release_campaign_ledger.json`) |
 | `mammamiradio/restart_handoff.py` | Post-restart music continuity spool: producer writes safe recent segments, startup admits them into the queue (`cache/restart_handoff/`) |

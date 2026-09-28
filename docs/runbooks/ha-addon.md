@@ -12,7 +12,7 @@ Code change
   → push/merge to main                                        [cut window opens]
   → addon-build.yml CI validates + builds :sha and :<short-sha> without publishing, proves both images, then publishes and smokes them (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, 20-run HA Green evidence, and prebuilt :sha checks
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, the opt-in 20-run HA Green evidence (MMR_REQUIRE_HA_RECEIPTS=1), and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs both per-arch :sha images and proves their host-published ports before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
                                                               [cut window closes]
@@ -32,25 +32,96 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **The cut window.** Between the cut merge and the second `promote` job, `main` advertises a version whose image is not published yet. A fresh install of the stable add-on fails and rolls back, and an update fails to download. A station already playing keeps playing, because the Supervisor pulls the new image before it stops the old container.
 
-The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). Recovery is under "Cutting a stable release" below: land `git revert <cut-sha>`, the whole cut commit rather than the version files alone, then debug.
+The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). For recovery, prepare `git revert --no-commit <cut-sha>`, then commit and land the complete revert before debugging. See "Cutting a stable release" below for the commands.
 
-To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily and raises a flag if it never closed.
+To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily. `dependabot-automerge.yml` reads current `main` on Dependabot PR events, config.yaml pushes to main, hourly, and on demand. A missing image disables auto-merge on eligible Dependabot PRs and adds `cut-window-hold`; a failed label write fails the run. An unreachable registry leaves auto-merge unchanged. Arming requires verified patch/minor metadata, a matching PR head, a current `main` check, and an active workflow. The sweep only disarms. After publication, request `@dependabot rebase` from a maintainer account to trigger a fresh PR event, or use the landing workflow. Major updates need manual landing. Label events can re-arm a PR you disarmed by hand.
+
+Before landing a cut, the release operator must freeze Dependabot. The same
+operator owns the freeze, cut and resume; do not run them concurrently from
+different seats. Keep strict up-to-date branch checks and pause human landings
+through publication.
+
+```bash
+GH_REPO=florianhorner/mammamiradio bash scripts/dependabot-window-hold.sh freeze
+```
+
+This explicitly disables the workflow, waits up to five minutes for every
+existing run to finish, then disarms existing Dependabot auto-merges. It verifies
+disabled state, zero active runs and zero armed Dependabot PRs. If disable fails
+or its result cannot be verified, inspect the workflow state and do not cut.
+After a verified pause, a timeout or later API failure does not enable it again;
+finish draining and rerun `freeze`. Disabling alone does not stop a run that
+already passed the arming check.
+
+`scripts/land-pr.sh` compares the stable versions in the verified base and PR
+head. A version change, including a cut revert, requires this freeze admission
+before it can arm the merge. An ordinary PR keeps the existing landing checks.
+The gate reads state; it never disables workflows or disarms PRs itself. Direct
+GitHub UI/API merges bypass this local guard and must obey the same freeze.
+
+Keep the workflow disabled until both architecture promotions succeed. Then use
+the successful `addon-release.yml` run ID to resume explicitly:
+
+```bash
+GH_REPO=florianhorner/mammamiradio bash scripts/dependabot-window-hold.sh thaw <release-run-id>
+```
+
+`thaw` requires the current main version, its exact release tag/commit, a
+successful release run, successful amd64 and aarch64 promotion jobs in the same
+run attempt, and an explicit registry `pass` for main's image configuration.
+It also refuses any still-armed PR, so an old release cannot reopen Dependabot
+while a cut is waiting for CI. Before enable, changed proof, missing jobs, API
+errors or an unknown registry verdict retain the pause. If the enable request
+or its read-back fails, the workflow may already be active: inspect its actual
+state before proceeding. After a partial workflow rerun,
+rerun all release jobs if that attempt lacks either promotion. After reverting
+a failed cut, use the successful release run for the restored published version.
+A successful thaw enables future PR events; it does not re-arm held PRs itself.
 
 ## First-listen operator check
 
-Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
-authored 27-second mini-show on deck: an original music bed and a privacy-aware
-Marco/Giulia opening, then a source-aware handoff to the live stream. It needs
-no AI key or Home context. Source readiness is supporting detail under that
-opening; verify that charts, Jamendo, local music, bundled demo music, and
-recovery cover are described honestly. The listening cue must distinguish a
-primary rotation, recovery cover, and music that still needs repair; bundled
-demo music must not be presented as a promised song library.
+Open the add-on Web UI. A fresh unfinished install shows one active moment:
+**Your seat's ready**. **Start my station** opens the actual
+`/stream?first_listen=1`; its Marco/Giulia opening flows into live radio on the
+same player, with no separate demo or second start. The real media `playing`
+event reveals the sound check inside the same studio frame; an expanded
+opening transcript remains available. Choose **I can hear it** only after sound
+reaches this device, or use **I can’t hear you** and the [this-device repair
+steps](../troubleshooting.md#first-listen-does-not-play-on-this-device). Arrival,
+sound confirmation, and **Make it yours** appear one at a time; completed choices
+become compact Setup review rows, not a checklist.
 
-Required First Listen proof is hearing the station on this device in the add-on
-Web UI. Select **Start sound check**, then **Yes, I hear it** only after you hear
-the opening, or use the [this-device repair
-steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
+Music readiness is nested under **Music details** in the arrival. It must
+distinguish a primary rotation, recovery cover, and music that still needs
+repair; bundled demo music must not be presented as a promised song library.
+Recovery audio alone must say **Music needs attention**, never **Music is
+ready**. After the listener has completed their choices, an unavailable
+continuity source must make the music-repair route reachable without reopening
+the onboarding ritual. A failed station check must show a connection/reload
+action, preserve saved choices, and clear its warning when polling succeeds.
+During the final privacy save, a background completion check must keep First
+Listen open, retain keyboard focus, and leave its station audio connected.
+
+Music continues beneath the recorded hosts at a lower level, then returns to
+normal. The same player stays available through Make it yours, completion,
+music-source setup and station controls. **Pause music** pauses this device;
+**Continue music** resumes it without changing saved choices. If the browser
+is reloaded after sound confirmation, **Resume station** is available without
+autoplay or repeating the sound check. If the browser
+cannot mix the hosts over music, use the transcript or pause music explicitly
+before playing the recording. **Listen elsewhere** offers Music Assistant and
+AirPlay/Bluetooth guidance. Copying a stream address is offered outside
+localhost and Home Assistant ingress; the other player must be able to reach
+the station. Completion plays the existing host celebration once, unless music
+was deliberately paused. **Listen to the station** opens the existing `/listen`
+page; **Open station controls** opens `/admin`. Both keep the same stream.
+In **Motore**, **Restart First Listen** reopens the arrival and all three moments.
+It preserves music and saved settings; existing Home sharing stays active until
+the operator explicitly changes it. Old receipts do not skip the repeated steps.
+The listener page uses its own familiar controls; no second player starts.
+Choosing **Start sound check** makes a new playback attempt. It joins the live
+station on completed or existing installations; the server does not replay its
+fresh-install opening after durable hearing proof.
 
 Home Assistant speakers remain optional and are no longer part of First Listen.
 The add-on has no speaker picker; the route is Home Assistant's own media
@@ -61,16 +132,41 @@ An accepted Home Assistant service call is not audible proof; confirm the room
 yourself. See [Optional: play it on a Home Assistant
 speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
 
-First audio does not require an AI key. On a fresh add-on install,
-`ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, First Listen offers **Keep Home private** without reading
-Home state, or a fresh filtered preview before **Let Marco and Giulia use these
-details**. If only generic daylight is available, verify that it is disclosed as
-ambient-only and not meaningful personalization, with the private path
-recommended. AI-host setup comes later.
+First audio needs no AI key; fresh installs keep Home context off. After sound
+confirmation, **Hear the evening** is explicitly staged, uses only weather and
+daylight, and says no Home details were read. The station ducks for the scene
+and resumes; the listener may hear it, skip it, or finish with Home private.
+
+When the scene ends, Replay and its transcript remain available; **Set up AI and Home**
+appears without moving keyboard focus. **Skip this example** goes directly to
+writing. **Let them surprise you** compares recorded moments with fresh
+conversations, alongside one provider selector and one key field. Included
+radio keeps playing without a key. A saved but unverified key is not presented
+as connected; **Check connection again** actively checks the existing providers
+and refreshes the result, with bounded failure recovery. Unfinished key input
+must remain visible through background checks. **Skip AI, choose Home details** skips
+writing and opens the same exact Home choice. Missing, stale, or daylight-only
+previews must not claim meaningful household personalization.
+
+`FIRST_LISTEN_HOME_PROOF_KEY` selects the opening day-one `quiet` recording from
+the hash-bound four-scene pack. Completion offers laundry, arrival, then coffee
+as optional recorded examples; each waits for a click, and **Set up AI and Home**
+remains available. Their disclosure states that these household features are
+unavailable on new installations. Playing an example grants no household
+details; `scripts/validate-spoken-assets.py` preserves the manifest's day-one
+versus Home-grant boundary.
+
+**Free vs studio voices · listen** is an optional drawer, not another required
+step. Both samples are recordings. New conversations use free voices with the
+default setup; a writing key alone does not buy the recorded studio voices.
+**Connect a voice service** opens existing voice settings and returns to writing.
+Writing and voice services bill separately. **Done with setup** and **Back to
+setup** stay on the same station, including after an early private completion.
+The English Admin opening is a bundled recording of the studio voices; it needs
+no key to play. The existing Italian opening for ordinary listeners is unchanged. The optional example never counts toward required progress.
 
 If saving the privacy-review receipt fails, verify that the live choice remains
-truthful and AI setup stays locked: the private path retries without a preview;
+truthful and completion stays blocked: the private path retries without a preview;
 the enabled path requires a fresh preview before saving the review again.
 
 ## Version: three files, must match
@@ -140,7 +236,11 @@ worked, and the watchdog was satisfied. Nothing in the log grep would have shown
 Prolonged-silence detection cannot catch this either, because listeners fail before
 they are ever counted as listeners.
 
-**The cut — 4 steps, when the edge line feels good:**
+**The cut: 4 steps, after edge validation.** Land the cut PR only when you can
+finish the tag and the QA in the same sitting: the window opens at the merge, and every
+hour it stays open leaves new installs broken. The 3.0.0 cut of 2026-09-02 merged in
+the evening with QA deferred to "the stable image", which cannot exist before the tag; it
+had to be reverted the same night.
 
 1. **Land one `chore(release): cut X.Y.Z` PR** via `/ship`:
    - `pyproject.toml`, `ha-addon/mammamiradio/config.yaml`,
@@ -149,7 +249,6 @@ they are ever counted as listeners.
      open a fresh `## [Unreleased]`
    - **ha-addon CHANGELOG**: move its `## Unreleased` content under a real
      `## X.Y.Z - <date>` heading
-
    Both are REQUIRED. `pre-release-check.sh` §2 compares `config.yaml` against the
    first *versioned* heading in each file, skipping `## Unreleased`. The extractor
    strips brackets, so `## [X.Y.Z]` and `## X.Y.Z` both parse; the root file uses
@@ -165,18 +264,19 @@ they are ever counted as listeners.
    git fetch origin main --tags
    CUT_SHA="$(git rev-parse origin/main)"
    ```
-   The cut must already contain the physical 20-run HA Green receipt set from
-   the exact clean edge source commit, recorded with the commands in
-   [`docs/music-sources.md`](../music-sources.md). Pre-flight fails loud if the
-   evidence is missing, stale, or over its two-second p95, or if the tag/version,
-   release metadata, changelog head, or either per-arch `:sha` image disagrees.
+   The physical 20-run HA Green receipt gate is opt-in (`MMR_REQUIRE_HA_RECEIPTS=1`);
+   unset, pre-flight prints a waiver and continues. When armed, the cut must already
+   contain the receipt set for its complete release content, recorded with the commands in
+   [`docs/music-sources.md`](../music-sources.md), and pre-flight fails if the
+   evidence is missing, stale, or over its two-second p95. Pre-flight also fails
+   if the tag/version, release metadata, changelog head, or either per-arch
+   `:sha` image disagrees.
 
 2. **Wait for `addon-build.yml` green** on `$CUT_SHA` (~15-25 min; the PR touches
    `pyproject.toml` and `ha-addon/**`, both in the build's path filter).
 
    The long judgment soak belongs *before* the cut, on the edge line. If you want a
-   short confirmation that the cut commit itself boots (it differs from its soaked
-   parent only by version strings and changelog text), pin edge to it:
+   short confirmation that the squash-landed cut commit itself boots, pin edge to it:
    ```bash
    make edge-release ARGS="--target-sha $CUT_SHA"
    ```
@@ -226,20 +326,22 @@ they are ever counted as listeners.
    ha-addon CHANGELOG head do not equal the tag, or either arch `:sha` image is missing.
 
    **The window closes only when both arch `promote` jobs finish** — not at tag push.
-   Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`, or just
-   `bash scripts/check-advertised-version.sh`.
+   Verify both images with `bash scripts/check-advertised-version.sh --version X.Y.Z`.
+   Pass the release version so a stale checkout cannot verify the previous release.
+   Keep the freeze through this check, then use the full `thaw` command in "The cut window".
 
 4. **Write the GitHub Release.** Nothing in CI creates it, and HACS keys the integration
    update off it. There is **no** "open the next RC" step — you are back at steady state.
 
 **If the release fails, revert first, debug second.** Any failure in `addon-release.yml`
-leaves the window open indefinitely. Land `git revert <cut-sha>`, then investigate. A stuck
-window is a broken install for everyone.
+leaves the window open indefinitely. Prepare the complete revert with
+`git revert --no-commit <cut-sha>`, then commit and land it before investigating. A stuck window breaks new installs.
 
 Revert the whole cut commit, not just the version files. The cut also folded both
 changelogs, so a version-only revert leaves the ha-addon CHANGELOG head at the unreleased
 number: `check-changelog-sync.sh` then refuses the commit locally, and `pre-release-check.sh`
-fails the PR in CI. Reverting the commit is atomic across both and passes each gate.
+fails the PR in CI. Review-receipt admission is retired; receipt restoration is no longer required.
+The 3.0.0 revert (#1088) records the former receipt-preserving process.
 
 **Never tag the `chore(edge)` metadata commit** — `addon-build.yml` skips those, so it has
 no `:sha` image and pre-flight will reject the tag.
@@ -250,8 +352,7 @@ no `:sha` image and pre-flight will reject the tag.
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - The promoted image is built from the cut commit, so it differs from the soaked parent by
-  the version strings and changelog text. The bump reaches runtime (the Dockerfile
-  pip-installs `pyproject.toml`, so `_ASSET_VERSION` and `bridge_app_version` change).
+  finalized proof and release metadata; receipts bind tracked source, not the built image, and the bump reaches runtime because the Dockerfile installs `pyproject.toml`.
   Step 2's `--target-sha` soak is what makes "you ran what you tagged" literally true.
 
 ## Addon stage
@@ -316,6 +417,7 @@ Current config options:
 | `songs_between_ads` | `int(1,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS` |
 | `ad_spots_per_break` | `int(1,5)?` | `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK` |
 | `norm_cache_mb` | `int(200,8000)?` | `MAMMAMIRADIO_MAX_CACHE_MB` (Music cache size; add-on default 1500, standalone 500. Startup computes an effective limit from available disk space. See `docs/operations.md`, "Music cache sizing".) |
+| `music_folder` | `str?` | `MAMMAMIRADIO_MUSIC_FOLDER` (validated relative folder inside mounted Media; `run.sh` exports the selected `MAMMAMIRADIO_MUSIC_DIR`) |
 
 Jamendo is not a Supervisor option. The authenticated **Motore → Setup → Music
 sources** flow persists the client ID, enabled intent, current non-commercial
@@ -325,9 +427,11 @@ Supervisor client ID when possible, but keeps the source disabled until the
 operator reviews and acknowledges the current boundary. Additional candidate
 tuning can be set in `radio.toml` or container env without exposing Supervisor
 UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
-Add-on local MP3s live at `/data/music`; `run.sh` exports that path as
-`MAMMAMIRADIO_MUSIC_DIR` and moves it under the temporary fallback base only
-when `/data` is not writable.
+Add-on local music is the Music folder option (default `mammamiradio`) under
+Home Assistant Media when `/media` is mounted. `run.sh` exports that path as
+`MAMMAMIRADIO_MUSIC_DIR`. When Media is not mounted, or the chosen folder is a
+symlink, the export is `/data/music`. A name that leaves Media is ignored and
+the default folder is used. The control room names the path actually in use.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -378,9 +482,11 @@ not special for unquoted values, so `OPENAI_API_KEY=sk#abc` means the value cont
 **AI quality / model selection.** `quality_profile` (premium | balanced | economy)
 replaced the old `claude_model` dropdown. The operator picks *intent*, not a model
 snapshot, and `run.sh` maps it to `MAMMAMIRADIO_QUALITY` (a missing/blank value
-defaults to `balanced`). Creative work uses Opus/large in `premium`, Sonnet/small
-in `balanced`, and Haiku/small in `economy`; latency-sensitive `fast` work stays
-on Haiku/small in every profile. If the Supervisor-generated, read-only
+defaults to `balanced`). Creative work uses Opus/Sol in `premium`, Sonnet/Terra
+in `balanced`, and Haiku/Luna in `economy`; latency-sensitive `fast` work stays
+on Haiku/Luna in every profile. Opus and Sonnet creative calls use the registry's
+`medium` Anthropic effort; fast routes and Haiku omit effort. If the
+Supervisor-generated, read-only
 `/data/options.json` startup projection still contains the removed
 `claude_model` key, `run.sh` also
 exports it as the legacy `CLAUDE_MODEL` fast-role override while no
@@ -390,7 +496,8 @@ TTS selection, and script-token prices live in the root `model_registry.toml`
 (see "Dynamic LLM routing" in the root `CLAUDE.md`).
 **To add or swap a model:** update the relevant registry catalog entry and its
 matching `[pricing.catalog.<provider>]` key in the same change—no code or schema
-change. The add-on image copies this canonical root file; do not create an
+change. Restamp `last_reviewed` in the same change and say why in the comment
+beside it; the weekly watch and the cut gate both read it. The add-on image copies this canonical root file; do not create an
 add-on-specific registry copy. An unknown experimental `--models` candidate in
 the evaluator uses the registry's conservative fallback price and is marked
 unpriced in its JSONL output.
@@ -503,11 +610,9 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
-`addon-release.yml` does not rebuild the add-on. It first validates at least 20
-physical Home Assistant Green cold-launch receipts bound to the tested source
-commit, requires nearest-rank first-byte p95 at or below two seconds, and proves
-that the tagged commit changed nothing after that source except the receipt JSON
-files. It then verifies that both per-arch `:${git_sha}` images exist, runs the
+`addon-release.yml` does not rebuild the add-on. The physical HA Green receipt gate is opt-in (`MMR_REQUIRE_HA_RECEIPTS=1`; unset, pre-flight prints a waiver). When armed, it first validates at least 20
+physical HA Green cold-launch receipts with one release version and hardware-neutral content digest, requires p95 at or below two seconds, and proves the tagged tree matches after excluding only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag. Recording assumes a trusted single-writer checkout; pre/post snapshots do not attest against concurrent change-and-restore during a run.
+It then verifies that both per-arch `:${git_sha}` images exist, runs the
 launch and host-published-port proofs for each native architecture before stable
 publishing, and promotes those exact
 images to `:X.Y.Z` without changing the source manifest shape, updates `:latest`
@@ -536,13 +641,17 @@ Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-a
 
 **Cutting an edge release.** Edge releases are **manual and deliberate** — there is no CI bot. The HA Supervisor pulls `{image}:{version}` (the `version:` field *is* the Docker tag) and decides "update available" by a version-string compare, so advancing the edge `version:` to a new value surfaces an in-place Update on the soak Pi. To cut one:
 
-1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
+1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA (quoted, because an all-digit SHA would otherwise parse as a YAML integer), and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
 
-The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the complete image trigger set (`ha-addon/**`, `mammamiradio/**`, `pyproject.toml`, `radio.toml`, `model_registry.toml`, `scripts/validate-addon.sh`, `scripts/ha-green-launch-smoke.py`, `scripts/ha-green-perf-smoke.py`, and `.github/workflows/addon-build.yml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). `scripts/cut-edge-release.sh` mirrors this trigger set exactly, and its hermetic test fails on drift. It uses `gh run list` (needs only `actions:read`); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
+The pin **may trail `origin/main` HEAD**. Commits outside the push build trigger paths do not automatically get an image tag, so the script selects the newest main commit with a successful `Build HA Addon` run. It refuses to open a PR when that proof cannot be read or newer image content differs.
+
+`IMAGE_CONTENT_PATHS` covers the Dockerfile COPY sources, both add-on directories, and the build workflow. Only a valid top-level `version:` change in the edge config is exempt; its other metadata, translations and access policy still count. A trigger-only change, such as `requirements-dev.txt`, does not make an older image stale. But if a newer main commit has an attempted build, it needs a successful run: failed, cancelled or unfinished runs block the pin until a retry succeeds. No run, or only completed skipped runs, is allowed when image content is unchanged. The workflow deliberately skips edge-version cuts.
+
+Both path sets and all selection checks live in `scripts/edge-select.sh`, shared by the manual cut and the shadow queue (`scripts/land-queue-plan.sh`). Tests check trigger parity, staged-source coverage, metadata drift and failed-proof refusal. Selection uses `gh run list` with `actions:read`; `EDGE_RUN_LOOKBACK` defaults to 40 candidate runs. Newer commits are checked individually, so that window cannot hide failed proof. If a commit has 100 or more runs, it needs a successful run because a full response page cannot prove every attempt was skipped. The script does not use the GHCR packages API.
 
 Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
 
-**Constraint:** `Build HA Addon` is push-only (it does not run on PRs), so it must never be a required check on `main` — requiring it would make every PR unmergeable.
+**Constraint:** `Build HA Addon` runs on `main` pushes and manual dispatch, not PRs, so it must never be a required check on `main` — requiring it would make every PR unmergeable.
 
 **Smoke runs in addon mode.** Every smoke `docker run` (`addon-build.yml`, and both blocks in `addon-release.yml`) sets `-e SUPERVISOR_TOKEN=smoke-ci`, mirroring how the HA Supervisor launches the image. Without it the container boots in standalone mode, where binding `0.0.0.0` with no admin token is a fatal config error (`config._is_addon` is false), uvicorn never starts, and the smoke fails with `/healthz` connection-refused — a false negative that doesn't reflect the real addon. Keep the token on any new smoke step.
 
@@ -583,11 +692,13 @@ the other retained files hold provider keys, station memory, and history.
 Generated downloads, normalization outputs, renders, and clips warm again after
 restore.
 
-`/data/music` is the add-on's operator-managed local music library: `run.sh`
-exports it as `MAMMAMIRADIO_MUSIC_DIR`, and the app resolves local MP3s from
-that path (moving under the temporary fallback base only when `/data` is not
-writable). Backing it up restores the local library along with the rest of the
-retained state.
+`/data/music` stays in the add-on backup. The scanner reads it in place and
+never moves or deletes operator files. Songs in the Media panel are outside this
+app backup. A Home Assistant backup includes local Media songs when that backup
+includes Media; back up a NAS library separately. The station does not copy
+them into `/data/music`.
+If Media is not mounted and `/data` cannot be written, the fallback
+`/tmp/mammamiradio-data/music` is not persisted in either backup.
 
 This is a live, file-level copy, **not a copy taken from one single exact
 moment** of the retained state. SQLite may commit while Supervisor is
@@ -667,12 +778,14 @@ gates" (single source of truth). The short version:
 
 - `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
   review time) until Florian gives the merge signal.
-- On the signal, run `scripts/land-pr.sh <PR#>`. It verifies the pre-ship
-  squad entry against the PR head (code-state freshness — a soak of days is
-  fine, a push after the review is not), updates the branch if it is behind
-  (CI re-runs on the integrated state), and arms
+- On the signal, run `scripts/land-pr.sh <PR#>`. No review receipt or local review ledger is required. It blocks
+  unresolved current Major/Critical/P0/P1 bot threads and fails closed when
+  thread data cannot be read. A behind branch is not changed from the landing
+  seat: return to its feature workspace, merge `origin/main` and push, then
+  retry after CI and re-review of changed code. For an up-to-date head it arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
-  fires on the exact head it verified.
+  fires on the exact head it verified. Stable-version changes also require the
+  read-only Dependabot freeze admission described in "The cut window".
 - Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local
   hook (`scripts/hooks/require-preship-squad.sh`); `--disable-auto`
   (disarming) is allowed. The hook is a local guard, not a security boundary.
@@ -685,12 +798,12 @@ gates" (single source of truth). The short version:
   authenticated maintainer handles that specific PR. If Dependabot still owns
   the branch, request its rebase as the maintainer; if the branch was edited,
   use `@dependabot recreate` and re-review the new head. Human-authored PRs land
-  through `scripts/land-pr.sh <PR#>`, which updates the branch after verifying
-  pre-ship evidence.
+  through `scripts/land-pr.sh <PR#>`; a behind branch returns to its feature
+  workspace to integrate and push.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
-  `allow_auto_merge`, and the required contexts. Run it if landing behaves
-  oddly.
+  `allow_auto_merge`, required contexts, and that the main-branch ruleset
+  enables review thread resolution. Run it if landing behaves oddly.
 
 ## Pre-merge checklist
 
@@ -701,7 +814,8 @@ Before merging ANY change that touches addon files:
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)
 - [ ] `make media-check` passes; a release also has complete `make media-proof`
-      output and the 20-run Home Assistant Green cold-listen receipt
+      output, and the 20-run Home Assistant Green cold-listen receipt when the
+      opt-in gate is armed (`MMR_REQUIRE_HA_RECEIPTS=1`)
 - [ ] If new config option: added to config.yaml + run.sh + translations
 - [ ] If store listing touched (`description`, `README.md`, `icon.png`, `logo.png`,
       `url`, `panel_*`): see "Store listing" above — both channels, absolute URLs
@@ -710,7 +824,7 @@ Before merging ANY change that touches addon files:
 - [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —
       `scripts/check-merge-gate.sh` passes if anything about merging looks off
 
-**After merging a cut commit**, follow "Cutting a stable release" above. Do not tag `HEAD`: tag the cut commit itself, and if the release workflow fails, land `git revert <cut-sha>` — the whole cut commit, not the version files alone.
+**After merging a cut commit**, follow "Cutting a stable release" above. Tag the cut commit itself. If the release workflow fails, prepare `git revert --no-commit <cut-sha>`, then commit and land the whole revert using the commands above.
 
 ## Release invariants gate (2026-04-27 onward)
 
@@ -725,26 +839,12 @@ Before merging ANY change that touches addon files:
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
 5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist. The perf smoke skips its stream-byte probe only for a persisted operator stop confirmed independently by `503 stopped` from `/readyz` and `session_stopped: true` from `/public-status`; every other starting or ready state must still produce bytes.
-6. **Starter media proof**: `make media-check` validates the canonical manifest,
-   evidence, bytes, and audio quickly. `make media-proof` additionally proves
-   wheel/sdist and amd64/aarch64 image parity, FFprobe facts, add-on extractor
-   absence, and Jamendo transience. While the starter content is absent by
-   design, the PR quality lane's direct step, the release-invariants media
-   section, the add-on build validate job, the add-on build full media-proof
-   job (so the proof remains visible while image publish and the edge channel
-   keep flowing), the edge cut, and
-   local `make media-check` run their proof report-only (verdict plus a
-   missing-content notice, exit 0); the stable promotion media-proof job in
-   `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
-   hard gate on the release path. Stable remains blocked until exactly 12
-   approved derivatives total at least 45 minutes and no more than 75 MiB, every
-   full audition receipt is complete, and 20 cold HA Green runs show p95 first
-   accepted non-silent starter byte at or below two seconds.
+6. **Starter media proof**: `make media-check` validates the canonical manifest, evidence, bytes, and audio quickly, while `make media-proof` additionally proves wheel/sdist and amd64/aarch64 image parity, FFprobe facts, add-on extractor absence, and Jamendo transience. PR quality, release-invariants, the add-on validate job, edge cut, and local quick checks remain report-only, but the full `addon-build.yml` proof is blocking and runs one native job per architecture (`ubuntu-latest` for amd64, `ubuntu-24.04-arm` for aarch64); `addon-release.yml` repeats the same native per-arch gate before `promote`, so any failed or unprobed architecture blocks publication. Stable remains blocked until exactly 12 approved derivatives total at least 45 minutes and no more than 75 MiB and every full audition receipt is complete. The 20 cold HA Green runs at p95 first accepted non-silent starter byte within two seconds are a separate opt-in gate, armed with `MMR_REQUIRE_HA_RECEIPTS=1`; unset, the cut reports the waiver instead of a pass.
 7. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.
 
-Local pre-release: `make pre-release` (runs the full eight-check
+Local pre-release: `make pre-release` (runs every section of
 `pre-release-check.sh`, including independent validation of both packaged
 recovery assets and a target-scoped release-beat check:
 `--channel stable --semver "$ADDON_VER"`, which additionally confirms the
@@ -798,7 +898,7 @@ Use these to tell intentional degradation from a real regression during post-mer
 
 **Anthropic auth suspended (intentional)**: one `Anthropic auth failed — suspending for 10 minutes` followed by OpenAI script generation. If you see this line repeating every few seconds, the WS3-A cooldown broke.
 
-**TTS voice substituted (intentional)**: one `Invalid voice 'X' for backend edge; falling back to it-IT-DiegoNeural` at boot. Zero per-segment `Invalid voice` lines. Dashboard shows `tts_degraded` badge.
+**TTS voice substituted (intentional)**: one `Invalid voice 'X' for backend edge; falling back to it-IT-DiegoNeural` at boot. Zero per-segment `Invalid voice` lines. Engine Room → Voices shows the engine state.
 
 **Starter catalog admitted (required)**: the boot summary identifies the
 attributed starter/local base and the first `Producing MUSIC:` line follows
@@ -877,9 +977,10 @@ rolls back; an update fails to download but leaves a playing station alone.
 - Or by hand: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:VERSION`
 - **Release mid-flight?** Wait for `addon-release.yml` to finish promoting *both*
   architectures, then re-check.
-- **Release failed or abandoned?** Land `git revert <cut-sha>` immediately, then debug.
+- **Release failed or abandoned?** Prepare `git revert --no-commit <cut-sha>`, then commit and land the revert before debugging.
   Revert the commit rather than the version files alone: the cut folded both changelogs
   too, and a partial revert is refused by `check-changelog-sync.sh` and `pre-release-check.sh`.
+  No review-receipt restore step is required; see "If the release fails" above.
 - `advertised-version.yml` raises a flag daily if this state persists.
 
 ## Hardcoded values that must stay in sync

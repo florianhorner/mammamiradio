@@ -220,14 +220,18 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
     async def fake_render(track: Track, *_args, **_kwargs) -> RenderedMusicTrack:
         return RenderedMusicTrack(track=track, path=music_path, cache_path=music_path, cache_hit=True)
 
-    def fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
+    parked = asyncio.Event()
+
+    class ObservedResume(asyncio.Event):
+        async def wait(self):
+            parked.set()
+            return await super().wait()
+
+    state.resume_event = ObservedResume()
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=fake_tone),
         patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=fake_render),
         patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.generate_track_rationale", return_value="Because it fits."),
@@ -235,23 +239,14 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(parked.wait(), timeout=2)
             assert state.queued_segments == []
             state.session_stopped = False
             state.resume_event.set()
-            deadline = asyncio.get_event_loop().time() + 5.0
-            while queue.empty():
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Producer did not queue resume bridge")
-                await asyncio.sleep(0.05)
-            bridge = queue.get_nowait()
-            assert bridge.metadata.get("resume_bridge") is True
-            assert bridge.metadata.get("audio_source") == "emergency_tone"
-            assert state.queued_segments[0]["id"] == bridge.metadata["queue_id"]
-            while not any(row.get("playlist_index") == 0 for row in state.queued_segments):
-                if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Producer did not queue after resume")
-                await asyncio.sleep(0.05)
+            music = await asyncio.wait_for(queue.get(), timeout=5)
+            assert music.type is SegmentType.MUSIC
+            assert not music.metadata.get("resume_bridge")
+            assert state.queued_segments[0]["id"] == music.metadata["queue_id"]
         finally:
             task.cancel()
             try:
@@ -697,3 +692,37 @@ def test_norm_cache_bridge_scrubs_foreign_title_prefix():
     with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=real):
         metadata, _ = _norm_cache_bridge_payload(Path("norm_xyz_128k.mp3"), "idle_bridge", "Mamma Mi Radio")
     assert metadata["title"] == "Radio Ga Ga"
+
+
+@pytest.mark.asyncio
+async def test_producer_wires_ha_publish_heartbeat_loop(tmp_path):
+    started = asyncio.Event()
+    results: list[bool | None] = []
+
+    async def fake_loop(push, is_enabled):
+        started.set()
+        assert is_enabled()
+        results.append(await push())
+        await asyncio.Event().wait()
+
+    state = StationState(listeners_active=0, session_stopped=False)
+    config = _make_config(tmp_path)
+    config.homeassistant.enabled = True
+    config.homeassistant.url = "http://ha.local:8123"
+    config.ha_token = "test-token"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    with (
+        patch(f"{PRODUCER_MODULE}.run_ha_publish_heartbeat", fake_loop),
+        patch(f"{PRODUCER_MODULE}.push_state_to_ha", new_callable=AsyncMock, return_value=False) as push,
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    assert results == [False]
+    push.assert_awaited_once()

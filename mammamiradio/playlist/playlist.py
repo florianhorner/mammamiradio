@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import random
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from itertools import islice
 from pathlib import Path
 from typing import Literal
 from urllib.error import URLError
@@ -19,12 +17,10 @@ from urllib.request import urlopen
 from mammamiradio.core.config import StationConfig, jamendo_source_configured
 from mammamiradio.core.models import Heading, PlaylistSource, SourceReadinessEvidence, Track
 from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
-from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
+from mammamiradio.playlist.local_library import local_track_is_blocklisted, scan_local_library
 
 _DEMO_ASSETS_RECOVERY_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "recovery"
-_MAX_LOCAL_TRACKS = 200
-_MAX_LOCAL_DIRECTORY_ENTRIES = 4096
 _CLASSIC_ERA_QUERIES: dict[str, tuple[str, int]] = {
     "70s": ("cantautori italiani anni 70 lucio battisti fabrizio de andre", 1975),
     "80s": ("canzoni italiane anni 80 vasco rossi eros ramazzotti celentano", 1985),
@@ -62,6 +58,17 @@ def _copy_tracks_with_source(
     return [replace(track, source=source) for track in tracks]
 
 
+def record_recovery_availability(evidence: SourceReadinessEvidence) -> None:
+    """Record approved backup audio independently of music-source success."""
+    from mammamiradio.core.spoken_assets import approved_spoken_assets, is_approved_packaged_audio_asset
+
+    assets_root = _DEMO_ASSETS_RECOVERY_DIR.parent
+    bundled = bool(approved_spoken_assets("recovery", assets_root=assets_root)) or is_approved_packaged_audio_asset(
+        _DEMO_ASSETS_RECOVERY_DIR / "emergency_tone.mp3", assets_root=assets_root
+    )
+    evidence.configure("recovery", bundled, bundled=bundled)
+
+
 def _source_evidence_for_config(config: StationConfig) -> SourceReadinessEvidence:
     """Create bounded configuration evidence before source attempts begin."""
     evidence = SourceReadinessEvidence()
@@ -69,8 +76,7 @@ def _source_evidence_for_config(config: StationConfig) -> SourceReadinessEvidenc
     evidence.configure("jamendo", jamendo_source_configured(config))
     evidence.configure("local", config.music_dir.exists())
     evidence.configure("demo", True)
-    recovery_bundled = _DEMO_ASSETS_RECOVERY_DIR.exists() and any(islice(_DEMO_ASSETS_RECOVERY_DIR.glob("*.mp3"), 1))
-    evidence.configure("recovery", recovery_bundled, bundled=recovery_bundled)
+    record_recovery_availability(evidence)
     return evidence
 
 
@@ -98,12 +104,12 @@ def load_operator_local_tracks(
     *,
     blocklist: Mapping[tuple[str, str], object] | None = None,
 ) -> list[Track]:
-    """Load operator MP3s with the same ingest rules as first startup.
+    """Load operator audio with the same ingest rules as first startup.
 
     Files are source-tagged as local, shuffled when configured, and dropped when
     they match the operator blocklist. Callers never claim bundled rights.
     """
-    tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
+    tracks = _copy_tracks_with_source(_load_local_music_tracks(config), "local")
     if not tracks:
         return []
     return filter_blocklisted(_shuffle_if_needed(config, tracks), blocklist)
@@ -113,7 +119,7 @@ def _local_source(track_count: int) -> PlaylistSource:
     return PlaylistSource(
         kind="local",
         source_id="local_music_dir",
-        label="Local music/ files",
+        label="Local music",
         track_count=track_count,
         selected_at=time.time(),
         url="",
@@ -206,74 +212,9 @@ def _load_classic_italian_tracks(era: str) -> list[Track]:
     return tracks
 
 
-def _load_local_music_tracks(music_dir: Path) -> list[Track]:
-    """Return Track objects built from MP3 files found in music_dir.
-
-    File names are parsed as ``Artist - Title.mp3`` when a hyphen is present;
-    otherwise the stem is used as the title with artist "Unknown".  Silently
-    returns an empty list if the directory does not exist or contains no MP3s.
-    """
-    if not music_dir.exists():
-        return []
-    tracks: list[Track] = []
-    # Bound raw enumeration before checking extensions. ``Path.glob("*.mp3")``
-    # can still walk every entry when a mounted directory is huge but contains
-    # few songs, turning first startup into an unbounded wait.
-    sampled_mp3s: list[Path] = []
-    directory_over_limit = False
-    track_over_limit = False
-    try:
-        with os.scandir(music_dir) as directory_entries:
-            for raw_index, entry in enumerate(islice(directory_entries, _MAX_LOCAL_DIRECTORY_ENTRIES + 1)):
-                if raw_index == _MAX_LOCAL_DIRECTORY_ENTRIES:
-                    directory_over_limit = True
-                    break
-                if not entry.name.endswith(".mp3"):
-                    continue
-                try:
-                    if not entry.is_file():
-                        continue
-                except OSError:
-                    continue
-                sampled_mp3s.append(Path(entry.path))
-                if len(sampled_mp3s) > _MAX_LOCAL_TRACKS:
-                    track_over_limit = True
-                    break
-    except OSError as exc:
-        logger.warning("Could not inspect local music directory %s: %s", music_dir, exc)
-        return []
-
-    all_mp3s = sorted(sampled_mp3s[:_MAX_LOCAL_TRACKS])
-    if directory_over_limit:
-        logger.warning(
-            "%s contains more than %d entries; inspected only a bounded subset for MP3s",
-            music_dir,
-            _MAX_LOCAL_DIRECTORY_ENTRIES,
-        )
-    if track_over_limit:
-        logger.warning(
-            "%s contains more than %d MP3s; using a bounded subset",
-            music_dir,
-            _MAX_LOCAL_TRACKS,
-        )
-    for mp3 in all_mp3s:
-        stem = mp3.stem.strip()
-        if " - " in stem:
-            artist_part, title_part = stem.split(" - ", 1)
-        else:
-            artist_part, title_part = "Unknown", stem
-        track_id = f"local_{mp3.stem.lower().replace(' ', '_')}"
-        tracks.append(
-            Track(
-                title=title_part.strip(),
-                artist=artist_part.strip(),
-                duration_ms=210000,
-                spotify_id=track_id,
-                local_path=mp3,
-                source="local",
-            )
-        )
-    return tracks
+def _load_local_music_tracks(music_dir: Path | StationConfig) -> list[Track]:
+    """Scan one legacy path or one complete station-local library."""
+    return scan_local_library(music_dir).tracks
 
 
 def _normalized_track_key(track: Track) -> tuple[str, str]:
@@ -292,10 +233,14 @@ def filter_blocklisted(tracks: Sequence[Track], blocklist: Mapping[tuple[str, st
     Applied at bulk ingest doorways; direct audio gates share the underlying
     song-identity comparison. Returns a fresh list; a falsy blocklist is a cheap
     passthrough.
+
+    A local file is additionally checked under the identity it had before the
+    scanner read embedded tags, so a ban placed on an operator MP3 survives the
+    upgrade that changed how that file is labelled.
     """
     if not blocklist:
         return list(tracks)
-    return [track for track in tracks if not song_identity_key_is_blocklisted(_normalized_track_key(track), blocklist)]
+    return [track for track in tracks if not local_track_is_blocklisted(track, blocklist)]
 
 
 def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Track]) -> int:
@@ -312,8 +257,8 @@ def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Trac
     return merged
 
 
-def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
-    """Load chart tracks and blend local music/ tracks, then shuffle if configured.
+def _load_chart_source_tracks(config: StationConfig, *, include_local: bool = True) -> list[Track]:
+    """Load chart tracks and blend local music tracks, then shuffle if configured.
 
     Local MP3s are an enrichment of the charts source, not a fallback. If the
     charts API returns zero tracks (outage, blocked region, scheme mismatch),
@@ -327,11 +272,11 @@ def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
     chart_tracks = list(_fetch_current_italy_charts())
     if not chart_tracks:
         return []
-    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
+    local_tracks = load_operator_local_tracks(config) if include_local else []
     if local_tracks:
         merged_count = _merge_local_music_tracks(chart_tracks, local_tracks)
         logger.info(
-            "Merged %d/%d local music/ tracks into chart playlist",
+            "Merged %d/%d local music tracks into chart playlist",
             merged_count,
             len(local_tracks),
         )
@@ -570,6 +515,7 @@ def load_explicit_source(
     source: PlaylistSource,
     *,
     readiness: SourceReadinessEvidence | None = None,
+    include_local: bool = True,
 ) -> tuple[list[Track], PlaylistSource]:
     """Load a user-chosen source without any silent fallback."""
     evidence = readiness or _source_evidence_for_config(config)
@@ -638,7 +584,7 @@ def load_explicit_source(
             )
         # Existing explicit chart/URL operations retain their standalone
         # behavior behind the single effective capability gate.
-        tracks = _load_chart_source_tracks(config)
+        tracks = _load_chart_source_tracks(config, include_local=include_local)
         if not tracks:
             evidence.mark_failure("charts", "Live charts returned no candidates")
             raise ExplicitSourceError("Current Italian charts are temporarily unavailable")
@@ -653,10 +599,10 @@ def load_explicit_source(
         # file or admin-API change can restore the user's local selection
         # explicitly without falling through to ExplicitSourceError.
         evidence.mark_attempted("local")
-        local_tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
+        local_tracks = load_operator_local_tracks(config)
         if not local_tracks:
-            evidence.mark_failure("local", "No MP3 files were found in the configured music directory")
-            raise ExplicitSourceError("No MP3 files found in the configured music directory")
+            evidence.mark_failure("local", "No supported audio files were found in the local library")
+            raise ExplicitSourceError("No supported audio files found in the local library")
         tracks = _shuffle_if_needed(config, local_tracks)
         evidence.mark_candidates("local", len(tracks))
         return tracks, _attach_source_evidence(_local_source(len(tracks)), tracks, evidence)
@@ -665,12 +611,15 @@ def load_explicit_source(
 
 
 def fetch_startup_playlist(
-    config: StationConfig, persisted_source: PlaylistSource | None = None
+    config: StationConfig,
+    persisted_source: PlaylistSource | None = None,
+    *,
+    include_local: bool = True,
 ) -> tuple[list[Track], PlaylistSource, str]:
     """Load an explicit base or the local/starter first-run rotation."""
     evidence = _source_evidence_for_config(config)
     migrate_legacy_jamendo = False
-    if persisted_source:
+    if persisted_source and (include_local or persisted_source.kind != "local"):
         migrate_legacy_jamendo = persisted_source.kind == "jamendo" or (
             persisted_source.kind == "url" and urlparse(persisted_source.url or "").scheme == "jamendo"
         )
@@ -679,7 +628,9 @@ def fetch_startup_playlist(
             error = "Saved Jamendo playlist retired; selected the current base source."
         else:
             try:
-                tracks, source = load_explicit_source(config, persisted_source, readiness=evidence)
+                tracks, source = load_explicit_source(
+                    config, persisted_source, readiness=evidence, include_local=include_local
+                )
                 return tracks, source, ""
             except ExplicitSourceError as exc:
                 logger.warning("Persisted source restore failed: %s", exc)
@@ -689,10 +640,11 @@ def fetch_startup_playlist(
     else:
         error = ""
 
-    # Operator-owned local files remain the base when present. They are never
-    # blended with bundled files or assigned license claims by the application.
-    evidence.mark_attempted("local")
-    local_tracks = load_operator_local_tracks(config)
+    # Direct callers may still choose local as a base. Production startup defers
+    # discovery, then overlays local files without delaying starter audio.
+    if include_local:
+        evidence.mark_attempted("local")
+    local_tracks = load_operator_local_tracks(config) if include_local else []
     if local_tracks:
         logger.info("Using local music files from %s (%d tracks)", config.music_dir, len(local_tracks))
         tracks = local_tracks
@@ -704,7 +656,8 @@ def fetch_startup_playlist(
             except OSError:
                 logger.warning("Could not rewrite retired Jamendo base source", exc_info=True)
         return tracks, _attach_source_evidence(source, tracks, evidence), error
-    evidence.mark_failure("local", "No MP3 files were found in the configured music directory")
+    if include_local:
+        evidence.mark_failure("local", "No supported audio files were found in the local library")
 
     from mammamiradio.media.starter import StarterCatalogError, load_starter_rotation_tracks, starter_source
 

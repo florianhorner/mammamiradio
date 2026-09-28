@@ -25,11 +25,14 @@ case "${1:-}" in
     cat <<'EOF'
 Usage: scripts/pre-release-check.sh
 
-Pre-release sanity check. Run before bumping the version number.
+Pre-release sanity check. Run after the release version and changelogs are updated.
 Verifies version consistency across pyproject.toml + addon config.yaml,
 CHANGELOG head matches the version, all release invariants (FFmpeg eq
-chain count, recovery and browser audio, test mocks, post-restart guard),
-and the physical 20-run Home Assistant Green cold-launch receipt set.
+chain count, recovery and browser audio, test mocks, post-restart guard).
+
+The physical 20-run Home Assistant Green cold-launch receipt set is opt-in:
+it is waived unless MMR_REQUIRE_HA_RECEIPTS=1, and a waived gate is reported
+as WAIVED rather than counted as a pass. See docs/music-sources.md.
 
 Catches the class of bugs that have caused production silence incidents.
 
@@ -42,11 +45,23 @@ EOF
     ;;
 esac
 
+# shellcheck source=scripts/model-registry-gate.sh
+source "$SCRIPT_DIR/model-registry-gate.sh"
+model_registry_gate_validate || exit 2
+
+# shellcheck source=scripts/ha-green-receipt-gate.sh
+source "$SCRIPT_DIR/ha-green-receipt-gate.sh"
+ha_green_receipt_gate_validate || exit 2
+
 PASS=0
 FAIL=0
+WAIVED=0
 
 ok()   { echo "  [PASS] $*"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }
+# A waived gate is its own category on purpose. Counting it as a PASS would
+# make the summary claim evidence the release does not have.
+waive() { echo "  [WAIVED] $*"; WAIVED=$((WAIVED + 1)); }
 
 echo ""
 echo "=== mammamiradio pre-release check ==="
@@ -166,14 +181,14 @@ else
     ok "producer recovery paths do not call generate_silence"
 fi
 
-if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py" \
     --assets-root "$PWD/mammamiradio/assets/demo"; then
     ok "packaged spoken assets are manifest/hash/transcript approved"
 else
     fail "packaged spoken-asset manifest/hash/transcript validation failed"
 fi
 
-if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py" \
     --browser-assets-root "$PWD/mammamiradio/web/static/audio" \
     --static-root "$PWD/mammamiradio/web/static" \
     --admin-template "$PWD/mammamiradio/web/templates/admin.html" \
@@ -263,11 +278,10 @@ fi
 echo ""
 echo "9. Physical HA Green release evidence"
 
-if "$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py --release-version "$ADDON_VER"; then
-    ok "at least 20 cold Home Assistant Green runs meet the <=2s p95 release contract"
-else
-    fail "HA Green release evidence is incomplete — record 20 runs with scripts/ha-green-launch-smoke.py --record-release-receipt proof/media/ha-green-release-evidence, then commit only those receipt JSON files"
-fi
+ha_green_receipt_gate \
+    "$MEDIA_PYTHON" \
+    "$SCRIPT_DIR/validate-ha-green-release-evidence.py" \
+    "$ADDON_VER"
 
 # ── 10. Strict media-rights gate ──────────────────────────────────────────────
 echo ""
@@ -279,16 +293,24 @@ else
     fail "strict media proof failed — release/publish paths must remain blocked"
 fi
 
+echo ""
+echo "11. Model registry (review age + pinned models alive)"
+# Body and contract: scripts/model-registry-gate.sh and CLAUDE.md, Quality gates, "Model registry watch".
+model_registry_gate "$MEDIA_PYTHON" "$SCRIPT_DIR/check_model_registry.py"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "======================================="
-echo "  Passed: $PASS  Failed: $FAIL"
+echo "  Passed: $PASS  Failed: $FAIL  Waived: $WAIVED"
 echo "======================================="
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then
     echo "Fix the failures above before tagging this cut."
     exit 1
+elif [ "$WAIVED" -gt 0 ]; then
+    echo "All enforced checks passed, but $WAIVED gate(s) were WAIVED and prove nothing."
+    exit 0
 else
     echo "All checks passed."
     exit 0

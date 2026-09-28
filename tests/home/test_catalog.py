@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -31,6 +32,39 @@ def _reset_catalog_state():
     reset_catalog_cache()
     yield
     reset_catalog_cache()
+
+
+class _FakeAnthropic:
+    """Stand-in for AsyncAnthropic. The real client is an async context manager and
+    the catalog closes it, so a double that skips that protocol would hide a leak."""
+
+    def __init__(self, client, kwargs):
+        self._client = client
+        self.kwargs = kwargs
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        self.closed = True
+        return False
+
+    def with_options(self, **opts):
+        self.options = opts
+        return self._client
+
+
+def _patch_anthropic(monkeypatch, create):
+    """Install the double and return the list of constructed clients."""
+    built: list[_FakeAnthropic] = []
+
+    def factory(**kwargs):
+        built.append(_FakeAnthropic(SimpleNamespace(messages=SimpleNamespace(create=create)), kwargs))
+        return built[-1]
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", factory)
+    return built
 
 
 def _state(name: str | None = "Kitchen light", *, area: str | None = "Kitchen") -> dict:
@@ -171,7 +205,7 @@ async def test_generate_label_catalog_lock_contention_calls_llm_once(tmp_path):
     release = asyncio.Event()
     calls = 0
 
-    async def fake_call(candidates, _config, *, role):
+    async def fake_call(candidates, _config, *, role, policy_epoch):
         nonlocal calls
         assert role == "fast"
         calls += 1
@@ -350,7 +384,7 @@ async def test_cancellation_resistant_label_completion_after_revoke_cannot_save_
     save_catalog(tmp_path, old_catalog)
     provider_entered = asyncio.Event()
 
-    async def cancellation_resistant_provider(candidates, _config, *, role):
+    async def cancellation_resistant_provider(candidates, _config, *, role, policy_epoch):
         assert role == "fast"
         provider_entered.set()
         try:
@@ -434,7 +468,9 @@ def test_parse_label_payload_tolerates_fences_and_garbage():
 
 
 @pytest.mark.asyncio
-async def test_call_anthropic_labels_builds_client_and_parses_labels():
+@pytest.mark.parametrize("count,budget", [(1, 1200), (10, 1200), (25, 2200), (50, 4000)])
+async def test_call_anthropic_labels_builds_client_and_parses_labels(count, budget):
+    import mammamiradio.home.catalog as catalog
     from mammamiradio.home.catalog import LabelCandidate, _call_anthropic_labels
 
     candidate = LabelCandidate(
@@ -453,19 +489,325 @@ async def test_call_anthropic_labels_builds_client_and_parses_labels():
         ]
     )
     create = AsyncMock(return_value=fake_response)
-    scoped_client = SimpleNamespace(messages=SimpleNamespace(create=create))
-    seen_options: dict[str, object] = {}
+    built: list[_FakeAnthropic] = []
 
-    def with_options(**kwargs):
-        seen_options.update(kwargs)
-        return scoped_client
+    def factory(**kwargs):
+        built.append(_FakeAnthropic(SimpleNamespace(messages=SimpleNamespace(create=create)), kwargs))
+        return built[-1]
 
-    client = SimpleNamespace(with_options=with_options)
-
-    with patch("anthropic.AsyncAnthropic", return_value=client):
-        labels = await _call_anthropic_labels([candidate], config, role="fast")
+    with patch("anthropic.AsyncAnthropic", factory):
+        labels = await _call_anthropic_labels(
+            [candidate] * count, config, role="fast", policy_epoch=catalog._generation_policy_epoch
+        )
 
     assert labels == [{"entity_id": "light.counter", "label_it": "Luce", "label_en": "Light"}]
     assert create.await_args.kwargs["model"] == "claude-haiku-test"
-    # The 45s timeout must be applied (it guards _CATALOG_LOCK from a 10-min stall).
-    assert seen_options == {"timeout": 45.0}
+    assert create.await_args.kwargs["max_tokens"] == budget
+    # The deadline guards _CATALOG_LOCK from a long stall and scales with the
+    # requested budget: a fixed 45s cannot cover a 4,000-token response.
+    assert built[0].options == {"timeout": catalog._label_attempt_timeout(budget)}
+    assert built[0].options["timeout"] >= 45.0
+    assert built[0].closed
+
+
+def _label_response(labels=(), *, stop_reason="end_turn", text=None):
+    return SimpleNamespace(
+        stop_reason=stop_reason,
+        content=[SimpleNamespace(text=text if text is not None else json.dumps({"labels": list(labels)}))],
+    )
+
+
+def _request_entities(call):
+    return json.loads(call.kwargs["messages"][0]["content"].rsplit("\n\n", 1)[1])["entities"]
+
+
+@pytest.fixture
+def label_provider(monkeypatch):
+    create = AsyncMock()
+    _patch_anthropic(monkeypatch, create)
+    return SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section()), create
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "count,stops,expected_calls",
+    [(50, ["max_tokens", "end_turn"], 2), (2, ["max_tokens"] * 2, 2), (1, ["max_tokens"], 1)],
+)
+async def test_label_truncation_is_bounded_and_rebudgets_first_half(
+    tmp_path, label_provider, count, stops, expected_calls
+):
+    config, create = label_provider
+    states = {f"light.fixture_{i:02}": _state(f"Counter {i}") for i in range(count)}
+    old = {"schema_version": 1, "entries": {"light.previous": {"label_it": "Luce", "label_en": "Light", "hash": "old"}}}
+    save_catalog(tmp_path, old)
+    before = (tmp_path / CATALOG_FILENAME).read_bytes()
+    accepted_id = sorted(states)[-1]
+    labels = [{"entity_id": accepted_id, "label_it": "Luce bancone", "label_en": "Counter light"}]
+    # Even syntactically valid JSON must be discarded when marked truncated.
+    create.side_effect = [_label_response(labels, stop_reason=stop) for stop in stops]
+    result = await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+    assert create.await_count == expected_calls
+    first = _request_entities(create.await_args_list[0])
+    assert len(first) == count
+    if expected_calls == 2:
+        assert _request_entities(create.await_args_list[1]) == first[: count // 2]
+    if count == 50:
+        assert [call.kwargs["max_tokens"] for call in create.await_args_list] == [4000, 2200]
+        assert result["entries"][accepted_id]["label_en"] == "Counter light"
+        assert result["entries"]["light.previous"] == old["entries"]["light.previous"]
+    else:
+        assert result["entries"] == old["entries"]
+        assert (tmp_path / CATALOG_FILENAME).read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_successful_half_batches_leave_pending_selection(tmp_path, label_provider):
+    config, create = label_provider
+    states = {f"light.fixture_{i}": _state(f"Counter {i}") for i in range(4)}
+    seen = []
+
+    async def respond(**kwargs):
+        entities = json.loads(kwargs["messages"][0]["content"].rsplit("\n\n", 1)[1])["entities"]
+        seen.append([entity["entity_id"] for entity in entities])
+        labels = [{"entity_id": entity["entity_id"], "label_it": "Luce", "label_en": "Light"} for entity in entities]
+        return _label_response(labels, stop_reason="max_tokens" if len(entities) > 1 else "end_turn")
+
+    create.side_effect = respond
+    # First attempt: 4 -> 2, both truncated. Existing data stays intact.
+    assert (await generate_label_catalog(states, cache_dir=tmp_path, config=config))["entries"] == {}
+    create.reset_mock()
+    seen.clear()
+
+    async def successful_half(**kwargs):
+        response = await respond(**kwargs)
+        if len(seen) % 2 == 0:
+            response.stop_reason = "end_turn"
+        return response
+
+    create.side_effect = successful_half
+    for _ in range(3):
+        await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+    original = seen[0]
+    assert set(original) == set(states)
+    assert seen == [original, original[:2], original[2:], [original[2]], [original[3]]]
+    assert set(load_catalog(tmp_path)["entries"]) == set(states)
+    await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+    assert create.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_revoke_during_truncated_provider_call_prevents_retry_and_save(tmp_path, label_provider):
+    import mammamiradio.home.catalog as catalog
+
+    config, create = label_provider
+    states = {f"light.fixture_{i}": _state(f"Counter {i}") for i in range(2)}
+    save_catalog(tmp_path, {"schema_version": 1, "entries": {}})
+    before = (tmp_path / CATALOG_FILENAME).read_bytes()
+    entered = asyncio.Event()
+
+    async def cancellation_resistant(**kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return _label_response(stop_reason="max_tokens")
+        raise AssertionError("request completed without cancellation")
+
+    create.side_effect = cancellation_resistant
+    with patch("mammamiradio.home.catalog.save_catalog") as save:
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        await catalog.revoke_label_generation()
+        await asyncio.sleep(0)
+    create.assert_awaited_once()
+    save.assert_not_called()
+    assert (tmp_path / CATALOG_FILENAME).read_bytes() == before
+    assert load_catalog(tmp_path)["entries"] == {}
+    assert not catalog.generation_in_progress()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["parse", "provider", "persistence"])
+async def test_catalog_failure_preserves_bytes_without_logging_private_data(tmp_path, label_provider, caplog, failure):
+    config, create = label_provider
+    canary = "PRIVATE-HOUSEHOLD-CANARY sk-ant-secret-canary light.private_canary"
+    states = {"light.private_canary": _state(canary)}
+    save_catalog(tmp_path, {"schema_version": 1, "entries": {}})
+    before = (tmp_path / CATALOG_FILENAME).read_bytes()
+    if failure == "provider":
+        create.side_effect = RuntimeError(canary)
+    else:
+        create.return_value = _label_response(
+            [{"entity_id": "light.private_canary", "label_it": "Luce", "label_en": "Light"}],
+            text=canary if failure == "parse" else None,
+        )
+    with patch("mammamiradio.home.catalog.os.replace", side_effect=OSError(canary)):
+        result = await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+    assert result["entries"] == load_catalog(tmp_path)["entries"] == {}
+    assert (tmp_path / CATALOG_FILENAME).read_bytes() == before
+    assert caplog.records
+    for private_text in canary.split():
+        assert private_text not in caplog.text
+
+
+def test_catalog_persistence_has_no_fallible_step_after_replace(tmp_path):
+    import mammamiradio.home.catalog as catalog
+
+    destination = tmp_path / CATALOG_FILENAME
+    real_chmod = os.chmod
+
+    def chmod_before_replace(path, mode):
+        if path == destination:
+            raise OSError("cannot chmod after commit")
+        real_chmod(path, mode)
+
+    with patch("mammamiradio.home.catalog.os.chmod", side_effect=chmod_before_replace):
+        assert catalog._atomic_write_json(destination, {"entries": {}})
+    assert destination.stat().st_mode & 0o777 == 0o600
+    assert json.loads(destination.read_text()) == {"entries": {}}
+
+
+def test_catalog_temp_file_is_created_owner_only(tmp_path):
+    """Creating the temp file under the process umask and chmod-ing afterwards left
+    household labels readable by other local users for the length of the write.
+    Assert the mode the file is *created* with, not the mode it ends up with."""
+    import mammamiradio.home.catalog as catalog
+
+    destination = tmp_path / CATALOG_FILENAME
+    modes: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        modes.append(os.stat(name).st_mode & 0o777)
+        return fd, name
+
+    previous_umask = os.umask(0o000)
+    try:
+        with patch("mammamiradio.home.catalog.tempfile.mkstemp", side_effect=recording_mkstemp):
+            assert catalog._atomic_write_json(destination, {"entries": {}})
+    finally:
+        os.umask(previous_umask)
+
+    assert modes == [0o600]
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_label_client_disables_sdk_retries(tmp_path, monkeypatch):
+    """anthropic's default max_retries=2 multiplies the per-request timeout, and the
+    whole call runs while _CATALOG_LOCK is held."""
+    built = _patch_anthropic(monkeypatch, AsyncMock(return_value=_label_response([])))
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
+
+    await generate_label_catalog({"light.counter": _state("Counter light")}, cache_dir=tmp_path, config=config)
+
+    assert built
+    assert built[0].kwargs.get("max_retries") == 0
+    # The pool is closed, so a cancelled attempt cannot abandon a live socket.
+    assert built[0].closed
+
+
+@pytest.mark.asyncio
+async def test_stalled_provider_cannot_hold_the_catalog_lock_open_ended(tmp_path, monkeypatch):
+    """A hung provider must hit the refresh budget, release the lock, and leave the
+    previous catalog intact rather than blocking every later refresh."""
+    import mammamiradio.home.catalog as catalog
+
+    async def never_answers(**kwargs):
+        await asyncio.sleep(3600)
+
+    built = _patch_anthropic(monkeypatch, never_answers)
+    monkeypatch.setattr(catalog, "_label_attempt_timeout", lambda max_tokens: 0.05)
+
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
+    entity_id = "light.counter"
+    state = _state("Counter light")
+    save_catalog(
+        tmp_path,
+        {
+            "entries": {
+                entity_id: {"hash": compute_hash(entity_id, state), "label_it": "Vecchia luce", "label_en": "Old light"}
+            }
+        },
+    )
+
+    result = await asyncio.wait_for(
+        generate_label_catalog({entity_id: state}, cache_dir=tmp_path, config=config, force=True),
+        timeout=5,
+    )
+
+    assert result["entries"][entity_id]["label_it"] == "Vecchia luce"
+    assert not catalog._CATALOG_LOCK.locked()
+    assert built[0].closed
+
+
+@pytest.mark.asyncio
+async def test_half_batch_retry_survives_a_slow_first_attempt(tmp_path, monkeypatch):
+    """One deadline shared by both attempts threw away the retry's own labels.
+
+    A first attempt that truncates after spending most of a shared budget left the
+    half-batch retry to issue its request, succeed, and have the result discarded by
+    the expiring deadline, which is exactly the case the retry exists for."""
+    import mammamiradio.home.catalog as catalog
+
+    seen: list[int] = []
+
+    async def slow_then_good(**kwargs):
+        seen.append(kwargs["max_tokens"])
+        if len(seen) == 1:
+            await asyncio.sleep(0.14)
+            return _label_response([], stop_reason="max_tokens")
+        await asyncio.sleep(0.08)
+        return _label_response([{"entity_id": "light.e0", "label_it": "Luce", "label_en": "Light"}])
+
+    _patch_anthropic(monkeypatch, slow_then_good)
+    # Each attempt gets its own deadline, scaled to its own token budget.
+    monkeypatch.setattr(catalog, "_label_attempt_timeout", lambda max_tokens: 0.20)
+
+    states = {f"light.e{index}": _state(f"Counter {index}") for index in range(50)}
+    config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
+
+    result = await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+
+    assert len(seen) == 2
+    assert seen[1] < seen[0]
+    assert result["entries"]["light.e0"]["label_it"] == "Luce"
+
+
+def test_catalog_partial_write_failure_unlinks_orphaned_tmp(tmp_path):
+    """Nothing prunes scratch in the cache directory, so a failure after the temp
+    file exists must clean up after itself or the file sits there forever."""
+    import mammamiradio.home.catalog as catalog
+
+    destination = tmp_path / CATALOG_FILENAME
+    save_catalog(tmp_path, {"entries": {"light.previous": {"label_it": "Vecchia", "label_en": "Old"}}})
+    before = destination.read_bytes()
+
+    with patch("mammamiradio.home.catalog.os.replace", side_effect=OSError("PRIVATE-REPLACE-CANARY")):
+        assert not catalog._atomic_write_json(destination, {"entries": {}})
+
+    assert destination.read_bytes() == before
+    assert not list(tmp_path.glob(f".{CATALOG_FILENAME}.*.tmp"))
+
+
+def test_catalog_unencodable_payload_is_fail_soft_and_leaves_no_scratch(tmp_path, caplog):
+    """save_catalog is called outside the caller's try, so an escaping TypeError
+    would kill the detached refresh task instead of preserving the catalog."""
+    import mammamiradio.home.catalog as catalog
+
+    destination = tmp_path / CATALOG_FILENAME
+
+    assert not catalog._atomic_write_json(destination, {"entries": {"light.a": object()}})
+    assert not destination.exists()
+    assert not list(tmp_path.glob(f".{CATALOG_FILENAME}.*.tmp"))
+    assert "TypeError" in caplog.text
+
+
+def test_catalog_directory_failure_is_fail_soft(tmp_path, caplog):
+    import mammamiradio.home.catalog as catalog
+
+    with patch("pathlib.Path.mkdir", side_effect=OSError("PRIVATE-DIRECTORY-CANARY")):
+        assert not catalog._atomic_write_json(tmp_path / CATALOG_FILENAME, {"entries": {}})
+    assert "PRIVATE-DIRECTORY-CANARY" not in caplog.text
+    assert not (tmp_path / CATALOG_FILENAME).exists()

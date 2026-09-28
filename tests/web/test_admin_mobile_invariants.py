@@ -341,7 +341,8 @@ def test_skip_control_reports_backend_declines_and_network_failure() -> None:
     assert "if(!(r&&r.ok))" in block
     assert "(r&&r.error)||wayOut('skip that segment')" in block
     assert "toast(offlineMsg())" in block
-    assert block.index("if(!(r&&r.ok))") < block.index("Skip prepared"), (
+    assert "DJ handoff in progress — next segment queued." in block
+    assert block.index("if(!(r&&r.ok))") < block.index("DJ handoff in progress"), (
         "skip success copy must only run after the response proves ok=true."
     )
 
@@ -681,7 +682,22 @@ def test_mobile_upper_deck_scrolls_away() -> None:
 
 
 def test_desktop_sticky_deck_masks_under_scrolled_panel_chrome() -> None:
-    """The sticky deck must hide focused panel borders scrolling behind it."""
+    """The deck's backdrop is armed by state, not painted permanently.
+
+    Asserts the contract rather than the mechanism. The previous version of this
+    test asserted that a `.mmr-deck::before` pseudo-layer existed with a specific
+    `inset`, which pinned an implementation detail and let a proposed fix look
+    correct against a green suite while changing nothing a user could see.
+
+    Both halves:
+
+    * At rest the deck must NOT paint an opaque fill. `html` carries the page
+      atmosphere (gold radial glow + grain + warm top gradient), and the deck
+      sits exactly where that atmosphere is warmest, so a permanent
+      `background: var(--bg)` stamps a visible hard-edged rectangle over it.
+    * While pinned it MUST paint one, or focused panel chrome scrolls through
+      the deck.
+    """
     css = _admin_css()
 
     deck = _declarations_for_selector(css, ".mmr-deck")
@@ -690,14 +706,59 @@ def test_desktop_sticky_deck_masks_under_scrolled_panel_chrome() -> None:
     assert deck.get("z-index") == "40"
     assert deck.get("isolation") == "isolate"
 
-    mask = re.search(r"\.mmr-deck::before\s*\{([^}]*)\}", css, re.DOTALL)
-    assert mask, ".mmr-deck must own a pseudo-layer that masks scrolled panel chrome."
-    mask_declarations = {prop.strip(): value.strip() for prop, value in _CSS_DECL_RE.findall(mask.group(1))}
-    assert mask_declarations.get("position") == "absolute"
-    assert mask_declarations.get("inset") == "0 0 -16px 0"
-    assert mask_declarations.get("background") == "var(--bg)"
-    assert mask_declarations.get("z-index") == "0"
-    assert mask_declarations.get("pointer-events") == "none"
+    # At rest: transparent. Any opaque value here is the hard-edged-band bug.
+    assert deck.get("background") == "transparent", (
+        "The deck must be transparent at rest. An opaque backdrop paints a flat "
+        "rectangle over the html atmosphere and reintroduces the hard-edged band."
+    )
+    # The 16px below the deck is padding so the armed fill covers it, rather
+    # than margin needing a second paint layer to reach into.
+    assert deck.get("padding-bottom") == "16px"
+    assert deck.get("margin-bottom") == "0"
+
+    # No pseudo-layer may reintroduce a permanent backdrop.
+    assert not re.search(r"\.mmr-deck::before\s*\{", css), (
+        "The deck must not own a permanent pseudo-backdrop; the fill is state-driven."
+    )
+
+    # Pinned: opaque. The rule is unconditional so that no viewport width is
+    # left both sticky and unmasked. A `min-width:769px` twin of the 768px
+    # mobile block would leave fractional widths in between matching neither,
+    # and the deck pins there.
+    pinned = _declarations_for_selector(css, ".mmr-deck.is-pinned")
+    assert pinned.get("background") == "var(--bg)", "A pinned deck must mask panel chrome scrolling underneath it."
+    assert pinned.get("box-shadow"), "A pinned deck needs an elevation cue."
+
+    # The mobile deck is static, so nothing passes underneath it; the phone
+    # block must disarm the fill rather than rely on a breakpoint gap.
+    mobile_pinned = _declarations_for_selector(_phone_css(), ".mmr-deck.is-pinned")
+    assert mobile_pinned.get("background") == "transparent", (
+        "The static mobile deck must never arm the backdrop, even while the class is set."
+    )
+
+    # The sentinel that drives the state must exist in both markup and CSS.
+    html = _read_admin_html()
+    assert 'class="mmr-deck-sentinel"' in html
+    assert re.search(r"\.mmr-deck-sentinel\s*\{", css)
+    # producer-main is a flex column with gap. An in-flow sibling would insert a
+    # second gap between header and deck unless the trailing margin cancels it.
+    # A wrapper is unsafe: it would become the sticky containing block.
+    producer = _declarations_for_selector(css, ".a-content.producer-main")
+    assert "--mmr-producer-gap" in (producer.get("gap") or "")
+    sentinel = _declarations_for_selector(css, ".mmr-deck-sentinel")
+    assert sentinel.get("height") == "1px"
+    # Assert the full value: the sentinel's own 1px and the gap it inserts both
+    # have to come back out, or the deck sits 1-19px too low.
+    assert sentinel.get("margin") == "0 0 calc(-1px - var(--mmr-producer-gap, 18px))", (
+        "The sentinel must cancel its own height plus the producer-main flex gap it adds."
+    )
+    first_listen = FIRST_LISTEN_CSS.read_text(encoding="utf-8")
+    assert re.search(r":is\(\.mmr-deck,\s*\.mmr-deck-sentinel\)", first_listen), (
+        "First Listen required-entry must hide the sentinel with the deck."
+    )
+    assert ".mmr-deck-sentinel" in first_listen.split('data-first-listen-entry="completing"')[1], (
+        "First Listen completing must hide the sentinel with the deck."
+    )
 
     panel_focus = re.search(r"\.mmr-tabpanel:focus-visible\s*\{([^}]*)\}", css, re.DOTALL)
     assert panel_focus, "Focusable tab panels need an internal focus ring."
@@ -705,12 +766,54 @@ def test_desktop_sticky_deck_masks_under_scrolled_panel_chrome() -> None:
     assert focus_declarations.get("outline") == "none"
     assert focus_declarations.get("box-shadow", "").startswith("inset 0 0 0 2px")
 
-    mobile_mask = re.search(r"\.mmr-deck::before\s*\{([^}]*)\}", _phone_css(), re.DOTALL)
-    assert mobile_mask, "The mobile breakpoint must explicitly disable the desktop deck mask."
-    mobile_mask_declarations = {
-        prop.strip(): value.strip() for prop, value in _CSS_DECL_RE.findall(mobile_mask.group(1))
-    }
-    assert mobile_mask_declarations.get("display") == "none"
+
+def test_pinned_deck_mask_snaps_and_its_elevation_cue_respects_reduced_motion() -> None:
+    """The fill snaps on; only the elevation cue fades, and reduced motion drops that too.
+
+    `.mmr-tabbar` carries no background of its own, so anything that cross-fades
+    the deck's fill leaves the page scrolling through the tab row for the length
+    of the fade. That is the same bleed the permanent backdrop existed to stop,
+    narrowed to each pin crossing instead of removed.
+    """
+    css = _admin_css()
+    deck = _declarations_for_selector(css, ".mmr-deck")
+    transition = deck.get("transition", "")
+    assert "background" not in transition, (
+        "The mask must snap. Fading it lets content scroll through the transparent tab bar."
+    )
+    assert "box-shadow" in transition, "The elevation cue should fade in rather than snap."
+    # box-shadow does not interpolate from `none`, so the resting state needs
+    # the same geometry at zero alpha or the transition has nothing to animate.
+    assert "rgba(0,0,0,0)" in (deck.get("box-shadow") or "").replace(" ", ""), (
+        "The resting shadow must be the pinned geometry at zero alpha, or it cannot animate."
+    )
+
+    reduced_blocks = [
+        _read_balanced_block(css, match.end() - 1)
+        for match in re.finditer(r"@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{", css)
+    ]
+    assert reduced_blocks, "admin.html must carry a reduced-motion block."
+    reduced = "\n".join(reduced_blocks)
+    assert _declarations_for_selector(reduced, ".mmr-deck").get("transition") == "none", (
+        "The deck fade must be suppressed under prefers-reduced-motion."
+    )
+
+
+def test_admin_reserves_scroll_padding_for_the_pinned_deck() -> None:
+    """Keyboard focus must never land underneath the pinned deck.
+
+    listener.css sets scroll-padding-top for its 96px sticky nav; admin's deck
+    is far taller and its height moves with the console's `is-idle` collapse,
+    so the value is derived from the live element rather than hardcoded.
+    """
+    html = _read_admin_html()
+    assert "scrollPaddingTop" in html, (
+        "Tabbing into a scrolled panel scrolls the control flush to the viewport "
+        "top, underneath the sticky deck, unless scroll padding is reserved."
+    )
+    assert "getComputedStyle(deck).position==='sticky'" in html, (
+        "Scroll padding must only be reserved while the deck is sticky, so the mobile breakpoint stays owned by CSS."
+    )
 
 
 def test_on_air_zone_renders_ai_cost_counter() -> None:
@@ -1056,6 +1159,102 @@ def test_programme_table_desktop_colgroup_has_all_columns() -> None:
         assert f'class="{col}"' in text, f'renderProgramme() must emit <col class="{col}"> inside the colgroup.'
 
 
+def test_programme_time_column_keeps_heading_clear_of_type() -> None:
+    """The relative-time heading needs enough fixed width for its longest label."""
+    text = _read_admin_html()
+    assert re.search(r"\.a-programme \.col-time\s*\{[^}]*width\s*:\s*72px", text)
+
+
+def test_scaletta_category_only_labels_are_not_repeated() -> None:
+    """A category badge must not be followed by the same category as its title."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+
+    assert "function normaliseSegmentLabel(value)" in text
+    assert "const titleIsBareSegment=typeKey!=='music'" in render_block
+    assert "typeKey==='music'?segmentText(typeKey):''" in render_block
+    assert "replace(/[_-]+/g,' ')" in text
+
+
+def test_now_playing_reads_source_kind_from_metadata_too() -> None:
+    """`source_kind` is top-level on queue rows but nested on now_streaming.
+
+    Reading only the top level silently disabled the legacy-`Unknown`
+    suppression for the one segment the operator is actually listening to.
+    """
+    text = _read_admin_html()
+    assert "function segmentSourceKind(seg)" in text
+    assert "metadata.source_kind||(seg&&seg.source_kind)" in text
+    assert "const sourceKind=segmentSourceKind(seg);" in text
+    assert "seg.source_kind==='local'" not in text, (
+        "splitTrackLabel() must resolve source_kind through segmentSourceKind(), not the bare segment field."
+    )
+
+
+def test_scaletta_source_labels_are_safe_and_do_not_control_actions() -> None:
+    """Fonte labels are a presentation mapping; queue source remains the action gate."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+    source_helper = text[text.index("function programmeSourceLabel") : text.index("// Subtitle line")]
+
+    assert "const sourceKind=segmentSourceKind(it);" in source_helper
+    assert "switch(sourceKind)" in source_helper
+    for label in ("Local music", "Jamendo", "Starter crate", "Download", "Music", "Studio", "Planned"):
+        assert f"'{label}'" in source_helper
+    assert "if(typeKey!=='music')return actionable?'Studio':'Planned';" in source_helper
+    assert "default:return actionable?(typeKey==='music'?'Music':'Studio'):'Planned';" in source_helper
+    assert "const sourceText=programmeSourceLabel(it,typeKey,actionable);" in render_block
+    assert "const actionable=source==='rendered_queue'" in render_block
+    assert "esc(sourceText)" in render_block
+
+
+def test_scaletta_music_subtitles_cover_later_rows_without_source_suffix() -> None:
+    """Artist subtitles remain useful when Fonte is hidden at tablet widths."""
+    text = _read_admin_html()
+    subtitle = text[text.index("function buildSubtitle") : text.index('// "In produzione"')]
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+
+    assert "if(typeKey==='music'){\n    return parts.artist||'';" in subtitle
+    assert (
+        "const subtitle=(typeKey==='music'&&parts.artist)||(it._queueIndex===0&&"
+        "!titleIsBareSegment)?buildSubtitle(it,typeKey,parts):'';"
+    ) in render_block
+    assert "parts.artist&&it.source_kind" not in subtitle
+    assert "if(typeKey==='banter')return (it.metadata&&it.metadata.title)||'';" in subtitle
+    assert "if(typeKey==='news_flash')return (it.metadata&&it.metadata.category)||'breaking';" in subtitle
+
+
+def test_scaletta_render_cache_covers_consumed_row_metadata() -> None:
+    """A same-ID metadata update must invalidate the presentation cache."""
+    text = _read_admin_html()
+    render_block = text[text.index("function renderProgramme") : text.index("async function removeQueueItem")]
+    cache_line = next(line for line in render_block.splitlines() if "const hash=JSON.stringify" in line)
+
+    for field in (
+        "u.spotify_id",
+        "u.label",
+        "u.source_kind",
+        "u.source",
+        "u.duration_sec",
+        "u.duration_ms",
+        "u.metadata?.source_kind",
+        "u.metadata?.title_only",
+        "u.metadata?.artist",
+        "u.metadata?.title",
+        "u.metadata?.category",
+        "u.metadata?.duration_s",
+        "u.metadata?.duration_ms",
+    ):
+        assert field in cache_line, f"renderProgramme cache key must include {field}"
+
+
+def test_playlist_rows_format_title_only_tracks_without_leading_dash() -> None:
+    text = _read_admin_html()
+    assert "function trackDisplayLabel(track)" in text
+    assert "if(artist&&title)return `${artist} – ${title}`" in text
+    assert "return title||String(track&&track.display||'').trim()||'?';" in text
+
+
 def test_scaletta_actions_only_apply_to_rendered_queue_rows() -> None:
     """Predicted rows are read-only; only rendered queue rows call /api/queue/remove."""
     text = _read_admin_html()
@@ -1212,13 +1411,12 @@ def test_pending_request_strip_keeps_full_border() -> None:
     )
 
 
-def test_scaletta_header_controls_stack_below_title() -> None:
-    css = _admin_css()
-    stacked = _declarations_for_selector(css, ".a-panel header.mmr-panel-head-stacked")
-
-    assert stacked.get("display") == "grid"
-    assert stacked.get("grid-template-columns") == "1fr"
-    assert 'class="mmr-panel-head mmr-panel-head-stacked"' in _read_admin_html()
+def test_scaletta_uses_shared_header_with_controls_in_a_separate_row() -> None:
+    panel = _read_admin_html().split('id="live-queue"', 1)[1].split('id="rotation-pool"', 1)[0]
+    header = panel.split("</header>", 1)[0]
+    assert '<header class="mmr-panel-head">' in header
+    assert "programme-toolbar" not in header
+    assert panel.index("</header>") < panel.index('class="programme-toolbar"')
 
 
 def test_live_console_accent_sits_inside_rounded_border() -> None:

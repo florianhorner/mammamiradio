@@ -8,7 +8,10 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 cp .env.example .env
 ./start.sh                # or: docker compose up
 pytest tests/core/test_config.py -q  # fast loop while editing
@@ -37,11 +40,23 @@ add-ons. See [Music sources and rights boundaries](docs/music-sources.md).
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 cp .env.example .env
 ```
 
-That one install command includes the application plus the repo's pinned developer tools: pytest, Ruff, mypy, coverage, and the test watcher.
+Install developer tools first, then the hash-locked runtime dependencies. Installing the application with `--no-deps` preserves those versions; `pip check` verifies its declared requirements. Quality CI and both container builds use the same runtime lock. The dependency tests also verify the requested runtime extras against installed package metadata.
+
+For a targeted runtime update, activate a Python 3.11 environment and install the pinned lock-generation tool first. Replace `PACKAGE==VERSION` with the dependency and version you intend to update:
+
+```bash
+python -m pip install pip-tools==7.6.1
+python -m piptools compile --generate-hashes --output-file=requirements.txt --strip-extras --upgrade-package PACKAGE==VERSION pyproject.toml
+```
+
+Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
 
 If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 
@@ -116,16 +131,21 @@ pytest tests/core/test_config.py tests/scheduling/test_scheduler.py
 make test-fast
 ```
 
-Before committing, run the complete local gate:
+Before pushing, run the deterministic lint bundle (the pre-push hook runs it
+automatically when installed):
 
 ```bash
-make check
+scripts/pre-lint.sh
 ```
 
-`make check` is the pre-commit source of truth: lint, format check, type checking, dead-code scan, the full pytest suite, coverage, and per-module coverage floors. A focused test is the fast feedback loop, not a substitute for this gate.
+It mirrors the Quality lint job without auto-fixing files or starting the full
+pytest/coverage run. Use `make check` for the complete local gate before `/ship`
+when a broad runtime or coverage change needs full-suite proof; required CI
+still makes the final repository-wide decision.
 
 Notes:
 
+- The suite never reads your workspace `.env`. `tests/conftest.py` sets `PYTHON_DOTENV_DISABLED=1` at module level, because `core/config.py` loads `.env` at import time, which is during collection; without the switch a local `.env` with `HA_URL` or `HA_ENABLED` fails tests that CI (no `.env`) passes. This needs `python-dotenv>=1.2`; the guard in `tests/core/test_config_env_overrides.py` tells you if yours is older. The `_isolate_env` fixture strips exported provider credentials, HA settings, and local port overrides during tests. The one test that loads a dotenv file on purpose (the guide generator's `--env-file` test) lifts the switch for itself.
 - `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes. On PRs that job runs when audio, scheduling, streamer, startup/core configuration, launch-smoke, Python package/runtime/development dependencies, radio/model configuration, the changed-lanes classifier, or the shared Python CI setup change; every push to `main` still runs it.
 - Home Assistant add-on changes must also pass the local add-on build check:
 
@@ -216,9 +236,9 @@ release path.
 `media-proof` additionally proves wheel, sdist, amd64/aarch64 add-on image,
 FFprobe, extractor-containment, and Jamendo-transience parity. A release remains
 blocked until all twelve exact derivatives total at least 45 minutes, remain at
-or below 75 MiB, and have complete evidence and audition receipts. Release
-evidence also needs 20 cold Home Assistant Green listener runs with p95 first
-accepted non-silent starter byte at or below two seconds.
+or below 75 MiB, and have complete evidence and audition receipts. Twenty cold Home Assistant Green listener runs at p95 first accepted non-silent
+starter byte within two seconds are an opt-in gate, armed with
+`MMR_REQUIRE_HA_RECEIPTS=1`; unset, a release cut reports the waiver.
 
 To replace a mistaken approval before publication, revert the derivative,
 receipt, and the same manifest row together; never leave one of the three at a
@@ -242,8 +262,8 @@ omitting `airtime_approved` now means `false`. Set it explicitly to `true` only
 for a character with existing provider and human approval; leave every other row
 `false`. A legacy role pin can keep serving its campaign while a replacement
 waits for approval. Otherwise an unapproved direct character's campaign is
-excluded, another safe campaign is tried, and an ad break with no safe campaign
-is skipped rather than recasting the character.
+excluded and another safe campaign is tried. With no safe live campaign, the
+station tries an approved packaged ad before continuity; it never recasts the character.
 
 ```bash
 ./.venv/bin/python scripts/audition_tts_voices.py --config radio.toml --providers elevenlabs --strict
@@ -291,19 +311,20 @@ audit history.
 
 Two proof/ conventions coexist, on purpose. Append-only receipts are never
 overwritten: that includes dated human-review receipts like the one above and
-content-addressed pre-ship receipts under `proof/preship-reviews/v2/`. Fixed-name
+content-addressed pre-ship receipts under `proof/preship-reviews/v2/` (never
+edited in place; `--reattest` retires only a branch's own pre-integration
+receipts before they land — a landed receipt is never removed). Fixed-name
 current-state files (`proof/checks.txt`, `proof/review-findings.json`) use Git
-history as their audit trail. The legacy `proof/preship-review.json` remains a
-fixed-name file only during the v1/v2 compatibility phase. New proof artifacts
-should say which convention they follow.
+history as their audit trail. The legacy fixed-name `proof/preship-review.json`
+is retired — pre-ship evidence is v2 receipts only, precisely because a
+fixed-name evidence file made every pair of concurrent PRs conflict. New proof
+artifacts should say which convention they follow.
 
 Content-addressing makes a v2 receipt deterministic and binds it to the reviewed
 tree; it does not authenticate who created it. `source_record_sha256` identifies
 the exact local review-ledger line used by the emitter, but CI has no copy of that
-ledger to authenticate. During the report-only phase this is an explicit process
-guard for trusted repository writers. Before it becomes required, the workflow
-orchestration must also move off the PR-editable `pull_request` definition and
-report from a base-owned control plane against the exact head.
+ledger to authenticate. Mandatory review-receipt admission and its report-only
+workflow are retired; the standalone verifier and historical receipts remain.
 
 The redacted tracked proof stores the candidate ID and name, selected profile,
 text and audio hashes, provider result, duration, approval status, and human
@@ -340,7 +361,11 @@ pip install pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-The repo wires `scripts/validate-addon.sh` into both `pre-commit` and `pre-push` for files that can break the Home Assistant add-on build. Docker Desktop or Podman must be installed for `--build` checks.
+The repo runs `scripts/pre-lint.sh` on pre-push and wires
+`scripts/validate-addon.sh` into both `pre-commit` and `pre-push` for files that
+can break the Home Assistant add-on build. The lint bundle requires ShellCheck
+0.11.0 or Docker; Docker Desktop or Podman is also required for add-on `--build`
+checks.
 
 ## Manual smoke test
 
@@ -365,6 +390,9 @@ branch code, test credentials, or synthetic state to the live home.
 When behavior changes, update the matching docs in the same change:
 
 - `README.md` for user-facing setup and route changes
+- `ha-addon/README.md` and `ha-addon/mammamiradio/DOCS.md` for Home Assistant
+  install steps and First Listen labels
+- `docs/integrations/` for integration setup and playback routes
 - `docs/architecture.md` for runtime flow and system design changes
 - `CLAUDE.md` for the codebase map used by coding agents
 - `docs/troubleshooting.md` for failure modes users will actually hit
@@ -373,7 +401,38 @@ When behavior changes, update the matching docs in the same change:
 
 If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.
 
+When changing anything a listener or operator reads — template copy, `ui_copy.py`,
+toast text, `streamer.py` setup errors, add-on option descriptions — run
+`bash scripts/check-ui-copy-lint.sh`. It holds human-facing strings to leadership
+principle #5. Three rules can fail it: a machine word on screen (`tech_lingo`), copy still
+phrased around picking a speaker or room (`stale_speaker_copy`), and a stated failure with
+no next step (`no_way_out`) — the last one only inside the authored error tables, because
+in free-text toasts the check misjudges correct copy. `--audit` prints everything it found
+and labels each row blocking or advisory.
+
+Known violations are grandfathered in `.config/ui-copy-baseline.json`. Fixing one also
+fails the lint, on purpose: the backlog may only shrink, so it tells you to refresh with
+`bash scripts/check-ui-copy-lint.sh --write-baseline`. Read the `+` lines that refresh
+prints — those are violations it newly *accepted*, and each one should be copy you meant
+to grandfather rather than a regression you just wrote. Fixed entries leave as a
+`- dropped N` line.
+
 When changing the public install or add-on guides, run `bash scripts/check-docs-safety.sh`. It catches retired Home Assistant navigation, unsafe live-recovery instructions, and broken relative Markdown links before CI does.
+
+Public examples use synthetic entity IDs such as `person.example_resident`,
+`device_tracker.example_phone`, and `lock.example_front_door`. Keep observed
+household identifiers and private capture notes out of new docs and fixtures.
+The documentation check enforces that convention for its selected public
+examples and rejects obsolete review-receipt requirements in maintained release
+guides. Coupled legacy runtime fixtures require a separate compatibility change.
+
+Before publishing a PR or a curated GitHub release, save the exact body in a
+local file and run `bash scripts/check-pr-body-lint.sh <body-file>`. The same
+public-text rules apply to both. Internal workspace links are rejected without
+echoing their identifiers into the check's output; public tool documentation and
+contributor attribution remain valid. PR CI checks published text using the base
+branch's rules. It cannot prevent initial publication or guarantee what another
+application may append, so inspect the final payload as well.
 
 
 

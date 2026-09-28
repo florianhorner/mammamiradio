@@ -21,10 +21,10 @@ import shutil
 import stat as _stat
 import time
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from mammamiradio.audio.imaging import default_imaging_assets_dir
 from mammamiradio.audio.norm_cache import (
     is_listener_reserved_cache_file as _is_listener_reserved_cache_file,
 )
@@ -67,12 +68,14 @@ from mammamiradio.audio.normalizer import (
     probe_duration_sec,
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
+from mammamiradio.audio.tts import cloud_tts_health
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
 from mammamiradio.core.config import (
     DEFAULT_STATION_NAME,
     MODEL_REGISTRY_FILENAME,
     PACING_BOUNDS,
     ModelsSection,
+    StationConfig,
     load_model_registry,
 )
 from mammamiradio.core.first_listen import (
@@ -116,7 +119,6 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
-from mammamiradio.core.provider_checks import check_provider_keys
 from mammamiradio.core.setup_status import (
     addon_options_snippet,
     build_setup_status,
@@ -124,7 +126,11 @@ from mammamiradio.core.setup_status import (
     first_listen_continuity_available,
 )
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
-from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
+from mammamiradio.core.spoken_assets import (
+    PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
+    is_approved_packaged_audio_asset,
+    is_approved_spoken_asset,
+)
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import (
     drain_invalidated_label_generation,
@@ -149,6 +155,7 @@ from mammamiradio.home.ha_context import (
     PRESENCE_SENSOR_DEVICE_CLASSES,
     fetch_home_context_preview,
     get_cached_home_context,
+    ha_publish_status_payload,
     invalidate_all_home_context,
     invalidate_home_context_entity_baselines,
     push_state_to_ha,
@@ -174,6 +181,7 @@ from mammamiradio.playlist.direction import (
     resolve_direction_search_results,
 )
 from mammamiradio.playlist.downloader import external_media_enabled
+from mammamiradio.playlist.local_library import scan_and_reconcile_local_library
 from mammamiradio.playlist.music_admission import (
     YOUTUBE_ADMISSION_SEARCH_DEPTH,
     classify_youtube_candidate,
@@ -192,6 +200,16 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
+from mammamiradio.scheduling.boundary_glue import (
+    SKIP_ASSET_MISSING,
+    SKIP_GENERATION,
+    SKIP_SWITCH_OFF,
+    AiredBoundary,
+    _packaged_file,
+    seam_choice,
+    validated_playable_bytes,
+    warn_unusable,
+)
 from mammamiradio.scheduling.clip import KEEPSAKE_SEGMENT_TYPES
 from mammamiradio.scheduling.handoff import (
     cancel_active_music_handoff,
@@ -202,6 +220,9 @@ from mammamiradio.scheduling.handoff import (
     is_protected_handoff_successor,
     mark_handoff_segment_selected,
     reconcile_handoff_queue_items,
+)
+from mammamiradio.scheduling.queue_mutations import (
+    discard_continuity_slot as _discard_continuity_slot,
 )
 from mammamiradio.scheduling.queue_mutations import (
     discard_queued_segment as _discard_queued_segment,
@@ -215,6 +236,12 @@ from mammamiradio.scheduling.queue_mutations import (
 )
 from mammamiradio.scheduling.queue_mutations import (
     drop_segment_moment_receipts as _drop_segment_moment_receipts,
+)
+from mammamiradio.scheduling.queue_mutations import (
+    is_continuity_reservation as _is_continuity_reservation,
+)
+from mammamiradio.scheduling.queue_mutations import (
+    park_continuity_slot as _park_continuity_slot,
 )
 from mammamiradio.scheduling.queue_mutations import (
     unlink_ephemeral_best_effort as _unlink_ephemeral_best_effort,
@@ -260,8 +287,12 @@ from mammamiradio.web.persistence import (
     _save_dotenv,
 )
 from mammamiradio.web.provider_verdict import (
-    _record_provider_verdict,
+    _probe_provider_keys,
+    _provider_check_identity,
+    _provider_probe_in_flight,
+    _record_provider_verdict,  # noqa: F401  facade re-export used by route tests
     _run_provider_verdict,
+    _verdict_from_probe_entry,
 )
 from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
     PUBLIC_STATUS_CACHE_CONTROL,
@@ -284,6 +315,8 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
     _serialize_stream_log_entry,
     _serialize_track,
     _status_now_playback,
+    local_library_admin_status,
+    local_music_place,
     normalize_public_status_json,
     public_status_etag,
     public_status_not_modified,
@@ -859,6 +892,13 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 # After an ad/banter ends we keep its snapshot briefly, so a listener who taps
 # Share a moment too late (music already playing again) still gets the whole bit.
 CLIP_LOOKBACK_SECONDS = 15
+# Upper bound on a duration we are willing to print on the public share page.
+# Nothing shareable comes close: voice segments are capped at
+# CLIP_MAX_SEGMENT_SECONDS and the longest bundled starter track is under ten
+# minutes. Finiteness alone is not proof — 1e308 and a 300-digit integer are
+# both finite and both nonsense — so a value past this ceiling is treated as
+# corrupt metadata and no duration is claimed at all.
+CLIP_MAX_PROVABLE_DURATION_SECONDS = 3600
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 STREAM_MAX_PACKET_SECONDS = 0.125
@@ -1098,6 +1138,7 @@ def _validated_starter_share_snapshot(segment: Segment) -> dict[str, Any] | None
         "type": "starter",
         "title": entry.title,
         "artist": entry.artist,
+        "duration_seconds": entry.duration_seconds,
         "provider_track_id": entry.isrc,
         "attribution": safe_attribution,
     }
@@ -1260,6 +1301,31 @@ def _segment_is_listener_reserved(state: StationState, segment: Segment) -> bool
     return False
 
 
+def _packaged_banter_predecessor_is_current(state: StationState, segment: Segment) -> bool:
+    """Fail closed unless exact-track banter still follows its named starter."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    required_starter_id = str(metadata.get(PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY) or "")
+    if not required_starter_id:
+        return True
+    # ``now_streaming`` is selected/readable truth and can be published before
+    # any listener accepts a byte. The last-audible snapshot advances only at
+    # the accepted-listener commit, so it is the actual predecessor boundary.
+    previous = state._last_audible_stream if isinstance(state._last_audible_stream, dict) else {}
+    if previous.get("type") != SegmentType.MUSIC.value:
+        return False
+    previous_metadata = previous.get("metadata")
+    if not isinstance(previous_metadata, dict):
+        return False
+    source_kind = str(
+        previous_metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY)
+        or previous_metadata.get("source_kind")
+        or previous_metadata.get("audio_source")
+        or ""
+    )
+    return source_kind == "starter" and str(previous_metadata.get("provider_track_id") or "") == required_starter_id
+
+
 def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
     """Return whether a segment carries the cue marker and its valid epoch."""
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
@@ -1304,6 +1370,11 @@ def _segment_is_immediately_playable(
     """Return whether a queued/slot segment is safe to use as live runway now."""
     excluded_paths = excluded_paths or set()
     excluded_track_keys = excluded_track_keys or set()
+    # ``mark_playback_started`` refuses a released segment, so it is not runway
+    # whatever its path says. Reading it as playable let Resume answer success
+    # over a head the playback loop then skipped.
+    if getattr(segment, "released", False):
+        return False
     if segment.path in excluded_paths:
         return False
     is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
@@ -1328,11 +1399,19 @@ def _continuity_reservation_segments(
     max_segments: int | None = None,
     excluded_paths: set[Path] | None = None,
     excluded_track_keys: set[tuple[str, str]] | None = None,
+    preferred_ready_segments: Sequence[Segment] | None = None,
+    prune_index: bool = True,
 ) -> list[Segment]:
     """Build no-wait packaged/cache fallback segments for a control action.
 
     This deliberately avoids ffprobe, network, synthesis, and FFmpeg.  A control
-    can only reserve audio that is already safe to play now.
+    can only reserve audio that is already safe to play now. Pre-verified starter
+    runway may be supplied by an async Resume path; it still sits below cache
+    music and above the packaged continuity clip.
+
+    ``prune_index=False`` makes the call a pure question. Resume's probe uses it
+    so that asking "would this pick cache music" cannot change the index the
+    real reservation reads a moment later.
     """
     selected: list[Segment] = []
     covered = 0.0
@@ -1453,14 +1532,30 @@ def _continuity_reservation_segments(
                 break
             _add_cached_segment(cached, duration, metadata)
 
-    for path in prune_paths:
-        state.immediate_audio_index.pop(path, None)
+    if prune_index:
+        for path in prune_paths:
+            state.immediate_audio_index.pop(path, None)
 
     # The packaged sweeper is the rung BELOW cached music, not a mandatory
     # preamble to it. When the warm cache yielded a real song the control goes
     # straight into it: a 4.4s canned line in front of the song is what made a
     # repeat sound like a deliberate rotation choice instead of a hiccup, and it
     # is the one voice on air that belongs to neither host.
+    if not selected and preferred_ready_segments:
+        for candidate in preferred_ready_segments:
+            if not _can_add() or _target_met():
+                break
+            if candidate.path in excluded_paths:
+                continue
+            if not _segment_is_immediately_playable(
+                state,
+                candidate,
+                excluded_paths=excluded_paths,
+                excluded_track_keys=transient_blocked_keys,
+            ):
+                continue
+            _add(candidate)
+
     if (
         not selected
         and _can_add()
@@ -1529,7 +1624,7 @@ def _continuity_slot_seconds(state: StationState, *, self_heal: bool = True) -> 
     if not _indexed_audio_path_is_file(slot.path):
         if self_heal:
             logger.warning("Protected continuity slot disappeared before playback; clearing it")
-            state.continuity_slot = None
+            _discard_continuity_slot(state)
         return 0.0
     return buffered_audio_seconds([float(getattr(slot, "duration_sec", 0.0) or 0.0)])
 
@@ -1549,17 +1644,19 @@ def _claim_continuity_slot(state: StationState) -> Segment | None:
         _segment_blocklist_key(slot), state.blocklist
     ):
         logger.warning("Protected continuity slot became blocklisted before playback; clearing it")
-        state.continuity_slot = None
+        _discard_continuity_slot(state)
         return None
     if _segment_is_listener_reserved(state, slot):
         logger.info("Protected continuity slot now belongs to a pending listener dedication; clearing it")
-        state.continuity_slot = None
+        _discard_continuity_slot(state)
         return None
     state.continuity_slot = None
     return slot
 
 
-def _playable_runway_available(q, state: StationState, *, self_heal: bool = True) -> bool:
+def _playable_runway_available(
+    q, state: StationState, *, self_heal: bool = True, exclude_segment: Segment | None = None
+) -> bool:
     """Return whether cutting the current segment has ready audio behind it.
 
     ``self_heal`` is forwarded to :func:`_continuity_slot_seconds`; read-only
@@ -1570,7 +1667,7 @@ def _playable_runway_available(q, state: StationState, *, self_heal: bool = True
     # once the real queue is empty. A non-empty queue means the next audio the
     # loop pulls is ``queued[0]`` — never the slot — so gate strictly on the
     # head there instead of letting a ready slot mask an unplayable head.
-    queued = list(getattr(q, "_queue", ()))
+    queued = [segment for segment in getattr(q, "_queue", ()) if segment is not exclude_segment]
     if queued:
         return _segment_is_immediately_playable(state, queued[0])
     slot = state.continuity_slot
@@ -1590,6 +1687,37 @@ def _playable_runway_source(q, state: StationState) -> str:
     metadata = candidate.metadata if isinstance(candidate.metadata, dict) else {}
     source = str(metadata.get("audio_source") or candidate.path.name or "reserved_audio")
     return "norm_cache" if source == "fallback_norm_cache" else source
+
+
+def _recovery_runway_owned(
+    q, state: StationState, *, since_audible_epoch: int | None = None, exclude_segment: Segment | None = None
+) -> bool:
+    """Check existing recovery ownership without inventing a second receipt.
+
+    Completed audio only covers the producer boundary that observed it. Callers
+    supply that boundary's audible epoch; historical airplay must never disable
+    the recovery ladder for a later, unrelated drain.
+    """
+    # The enqueue funnel rechecks after queue.put(). Its own candidate is not a
+    # competing owner; rescue fills retain object identity through egress.
+    if _playable_runway_available(q, state, exclude_segment=exclude_segment):
+        return True
+
+    def _reserved_here(metadata: dict) -> bool:
+        return bool(metadata.get(_CONTINUITY_RESERVATION_FLAG)) and (
+            metadata.get(_CONTINUITY_ADMISSION_EPOCH) == state.continuity_epoch
+        )
+
+    active = state.active_playback_segment
+    if active is not None and _reserved_here(active.metadata) and _segment_is_immediately_playable(state, active):
+        return True
+    aired = state._last_audible_stream
+    return bool(
+        since_audible_epoch is not None
+        and state.audible_playback_epoch > since_audible_epoch
+        and aired.get("epoch") == state.audible_playback_epoch
+        and _reserved_here(aired.get("metadata", {}))
+    )
 
 
 def _stamp_continuity_runway_epoch(q, state: StationState) -> None:
@@ -1637,7 +1765,8 @@ def _stamp_playback_gap_fill(segment: Segment, state: StationState) -> Segment:
 def _continuity_slot_status(state: StationState) -> dict | None:
     """Admin-only projection of the capacity-exempt safety reservation."""
     slot = state.continuity_slot
-    if slot is None:
+    if slot is None or slot.released:
+        # A released segment can never be admitted, so it is not safety audio.
         return None
     # Read-only status projection: never self-heal (clear) the reserved slot from
     # a /status poll — only mutation paths may drop a dangling slot. A slot whose
@@ -1765,6 +1894,7 @@ def _reserve_continuity_runway(
     capacity_slot_excluded_queue_ids: frozenset[str] = frozenset(),
     outcome: ContinuityRunwayOutcome | None = None,
     minimum_runway_seconds: float = 0.0,
+    preferred_ready_segments: Sequence[Segment] | None = None,
 ) -> int:
     """Reserve playable runway, then bind it to the timeline it was created on.
 
@@ -1783,53 +1913,442 @@ def _reserve_continuity_runway(
     ~22 live-control call sites, so a typo'd argument type-checked clean and
     raised at request time inside a control whose job is preventing dead air.
     """
-    dropped = _reserve_continuity_runway_unstamped(
-        app_state,
-        state,
-        config,
-        replace_queue=replace_queue,
-        discard_reason=discard_reason,
-        excluded_paths=excluded_paths,
-        excluded_track_keys=excluded_track_keys,
-        preserve_queue_ids=preserve_queue_ids,
-        prefer_capacity_slot=prefer_capacity_slot,
-        capacity_slot_excluded_queue_ids=capacity_slot_excluded_queue_ids,
-        outcome=outcome,
-        minimum_runway_seconds=minimum_runway_seconds,
-    )
+    prior_queue = list(getattr(app_state.queue, "_queue", ()))
+    prior_slot = state.continuity_slot
+    try:
+        dropped = _reserve_continuity_runway_unstamped(
+            app_state,
+            state,
+            config,
+            replace_queue=replace_queue,
+            discard_reason=discard_reason,
+            excluded_paths=excluded_paths,
+            excluded_track_keys=excluded_track_keys,
+            preserve_queue_ids=preserve_queue_ids,
+            prefer_capacity_slot=prefer_capacity_slot,
+            capacity_slot_excluded_queue_ids=capacity_slot_excluded_queue_ids,
+            outcome=outcome,
+            minimum_runway_seconds=minimum_runway_seconds,
+            preferred_ready_segments=preferred_ready_segments,
+        )
+    finally:
+        _release_superseded_continuity_audio(app_state, state, prior_queue, prior_slot)
     _stamp_continuity_runway_epoch(app_state.queue, state)
     return dropped
 
 
-def _reserve_continuity_runway_unstamped(
+def _release_superseded_continuity_audio(
+    app_state,
+    state: StationState,
+    prior_queue: Sequence[Segment],
+    prior_slot: Segment | None,
+) -> None:
+    """Release protected continuity audio a reservation replaced without discarding.
+
+    A non-replacing rebuild keeps ``ordinary + reservation`` and simply omits the
+    previous protected set, and the planner clears an unplayable slot. Neither
+    goes through ``_discard_queued_segments``. That was harmless while protected
+    runway was only cache and packaged audio, which own nothing. A starter song
+    reserved by Resume owns a music admission reservation, and dropping it
+    unreleased leaves its key in ``starter_cycle_reserved`` for the session: once
+    every other starter track has aired, the cycle waits on a song that is no
+    longer queued anywhere.
+
+    Deliberately narrow. Only segments carrying the continuity-reservation flag,
+    in the queue or the slot, are candidates -- continuity audio is owned solely by
+    this runway, whereas ordinary queue items can be carried into listener-request
+    and handoff bookkeeping and must be settled by their own paths. ``release()``
+    is idempotent, so anything already discarded is unaffected.
+    """
+    live_queue = list(getattr(app_state.queue, "_queue", ()))
+    live_slot = state.continuity_slot
+    candidates = [segment for segment in prior_queue if _is_continuity_reservation(segment)]
+    if prior_slot is not None and _is_continuity_reservation(prior_slot):
+        # The replace-queue failure path can park an ordinary, possibly
+        # listener-linked, survivor in the slot. That one is not ours to release.
+        candidates.append(prior_slot)
+    for segment in candidates:
+        if segment is live_slot or any(segment is item for item in live_queue):
+            continue
+        segment.release()
+
+
+def _continuity_chose_cache_music(segments: Sequence[Segment]) -> bool:
+    """Return whether a reservation probe already has immediately playable cache music."""
+    return any(
+        (segment.metadata if isinstance(segment.metadata, dict) else {}).get("audio_source") == "norm_cache"
+        for segment in segments
+    )
+
+
+# Starter verification is one manifest match plus one SHA-256 over a packaged
+# MP3, so on healthy storage it finishes in a fraction of this. The bound exists
+# for the unhealthy case: Home Assistant runs the whole resume callback inside a
+# 5-second budget (``HAPlaybackTimeouts.callback``), and a Resume that overruns it
+# is reported as failed while its shielded task un-pauses the station anyway.
+_RESUME_STARTER_PREPARE_TIMEOUT_SECONDS = 2.0
+# How long a Resume waits for another in-flight Resume. Longer than the prepare
+# bound, so a normal in-flight Resume always finishes first and the waiter takes
+# the cheap already-running path; short enough to leave that same HA budget.
+_RESUME_LOCK_TIMEOUT_SECONDS = 3.0
+
+
+def _resume_runway_wants_starter(app_state, state: StationState, config) -> bool:
+    """Whether Resume should spend a starter verification. Writes nothing.
+
+    Asks the reservation's own question through ``_plan_continuity_runway``, so
+    the answer cannot drift from what ``_reserve_continuity_runway`` then does:
+    no verification when protected runway already covers the target (the
+    reservation would discard the song), and none when the first rung the
+    reservation picks, under its real exclusions, is cache music.
+    """
+    plan = _plan_continuity_runway(
+        app_state,
+        state,
+        replace_queue=False,
+        excluded_paths=None,
+        excluded_track_keys=None,
+        preserve_queue_ids=frozenset(),
+        minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+        heal_slot=False,
+    )
+    if plan.covered:
+        return False
+    first_rung = _continuity_reservation_segments(
+        state,
+        config,
+        plan.target_seconds,
+        max_segments=1,
+        excluded_paths=plan.selection_excluded_paths,
+        excluded_track_keys=plan.selection_excluded_track_keys,
+        prune_index=False,
+    )
+    return not _continuity_chose_cache_music(first_rung)
+
+
+def _resume_lock(app_state) -> asyncio.Lock:
+    """The one lock both Resume entry points share, created on first use.
+
+    ``session_stopped`` stays True across Resume's await, so without this two
+    concurrent Resumes (a double tap, or the admin and Home Assistant at once)
+    both run the whole path: two selector passes, two marker writes, and a second
+    ``_clear_session_stopped`` that resets the silence watchdog on a station that
+    had already started airing. Stop deliberately does not take it -- a Stop must
+    win immediately, which is what ``session_stop_revision`` detects.
+    """
+    lock = getattr(app_state, "resume_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        app_state.resume_lock = lock
+    return lock
+
+
+async def _acquire_resume_lock(lock: asyncio.Lock) -> bool:
+    """Wait briefly for an in-flight Resume, returning False instead of hanging."""
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=_RESUME_LOCK_TIMEOUT_SECONDS)
+    except TimeoutError:
+        return False
+    return True
+
+
+def _discard_late_starter_preparation(task: asyncio.Future) -> None:
+    """Consume a verification that finished after Resume stopped waiting for it.
+
+    Its result holds no admission reservation yet (that is taken only after the
+    await returns), so dropping it strands nothing. Retrieving the outcome keeps
+    a late exception from surfacing as an unretrieved-task warning.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug("Late starter verification failed after Resume moved on", exc_info=exc)
+        return
+    prepared = task.result()
+    if prepared is not None:
+        prepared.segment.release()
+
+
+async def _prepare_resume_starter_bounded(app_state, state: StationState, config):
+    """Verify one starter song within the Resume budget, with one worker at most.
+
+    ``asyncio.wait_for`` would cancel the awaiting coroutine but not the
+    ``to_thread`` SHA-256 behind it, so every Resume retry on slow storage would
+    start another hash while the previous one kept running. Instead the
+    verification runs as a task that is never cancelled: Resume stops waiting
+    after ``_RESUME_STARTER_PREPARE_TIMEOUT_SECONDS``, the task finishes on its
+    own and its result is dropped, and a Resume that arrives while it is still
+    running skips verification rather than stacking a second worker. A slow
+    verification is not a broken catalog, so none of this marks the source failed.
+    """
+    from mammamiradio.scheduling.producer import _prepare_starter_catalog_runway
+
+    pending = getattr(app_state, "resume_starter_prepare_task", None)
+    if pending is not None and not pending.done():
+        logger.info("Resume runway: an earlier starter verification is still running; using the packaged ladder")
+        return None
+    task = asyncio.ensure_future(_prepare_starter_catalog_runway(state, config, context="resume runway"))
+    app_state.resume_starter_prepare_task = task
+    try:
+        done, _ = await asyncio.wait({task}, timeout=_RESUME_STARTER_PREPARE_TIMEOUT_SECONDS)
+    except BaseException:
+        task.add_done_callback(_discard_late_starter_preparation)
+        raise
+    if task in done:
+        return task.result()
+    task.add_done_callback(_discard_late_starter_preparation)
+    logger.info(
+        "Resume runway: starter verification took longer than %.1fs; using the packaged ladder",
+        _RESUME_STARTER_PREPARE_TIMEOUT_SECONDS,
+    )
+    return None
+
+
+class ResumeRunwayOutcome(NamedTuple):
+    """What a Resume reservation did, and whether a Stop overtook it."""
+
+    dropped: int
+    superseded_by_stop: bool
+
+
+def _account_starter_runway(state: StationState, track: Track) -> None:
+    """Run the producer's lookahead bookkeeping for a starter song Resume placed.
+
+    ``after_music`` is queue-order state, not airing state: it sets
+    ``current_track``, appends to ``played_tracks``, and advances pacing, and
+    ``write_transition`` reads ``played_tracks[-1]`` as the song before the next
+    speech. Ordinary producer music runs it at enqueue. Accounting failures must
+    never affect what airs.
+    """
+    from mammamiradio.scheduling.producer import _arm_accepted_heading_announcement
+
+    try:
+        state.source_readiness.mark_playable(track.source)
+        _arm_accepted_heading_announcement(state, track)
+        state.after_music(track)
+    except Exception:  # pragma: no cover - accounting must never affect what airs
+        logger.debug("Starter runway accounting failed", exc_info=True)
+
+
+def _chain_starter_runway_accounting(state: StationState, segment: Segment, track: Track) -> None:
+    """Defer a slot-parked starter song's accounting to its playback admission.
+
+    Only for the capacity-exempt slot. A song in the real queue is in lookahead
+    order and is accounted at insertion, exactly like producer music; accounting
+    it at admission instead would overwrite newer queue-order state with an older
+    song. The slot is different: it airs only once the real queue is empty, so at
+    admission it genuinely is next, and it is routinely discarded when the
+    producer refills first -- deferring means a discarded park counts for nothing.
+    ``release()`` clears the callback. Returning anything but ``True`` would make
+    ``mark_playback_started`` drop the segment, so accounting never does.
+    """
+    chained = segment.playback_start_callback
+
+    def _admit_and_account() -> bool:
+        if chained is not None and chained() is not True:
+            return False
+        if song_identity_key_is_blocklisted(
+            _segment_blocklist_key(segment), state.blocklist
+        ) or _segment_is_listener_reserved(state, segment):
+            # The playback loop admits first and applies its last-mile ban and
+            # listener-reservation fence immediately after, with no await in
+            # between. Returning True keeps admission semantics identical; the
+            # fence then discards the segment. Do not count a song that will
+            # not air.
+            return True
+        _account_starter_runway(state, track)
+        return True
+
+    segment.playback_start_callback = _admit_and_account
+
+
+async def _reserve_resume_runway(
     app_state,
     state: StationState,
     config,
     *,
-    replace_queue: bool = False,
-    discard_reason: str = GenerationWasteReason.OPERATOR_PURGE,
-    excluded_paths: set[Path] | None = None,
-    excluded_track_keys: set[tuple[str, str]] | None = None,
-    preserve_queue_ids: frozenset[str] = frozenset(),
-    prefer_capacity_slot: bool = False,
-    capacity_slot_excluded_queue_ids: frozenset[str] = frozenset(),
-    outcome: ContinuityRunwayOutcome | None = None,
-    minimum_runway_seconds: float = 0.0,
-) -> int:
-    """Reserve immediately playable runway before a live control mutates audio.
+    discard_reason: str,
+    stop_revision_at_request: int | None = None,
+) -> ResumeRunwayOutcome:
+    """Reserve Resume audio, preferring verified starter music on a cold cache.
 
-    Call `_reserve_continuity_runway` instead — it adds the required epoch stamp.
+    The live-control ladder cannot await. Verification therefore happens here,
+    off the event loop, and is rechecked before the prepared song is offered as
+    the rung below cache music. Unused preparations release their cycle
+    reservation so later rotation can still select that track.
 
-    The function has no await points.  It may discard only ordinary far-future
-    queue items to make room; an existing protected reservation is reused.  A
-    full queue with no ordinary tail retains its own audio and stores the short
-    packaged clip in a capacity-exempt fallback slot. A preferred slot leaves
-    the real queue open for stronger ownership; excluded queue ids remain there
-    so the caller can settle their dependencies by id.
+    Two guarantees the starter rung must not weaken, both of which it did:
+
+    * **The packaged ladder is reserved unconditionally.** Every starter failure
+      degrades into ``_reserve_continuity_runway`` rather than returning with
+      nothing reserved. Before this, a raise anywhere in selection, verification,
+      or segment construction skipped the ladder entirely and left Resume with an
+      empty queue -- on the fresh installs this rung exists to serve.
+    * **A Stop is distinguished from any other control.** ``continuity_epoch``
+      advances on roughly two dozen paths, including admin routes that run while
+      the station is paused (pool purge, per-row ban, bulk ban). Treating a move
+      as a Stop refused legitimate Resumes and blamed missing recovery assets.
+      Staleness and supersession are now separate questions:
+      ``continuity_epoch`` answers "is this candidate still fresh", and
+      ``session_stop_revision`` answers "must the station stay paused".
+    """
+    from mammamiradio.scheduling.producer import _reserve_music_segment
+
+    preferred: list[Segment] = []
+    prepared_track: Track | None = None
+    source = state.playlist_source
+    resume_epoch = state.continuity_epoch
+    # Callers capture this before waiting on ``_resume_lock``. Capturing it here
+    # instead would let a Resume that queued behind another adopt a Stop that
+    # landed while it waited, and un-pause the station the operator just paused.
+    resume_stop_revision = state.session_stop_revision if stop_revision_at_request is None else stop_revision_at_request
+
+    def _release_preferred() -> None:
+        for segment in preferred:
+            segment.release()
+        preferred.clear()
+
+    def _preferred_admitted() -> bool:
+        """Whether the reservation actually took the prepared segment.
+
+        Read before any release: releasing a segment that IS queued leaves a head
+        whose ``mark_playback_started`` refuses, which playback skips.
+        """
+        if not preferred:
+            return False
+        head = preferred[0]
+        return state.continuity_slot is head or any(item is head for item in getattr(app_state.queue, "_queue", ()))
+
+    try:
+        try:
+            if (
+                source is not None
+                and source.kind == "starter"
+                and state.listener_request_handoff is None
+                and _resume_runway_wants_starter(app_state, state, config)
+            ):
+                prepared = await _prepare_resume_starter_bounded(app_state, state, config)
+                if prepared is None:
+                    pass
+                elif state.continuity_epoch != resume_epoch:
+                    # The prepare await is interruptible and its eligibility
+                    # recheck was made against the old epoch, so this candidate
+                    # is stale. Drop it and keep going: the ladder below is what
+                    # guarantees Resume ends up with audio.
+                    prepared.segment.release()
+                    logger.info("Resume runway: a live control superseded the starter candidate")
+                elif prepared.segment.duration_sec <= 0:
+                    # A zero-length segment still counts as selected downstream
+                    # and would suppress both packaged fallbacks, so refusing it
+                    # is what keeps the ladder reachable.
+                    prepared.segment.release()
+                    logger.warning(
+                        "Resume runway: starter candidate %s reported no duration; using the packaged ladder",
+                        prepared.track.display,
+                    )
+                else:
+                    segment = prepared.segment
+                    segment.metadata[_CONTINUITY_RESERVATION_FLAG] = True
+                    segment.metadata["rescue"] = True
+                    segment.metadata["continuity_reservation_id"] = uuid4().hex
+                    segment.metadata["queue_reason"] = "Protected continuity audio."
+                    segment.metadata.setdefault("queue_id", uuid4().hex)
+                    try:
+                        _reserve_music_segment(state, prepared.track, segment)
+                    except RuntimeError:
+                        segment.release()
+                    else:
+                        preferred.append(segment)
+                        prepared_track = prepared.track
+        except Exception:
+            # The starter rung is an improvement on the packaged clip, never a
+            # precondition for it. Selection, rationale, crate classification,
+            # and manifest resolution are all reachable from here and none of
+            # them may cost the station its recovery audio.
+            logger.warning(
+                "Resume runway: starter-catalog preparation failed; using the packaged ladder",
+                exc_info=True,
+            )
+            _release_preferred()
+        dropped = _reserve_continuity_runway(
+            app_state,
+            state,
+            config,
+            discard_reason=discard_reason,
+            minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+            preferred_ready_segments=preferred,
+        )
+        if not _preferred_admitted():
+            _release_preferred()
+        elif prepared_track is not None:
+            head = preferred[0]
+            if state.continuity_slot is head:
+                _chain_starter_runway_accounting(state, head, prepared_track)
+                placement = "parked"
+            else:
+                _account_starter_runway(state, prepared_track)
+                placement = "queued"
+            logger.info(
+                "Resume runway: inserting verified starter-catalog runway (%s): %s",
+                placement,
+                head.metadata.get("title") or head.path.name,
+            )
+        return ResumeRunwayOutcome(
+            dropped=dropped,
+            superseded_by_stop=state.session_stop_revision != resume_stop_revision,
+        )
+    except BaseException:
+        if not _preferred_admitted():
+            _release_preferred()
+        raise
+
+
+@dataclass
+class _ContinuityRunwayPlan:
+    """What a continuity reservation decides from, computed in one place.
+
+    The reservation and Resume's read-only probe both build this, so the probe
+    asks exactly the question the reservation will answer: the same exclusions,
+    the same target, and the same "already covered" short-circuit. The probe
+    used to approximate it with no exclusions at all, which let it report cache
+    music the reservation would then refuse.
+    """
+
+    excluded_paths: set[Path]
+    excluded_track_keys: set[tuple[str, str]]
+    existing: list[Segment]
+    protected: list[Segment]
+    ordinary: list[Segment]
+    ready_duration: Callable[[Segment], float]
+    required_survivors: list[Segment]
+    target_seconds: float
+    protected_ready_seconds: float
+    covered: bool
+    selection_excluded_paths: set[Path]
+    selection_excluded_track_keys: set[tuple[str, str]]
+
+
+def _plan_continuity_runway(
+    app_state,
+    state: StationState,
+    *,
+    replace_queue: bool,
+    excluded_paths: set[Path] | None,
+    excluded_track_keys: set[tuple[str, str]] | None,
+    preserve_queue_ids: frozenset[str],
+    minimum_runway_seconds: float,
+    heal_slot: bool,
+) -> _ContinuityRunwayPlan:
+    """Measure the live queue and slot against the runway target.
+
+    ``heal_slot=True`` is the reservation's behaviour: an unplayable
+    capacity-exempt slot is cleared before it is counted. ``heal_slot=False``
+    computes the same numbers without writing anything, treating that slot as
+    zero seconds, so a probe can never mutate what it is measuring.
     """
     from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
 
-    q = app_state.queue
     excluded_paths = set(excluded_paths or ())
     excluded_track_keys = set(excluded_track_keys or ())
     # A live reservation's original source is hidden behind the shortened head
@@ -1840,8 +2359,7 @@ def _reserve_continuity_runway_unstamped(
         track_key = _segment_track_key(music)
         if track_key != ("", ""):
             excluded_track_keys.add(track_key)
-    existing = list(getattr(q, "_queue", ()))
-    current_queue = list(existing)
+    existing = list(getattr(app_state.queue, "_queue", ()))
     protected = [seg for seg in existing if seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
     ordinary = [seg for seg in existing if not seg.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
 
@@ -1866,17 +2384,16 @@ def _reserve_continuity_runway_unstamped(
         return bool(queue_id and queue_id in preserve_queue_ids and _ready_duration(segment) > 0)
 
     required_survivors = [segment for segment in existing if _must_preserve(segment)]
-    required_survivor_ids = {id(segment) for segment in required_survivors}
 
     slot = state.continuity_slot
-    if slot is not None and not _segment_is_immediately_playable(
+    slot_ready = slot is not None and _segment_is_immediately_playable(
         state,
         slot,
         excluded_paths=excluded_paths,
         excluded_track_keys=excluded_track_keys,
-    ):
+    )
+    if slot is not None and not slot_ready and heal_slot:
         state.continuity_slot = None
-        slot = None
 
     # Measure ordinary runway separately from the active protected set. This
     # prevents double-counting an existing reservation: the target is what the
@@ -1888,38 +2405,105 @@ def _reserve_continuity_runway_unstamped(
     # all — see ANY_PLAYABLE_RUNWAY_SECONDS at the Resume site.
     runway_floor = max(float(RUNWAY_FLOOR_SECONDS), minimum_runway_seconds)
     target = max(0.0, runway_floor - ordinary_ready)
-    protected_ready = (
-        0.0
-        if replace_queue
-        else buffered_audio_seconds(
+    if replace_queue:
+        protected_ready = 0.0
+    else:
+        slot_seconds = _continuity_slot_seconds(state, self_heal=heal_slot) if slot_ready else 0.0
+        protected_ready = buffered_audio_seconds(
             [
                 *(_ready_duration(segment) for segment in protected),
-                _continuity_slot_seconds(state),
+                slot_seconds,
             ]
         )
-    )
-    if not replace_queue and protected_ready >= target:
-        return 0
 
-    max_segments = q.maxsize if q.maxsize > 0 else None
+    # A non-replacing control keeps these ordinary segments in the real queue.
+    # Never append the same cached bytes (or the same canonical song through
+    # another cached path) as "recovery" behind them. In particular, queue-remove
+    # may just have restored a handoff predecessor to its full original path
+    # while ``last_music_file`` has advanced to a later song.
     surviving_paths = {segment.path for segment in ordinary} if not replace_queue else set()
     surviving_track_keys = (
         {track_key for segment in ordinary if (track_key := _segment_track_key(segment)) != ("", "")}
         if not replace_queue
         else set()
     )
+    return _ContinuityRunwayPlan(
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+        existing=existing,
+        protected=protected,
+        ordinary=ordinary,
+        ready_duration=_ready_duration,
+        required_survivors=required_survivors,
+        target_seconds=target,
+        protected_ready_seconds=protected_ready,
+        covered=not replace_queue and protected_ready >= target,
+        selection_excluded_paths=excluded_paths | surviving_paths,
+        selection_excluded_track_keys=excluded_track_keys | surviving_track_keys,
+    )
+
+
+def _reserve_continuity_runway_unstamped(
+    app_state,
+    state: StationState,
+    config,
+    *,
+    replace_queue: bool = False,
+    discard_reason: str = GenerationWasteReason.OPERATOR_PURGE,
+    excluded_paths: set[Path] | None = None,
+    excluded_track_keys: set[tuple[str, str]] | None = None,
+    preserve_queue_ids: frozenset[str] = frozenset(),
+    prefer_capacity_slot: bool = False,
+    capacity_slot_excluded_queue_ids: frozenset[str] = frozenset(),
+    outcome: ContinuityRunwayOutcome | None = None,
+    minimum_runway_seconds: float = 0.0,
+    preferred_ready_segments: Sequence[Segment] | None = None,
+) -> int:
+    """Reserve immediately playable runway before a live control mutates audio.
+
+    Call `_reserve_continuity_runway` instead — it adds the required epoch stamp.
+
+    The function has no await points.  It may discard only ordinary far-future
+    queue items to make room; an existing protected reservation is reused.  A
+    full queue with no ordinary tail retains its own audio and stores the short
+    packaged clip in a capacity-exempt fallback slot. A preferred slot leaves
+    the real queue open for stronger ownership; excluded queue ids remain there
+    so the caller can settle their dependencies by id.
+    """
+    q = app_state.queue
+    plan = _plan_continuity_runway(
+        app_state,
+        state,
+        replace_queue=replace_queue,
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+        preserve_queue_ids=preserve_queue_ids,
+        minimum_runway_seconds=minimum_runway_seconds,
+        heal_slot=True,
+    )
+    excluded_paths = plan.excluded_paths
+    excluded_track_keys = plan.excluded_track_keys
+    existing = plan.existing
+    current_queue = list(existing)
+    protected = plan.protected
+    ordinary = plan.ordinary
+    _ready_duration = plan.ready_duration
+    required_survivors = plan.required_survivors
+    required_survivor_ids = {id(segment) for segment in required_survivors}
+    target = plan.target_seconds
+    protected_ready = plan.protected_ready_seconds
+    if plan.covered:
+        return 0
+
+    max_segments = q.maxsize if q.maxsize > 0 else None
     reservation = _continuity_reservation_segments(
         state,
         config,
         target,
         max_segments=max_segments,
-        # A non-replacing control keeps these ordinary segments in the real
-        # queue. Never append the same cached bytes (or the same canonical song
-        # through another cached path) as "recovery" behind them. In particular,
-        # queue-remove may just have restored a handoff predecessor to its full
-        # original path while ``last_music_file`` has advanced to a later song.
-        excluded_paths=excluded_paths | surviving_paths,
-        excluded_track_keys=excluded_track_keys | surviving_track_keys,
+        excluded_paths=plan.selection_excluded_paths,
+        excluded_track_keys=plan.selection_excluded_track_keys,
+        preferred_ready_segments=preferred_ready_segments,
     )
     if not reservation:
         logger.warning("No packaged or cache continuity audio available for live control")
@@ -2383,6 +2967,26 @@ def _apply_ban(
     if removed or pin_cleared:
         state.playlist_revision += 1
 
+    # Quarantine the norm-cache artifact of every banned LOCAL file. A local
+    # track's cache key is path-derived, so re-labelling a file does not move its
+    # cache entry, and the sidecar is only rewritten when the track next plays.
+    # A file banned before it plays again therefore keeps a sidecar carrying its
+    # PRE-ban identity, while the ban is stored under the new one — and the
+    # rescue gate reads the sidecar. Without this, banning a song straight after
+    # the metadata upgrade left the old cache file airable forever. Same reason
+    # the external-download path quarantines its artifact on ban.
+    import contextlib
+
+    from mammamiradio.playlist.downloader import reject_cached_download as _reject_cached_download
+
+    for track in tracks:
+        if getattr(track, "local_path", None) is None:
+            continue
+        cache_key = getattr(track, "cache_key", "")
+        if cache_key:
+            with contextlib.suppress(Exception):
+                _reject_cached_download(config.cache_dir, cache_key, "operator_blocklist")
+
     def _matches_blocklist(segment: Segment) -> bool:
         # Use the shared segment identity so missing artist metadata is
         # normalized consistently at mutation and playback gates.
@@ -2446,9 +3050,13 @@ def _normalize_preference_key(raw_key: object) -> tuple[tuple[str, str], str] | 
     title_raw = str(raw_key[1] or "").strip()
     artist = artist_raw.lower()
     title = title_raw.lower()
-    if not (artist and title):
+    # Title-only is a real key, same rule as _now_playing_music_track and the
+    # blocklist. Requiring an artist here made an untagged local song
+    # un-likeable from the rotation list — and un-CLEARABLE, since a preference
+    # migrated onto ("", title) renders as pressed and the clear press 422s.
+    if not title:
         return None
-    display = f"{artist_raw} - {title_raw}"
+    display = f"{artist_raw} - {title_raw}" if artist_raw else title_raw
     return (artist, title), display
 
 
@@ -2486,11 +3094,20 @@ def _now_playing_music_track(now_seg: object) -> Track | None:
                 title = left
             else:
                 title = raw_title
-    if not (artist and title):
+    if not title:
+        # Only reach for the label when the metadata gave us no title at all.
+        # A title-only song legitimately has artist == "" (an untagged local
+        # file), and splitting its label here would invent an artist out of a
+        # song title that merely contains a dash.
+        #
+        # Deliberately NOT falling back to a bare unsplittable label: the norm-
+        # cache rescue path leaves `title_only` unset precisely because a
+        # humanized filename is not a trustworthy bare title, and a ban is
+        # durable — persisting a junk key is worse than refusing the action.
         parsed_label = _split_artist_title_label(now_seg.get("label"))
         if parsed_label is not None:
             artist, title = parsed_label
-    if not (artist and title):
+    if not title:
         return None
     return Track(title=title, artist=artist, duration_ms=0)
 
@@ -2517,6 +3134,17 @@ def _resolve_preference_target(state: StationState, body: dict) -> tuple[tuple[s
     if body.get("now_playing") is True or legacy_now_playing:
         target = _now_playing_preference_target(state)
         if target is None:
+            # Two different situations, two different ways out. Saying "nothing
+            # musical is on air" while a song is audibly playing is a message
+            # that lies to the operator (leadership #5).
+            now_seg = state.now_streaming or {}
+            if isinstance(now_seg, dict) and now_seg.get("type") == "music":
+                return JSONResponse(
+                    content={
+                        "ok": False,
+                        "error": "I can’t tell which song this is to mark it. Mark it from the rotation list instead.",
+                    }
+                )
             return JSONResponse(
                 content={"ok": False, "error": "Only a song can be marked — nothing musical is on air right now."}
             )
@@ -2688,18 +3316,40 @@ async def _resume_station(app_state: Any) -> None:
     Home Assistant playback invokes this callback before dispatching the media
     source. Mirror the admin Start gate: a stopped station only resumes after an
     immediately playable runway exists and the durable marker has been removed.
+    Serialized with the admin route through ``_resume_lock``.
     """
+    stop_revision = app_state.station_state.session_stop_revision
+    lock = _resume_lock(app_state)
+    if not await _acquire_resume_lock(lock):
+        raise RuntimeError("station is already resuming")
+    try:
+        if app_state.station_state.session_stop_revision != stop_revision:
+            # A Stop landed while this Resume waited behind another one. The
+            # operator's latest action wins; resuming now would undo it.
+            raise RuntimeError("station control changed while resuming")
+        await _resume_station_locked(app_state, stop_revision=stop_revision)
+    finally:
+        lock.release()
+
+
+async def _resume_station_locked(app_state: Any, *, stop_revision: int) -> None:
+    """Body of ``_resume_station``; the caller holds ``_resume_lock``."""
     state: StationState = app_state.station_state
     config = app_state.config
     was_stopped = state.session_stopped
     if was_stopped:
-        _reserve_continuity_runway(
+        runway = await _reserve_resume_runway(
             app_state,
             state,
             config,
             discard_reason=GenerationWasteReason.OPERATOR_STOP,
-            minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+            stop_revision_at_request=stop_revision,
         )
+        # Starter verification awaits, so a Stop can now land inside this
+        # callback. Report it as the control conflict it is, before the marker
+        # write below has a chance to undo it.
+        if runway.superseded_by_stop:
+            raise RuntimeError("station control changed while resuming")
         _discard_unplayable_queue_prefix(
             app_state.queue,
             state,
@@ -2855,6 +3505,7 @@ def _sync_runtime_state(request: Request) -> None:
 
 def _runtime_health_snapshot(request: Request) -> dict:
     state = request.app.state.station_state
+    config = getattr(request.app.state, "config", None)
     queue = getattr(request.app.state, "queue", None)
     queue_depth = queue.qsize() if queue else -1
     queue_capacity = queue.maxsize if queue else -1
@@ -2895,6 +3546,11 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "audio_source": audio_source or "unknown",
         "failover_active": fallback_active,
         "shadow_queue_corrections": state.shadow_queue_corrections,
+        "boundary_imaging": {
+            "enabled": bool(getattr(getattr(config, "audio", None), "boundary_imaging", True)),
+            "carts_aired": state.boundary_carts_aired,
+            "skips": dict(state.boundary_imaging_skips),
+        },
     }
 
 
@@ -2949,27 +3605,56 @@ _ACTION_REQUIRED_FALLBACK_REASONS = {
 
 
 _TTS_RUNTIME_FALLBACK_PREFIX = "Runtime TTS fallback: "
+_TTS_QUOTA_REASON_MARKERS = (
+    "quota_exceeded",
+    "insufficient_quota",
+    "credit_balance_exhausted",
+    "quota exceeded",
+    "credit balance",
+    "usage limit",
+)
+
+
+def _tts_reason_is_quota(reason: str) -> bool:
+    normalized = reason.strip().lower()
+    return any(marker in normalized for marker in _TTS_QUOTA_REASON_MARKERS)
 
 
 def _tts_single_reason_label(reason: str) -> str:
-    """Translate ONE engine's raw TTS fallback reason token into operator copy."""
+    """Translate one engine's raw reason and action into operator copy."""
     normalized = reason.strip().lower()
     if not normalized:
         return ""
     if "missing_credentials" in normalized:
-        return "A cloud voice key is missing; Edge voice is carrying the show. Add the key and restart the station."
-    if "provider_disabled:http 401" in normalized or "provider_disabled:http 403" in normalized:
-        return "A cloud voice key was not accepted; check the saved key and restart the station."
-    if "provider_disabled:http 404" in normalized:
-        return "A cloud voice route is not available; check the selected voice and restart the station."
+        return (
+            "A cloud voice key is missing; Edge voice is carrying the show. "
+            "Add the key under First Listen → Change AI services → Voice providers."
+        )
+    if _tts_reason_is_quota(normalized):
+        return (
+            "The voice provider quota is exhausted, so its cloud voices are off for this session. "
+            "Restore quota or credits, then save the key under First Listen → Change AI services → Voice providers "
+            "to retry. Edge voice is carrying the show."
+        )
+    if "http 401" in normalized or "http 403" in normalized:
+        return (
+            "The saved voice key was rejected by the provider, so its cloud voices are off for this session. "
+            "Save a working key under First Listen → Change AI services → Voice providers to retry. "
+            "Edge voice is carrying the show."
+        )
+    if "http 400" in normalized or "http 404" in normalized:
+        return (
+            "The provider rejected one configured cloud voice route; check its voice, model, and region settings, "
+            "then restart the station. Edge voice is carrying the show."
+        )
     if "cloud tts route rendered successfully" in normalized or "primary_success" in normalized:
         return "Cloud voice route is working."
     if "provider_cooldown" in normalized or "provider_error" in normalized:
         return "A cloud voice route had trouble; Edge voice is carrying the show and will retry automatically."
     if "provider_disabled_session" in normalized:
         return (
-            "A cloud voice route is temporarily unavailable; Edge voice is carrying the show and will retry "
-            "automatically."
+            "A cloud voice route is switched off for this session after a provider error; Edge voice is carrying "
+            "the show. Save the key again under First Listen → Change AI services → Voice providers to retry."
         )
     if "edge_voice_failure" in normalized:
         return "The configured voice was unavailable; the station is trying its house voice."
@@ -3002,7 +3687,7 @@ def _tts_runtime_reason_label(reason: str) -> str:
             engine = engine.strip()
             label = _tts_single_reason_label(token) if token else ""
             if engine and label:
-                labeled.append(f"{engine}: {label}")
+                labeled.append(f"{_runtime_provider_label(engine)}: {label}")
             elif label:
                 labeled.append(label)
         if labeled:
@@ -3286,6 +3971,8 @@ def _tts_provider_status(config, state: StationState, *, use_runtime_observation
     # synthesis boundary records the route that actually produced audio; use
     # that live state when it says a mixed/cloud route degraded to Edge.
     runtime_tts = state.runtime_provider_state.get("tts_provider", {}) if use_runtime_observation else {}
+    if runtime_tts.get("invalidated_by_credential_save"):
+        runtime_tts = {}
     if runtime_tts and runtime_tts.get("fallback_active"):
         current = str(runtime_tts.get("current_provider") or "edge")
         fallback_active = True
@@ -4303,7 +4990,15 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
     config = request.app.state.config
     state = request.app.state.station_state
     golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
+    if golden_path["stage"] == "needs_music_source":
+        # The shared status also reaches /public-status. Keep the exact path in
+        # this operator-only setup projection, never in the listener payload.
+        golden_path = {
+            **golden_path,
+            "steps": [golden_path["steps"][0], f"Add files in {local_music_place(config.music_dir)}."],
+        }
     provider_health = _provider_health_snapshot(config, state)
+    provider_health["probe_in_flight"] = _provider_probe_in_flight(request.app.state)
     origin = getattr(request.app.state, "first_listen_install_origin", None)
     origin_status = getattr(getattr(origin, "status", None), "value", None) or "unknown"
     setup = build_setup_status(
@@ -4410,12 +5105,48 @@ def _silence_with_listeners(state: StationState, queue_empty_elapsed: float) -> 
     return _runtime_monotonic() - state.last_air_monotonic > SILENCE_FAILURE_SECONDS
 
 
+def _voice_provider_health(
+    engine: str,
+    configured: bool,
+    voice_health: dict[str, dict[str, object]],
+    *,
+    key_rejected: bool = False,
+) -> dict:
+    """Same shape as the Anthropic entry so the admin can render voices the same way."""
+    health = voice_health.get(engine, {})
+    reason = str(health.get("reason") or "")
+    disabled = bool(health.get("disabled"))
+    cooldown = bool(health.get("cooldown"))
+    quota_exhausted = disabled and _tts_reason_is_quota(reason)
+    rejected = key_rejected or (disabled and not quota_exhausted and ("HTTP 401" in reason or "HTTP 403" in reason))
+    if not configured:
+        key_status = "missing"
+    elif rejected:
+        key_status = "rejected"
+    else:
+        key_status = "unverified"
+    raw_failed = health.get("failed_voices") or 0
+    failed_voices = raw_failed if isinstance(raw_failed, int) else 0
+    return {
+        "configured": configured,
+        "disabled": disabled,
+        "cooldown": cooldown,
+        "quota_exhausted": quota_exhausted,
+        "last_error": reason if disabled or cooldown or failed_voices else "",
+        "key_status": key_status,
+        "failed_voices": failed_voices,
+    }
+
+
 def _provider_health_snapshot(config, state: StationState) -> dict:
     """Return current provider degradation state for admin diagnostics."""
     now = time.time()
+    voice_health = cloud_tts_health()
     anthropic_configured = bool(config.anthropic_api_key)
     anthropic_degraded = anthropic_configured and state.anthropic_disabled_until > now
     retry_after = max(0, int(state.anthropic_disabled_until - now)) if anthropic_degraded else 0
+    openai_degraded = bool(config.openai_api_key) and state.openai_disabled_until > now
+    openai_retry_after = max(0, int(state.openai_disabled_until - now)) if openai_degraded else 0
     return {
         "anthropic": {
             "configured": anthropic_configured,
@@ -4425,22 +5156,34 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
             "auth_failures": state.anthropic_auth_failures,
             "key_status": state.anthropic_key_status,
         },
+        # Keep OpenAI script-key and speech-breaker verdicts separate.
         "openai": {
             "configured": bool(config.openai_api_key),
+            "degraded": openai_degraded,
+            "retry_after_s": openai_retry_after,
+            "last_error": state.openai_last_error if openai_degraded else "",
             "key_status": state.openai_key_status,
         },
-        "azure_speech": {
-            "configured": bool(config.azure_speech_key and config.azure_speech_region),
-        },
-        "elevenlabs": {
-            "configured": bool(config.elevenlabs_api_key),
-        },
+        "openai_speech": _voice_provider_health(
+            "openai",
+            bool(config.openai_api_key and config.models.tts_model("openai")),
+            voice_health,
+            key_rejected=state.openai_key_status == "rejected",
+        ),
+        "azure_speech": _voice_provider_health(
+            "azure", bool(config.azure_speech_key and config.azure_speech_region), voice_health
+        ),
+        "elevenlabs": _voice_provider_health("elevenlabs", bool(config.elevenlabs_api_key), voice_health),
         "chaos": {
             "enabled": state.chaos_mode_active,
             "pending": state.chaos_pending.value if state.chaos_pending else "",
             "script_fallbacks": state.chaos_script_fallbacks,
             "audio_failures": state.chaos_audio_failures,
             "last_degraded_reason": state.chaos_last_degraded_reason,
+        },
+        "script_guard": {
+            "rejections": state.language_guard_rejections,
+            "failures": state.language_guard_failures,
         },
     }
 
@@ -5061,6 +5804,7 @@ def _finalize_selected_playback(
     terminal_reason: str,
     all_chunks_audience_delivered: bool,
     cancel_reason: str = GenerationWasteReason.OPERATOR_PURGE,
+    emit_stream_result: bool = True,
 ) -> None:
     """Settle every selected Segment exactly once, including setup failures.
 
@@ -5095,16 +5839,17 @@ def _finalize_selected_playback(
             )
         finally:
             try:
-                _emit_stream_result(
-                    state,
-                    segment,
-                    bytes_sent,
-                    was_skipped,
-                    start_listeners,
-                    terminal_reason=terminal_reason,
-                    all_chunks_audience_delivered=all_chunks_audience_delivered,
-                    accepted_listener_count=accepted_listener_count,
-                )
+                if emit_stream_result:
+                    _emit_stream_result(
+                        state,
+                        segment,
+                        bytes_sent,
+                        was_skipped,
+                        start_listeners,
+                        terminal_reason=terminal_reason,
+                        all_chunks_audience_delivered=all_chunks_audience_delivered,
+                        accepted_listener_count=accepted_listener_count,
+                    )
             finally:
                 # Best-effort unlink: a raw unlink here can raise a non-missing
                 # OSError and escape the finally, killing the playback loop after
@@ -5116,6 +5861,153 @@ def _finalize_selected_playback(
                 finally:
                     if state.active_playback_segment is segment:
                         state.active_playback_segment = None
+
+
+def _boundary_assets_dir(config) -> Path:
+    """Resolve the imaging pack the cart is allowed to read."""
+    configured = getattr(getattr(config, "imaging", None), "assets_dir", "") or ""
+    if isinstance(configured, str) and configured:
+        return Path(configured)
+    return default_imaging_assets_dir()
+
+
+def _note_boundary_skip(state: StationState, reason: str, previous: AiredBoundary | None, segment: Segment) -> None:
+    state.boundary_imaging_skips[reason] = state.boundary_imaging_skips.get(reason, 0) + 1
+    logger.debug(
+        "boundary cart skip %s: %s → %s",
+        reason,
+        previous.kind.value if previous is not None else "none",
+        segment.type.value,
+    )
+
+
+def _boundary_abort_reason(
+    state: StationState, skip_event: asyncio.Event, epoch: int, stop_revision: int
+) -> str | None:
+    """Stop, Skip, or a continuity epoch change owns the seam before programme audio."""
+    if state.session_stopped:
+        return GenerationWasteReason.SESSION_STOPPED
+    if state.continuity_epoch != epoch or state.session_stop_revision != stop_revision:
+        return GenerationWasteReason.STALE_CONTINUITY
+    return "skip" if skip_event.is_set() else None
+
+
+@dataclass
+class _BoundaryPrelude:
+    """Caller-owned accounting survives interruption before programme audio."""
+
+    bytes_sent: int = 0
+    generation: int = 0
+    continuity_epoch: int = 0
+    abort_reason: str | None = None
+
+
+async def _broadcast_boundary_prelude(
+    *,
+    hub,
+    pacer,
+    state: StationState,
+    config,
+    segment: Segment,
+    last_aired: AiredBoundary | None,
+    chunk_size: int,
+    skip_event: asyncio.Event,
+    prelude: _BoundaryPrelude,
+) -> None:
+    """Send a packaged boundary cart before the programme file.
+
+    Records an abort reason when Stop, Skip, or a continuity change means the
+    programme file must not air. Prelude bytes are not accounted as the segment: the
+    caller keeps ``bytes_sent``, listener acceptance, and the share ring for
+    the programme file alone. The send stays here, not in a helper shared with
+    the file loop, so programme accounting cannot slip behind the pacing sleep.
+    """
+    choice = seam_choice(last_aired, segment)
+    generation_stale = last_aired is not None and last_aired.generation != hub.delivery_generation
+    # A policy exclusion owns its reason even when the room also changed.
+    # The immediate return keeps each skipped seam to one counter entry.
+    if choice.relative is None:
+        if choice.skip_reason:
+            _note_boundary_skip(state, choice.skip_reason, last_aired, segment)
+        return
+    if not config.audio.boundary_imaging:
+        _note_boundary_skip(state, SKIP_SWITCH_OFF, last_aired, segment)
+        return
+    if generation_stale:
+        _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
+        return
+
+    asset = Path(choice.relative)
+    try:
+        assets_dir = _boundary_assets_dir(config)
+        asset = assets_dir / choice.relative
+        path = _packaged_file(choice.relative, assets_dir=assets_dir)
+        if path is None:
+            warn_unusable(asset, "missing or unreadable")
+        playable = (
+            validated_playable_bytes(
+                path,
+                sample_rate=int(config.audio.sample_rate),
+                bitrate=int(config.audio.bitrate),
+                channels=int(config.audio.channels),
+            )
+            if path is not None
+            else None
+        )
+    except Exception:
+        warn_unusable(asset, "could not load")
+        playable = None
+    if not playable:
+        _note_boundary_skip(state, SKIP_ASSET_MISSING, last_aired, segment)
+        return
+
+    captured_epoch = state.continuity_epoch
+    captured_stop_revision = state.session_stop_revision
+    captured_generation = hub.delivery_generation
+    prelude.generation = captured_generation
+    prelude.continuity_epoch = captured_epoch
+
+    offset = 0
+    while offset < len(playable):
+        prelude.abort_reason = _boundary_abort_reason(state, skip_event, captured_epoch, captured_stop_revision)
+        if prelude.abort_reason is not None:
+            _note_boundary_skip(state, prelude.abort_reason, last_aired, segment)
+            return
+        if hub.delivery_generation != captured_generation:
+            _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
+            return
+        piece = playable[offset : offset + chunk_size]
+        offset += len(piece)
+        await hub.broadcast(piece)
+        prelude.bytes_sent += len(piece)
+        if offset == len(playable):
+            # Completion is the last emitted cart byte, even when an operator
+            # aborts the following programme during the final pacing sleep.
+            state.boundary_carts_aired += 1
+            logger.info(
+                "boundary cart %s: %s → %s",
+                choice.relative,
+                last_aired.kind.value if last_aired is not None else "none",
+                segment.type.value,
+            )
+        pacing = pacer.after_send(len(piece))
+        if pacing.kind is not None:
+            state.record_stream_pacing_event(
+                pacing.kind,
+                lateness_ms=pacing.lateness_seconds * 1000,
+                remaining_lead_ms=pacing.remaining_lead_seconds * 1000,
+                deficit_ms=pacing.deficit_seconds * 1000,
+                segment_type=segment.type.value,
+            )
+        if pacing.warn_underrun:
+            logger.warning(
+                "Stream delivery cushion exhausted by %.1f ms during boundary cart",
+                pacing.deficit_seconds * 1000,
+            )
+        if pacing.sleep_seconds > 0.005:
+            await asyncio.sleep(pacing.sleep_seconds)
+
+    prelude.abort_reason = _boundary_abort_reason(state, skip_event, captured_epoch, captured_stop_revision)
 
 
 async def run_playback_loop(app) -> None:
@@ -5146,9 +6038,13 @@ async def run_playback_loop(app) -> None:
     _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
     gap_clips_served = 0
+    # Last programme segment that sent audio. None after start, Stop, or an
+    # empty room, so the first bytes a listener hears are programme, not a cart.
+    last_aired: AiredBoundary | None = None
 
     while True:
         if state.session_stopped:
+            last_aired = None
             pacer.reset_timeline("playback_stop_resume")
             state.queue_empty_since = None
             gap_clips_served = 0
@@ -5162,6 +6058,7 @@ async def run_playback_loop(app) -> None:
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
+            last_aired = None
             pacer.reset_timeline("no_listeners")
             state.queue_empty_since = None
             gap_clips_served = 0
@@ -5272,7 +6169,6 @@ async def run_playback_loop(app) -> None:
                 if gap_clips_served == 0 and (fallback := _pick_recovery_clip(state)):
                     logger.info("Queue empty — serving packaged recovery clip: %s", fallback.name)
                     segment = await _packaged_recovery_segment(fallback)
-                    gap_clips_served += 1
                     segment_ready = True
 
                 if not segment_ready:
@@ -5376,7 +6272,6 @@ async def run_playback_loop(app) -> None:
                                 fallback.name,
                             )
                             segment = await _packaged_recovery_segment(fallback)
-                            gap_clips_served += 1
                             segment_ready = True
 
                     if (
@@ -5386,6 +6281,7 @@ async def run_playback_loop(app) -> None:
                     ):
                         pass
                     elif elapsed >= 60.0:
+                        last_aired = None
                         # Request forced banter once per silence episode to avoid producer thrash.
                         # queue_empty_since is intentionally NOT reset — the silence gate on
                         # /healthz and /readyz must stay active until real audio resumes.
@@ -5399,18 +6295,23 @@ async def run_playback_loop(app) -> None:
                         continue
                     else:
                         logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+                        last_aired = None
                         pacer.reset_timeline("queue_gap_fallback")
                         continue
+
+                # A producer or live control may have filled this gap while
+                # the packaged probe awaited. Its playable audio owns the next
+                # selection; this unqueued fill has no receipts to settle.
+                if _playable_runway_available(segment_queue, state):
+                    _unlink_ephemeral_best_effort(segment)
+                    continue
+                if segment_ready:
+                    gap_clips_served += 1
 
                 # Building a packaged fill can await a bounded probe while a
                 # Stop/Resume or another control advances continuity_epoch.
                 # These source-neutral rescue bytes are admitted only after
                 # that await, so bind them to the timeline that now owns them.
-                # Known trade-off: the stamp makes the staleness gate below
-                # unreachable for gap fills, so a control that queued fresh
-                # runway mid-probe has its cut deferred until the fill ends.
-                # Airing rescue audio is the safer default; teaching the fill
-                # to yield needs the full three-scenario test set first.
                 segment = _stamp_playback_gap_fill(segment, state)
 
         segment_metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
@@ -5430,7 +6331,7 @@ async def run_playback_loop(app) -> None:
             except asyncio.QueueFull:  # pragma: no cover - the get() freed this exact slot
                 _consume_queue_shadow(segment_queue, state, segment)
                 segment_queue.task_done()
-                state.continuity_slot = segment
+                _park_continuity_slot(state, segment)
             state.queue_empty_since = None
             gap_clips_served = 0
             logger.info(
@@ -5537,15 +6438,37 @@ async def run_playback_loop(app) -> None:
             gap_clips_served = 0
             continue
 
-        if not segment.mark_playback_started():
+        if not _packaged_banter_predecessor_is_current(state, segment):
+            # The clip was selected while its named starter was at queue-tail,
+            # but a later queue/source mutation removed or rejected that song.
+            # Drop at the last unstarted boundary rather than naming whichever
+            # unrelated track actually aired before it.
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_PLAYED_TRACK_REF)
+            _settle_discarded_selection_handoff(
+                segment_queue, state, segment, reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF
+            )
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info("Discarding exact-track packaged banter after its predecessor changed")
+            continue
+
+        if segment.released:
             # Settle like every other pre-air drop site. Without this the
             # segment vanishes with its listener-request reservation still held,
             # so the promised recording stays excluded from ordinary rotation
             # for the rest of the session with no retry and no waste trail.
-            # Its own reason, too: the usual cause is the segment's provider
-            # withdrawing it (an expired or released transient lease), which is
+            # Its own reason, too: the cause is the segment's provider
+            # withdrawing it (a released transient lease), which is
             # not an operator action. `operator_purge` renders to the operator as
             # "queue cleared" and would name them for something they did not do.
+            # The one-shot admission callback waits until after any boundary
+            # cart, immediately before the programme's first byte.
             state.record_discard(
                 segment,
                 reason=GenerationWasteReason.PLAYBACK_ADMISSION_DENIED,
@@ -5633,6 +6556,9 @@ async def run_playback_loop(app) -> None:
 
         try:
             bytes_sent = 0
+            prelude = _BoundaryPrelude()
+            pre_air_discard_reason: str | None = None
+            aired_generation = hub.delivery_generation
             accepted_listener_count = 0
             was_skipped = False
             send_completed_cleanly = False
@@ -5665,12 +6591,95 @@ async def run_playback_loop(app) -> None:
             try:
                 with open(segment.path, "rb") as f:
                     _skip_id3_and_xing_header(f)
-                    while chunk := f.read(chunk_size):
+                    # Read the programme's first chunk before any cart. An empty
+                    # or header-only file takes today's EOF path and never airs
+                    # an orphan sting. The cart itself is not part of this read.
+                    retained_chunk = f.read(chunk_size)
+                    send_programme = True
+                    if retained_chunk:
+                        await _broadcast_boundary_prelude(
+                            hub=hub,
+                            pacer=pacer,
+                            state=state,
+                            config=config,
+                            segment=segment,
+                            last_aired=last_aired,
+                            chunk_size=chunk_size,
+                            skip_event=skip_event,
+                            prelude=prelude,
+                        )
+                    if prelude.abort_reason == "skip":
+                        was_skipped = True
+                        terminal_reason = "skip"
+                        if skip_event.is_set():
+                            skip_event.clear()
+                        logger.info("Skipping current segment")
+                        send_programme = False
+                    elif prelude.abort_reason is not None:
+                        pre_air_discard_reason = prelude.abort_reason
+                    elif retained_chunk and not _home_context_generation_is_current(state, config, segment):
+                        pre_air_discard_reason = GenerationWasteReason.OPERATOR_PURGE
+                    elif retained_chunk and not _packaged_banter_predecessor_is_current(state, segment):
+                        pre_air_discard_reason = GenerationWasteReason.STALE_PLAYED_TRACK_REF
+                    elif (
+                        retained_chunk
+                        and segment.type is SegmentType.MUSIC
+                        and song_identity_key_is_blocklisted(_segment_blocklist_key(segment), state.blocklist)
+                    ):
+                        pre_air_discard_reason = GenerationWasteReason.OPERATOR_BAN
+                    elif retained_chunk and _segment_is_listener_reserved(state, segment):
+                        pre_air_discard_reason = GenerationWasteReason.LISTENER_REQUEST_RESERVED
+                    elif retained_chunk and not segment.mark_playback_started():
+                        # A provider can revoke its still-queued lease during
+                        # the cart. Consuming admission before that await would
+                        # falsely mark an unheard file as already playing.
+                        pre_air_discard_reason = GenerationWasteReason.PLAYBACK_ADMISSION_DENIED
+                    if pre_air_discard_reason is not None:
+                        state.record_discard(
+                            segment,
+                            reason=pre_air_discard_reason,
+                            already_counted_in_produced=pulled_from_queue,
+                        )
+                        _drop_segment_moment_receipts(state, segment, pre_air_discard_reason)
+                        listener_request_reservation_released = True
+                        companionship_discard_recorded = True
+                        terminal_reason = pre_air_discard_reason
+                        if pre_air_discard_reason == GenerationWasteReason.STALE_CONTINUITY:
+                            logger.warning(
+                                "Discarding playback selection after continuity epoch changed "
+                                "captured_epoch=%d current_epoch=%d type=%s",
+                                prelude.continuity_epoch,
+                                state.continuity_epoch,
+                                segment.type.value,
+                                extra={
+                                    "event": "playback_selection_stale_continuity",
+                                    "captured_continuity_epoch": prelude.continuity_epoch,
+                                    "continuity_epoch": state.continuity_epoch,
+                                    "segment_type": segment.type.value,
+                                },
+                            )
+                        elif pre_air_discard_reason == GenerationWasteReason.OPERATOR_PURGE:
+                            logger.info("Discarding stale Home-context segment before playback")
+                        else:
+                            logger.info("Discarding playback selection before first byte (%s)", pre_air_discard_reason)
+                        send_programme = False
+                    pending_chunk: bytes | None = retained_chunk if send_programme else None
+                    while send_programme:
+                        if pending_chunk is not None:
+                            chunk = pending_chunk
+                            pending_chunk = None
+                        else:
+                            chunk = f.read(chunk_size)
+                        if not chunk:
+                            send_completed_cleanly = True
+                            terminal_reason = "eof"
+                            break
                         if skip_event.is_set():
                             logger.info("Skipping current segment")
                             was_skipped = True
                             terminal_reason = "skip"
-                            pacer.reset_timeline("explicit_skip")
+                            # Already delivered bytes still play on every listener.
+                            # A new origin would add another full cushion per skip.
                             skip_event.clear()
                             break
 
@@ -5823,9 +6832,6 @@ async def run_playback_loop(app) -> None:
                             )
                         if pacing.sleep_seconds > 0.005:
                             await asyncio.sleep(pacing.sleep_seconds)
-                    else:
-                        send_completed_cleanly = True
-                        terminal_reason = "eof"
             except asyncio.CancelledError:
                 terminal_reason = "cancelled"
                 raise
@@ -5920,6 +6926,19 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            if bytes_sent > 0:
+                _aired_meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+                last_aired = AiredBoundary(
+                    kind=segment.type,
+                    rescue=bool(_aired_meta.get("rescue")),
+                    generation=aired_generation,
+                    packaged=bool(_aired_meta.get("packaged")),
+                    interrupt=bool(_aired_meta.get("interrupt")),
+                )
+            elif prelude.bytes_sent > 0:
+                # An orphaned cart already occupied this seam. Do not stack a
+                # second cart before the next programme gets its first byte.
+                last_aired = AiredBoundary(SegmentType.SWEEPER, False, prelude.generation)
             if not listener_request_reservation_released:
                 # File-error/empty-file restoration already popped this token
                 # into an active or backlogged retry. Other pre-byte exits (an
@@ -5956,7 +6975,16 @@ async def run_playback_loop(app) -> None:
                 accepted_listener_count=accepted_listener_count,
                 terminal_reason=terminal_reason,
                 all_chunks_audience_delivered=all_chunks_audience_delivered,
+                emit_stream_result=pre_air_discard_reason is None,
+                cancel_reason=pre_air_discard_reason or GenerationWasteReason.OPERATOR_PURGE,
             )
+            if pulled_from_queue and pre_air_discard_reason in {
+                GenerationWasteReason.OPERATOR_BAN,
+                GenerationWasteReason.LISTENER_REQUEST_RESERVED,
+            }:
+                remaining = list(getattr(segment_queue, "_queue", ()))
+                prior_tail = remaining[-1] if remaining else segment
+                _reconcile_queue_tail_adjacency(segment_queue, state, prior_tail=prior_tail)
 
 
 def _schedule_banter_memory_extraction_after_send(
@@ -6399,7 +7427,7 @@ async def _wait_for_first_listen_resume(request: Request) -> bool:
     return True
 
 
-async def _audio_generator(request: Request, *, first_listen: bool = False):
+async def _audio_generator(request: Request, *, first_listen: bool = False, prelude: bool = True):
     """Stream an eligible first-listen prelude, then the shared live station.
 
     The packaged show is emitted before subscribing to ``LiveStreamHub``.  It
@@ -6411,10 +7439,10 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
     if first_listen and state.session_stopped and not await _wait_for_first_listen_resume(request):
         return
     show_path = None
-    if first_listen_show_required(request.app.state):
+    if prelude and first_listen_show_required(request.app.state):
         try:
             show_path = await asyncio.wait_for(
-                asyncio.to_thread(approved_first_listen_show_path),
+                asyncio.to_thread(approved_first_listen_show_path, english=first_listen),
                 timeout=FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS,
             )
         except TimeoutError:
@@ -6428,25 +7456,43 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
             return
         logger.info("First Listen client prelude: %s", show_path.name)
         try:
+            # Keep a small decoder cushion so WebKit can start immediately,
+            # while bounding the backlog instead of sending the whole opening.
+            opening_pacer = StreamPacer(DEFAULT_CLIP_BITRATE_KBPS * 125)
             chunk_iter = iter(iter_first_listen_show_chunks(show_path))
+            chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
             while True:
-                chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
+                if await request.is_disconnected() or state.session_stopped:
+                    return
                 if chunk is None:
                     break
                 yield chunk
+                # The prelude is audio a listener accepted, so it counts as air.
+                # Pacing it in real time means nobody reaches the hub for ~23s on
+                # a cold install; without this stamp the station would report
+                # `503 starting` and could trip the silence watchdog while the
+                # opening is audibly covering the speaker. Only the timestamp is
+                # set: `current_stream_audible` belongs to a queued segment, and
+                # no segment is on air yet.
+                state.last_air_monotonic = _runtime_monotonic()
+                pacing = opening_pacer.after_send(len(chunk))
+                chunk = await asyncio.to_thread(_next_first_listen_chunk, chunk_iter)
+                # Join live immediately at EOF, with the last packet still buffered.
+                if chunk is not None and pacing.sleep_seconds > 0:
+                    await asyncio.sleep(pacing.sleep_seconds)
         except OSError:
             # The reviewed package asset is optional at runtime: corruption or
             # an unreadable installation falls through to the normal instant-
             # audio ladder instead of terminating the speaker request.
             logger.warning("First Listen client prelude became unreadable; joining live station", exc_info=True)
-        if await request.is_disconnected():
+        if await request.is_disconnected() or state.session_stopped:
             return
 
     listener_id, listener_queue = hub.subscribe()
 
     try:
         while True:
-            if await request.is_disconnected():
+            if await request.is_disconnected() or not hub.has_listener(listener_id):
                 break
 
             try:
@@ -6456,7 +7502,7 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
                     break
                 continue
 
-            if chunk is None:
+            if chunk is None or not hub.has_listener(listener_id):
                 break
 
             yield chunk
@@ -6465,11 +7511,15 @@ async def _audio_generator(request: Request, *, first_listen: bool = False):
 
 
 async def _render_admin_response(request: Request, prefix: str) -> HTMLResponse:
+    from html import escape
+
     # CSP: 'unsafe-inline' is required because admin.html has inline event handlers
     # (onclick, oninput, onchange) on ~40 elements that cannot carry a nonce attribute.
     # esc() on all HA fields in admin.html is the load-bearing XSS defense.
     await _wait_for_first_listen_bootstrap(request.app.state)
     html = _get_injected_html("admin", _ADMIN_HTML, prefix)
+    identity = str(getattr(request.app.state, "runtime_identity", "Version and build unavailable"))
+    html = html.replace("<!-- runtime-identity -->", escape(identity))
     state = getattr(request.app.state, "station_state", None)
     stopped = "true" if bool(getattr(state, "session_stopped", False)) else "false"
     first_listen_entry = _first_listen_entry_state(request.app.state)
@@ -6613,24 +7663,31 @@ async def service_worker():
 
 
 def _resolve_static_file(filename: str) -> Path | None:
-    """Resolve a user-requested static asset path safely.
+    """Select a contained static file without constructing a path from input.
 
-    Rejects absolute paths and ``..`` components before filesystem lookup, then
-    confirms the resolved target stays under the static directory and is a file.
+    Match the walked name before resolving it so safe file aliases still work.
+    Directory symlinks are not traversed by rglob.
     """
-    if filename.startswith("/") or ".." in Path(filename).parts:
+    if filename.startswith("/") or "\x00" in filename or ".." in filename.split("/"):
         return None
 
-    static_root = _STATIC_DIR.resolve()
     try:
-        candidate = (static_root / filename).resolve()
-    except OSError:
+        static_root = _STATIC_DIR.resolve()
+        for entry in static_root.rglob("*"):
+            if filename != entry.relative_to(static_root).as_posix():
+                continue
+            try:
+                candidate = entry.resolve()
+                if candidate.is_relative_to(static_root) and candidate.is_file():
+                    return candidate
+            except (OSError, RuntimeError, ValueError):
+                continue
+    except (OSError, RuntimeError, ValueError):
+        # Guard root resolution and lazy iteration too: an unreadable install
+        # or symlink cycle must answer 404 instead of raising on a public route.
         return None
 
-    if not candidate.is_relative_to(static_root) or not candidate.is_file():
-        return None
-
-    return candidate
+    return None
 
 
 @router.get("/static/{filename:path}")
@@ -6814,11 +7871,15 @@ async def stream(request: Request):
     # Omit ``icy-genre`` when no listener-facing tagline survives header folding.
     if icy_genre:
         headers["icy-genre"] = icy_genre
-    audio = (
-        _audio_generator(request, first_listen=True)
-        if request.query_params.get("first_listen") == "1"
-        else _audio_generator(request)
-    )
+    # The existing browser owner rejoins live after an explicit transport click.
+    # It must not replay either opening while human confirmation is still pending.
+    first_listen_mode = request.query_params.get("first_listen")
+    if first_listen_mode == "live":
+        audio = _audio_generator(request, first_listen=True, prelude=False)
+    elif first_listen_mode == "1":
+        audio = _audio_generator(request, first_listen=True)
+    else:
+        audio = _audio_generator(request)
     return StreamingResponse(
         audio,
         headers=headers,
@@ -6841,12 +7902,49 @@ async def setup_status(request: Request, _: None = Depends(_require_active_setup
 
 @router.post("/api/setup/recheck")
 async def setup_recheck(request: Request, _: None = Depends(_require_active_setup_access)):
-    """Force a fresh setup snapshot."""
+    """Force a fresh setup snapshot and refresh configured AI-key verdicts."""
     _body, error = await _strict_setup_json(request, {})
     if error is not None:
         return error
-    await _wait_for_first_listen_bootstrap(request.app.state)
-    return _setup_projection(request, force_refresh=True)["setup"]
+    app_state = request.app.state
+    keys = _provider_check_identity(app_state)
+    task = getattr(app_state, "_setup_recheck_provider_task", None)
+    if task is None or task.done() or getattr(app_state, "_setup_recheck_provider_task_keys", None) != keys:
+        task = asyncio.create_task(_run_setup_recheck_provider_check(request))
+        app_state._setup_recheck_provider_task = task
+        app_state._setup_recheck_provider_task_keys = keys
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=_SETUP_RECHECK_PROVIDER_WAIT_SECONDS)
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise
+    await _wait_for_first_listen_bootstrap(app_state)
+    setup = _setup_projection(request, force_refresh=True)["setup"]
+    setup["provider_check_pending"] = not task.done()
+    setup["provider_check_failed"] = task.cancelled() or (task.done() and not task.result())
+    return setup
+
+
+_SETUP_RECHECK_PROVIDER_WAIT_SECONDS = 2.0
+
+
+async def _run_setup_recheck_provider_check(request: Request) -> bool:
+    # Keep the waiter alive after the response budget so the shared probe settles.
+    config = request.app.state.config
+    try:
+        result = await _probe_provider_keys(request.app.state, ai_only=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # provider I/O must not block setup
+        logger.debug("Setup recheck provider probe failed: %s", exc)
+        return False
+    providers = result.get("providers", {}) if isinstance(result, dict) else {}
+    return all(
+        not key or _verdict_from_probe_entry(providers.get(name, {})) is not None
+        for name, key in (("anthropic", config.anthropic_api_key), ("openai_chat", config.openai_api_key))
+    )
 
 
 @router.post("/api/setup/first-listen/players")
@@ -7239,77 +8337,7 @@ async def setup_provider_check(request: Request, _: None = Depends(_require_acti
     _body, error = await _strict_setup_json(request, {})
     if error is not None:
         return error
-    config = request.app.state.config
-
-    def _record_if_task_keys_match(probe_result: dict) -> None:
-        # The verdict must reflect the keys the SHARED in-flight task actually probed,
-        # not this waiter's snapshot. A later request joining an old task after a
-        # concurrent save swapped a key must NOT accept that task's stale 401. Compare
-        # current config to the keys captured when the task was created.
-        snapshot = getattr(request.app.state, "_provider_check_task_keys", None)
-        if snapshot == (
-            config.anthropic_api_key,
-            config.openai_api_key,
-            config.azure_speech_key,
-            config.azure_speech_region,
-            config.elevenlabs_api_key,
-        ):
-            _record_provider_verdict(request.app.state.station_state, probe_result)
-
-    lock = getattr(request.app.state, "_provider_check_lock", None)
-    if lock is None:
-        lock = asyncio.Lock()
-        request.app.state._provider_check_lock = lock
-
-    async with lock:
-        cached_at = getattr(request.app.state, "_provider_check_cached_at", 0.0)
-        cached_result = getattr(request.app.state, "_provider_check_cached_result", None)
-        if cached_result is not None and time.time() - cached_at < 2.0:
-            return cached_result
-
-        task = getattr(request.app.state, "_provider_check_task", None)
-        if task is not None and task.done():
-            # Task finished but result wasn't cached yet (done-but-uncached window).
-            # Cache it now to close the race instead of spawning a second probe.
-            try:
-                result = task.result()
-            except BaseException:
-                request.app.state._provider_check_task = None
-            else:
-                request.app.state._provider_check_cached_result = result
-                request.app.state._provider_check_cached_at = time.time()
-                request.app.state._provider_check_task = None
-                _record_if_task_keys_match(result)
-                return result
-            task = None
-        if task is None:
-            # Capture the keys this task probes so the verdict can't be misattributed
-            # to a later config (Codex: snapshot travels with the task, not the waiter).
-            request.app.state._provider_check_task_keys = (
-                config.anthropic_api_key,
-                config.openai_api_key,
-                config.azure_speech_key,
-                config.azure_speech_region,
-                config.elevenlabs_api_key,
-            )
-            task = asyncio.create_task(check_provider_keys(config))
-            request.app.state._provider_check_task = task
-
-    try:
-        result = await task
-    except BaseException:
-        async with lock:
-            if getattr(request.app.state, "_provider_check_task", None) is task:
-                request.app.state._provider_check_task = None
-        raise
-
-    async with lock:
-        if getattr(request.app.state, "_provider_check_task", None) is task:
-            request.app.state._provider_check_cached_result = result
-            request.app.state._provider_check_cached_at = time.time()
-            request.app.state._provider_check_task = None
-    _record_if_task_keys_match(result)
-    return result
+    return await _probe_provider_keys(request.app.state)
 
 
 @router.post("/api/setup/save-keys")
@@ -7366,6 +8394,8 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
         await loop.run_in_executor(None, _save_dotenv, updates)
 
     _apply_live_credentials(request.app.state.station_state, config, updates)
+    request.app.state._provider_check_generation = getattr(request.app.state, "_provider_check_generation", 0) + 1
+    request.app.state._provider_check_cached_result = None
 
     # Re-validate the freshly-saved key in the background so the admin reflects a bogus
     # key WITHOUT waiting for a banter segment to fail. Applies to EVERY credential-save
@@ -7400,8 +8430,11 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
     capabilities["anthropic_key"] = bool(config.anthropic_api_key)
     capabilities["openai"] = bool(config.openai_api_key)
     provider_health = setup_projection["provider_health"]
+    capabilities["provider_probe_in_flight"] = provider_health["probe_in_flight"]
     capabilities["anthropic_degraded"] = provider_health["anthropic"]["degraded"]
     capabilities["anthropic_retry_after_s"] = provider_health["anthropic"]["retry_after_s"]
+    capabilities["openai_degraded"] = provider_health["openai"]["degraded"]
+    capabilities["openai_retry_after_s"] = provider_health["openai"]["retry_after_s"]
     # Tri-state key-validation verdict ("unverified" | "valid" | "rejected"), distinct
     # from the time-based `anthropic_degraded`. Lets the admin show a persistent
     # "key not working" state WITHOUT waiting for a banter segment to 401.
@@ -7414,12 +8447,18 @@ async def capabilities(request: Request, _: None = Depends(require_admin_access)
         provider_health["anthropic"]["key_status"] if config.anthropic_api_key else None,
         provider_health["openai"]["key_status"] if config.openai_api_key else None,
     ]
-    # Only steer once the probes have settled: an "unverified" key is still in flight,
-    # so don't nudge "replace your key" while a configured key might yet come back valid.
+    # A completed inconclusive probe needs a retry action; only a definitive
+    # rejection should steer the operator toward replacing a key.
     if "rejected" in statuses and "valid" not in statuses and "unverified" not in statuses:
         result["next_step"] = {
             "key": "fix_llm_key",
             "message": "An AI key isn't working — replace it in Settings to restore AI hosts",
+            "action": "open_settings",
+        }
+    elif "unverified" in statuses and "valid" not in statuses and not provider_health["probe_in_flight"]:
+        result["next_step"] = {
+            "key": "check_ai_connection",
+            "message": "We couldn't confirm the AI connection. Check it again in Settings.",
             "action": "open_settings",
         }
 
@@ -8072,6 +9111,10 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
         )
 
     state.session_stopped = True
+    # The one writer. An in-flight Resume compares this to decide whether it was
+    # superseded by a Stop (stay paused, say so) or merely by another control
+    # (reserve the packaged ladder and carry on).
+    state.session_stop_revision += 1
     state.force_recovery_active = False
     state.current_stream_audible = False
     state.last_air_monotonic = None
@@ -8155,9 +9198,50 @@ async def resume_session(
     _: None = Depends(require_admin_access),
 ):
     """Resume with immediate audio, or explicitly force a host-audio rebuild."""
-    state = request.app.state.station_state
     app_state = request.app.state
-    config = request.app.state.config
+    stop_revision = app_state.station_state.session_stop_revision
+    lock = _resume_lock(app_state)
+    if not await _acquire_resume_lock(lock):
+        logger.info("Resume declined: another Resume is still starting the station")
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": (
+                    "The station is already starting. Give it a few seconds, then press Start again if it stays paused."
+                ),
+            },
+        )
+    try:
+        if app_state.station_state.session_stop_revision != stop_revision:
+            # A Stop landed while this Resume waited behind another one. The
+            # operator's latest action wins; resuming now would undo it.
+            return _resume_superseded_response(app_state.station_state)
+        return await _resume_session_locked(app_state, force=force, stop_revision=stop_revision)
+    finally:
+        lock.release()
+
+
+def _resume_superseded_response(state: StationState) -> JSONResponse:
+    """409 for a Resume overtaken by an operator Stop. Never offers Force Start."""
+    logger.info(
+        "Resume superseded by an operator stop epoch=%d",
+        state.continuity_epoch,
+        extra={"event": "session_resume_superseded", "continuity_epoch": state.continuity_epoch},
+    )
+    return JSONResponse(
+        status_code=409,
+        content={
+            "ok": False,
+            "error": "The station was paused again while it was starting. Press Start to try again.",
+        },
+    )
+
+
+async def _resume_session_locked(app_state: Any, *, force: bool, stop_revision: int):
+    """Body of ``POST /api/resume``; the caller holds ``_resume_lock``."""
+    state = app_state.station_state
+    config = app_state.config
 
     if not state.session_stopped:
         try:
@@ -8210,18 +9294,23 @@ async def resume_session(
         return {"ok": True, "recovering": True, "runway_source": "none"}
 
     # Resume needs *some* playable audio, not a full runway: the producer
-    # replenishes once it wakes. This keeps the reservation non-empty even when
-    # the runway floor is configured to 0, so the fail-closed check below is a
-    # real test of playability rather than a no-op. The reservation is epoch-
-    # stamped inside the call, so a queue waiter blocked since before the Stop
-    # still accepts it.
-    _reserve_continuity_runway(
+    # replenishes once it wakes. Starter catalog verification runs off the
+    # event loop before this reservation so a cold cache can still start on a
+    # real song.
+    runway = await _reserve_resume_runway(
         app_state,
         state,
         config,
         discard_reason=GenerationWasteReason.OPERATOR_STOP,
-        minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+        stop_revision_at_request=stop_revision,
     )
+    # That verification awaits, so this route now has an interruption point it
+    # never had. A Stop accepted inside it owns the session: answer with the
+    # conflict rather than falling through to the assetless gate below, whose
+    # copy would blame missing recovery assets and offer Force Start -- a remedy
+    # that would undo the operator's own Stop.
+    if runway.superseded_by_stop:
+        return _resume_superseded_response(state)
     # The reservation counts ready seconds across every protected segment, but
     # the gate below reads only the queue head — the loop's next pull. A dead
     # head in front of a ready tail would satisfy the reservation and fail the
@@ -8302,6 +9391,38 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
             "ok": False,
             "error": "The station is paused. Press Start, then tap the Air Next control again.",
         }
+    # A forced ad skips the scheduler's availability check, so without this the
+    # button airs the brand name and tagline as an advertisement on exactly the
+    # install that has no way to write one. Refuse before the pending check:
+    # waiting a few seconds cannot fix a missing key, so that advice would be wrong.
+    if valid[seg_type] is SegmentType.AD:
+        from mammamiradio.scheduling.producer import ad_programme_block
+
+        block = ad_programme_block(request.app.state.config, state)
+        if block == "no_ai_key":
+            return {
+                "ok": False,
+                "error": (
+                    "The hosts need a working AI key to write an ad. Add or check it in Motore, "
+                    "then tap Ad break again."
+                ),
+            }
+        if block == "no_ad_route":
+            return {
+                "ok": False,
+                "error": (
+                    "No ad model route resolves. Check the active profile in model_registry.toml, "
+                    "restart, then tap Ad break again."
+                ),
+            }
+        if block == "no_ad_brands":
+            return {
+                "ok": False,
+                "error": (
+                    "None of the ad brands can air right now. Check the brands and their campaign "
+                    "voices in radio.toml, restart the station, then tap Ad break again."
+                ),
+            }
     # Air-next builds and front-inserts one operator trigger at a time. Reject a
     # second tap while one is still pending — with a way out (leadership #5),
     # never a silent overwrite of the first pick.
@@ -8467,14 +9588,13 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
             "effective_on": "next_banter_generation",
             "stream_status": "unaffected",
         }
-    except Exception as exc:
-        logger.error("hot-reload: importlib.reload failed: %s", exc)
+    except Exception:
+        logger.exception("hot-reload: importlib.reload failed")
         return JSONResponse(
             status_code=500,
             content={
                 "ok": False,
                 "error_code": "reload_failed",
-                "exception": str(exc),
                 "stream_status": "unaffected",
                 "retryable": True,
             },
@@ -8787,6 +9907,60 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
     logger.info("On-Air Sound (broadcast chain) %s by admin", "enabled" if value else "disabled")
     _record_operator_action(request, "broadcast_chain", old_value, value)
     return {"ok": True, "broadcast_chain": value}
+
+
+_boundary_imaging_lock = asyncio.Lock()
+
+
+@router.get("/api/boundary-imaging")
+async def get_boundary_imaging(request: Request, _: None = Depends(require_admin_access)):
+    """Return the Transitions dial and whether a restart resets its live choice."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    return {
+        "boundary_imaging": bool(config.audio.boundary_imaging),
+        "resets_on_restart": bool(config.is_addon),
+        "carts_aired": state.boundary_carts_aired,
+    }
+
+
+@router.post("/api/boundary-imaging")
+async def set_boundary_imaging(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle packaged boundary sounds live, at the next seam.
+
+    No queue purge. Standalone writes ``MAMMAMIRADIO_BOUNDARY_IMAGING`` to
+    ``.env`` before the runtime changes. The add-on has no Supervisor option
+    for this dial, so the change lasts until the container restarts with its
+    configured startup value (on by default).
+    """
+    config = request.app.state.config
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    if "boundary_imaging" not in body:
+        return {"ok": False, "error": "expected JSON object with boundary_imaging"}
+    raw_value = body["boundary_imaging"]
+    if not isinstance(raw_value, bool):
+        return {"ok": False, "error": "boundary_imaging must be a JSON boolean (true/false)"}
+    value = raw_value
+    env_value = "true" if value else "false"
+    loop = asyncio.get_running_loop()
+    async with _boundary_imaging_lock:
+        if not config.is_addon:
+            try:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_BOUNDARY_IMAGING": env_value})
+            except Exception:
+                logger.error("Failed to persist Transitions toggle", exc_info=True)
+                return JSONResponse(
+                    status_code=500,
+                    content={"ok": False, "error": "failed to persist transitions setting"},
+                )
+        old_value = bool(config.audio.boundary_imaging)
+        config.audio.boundary_imaging = value
+        os.environ["MAMMAMIRADIO_BOUNDARY_IMAGING"] = env_value
+    logger.info("Transitions (boundary imaging) %s by admin", "enabled" if value else "disabled")
+    _record_operator_action(request, "boundary_imaging", old_value, value)
+    return {"ok": True, "boundary_imaging": value, "resets_on_restart": bool(config.is_addon)}
 
 
 _quality_lock = asyncio.Lock()
@@ -9133,6 +10307,13 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
         persisted = _delete_persisted_source(config.cache_dir)
     logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments, forced banter", purged)
     return {"ok": True, "purged": purged, "persisted": persisted}
+
+
+@router.post("/api/media-sources/local/scan")
+async def scan_local_music(request: Request, _: None = Depends(require_admin_access)):
+    """Refresh operator-owned files without replacing the active base source."""
+    result = await scan_and_reconcile_local_library(request.app.state)
+    return {"ok": not bool(result.get("error")), **result}
 
 
 @router.post("/api/playlist/remove")
@@ -11140,6 +12321,18 @@ async def create_clip(request: Request):
         "track_artist": track_artist,
         "created_at": int(time.time()),
     }
+    # The starter catalog guarantees a positive duration_seconds for every
+    # entry, but this only claims one if the snapshot actually proves it —
+    # never guess from clip_data's byte length, which is the raw starter
+    # file at its own encode rate, not config.audio.bitrate.
+    snap_duration = snap.get("duration_seconds")
+    if (
+        isinstance(snap_duration, int | float)
+        and not isinstance(snap_duration, bool)
+        and math.isfinite(snap_duration)
+        and snap_duration > 0
+    ):
+        sidecar["duration_seconds"] = round(float(snap_duration), 3)
     if clip_attribution_override is not None:
         sidecar["music_attribution"] = clip_attribution_override
     try:
@@ -11333,6 +12526,7 @@ async def keep_this(request: Request, _: None = Depends(require_admin_access)):
         "station_name": config.display_station_name,
         "track_title": kept_title,
         "track_artist": "",
+        "duration_seconds": round(len(clip_data) / bytes_per_sec, 3),
         "segment_type": kept_type,
         "source": source,
         "created_at": int(now),
@@ -11600,6 +12794,16 @@ async def clip_landing(clip_id: str, request: Request):
     station_name = sidecar.get("station_name") or config.display_station_name
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
+    clip_duration_seconds = None
+    raw_duration = sidecar.get("duration_seconds")
+    if raw_duration is not None and not isinstance(raw_duration, bool):
+        try:
+            parsed_duration = float(raw_duration)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        else:
+            if math.isfinite(parsed_duration) and 0 < parsed_duration <= CLIP_MAX_PROVABLE_DURATION_SECONDS:
+                clip_duration_seconds = max(1, round(parsed_duration))
 
     return _TEMPLATES.TemplateResponse(
         request,
@@ -11610,6 +12814,7 @@ async def clip_landing(clip_id: str, request: Request):
             "station_name": station_name,
             "track_title": track_title,
             "track_artist": track_artist,
+            "clip_duration_seconds": clip_duration_seconds,
             "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
             "og_image_url": f"{public_base_url}/og-card.png",
             "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",
@@ -11690,6 +12895,14 @@ async def public_status(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers=headers)
 
 
+def _ad_programme_block(config: StationConfig, state: StationState) -> str | None:
+    """Name what stops the station airing a real advertisement, or ``None``."""
+
+    from mammamiradio.scheduling.producer import ad_programme_block
+
+    return ad_programme_block(config, state)
+
+
 @router.get("/status")
 async def status(
     request: Request,
@@ -11706,6 +12919,7 @@ async def status(
     payload = _public_status_payload(request)
     runtime_health = _runtime_health_snapshot(request)
     provider_health = _provider_health_snapshot(config, state)
+    provider_health["probe_in_flight"] = _provider_probe_in_flight(request.app.state)
     runtime_status = _runtime_status_snapshot(request, runtime_health=runtime_health, provider_health=provider_health)
     ad_cast = _ad_cast_status_payload(config)
     playlist_offset, playlist_limit = _page_bounds(playlist_offset, playlist_limit, default_limit=80, max_limit=200)
@@ -11758,6 +12972,12 @@ async def status(
                 "recent": [{"kind": r["kind"], "label": r["label"], "ok": r["ok"]} for r in list(state.gen_recent)],
             },
             "playlist_source": _serialize_source(state.playlist_source),
+            # Local paths and scan diagnostics are operator-only. The public
+            # payload intentionally carries only source-readiness summaries.
+            "local_library": local_library_admin_status(
+                getattr(request.app.state, "local_library_status", None),
+                getattr(config, "music_dir", None),
+            ),
             "jamendo": safe_jamendo_status(config, getattr(request.app.state, "jamendo_provider", None)),
             "external_extractors": _external_extractors_status(config),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
@@ -11787,6 +13007,10 @@ async def status(
                 "ad_spots_per_break": config.pacing.ad_spots_per_break,
                 "songs_since_banter": state.songs_since_banter,
                 "songs_since_ad": state.songs_since_ad,
+                # Why ads cannot air, or None. While set, the owed break is held
+                # at the threshold, and the counter alone would read "— next"
+                # forever; the admin shows this reason instead.
+                "ad_block": _ad_programme_block(config, state),
             },
             "consumption": {
                 "api_calls": state.api_calls,
@@ -11808,7 +13032,10 @@ async def status(
             # unique people.  Keep the legacy nested shape unchanged.
             "connections_total": state.listeners_total,
             "listener_session": state.listener_session.snapshot().to_dict(),
-            "runtime_health": runtime_health,
+            "runtime_health": {
+                **runtime_health,
+                "ha_publish": ha_publish_status_payload(config),
+            },
             "runtime_status": runtime_status,
             "provider_health": provider_health,
             "chaos_mode": {

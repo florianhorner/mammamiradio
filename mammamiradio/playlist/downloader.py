@@ -6,21 +6,24 @@ import asyncio
 import importlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from itertools import islice
 from pathlib import Path
 from types import ModuleType
-from typing import Literal
+from typing import Any, Literal
 
 from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.core.models import Track
 from mammamiradio.core.path_safety import safe_path_within
+from mammamiradio.playlist.music_admission import REFERENCE_SINGLE_TRACK_SEC
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +42,22 @@ _EXTERNAL_MEDIA_SOURCES = frozenset({"youtube", "classic"})
 # Per-socket-operation timeout for yt-dlp network reads. Python's urllib has no
 # default socket timeout — without this a stalled YouTube socket blocks a
 # download thread forever, leaking a slot from the shared run_in_executor pool
-# the audio pipeline also uses. Pairs with the `throttled_rate` opt, which
-# already bounds slow-but-alive transfers.
+# the audio pipeline also uses. yt-dlp ignores unknown option keys, so the old
+# `throttled_rate` key never bounded slow transfers. Do not add
+# `throttledratelimit`: yt-dlp then re-extracts in an uncapped loop whenever a
+# download is slow.
 _YTDLP_SOCKET_TIMEOUT_SEC = 30
+
+# yt-dlp `live_status` values that are not a finished recording: live now,
+# scheduled, or just ended and not yet processed into a normal video. None of
+# them downloads as a song; a live one can run until the station restarts.
+_LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
+
+# An extract more than this many times the track's own length is plainly not
+# the song the track describes (an hour-long compilation, a mix). Generous on
+# purpose: for YouTube picks the admission envelope after download still
+# judges normal lengths.
+_EXTRACT_DURATION_MAX_MULTIPLE = 4
 
 # Canonical YouTube video-id shape (11 chars, base64url alphabet). Single source
 # of truth for both the search-result filter (below) and the add-external payload
@@ -327,9 +343,24 @@ _LOCAL_FILES_LIMIT = 200
 _LOCAL_DIRECTORY_ENTRY_LIMIT = 10_000
 
 
+def _safe_operator_local_path(path: Path, music_dir: Path) -> Path | None:
+    """Resolve one real file without escaping the configured music root."""
+    try:
+        if music_dir.is_symlink():
+            return None
+        resolved = safe_path_within(path, music_dir, reject_symlinks=True)
+        return resolved if resolved is not None and resolved.is_file() else None
+    except OSError:
+        return None
+
+
+def _is_scanned_library_track(track: Track) -> bool:
+    return track.source == "local" and track.spotify_id.startswith("local_")
+
+
 def _find_local(track: Track, music_dir: Path) -> Path | None:
     """Check if a local MP3 exists in the music/ directory."""
-    if not music_dir.exists():
+    if not music_dir.is_dir() or music_dir.is_symlink():
         return None
     import time as _time
 
@@ -348,7 +379,7 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
                     if not entry.name.endswith(".mp3"):
                         continue
                     try:
-                        if not entry.is_file():
+                        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
                             continue
                     except OSError:
                         continue
@@ -361,8 +392,58 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
     for f in files:
         name = f.stem.lower()
         if track.cache_key in name or track.title.lower() in name:
-            return f
+            admitted = _safe_operator_local_path(f, music_dir)
+            if admitted is not None:
+                return admitted
     return None
+
+
+class ExternalMediaRefusedError(RuntimeError):
+    """The extract was live or far longer than its track; no audio was downloaded."""
+
+
+def _refuse_live_or_overlong(track: Track, refusals: list[str]) -> Callable[..., str | None]:
+    """Build the yt-dlp ``match_filter`` that turns down a live or wildly longer extract.
+
+    yt-dlp runs it on the extracted info before format selection, so a refusal
+    transfers no audio. Each reason is also appended to ``refusals`` for the caller.
+    """
+    reference_sec = max(_claimed_track_sec(track), REFERENCE_SINGLE_TRACK_SEC)
+    limit_sec = reference_sec * _EXTRACT_DURATION_MAX_MULTIPLE
+
+    # yt-dlp also passes ``incomplete=``; the verdict does not depend on it.
+    def match_filter(info: dict[str, Any], **_: Any) -> str | None:
+        if info.get("is_live") or info.get("live_status") in _LIVE_STATUSES:
+            reason = "refused a live stream before download"
+        else:
+            duration = info.get("duration")
+            if isinstance(duration, float) and not math.isfinite(duration):
+                return None
+            if not isinstance(duration, int | float) or duration <= limit_sec:
+                return None
+            reason = f"refused a result running {_clock(duration)} before download (limit {_clock(limit_sec)})"
+        refusals.append(reason)
+        return reason
+
+    return match_filter
+
+
+def _claimed_track_sec(track: Track) -> float:
+    """The track's recorded length in seconds, or 0 when missing or malformed.
+
+    ``/api/playlist/add`` stores the posted ``duration_ms`` unchecked, so a
+    string, NaN, huge, or negative value must not break the refusal limit.
+    """
+    try:
+        seconds = float(track.duration_ms) / 1000
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return seconds if math.isfinite(seconds) and seconds > 0 else 0.0
+
+
+def _clock(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole // 60}:{whole % 60:02d}"
 
 
 def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
@@ -375,11 +456,15 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         query = f"https://www.youtube.com/watch?v={track.youtube_id}"
     else:
         query = f"ytsearch1:{track.artist} {track.title} official audio"
+    refusals: list[str] = []
+    match_filter = _refuse_live_or_overlong(track, refusals)
     ytdlp_tmp = cache_dir / ".ytdlp_tmp" / track.cache_key
     ytdlp_tmp.mkdir(parents=True, exist_ok=True)
     opts = {
         "format": "bestaudio/best",
-        "outtmpl": str(cache_dir / f"{track.cache_key}.%(ext)s"),
+        # Relative to `paths`: an absolute template makes yt-dlp ignore both
+        # paths, and a failed download then strands `.part` files in the cache.
+        "outtmpl": f"{track.cache_key}.%(ext)s",
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -390,12 +475,29 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "abort_on_unavailable_fragments": True,
+        # Fail on a missing HLS/DASH fragment instead of skipping it: a skipped
+        # fragment still passes the duration and silence checks and airs as a
+        # jump, while a failed download only makes the producer pick another
+        # track. `abort_on_unavailable_fragments` is only a CLI flag name;
+        # yt-dlp never reads it as an option key. The fragment retry only covers
+        # a 4xx answer; a 5xx, a dropped connection, or a cut-off response fails
+        # at once, because `retries` is unset.
+        "skip_unavailable_fragments": False,
+        "fragment_retries": 1,
         "socket_timeout": _YTDLP_SOCKET_TIMEOUT_SEC,  # fail a stalled socket, never hang
-        "throttled_rate": 100_000,  # re-extract URLs if speed drops below 100 KB/s
-        "check_formats": True,  # verify formats are downloadable before selecting
+        # Test only the format being downloaded. True test-downloads every
+        # format (175 for one video).
+        "check_formats": "selected",
         "concurrent_fragment_downloads": 2,  # parallel fragment downloads
-        "paths": {"temp": str(ytdlp_tmp)},  # atomic: fragments in temp, move on completion
+        # Atomic: work files stay in temp (removed below), and only the
+        # finished file moves into the cache. yt-dlp joins a relative temp
+        # path onto home, so temp is given relative to it; that also holds when
+        # the cache directory itself is relative (the standalone default).
+        "paths": {"home": str(cache_dir), "temp": str(Path(".ytdlp_tmp") / track.cache_key)},
+        # One video per query: a multi-camera video would otherwise expand into
+        # sibling feeds that all write the same cache file.
+        "noplaylist": True,
+        "match_filter": match_filter,
     }
 
     try:
@@ -405,9 +507,11 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         shutil.rmtree(ytdlp_tmp, ignore_errors=True)
 
     out_path = cache_dir / f"{track.cache_key}.mp3"
-    if not out_path.exists():
-        raise FileNotFoundError(f"Download failed for {track.display}")
-    return out_path
+    if out_path.exists():
+        return out_path
+    if refusals:
+        raise ExternalMediaRefusedError(refusals[0])
+    raise FileNotFoundError(f"Download failed for {track.display}")
 
 
 def _load_external_media_module() -> ModuleType:
@@ -489,9 +593,17 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
         if legacy_path.exists():
             logger.info("Legacy YouTube cache hit: %s", track.display)
             return legacy_path
-    if track.local_path is not None and track.local_path.exists():
-        logger.info("Track file: %s -> %s", track.display, track.local_path)
-        return track.local_path
+    if track.local_path is not None:
+        attached = (
+            _safe_operator_local_path(track.local_path, music_dir)
+            if _is_scanned_library_track(track)
+            else track.local_path
+            if track.local_path.is_file()
+            else None
+        )
+        if attached is not None:
+            logger.info("Track file: %s -> %s", track.display, attached)
+            return attached
 
     local = _find_local(track, music_dir)
     if local:
@@ -554,9 +666,17 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
 
 def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     """Resolve an explicit external request without a silent fallback."""
-    if track.local_path is not None and track.local_path.exists():
-        logger.info("Track file: %s -> %s", track.display, track.local_path)
-        return track.local_path
+    if track.local_path is not None:
+        attached = (
+            _safe_operator_local_path(track.local_path, music_dir)
+            if _is_scanned_library_track(track)
+            else track.local_path
+            if track.local_path.is_file()
+            else None
+        )
+        if attached is not None:
+            logger.info("Track file: %s -> %s", track.display, attached)
+            return attached
     local = _find_local(track, music_dir)
     if local:
         logger.info("Local file: %s -> %s", track.display, local)

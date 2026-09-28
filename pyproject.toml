@@ -12,7 +12,7 @@ dependencies = [
 
     "anthropic>=0.94.0",
     "edge-tts>=7.0",
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.2",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "openai>=1.0",
@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 external-media = [
-    "yt-dlp>=2026.6.9",
+    "yt-dlp>=2026.7.4",
 ]
 
 [tool.setuptools.packages.find]

@@ -25,6 +25,7 @@ SCRIPTS = [
 PY_SCRIPTS = [
     "generate_welcome_clips.py",
     "validate-release-beat.py",
+    "check_model_registry.py",
 ]
 
 

@@ -10,7 +10,10 @@ WORKDIR /app
 # Copy and install dependencies first for better layer caching
 COPY pyproject.toml .
 COPY mammamiradio/ mammamiradio/
-RUN pip install --no-cache-dir .
+COPY requirements.txt .
+RUN pip install --no-cache-dir --force-reinstall --require-hashes -r requirements.txt \
+    && pip install --no-cache-dir --no-deps . \
+    && pip check
 # Runtime config is copied AFTER the install layer so a radio.toml / registry edit
 # doesn't invalidate the expensive pip layer (matches the HA add-on Dockerfile).
 COPY radio.toml .

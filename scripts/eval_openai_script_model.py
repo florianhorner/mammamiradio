@@ -165,7 +165,8 @@ def format_preflight(details: dict[str, Any]) -> str:
 async def run_one(*, model: str, fixture: dict[str, Any], config, state, run_id: str) -> dict[str, Any]:
     # Force the OpenAI branch to use the model under test regardless of which
     # role the fixture's caller maps to: point every OpenAI catalog entry at it.
-    config.models.catalog["openai"] = {"large": model, "small": model}
+    openai_catalog = config.models.catalog.get("openai", {})
+    config.models.catalog["openai"] = dict.fromkeys(openai_catalog, model)
     record: dict[str, Any] = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "run_id": run_id,

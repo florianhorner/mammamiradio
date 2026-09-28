@@ -529,3 +529,72 @@ def test_preview_upcoming_includes_time_check():
     preview = preview_upcoming(state, pacing, tracks, count=8)
     types = [p["type"] for p in preview]
     assert "time_check" in types
+
+
+def test_an_unfillable_ad_break_airs_music_instead_of_a_placeholder():
+    """A fresh no-key install must not hear a brand name read as an advertisement."""
+    from mammamiradio.scheduling.scheduler import next_segment_type
+
+    pacing = PacingSection(songs_between_ads=4, songs_between_banter=99)
+    state = _make_state(segments_produced=5, songs_since_ad=4, songs_since_banter=0)
+    state.ad_programme_available = False
+    assert next_segment_type(state, pacing) == SegmentType.MUSIC
+
+
+def test_a_skipped_ad_break_stays_owed_and_fires_the_moment_it_can():
+    """Music substitutions receive no credit for speech that never aired."""
+    from mammamiradio.scheduling.scheduler import next_segment_type
+
+    pacing = PacingSection(songs_between_ads=4, songs_between_banter=99)
+    state = _make_state(segments_produced=5, songs_since_ad=9, songs_since_banter=0)
+    state.ad_programme_available = False
+    assert next_segment_type(state, pacing) == SegmentType.MUSIC
+    # The counter is the caller's; the scheduler never forgives the break by
+    # returning AD and letting the producer reset it.
+    assert state.songs_since_ad == 9
+    state.ad_programme_available = True
+    assert next_segment_type(state, pacing) == SegmentType.AD
+
+
+def test_an_overdue_unfillable_ad_break_says_so_rather_than_reporting_a_music_slot():
+    from mammamiradio.scheduling.scheduler import _decide_with_reason
+
+    pacing = PacingSection(songs_between_ads=4, songs_between_banter=99)
+    seg_type, reason = _decide_with_reason(5, 4, 0, pacing, deterministic=True, ad_available=False)
+    assert seg_type == SegmentType.MUSIC
+    assert reason != _decide_with_reason(5, 0, 0, pacing, deterministic=True)[1]
+    assert "advertisement" in reason
+    # Principle 5: never name a problem without a next step. Unavailability has
+    # two causes with different fixes, so the reason has to name both.
+    assert "AI key" in reason and "Motore" in reason
+    assert "ad brand" in reason
+
+
+def test_an_unavailable_ad_does_not_steal_a_due_banter_slot():
+    """Skipping the ad falls through to ordinary pacing, not straight to music."""
+    from mammamiradio.scheduling.scheduler import next_segment_type
+
+    pacing = PacingSection(songs_between_ads=4, songs_between_banter=3)
+    state = _make_state(segments_produced=5, songs_since_ad=4, songs_since_banter=5)
+    state.ad_programme_available = False
+    assert next_segment_type(state, pacing) == SegmentType.BANTER
+
+
+def test_ads_are_available_by_default_so_configured_stations_are_unaffected():
+    from mammamiradio.scheduling.scheduler import next_segment_type
+
+    pacing = PacingSection(songs_between_ads=4, songs_between_banter=99)
+    state = _make_state(segments_produced=5, songs_since_ad=4, songs_since_banter=0)
+    assert state.ad_programme_available is True
+    assert next_segment_type(state, pacing) == SegmentType.AD
+
+
+def test_the_v1_schedule_preview_preserves_its_frozen_ad_prediction():
+    """Live suppression must not silently change the frozen integration contract."""
+    from mammamiradio.scheduling.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_ads=2, songs_between_banter=99)
+    state = _make_state(segments_produced=5, songs_since_ad=2, songs_since_banter=0)
+    state.ad_programme_available = False
+    predicted = preview_upcoming(state, pacing, state.playlist, count=6)
+    assert any(entry["type"] == "ad" for entry in predicted), predicted

@@ -53,6 +53,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mammamiradio.home.atomic_json import atomic_write_json, chmod_owner_only, unlink_legacy_fixed_tmp
 from mammamiradio.home.gag_select import weighted_offer
 from mammamiradio.home.ha_context import BRONZE_ENTITIES, GOLD_ENTITIES, SILVER_ENTITIES
 from mammamiradio.home.ha_enrichment import HomeEvent
@@ -473,11 +474,17 @@ class EveningLedger:
     @classmethod
     def _load_raw(cls, cache_dir: Path) -> EveningLedger:
         path = cache_dir / LEDGER_FILENAME
+        chmod_owner_only(path)
         try:
-            payload = json.loads(path.read_text())
+            payload_text = path.read_text()
         except FileNotFoundError:
             return cls()
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError):
+            logger.warning("Evening ledger is unreadable, starting fresh: %s", path)
+            return cls()
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
             logger.warning("Evening ledger is unreadable, starting fresh: %s", path)
             return cls()
         if not isinstance(payload, dict):
@@ -520,14 +527,13 @@ class EveningLedger:
         return led
 
     def save_if_dirty(self, cache_dir: Path) -> None:
-        """Persist atomically (temp + rename) only when state changed."""
+        """Persist atomically (temp + rename, owner-only 0600) only when state changed."""
         if not self._dirty:
             return
         path = cache_dir / LEDGER_FILENAME
-        tmp = path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True))
-            tmp.replace(path)
+            unlink_legacy_fixed_tmp(path)
+            atomic_write_json(path, self.to_dict(), ensure_ascii=True)
             self._dirty = False
         except OSError as exc:  # disk full / permissions — never crash the producer
             logger.warning("Could not persist evening ledger to %s: %s", path, exc)

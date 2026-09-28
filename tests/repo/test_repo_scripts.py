@@ -18,7 +18,10 @@ CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
 CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
+CHECK_UI_COPY_LINT = ROOT / "scripts" / "check-ui-copy-lint.sh"
+PRE_LINT = ROOT / "scripts" / "pre-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
+MODEL_REGISTRY_GATE_SELF_TEST = ROOT / "tests" / "workflows" / "test_model_registry_gate.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 ADDON_BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "addon-build.yml"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
@@ -131,8 +134,9 @@ if not is_mp3:
     print("invalid audio", file=sys.stderr)
     raise SystemExit(1)
 if "json" in sys.argv:
-    manifest = json.loads((path.parents[1] / "spoken_assets.json").read_text())
-    relative_path = f"first_listen/{path.name}"
+    manifest_root = next(parent for parent in path.parents if (parent / "spoken_assets.json").is_file())
+    manifest = json.loads((manifest_root / "spoken_assets.json").read_text())
+    relative_path = path.relative_to(manifest_root).as_posix()
     entry = next(item for item in manifest["assets"] if item["path"] == relative_path)
     print(json.dumps({
         "streams": [{
@@ -374,14 +378,126 @@ def test_pre_commit_addon_build_hook_selects_both_channels() -> None:
         assert not pattern.search(ignored), f"hook should not run for {ignored}"
 
 
-def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:
+def test_pre_lint_is_registered_for_pre_push_and_matches_ci_ruff() -> None:
+    config = (ROOT / ".pre-commit-config.yaml").read_text()
+    requirements = (ROOT / "requirements-dev.txt").read_text()
+
+    ruff_version = next(line.removeprefix("ruff==") for line in requirements.splitlines() if line.startswith("ruff=="))
+    assert f"rev: v{ruff_version}" in config
+    assert "id: pre-lint" in config
+    assert "entry: scripts/pre-lint.sh" in config
+    assert "stages: [pre-push]" in config
+
+
+def test_pre_lint_is_non_mutating_and_keeps_expensive_tests_out() -> None:
+    script = PRE_LINT.read_text()
+
+    for command in (
+        '"$RUFF_BIN" check .',
+        '"$RUFF_BIN" format --check .',
+        "shellcheck scripts/*.sh",
+        "bash scripts/check-changelog-lint.sh",
+        "bash scripts/check-docs-safety.sh",
+        "bash scripts/check-ui-copy-lint.sh",
+        "bash scripts/check-no-backlog-files.sh",
+    ):
+        assert command in script
+    assert "pytest" not in script
+    assert "--fix" not in script
+    assert "--write-baseline" not in script
+
+
+def test_pre_lint_propagates_the_first_failure(tmp_path: Path) -> None:
+    ruff_version = next(
+        line.removeprefix("ruff==")
+        for line in (ROOT / "requirements-dev.txt").read_text().splitlines()
+        if line.startswith("ruff==")
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    _write(
+        bin_dir / "shellcheck",
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = --version ]; then printf 'version: 0.11.0\\n'; exit 0; fi\n"
+        f"printf 'shellcheck\\n' >> {log!s}\n",
+    )
+    _write(
+        bin_dir / "ruff",
+        "#!/usr/bin/env bash\n"
+        f"if [ \"${{1:-}}\" = --version ]; then printf 'ruff {ruff_version}\\n'; exit 0; fi\n"
+        f"printf 'ruff %s\\n' \"$*\" >> {log!s}\n"
+        "exit 7\n",
+    )
+    os.chmod(bin_dir / "shellcheck", 0o755)
+    os.chmod(bin_dir / "ruff", 0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    # Hide the repository venv so PATH controls the test without a production
+    # test-only override in pre-lint.sh.
+    isolated = tmp_path / "repo"
+    shutil.copytree(ROOT / "scripts", isolated / "scripts")
+    shutil.copy2(ROOT / "requirements-dev.txt", isolated / "requirements-dev.txt")
+    result = _run(["bash", str(isolated / "scripts/pre-lint.sh")], cwd=isolated, env=env)
+
+    assert result.returncode == 7
+    assert log.read_text().splitlines() == ["shellcheck", "ruff check ."]
+    assert "Ruff format" not in result.stdout
+
+
+def test_pre_lint_uses_pinned_docker_when_installed_shellcheck_is_stale(tmp_path: Path) -> None:
+    ruff_version = next(
+        line.removeprefix("ruff==")
+        for line in (ROOT / "requirements-dev.txt").read_text().splitlines()
+        if line.startswith("ruff==")
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    _write(bin_dir / "shellcheck", "#!/usr/bin/env bash\nprintf 'version: 0.9.0\\n'\n")
+    _write(
+        bin_dir / "docker",
+        f"#!/usr/bin/env bash\nprintf 'docker %s\\n' \"$*\" >> {log!s}\n",
+    )
+    _write(
+        bin_dir / "ruff",
+        "#!/usr/bin/env bash\n"
+        f"if [ \"${{1:-}}\" = --version ]; then printf 'ruff {ruff_version}\\n'; exit 0; fi\nexit 7\n",
+    )
+    for executable in ("shellcheck", "docker", "ruff"):
+        os.chmod(bin_dir / executable, 0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    isolated = tmp_path / "repo"
+    shutil.copytree(ROOT / "scripts", isolated / "scripts")
+    shutil.copy2(ROOT / "requirements-dev.txt", isolated / "requirements-dev.txt")
+    result = _run(["bash", str(isolated / "scripts/pre-lint.sh")], cwd=isolated, env=env)
+
+    assert result.returncode == 7
+    assert "ShellCheck 0.9.0 is stale; using pinned Docker image." in result.stdout
+    docker_command = log.read_text()
+    assert "koalaman/shellcheck@sha256:" in docker_command
+    assert "scripts/pre-lint.sh" in docker_command
+
+
+def _init_changelog_sync_repo(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
+    _write(
+        tmp_path / "pyproject.toml",
+        '[project]\nname = "mammamiradio"\nversion = "1.0.0"\ndependencies = ["fastapi"]\n'
+        "\n[tool.coverage.report]\nfail_under = 92\n",
+    )
     _write(tmp_path / "CHANGELOG.md", "# Changelog\n")
     _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n")
     _run(["git", "add", "."], cwd=tmp_path)
     _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+
+
+def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:
+    _init_changelog_sync_repo(tmp_path)
 
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
@@ -395,13 +511,7 @@ def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path:
 
 
 def test_check_changelog_sync_passes_when_both_changelogs_staged(tmp_path: Path) -> None:
-    _init_git_repo(tmp_path)
-    _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.0.0"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.0.0"\n')
-    _write(tmp_path / "CHANGELOG.md", "# Changelog\n")
-    _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", "# Changelog\n")
-    _run(["git", "add", "."], cwd=tmp_path)
-    _run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+    _init_changelog_sync_repo(tmp_path)
 
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", 'version: "1.1.0"\n')
     _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
@@ -422,6 +532,60 @@ def test_check_changelog_sync_passes_when_both_changelogs_staged(tmp_path: Path)
     result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
 
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "pyproject",
+    [
+        pytest.param(
+            '[project]\nname = "mammamiradio"\nversion = "1.0.0"\ndependencies = ["fastapi", "httpx"]\n'
+            "\n[tool.coverage.report]\nfail_under = 92\n",
+            id="dependency-only",
+        ),
+        pytest.param(
+            '[project]\nname = "mammamiradio"\nversion = "1.0.0"\ndependencies = ["fastapi"]\n'
+            "\n[tool.coverage.report]\nfail_under = 93\n",
+            id="coverage-only",
+        ),
+    ],
+)
+def test_check_changelog_sync_ignores_non_version_pyproject_edits(tmp_path: Path, pyproject: str) -> None:
+    _init_changelog_sync_repo(tmp_path)
+    _write(tmp_path / "pyproject.toml", pyproject)
+    _run(["git", "add", "pyproject.toml"], cwd=tmp_path)
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_check_changelog_sync_ignores_unstaged_version_value(tmp_path: Path) -> None:
+    _init_changelog_sync_repo(tmp_path)
+    project = tmp_path / "pyproject.toml"
+    project.write_text(project.read_text().replace('dependencies = ["fastapi"]', 'dependencies = ["fastapi", "httpx"]'))
+    _run(["git", "add", "pyproject.toml"], cwd=tmp_path)
+    project.write_text(project.read_text().replace('version = "1.0.0"', 'version = "1.1.0"'))
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_check_changelog_sync_uses_staged_version_over_worktree(tmp_path: Path) -> None:
+    _init_changelog_sync_repo(tmp_path)
+    project = tmp_path / "pyproject.toml"
+    addon = tmp_path / "ha-addon/mammamiradio/config.yaml"
+    project.write_text(project.read_text().replace('version = "1.0.0"', 'version = "1.1.0"'))
+    addon.write_text('version: "1.1.0"\n')
+    _run(["git", "add", "pyproject.toml", "ha-addon/mammamiradio/config.yaml"], cwd=tmp_path)
+    project.write_text(project.read_text().replace('version = "1.1.0"', 'version = "1.0.0"'))
+
+    result = _run(["bash", str(CHECK_CHANGELOG_SYNC)], cwd=tmp_path)
+
+    assert result.returncode == 1
+    assert "requires staged CHANGELOG.md" in result.stdout
 
 
 def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Path) -> None:
@@ -447,6 +611,13 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "browser narration assets and admin metadata match the release manifest" in result.stdout
+
+
+def test_model_registry_gate_workflow_contract() -> None:
+    result = _run(["bash", str(MODEL_REGISTRY_GATE_SELF_TEST)], cwd=ROOT)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "All model registry gate cases passed." in result.stdout
 
 
 def test_pre_release_check_fails_on_manifest_version_mismatch(
@@ -615,6 +786,73 @@ def test_pre_release_check_rejects_browser_narration_hash_drift(
     assert result.returncode != 0
     assert "browser narration asset/admin manifest validation failed" in result.stdout
     assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
+
+
+@pytest.mark.parametrize("fallback", ["venv", "python3.11"])
+@pytest.mark.parametrize("changed_asset", [None, "packaged", "browser"])
+def test_pre_release_check_validates_spoken_assets_through_resolved_interpreter(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+    fallback: str,
+    changed_asset: str | None,
+) -> None:
+    """Both Python fallbacks validate good assets and reject changed assets."""
+    _write_release_check_repo(tmp_path)
+
+    real_python3 = shutil.which("python3")
+    assert real_python3, "a real python3 must be on PATH for this test to shadow"
+
+    fake_bin = tmp_path / ".fake-old-python-bin"
+    _write(
+        fake_bin / "python3",
+        "#!/usr/bin/env bash\n"
+        # Simulate an old system Python to force interpreter selection.
+        'if [ "$1" = "-c" ] && [[ "$2" == *version_info* ]]; then\n'
+        "  exit 1\n"
+        "fi\n"
+        # Catch either validator bypassing the selected interpreter.
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        "    *validate-spoken-assets.py)\n"
+        '      echo "bare python3 was invoked instead of \\$MEDIA_PYTHON" >&2\n'
+        "      exit 1\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        # Keep the fixture's ffmpeg and ffprobe stubs working.
+        f'exec "{real_python3}" "$@"\n',
+    )
+    (fake_bin / "python3").chmod(0o755)
+
+    fallback_python = tmp_path / ".venv/bin/python" if fallback == "venv" else fake_bin / fallback
+    _write(fallback_python, f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
+    fallback_python.chmod(0o755)
+
+    if changed_asset == "packaged":
+        asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
+        asset.write_bytes(asset.read_bytes() + b"tampered")
+    elif changed_asset == "browser":
+        asset = tmp_path / "mammamiradio/web/static/audio/first_listen/welcome.mp3"
+        asset.write_bytes(asset.read_bytes() + b"tampered")
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=env)
+
+    assert "bare python3 was invoked" not in result.stderr
+    if changed_asset == "packaged":
+        assert result.returncode != 0
+        assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
+        assert "recovery/emergency_tone.mp3 sha256 does not match" in result.stderr
+    elif changed_asset == "browser":
+        assert result.returncode != 0
+        assert "browser narration asset/admin manifest validation failed" in result.stdout
+        assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
+    else:
+        assert result.returncode == 0
+        assert "packaged spoken assets are manifest/hash/transcript approved" in result.stdout
+        assert "browser narration assets and admin metadata match the release manifest" in result.stdout
 
 
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
@@ -1141,6 +1379,12 @@ def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -
     assert r"\bsuperseded\b" in result.stdout
 
 
+def test_check_ui_copy_lint_passes_on_repo() -> None:
+    result = _run(["bash", str(CHECK_UI_COPY_LINT)], cwd=ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "UI copy lint clean" in result.stdout
+
+
 VALIDATE_ADDON_BACKUP_CONTRACT = (
     "backup: hot",
     "backup_exclude:",
@@ -1257,6 +1501,7 @@ def _create_validate_addon_repo(
         """
 [models]
 default_profile = "balanced"
+last_reviewed = "2026-09-08"
 
 [models.catalog.anthropic]
 opus = "anthropic-creative"
@@ -1369,18 +1614,123 @@ def test_validate_addon_rejects_registry_that_runtime_cannot_route(tmp_path: Pat
         tmp_path,
         streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
     )
-    _write(tmp_path / "model_registry.toml", "[models]\ndefault_profile = 'balanced'\n")
+    # The stamp is present so the failure is the routing schema, not the newer stamp check.
+    _write(
+        tmp_path / "model_registry.toml",
+        "[models]\ndefault_profile = 'balanced'\nlast_reviewed = '2026-09-08'\n",
+    )
 
     result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
 
     assert result.returncode != 0
     assert "model_registry.toml parse/schema error" in result.stdout
+    assert "[models.catalog] must be non-empty" in result.stdout
+
+
+def test_validate_addon_rejects_registry_without_last_reviewed(tmp_path: Path) -> None:
+    """The stamp is schema here and age at the cut; a registry nobody dated never validates."""
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    dated = registry.read_text()
+    assert 'last_reviewed = "2026-09-08"\n' in dated
+    _write(registry, dated.replace('last_reviewed = "2026-09-08"\n', ""))
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "last_reviewed must be a YYYY-MM-DD date" in result.stdout
+
+
+def test_validate_addon_rejects_effort_on_haiku(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    body = registry.read_text()
+    body = body.replace(
+        'haiku = "anthropic-fast"',
+        'haiku = "claude-haiku-4-5-20251001"',
+    )
+    body += '\n[models.effort.anthropic]\nhaiku = "medium"\n'
+    _write(registry, body)
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "must not set effort on Haiku" in result.stdout
+
+
+def test_validate_addon_rejects_unknown_effort_level(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    _write(registry, registry.read_text() + '\n[models.effort.anthropic]\nopus = "turbo"\n')
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "level 'turbo' is not one of" in result.stdout
+
+
+def test_validate_addon_rejects_unknown_effort_catalog_key(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    _write(registry, registry.read_text() + '\n[models.effort.anthropic]\nnonexistent = "medium"\n')
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "models.effort.anthropic.nonexistent is not in models.catalog.anthropic" in result.stdout
+
+
+def test_validate_addon_effort_levels_match_runtime() -> None:
+    """Release validation and runtime parsing must accept the same effort schema."""
+    import ast
+    import re
+
+    from mammamiradio.core.config import ALLOWED_EFFORT_LEVELS
+
+    match = re.search(
+        r"^allowed_effort\s*=\s*(\{[^\n]+\})$",
+        VALIDATE_ADDON.read_text(),
+        re.MULTILINE,
+    )
+    assert match is not None, "validate-addon.sh must declare its mirrored effort levels"
+    assert frozenset(ast.literal_eval(match.group(1))) == ALLOWED_EFFORT_LEVELS
+
+
+def test_validate_addon_effort_haiku_prefix_matches_runtime() -> None:
+    """The level set is pinned; the model prefix that rejects effort must be too."""
+    import ast
+    import re
+
+    from mammamiradio.core.config import EFFORT_UNSUPPORTED_MODEL_PREFIX
+
+    match = re.search(
+        r"model_id\.startswith\(('[^']+'|\"[^\"]+\")\)",
+        VALIDATE_ADDON.read_text(),
+    )
+    assert match is not None, "validate-addon.sh must guard effort on the unsupported model prefix"
+    assert ast.literal_eval(match.group(1)) == EFFORT_UNSUPPORTED_MODEL_PREFIX
 
 
 def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
     import re
 
     workflow = (ROOT / ".github" / "workflows" / "addon-build.yml").read_text()
+    # IMAGE_PATHS lives in the library both edge consumers read — the manual cut
+    # (cut-edge-release.sh) and the shadow land queue (land-queue-plan.sh) — so
+    # the parity contract is asserted against the one place it is declared.
+    library = (ROOT / "scripts" / "edge-select.sh").read_text()
     script = (ROOT / "scripts" / "cut-edge-release.sh").read_text()
 
     trigger_section_match = re.search(r"\bon:\s*\n(.*?)(?=\njobs:)", workflow, re.DOTALL)
@@ -1390,11 +1740,134 @@ def test_cut_edge_release_image_paths_mirror_addon_build_triggers() -> None:
         for line in trigger_section_match.group(0).splitlines()
         if line.lstrip().startswith("- ")
     }
-    image_paths_match = re.search(r'^IMAGE_PATHS="([^"]+)"$', script, re.MULTILINE)
-    assert image_paths_match, "scripts/cut-edge-release.sh must declare IMAGE_PATHS"
+    image_paths_match = re.search(r'^IMAGE_PATHS="([^"]+)"$', library, re.MULTILINE)
+    assert image_paths_match, "scripts/edge-select.sh must declare IMAGE_PATHS"
     image_paths = set(image_paths_match.group(1).split())
 
     assert image_paths == trigger_paths
+    content_match = re.search(r'^IMAGE_CONTENT_PATHS="([^"]+)"$', library, re.MULTILINE)
+    assert content_match
+    assert {"ha-addon/mammamiradio", "ha-addon/mammamiradio-edge"} <= set(content_match.group(1).split())
+
+    # One declaration, not two: a re-inlined copy in the cut script is how the
+    # two consumers drift apart while this test keeps passing.
+    assert not re.search(r'^IMAGE(_CONTENT)?_PATHS="', script, re.MULTILINE), (
+        "scripts/cut-edge-release.sh must source IMAGE_PATHS and IMAGE_CONTENT_PATHS from scripts/edge-select.sh"
+    )
+    planner = (ROOT / "scripts" / "land-queue-plan.sh").read_text()
+    assert not re.search(r'^IMAGE(_CONTENT)?_PATHS="', planner, re.MULTILINE), (
+        "scripts/land-queue-plan.sh must source IMAGE_PATHS and IMAGE_CONTENT_PATHS from scripts/edge-select.sh"
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "version",
+        "quoted_version",
+        "field",
+        "nested_version",
+        "apparmor",
+        "translation",
+        "new_file",
+        "deleted_file",
+        "deleted_config",
+        "renamed_config",
+        "mode",
+        "symlink",
+        "malformed",
+        "duplicate",
+        "missing_version",
+        "multiline_version",
+        "old_malformed",
+        "trailing_newline",
+        "missing_final_newline",
+        "nul",
+        "late_nul",
+        "old_nul",
+    ],
+)
+@pytest.mark.parametrize("subdirectory", [False, True])
+def test_edge_drift_exempts_only_valid_version_changes(tmp_path: Path, change: str, subdirectory: bool) -> None:
+    _init_git_repo(tmp_path)
+    edge = tmp_path / "ha-addon/mammamiradio-edge"
+    config = edge / "config.yaml"
+    original = "version: aaa1111\nhomeassistant_api: true\noptions:\n  version: one\n"
+    if change == "late_nul":
+        original += "#" * 8192 + "\n"
+    _write(config, original.replace("aaa1111", "bad") if change == "old_malformed" else original)
+    if change == "old_nul":
+        config.write_bytes(original.replace("true", "tr\x00ue").encode())
+    _write(edge / "apparmor.txt", "policy\n")
+    _write(edge / "translations/en.yaml", "name: Radio\n")
+    assert _run(["git", "add", "."], cwd=tmp_path).returncode == 0
+    assert _run(["git", "commit", "-qm", "chore: fixture baseline"], cwd=tmp_path).returncode == 0
+    target = _run(["git", "rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    updated = original.replace("aaa1111", "bbb2222")
+    config.write_text(updated)
+    if change == "quoted_version":
+        config.write_text(updated.replace("bbb2222", '"bbb2222"'))
+    elif change == "field":
+        config.write_text(updated.replace("true", "false"))
+    elif change == "nested_version":
+        config.write_text(updated.replace("version: one", "version: two"))
+    elif change == "apparmor":
+        (edge / "apparmor.txt").write_text("new policy\n")
+    elif change == "translation":
+        (edge / "translations/en.yaml").write_text("name: Changed\n")
+    elif change == "new_file":
+        (edge / "new.txt").write_text("new\n")
+    elif change == "deleted_file":
+        (edge / "apparmor.txt").unlink()
+    elif change == "deleted_config":
+        config.unlink()
+    elif change == "renamed_config":
+        config.rename(edge / "renamed.yaml")
+    elif change == "mode":
+        assert _run(["git", "config", "core.fileMode", "false"], cwd=tmp_path).returncode == 0
+    elif change == "symlink":
+        config.unlink()
+        config.symlink_to("apparmor.txt")
+    elif change == "malformed":
+        config.write_text(updated.replace("bbb2222", "bad"))
+    elif change == "duplicate":
+        config.write_text(updated + "version: ccc3333\n")
+    elif change == "missing_version":
+        config.write_text(updated.removeprefix("version: bbb2222\n"))
+    elif change == "multiline_version":
+        config.write_text(updated.replace("version: bbb2222", "version: |\n  bbb2222"))
+    elif change == "trailing_newline":
+        config.write_text(updated + "\n")
+    elif change == "missing_final_newline":
+        config.write_text(updated.rstrip("\n"))
+    elif change == "nul":
+        config.write_bytes(updated.replace("true", "tr\x00ue").encode())
+    elif change == "late_nul":
+        config.write_bytes(updated.encode() + b"\x00")
+    assert _run(["git", "add", "-A"], cwd=tmp_path).returncode == 0
+    if change == "mode":
+        # Set the committed mode even when Git ignores working-tree mode changes.
+        assert _run(["git", "update-index", "--chmod=+x", str(config)], cwd=tmp_path).returncode == 0
+    assert _run(["git", "commit", "-qm", "chore: fixture change"], cwd=tmp_path).returncode == 0
+    cwd = tmp_path / "scripts" if subdirectory else tmp_path
+    cwd.mkdir(exist_ok=True)
+    result = _run(
+        [
+            "bash",
+            "-c",
+            'set -euo pipefail; source "$1"; edge_image_drift "$2" HEAD',
+            "edge-test",
+            str(ROOT / "scripts/edge-select.sh"),
+            target,
+        ],
+        cwd=cwd,
+    )
+    if change in {"version", "quoted_version"}:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+    else:
+        assert result.returncode == 1, result.stderr
+        assert "ha-addon/mammamiradio-edge/" in result.stdout
 
 
 def test_validate_addon_allows_service_worker_rewrite(tmp_path: Path) -> None:

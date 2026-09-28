@@ -271,6 +271,12 @@ class AudioSection:
     # imperceptible on good speakers, and the "what should the station sound like"
     # strategy is being revisited. Set true to opt in.
     broadcast_chain: bool = False
+    # Short packaged stingers and ad bumpers played at the playback seam, before
+    # the next programme file. Default on. Packaged media stays byte-for-byte
+    # untouched; a missing asset is a clean cut. The Engine Room Transitions
+    # dial flips this live. Standalone persists it to .env. The add-on does not
+    # have a Supervisor option, so a dial change there lasts until restart.
+    boundary_imaging: bool = True
 
 
 # ── Dynamic model routing ─────────────────────────────────────────────────
@@ -291,6 +297,11 @@ _DEFAULT_ROUTING: dict[str, str] = {
     "direction": "creative",
 }
 
+# Adaptive-thinking effort levels accepted on Anthropic models that support them.
+# Haiku 4.5 does not; never send effort for a claude-haiku* ID.
+ALLOWED_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+EFFORT_UNSUPPORTED_MODEL_PREFIX = "claude-haiku"
+
 
 @dataclass
 class ModelsSection:
@@ -299,6 +310,8 @@ class ModelsSection:
     catalog: dict[str, dict[str, str]] = field(default_factory=dict)
     routing: dict[str, str] = field(default_factory=dict)
     profiles: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    # provider → catalog key → effort level (optional; absent means no effort body)
+    effort: dict[str, dict[str, str]] = field(default_factory=dict)
     default_profile: str = "balanced"
     active_profile: str = "balanced"
     tts_models: dict[str, str] = field(default_factory=dict)
@@ -330,6 +343,49 @@ def _empty_models(*, source: str = "unavailable") -> ModelsSection:
     return ModelsSection(routing=dict(_DEFAULT_ROUTING), source=source)
 
 
+def _resolve_catalog_key(
+    models: ModelsSection,
+    caller: str | None,
+    provider: str,
+    profile: str | None = None,
+) -> str | None:
+    """Return the catalog key selected by the same route as ``resolve_model``."""
+    role = models.routing.get(caller or "", DEFAULT_ROLE)
+    prof = profile or models.active_profile or models.default_profile
+
+    def _key_for(profile_name: str) -> str | None:
+        prov_map = models.profiles.get(profile_name, {}).get(provider, {})
+        return prov_map.get(role)
+
+    return _key_for(prof) or _key_for(models.default_profile)
+
+
+def effort_for(
+    models: ModelsSection,
+    provider: str,
+    model_id: str | None,
+    *,
+    caller: str | None = None,
+    profile: str | None = None,
+) -> str | None:
+    """Return effort for the selected route and model, or ``None``.
+
+    Effort is keyed by the selected catalog key, not reverse-matched by model ID.
+    That keeps dedicated fast/creative environment overrides isolated even when
+    an override happens to equal another catalog entry's model ID.
+    """
+    if not model_id:
+        return None
+    catalog_key = _resolve_catalog_key(models, caller, provider, profile)
+    if catalog_key is None:
+        return None
+    provider_catalog = models.catalog.get(provider) or {}
+    if provider_catalog.get(catalog_key) != model_id:
+        return None
+    level = (models.effort.get(provider) or {}).get(catalog_key)
+    return level if isinstance(level, str) and level in ALLOWED_EFFORT_LEVELS else None
+
+
 def resolve_model(models: ModelsSection, caller: str | None, provider: str, profile: str | None = None) -> str | None:
     """Resolve which model voices `caller` on `provider`, right now.
 
@@ -344,20 +400,72 @@ def resolve_model(models: ModelsSection, caller: str | None, provider: str, prof
     Any missing mapping is unavailable rather than an arbitrary catalog entry:
     a malformed registry must not turn into an accidental provider request.
     """
-    role = models.routing.get(caller or "", DEFAULT_ROLE)
-    prof = profile or models.active_profile or models.default_profile
-
-    def _key_for(profile_name: str) -> str | None:
-        prov_map = models.profiles.get(profile_name, {}).get(provider, {})
-        return prov_map.get(role)
-
-    key = _key_for(prof) or _key_for(models.default_profile)
+    key = _resolve_catalog_key(models, caller, provider, profile)
     provider_catalog = models.catalog.get(provider, {})
     if key:
         model_id = provider_catalog.get(key)
         if isinstance(model_id, str) and model_id.strip():
             return model_id
     return None
+
+
+def _parse_effort_table(
+    raw_effort: object,
+    catalog: dict[str, dict[str, str]],
+    *,
+    log,
+) -> dict[str, dict[str, str]]:
+    """Parse optional ``[models.effort.<provider>]`` tables; never raise into boot.
+
+    Invalid levels and unknown catalog keys are dropped with a warning so a
+    typo cannot disable the whole registry.
+    """
+    if raw_effort is None:
+        return {}
+    if not isinstance(raw_effort, dict):
+        log.warning("models.effort must be a table; ignoring")
+        return {}
+    parsed: dict[str, dict[str, str]] = {}
+    for provider, levels in raw_effort.items():
+        provider_key = str(provider)
+        if not isinstance(levels, dict):
+            log.warning("models.effort.%s must be a table; ignoring", provider_key)
+            continue
+        provider_catalog = catalog.get(provider_key) or {}
+        cleaned: dict[str, str] = {}
+        for catalog_key, level in levels.items():
+            key = str(catalog_key)
+            if key not in provider_catalog:
+                log.warning(
+                    "models.effort.%s.%s is not in models.catalog.%s; dropping",
+                    provider_key,
+                    key,
+                    provider_key,
+                )
+                continue
+            model_id = provider_catalog[key]
+            if isinstance(model_id, str) and model_id.startswith(EFFORT_UNSUPPORTED_MODEL_PREFIX):
+                log.warning(
+                    "models.effort.%s.%s points at Haiku (%s), which rejects effort; dropping",
+                    provider_key,
+                    key,
+                    model_id,
+                )
+                continue
+            level_text = str(level).strip().lower()
+            if level_text not in ALLOWED_EFFORT_LEVELS:
+                log.warning(
+                    "models.effort.%s.%s has invalid level %r (allowed: %s); dropping",
+                    provider_key,
+                    key,
+                    level,
+                    ", ".join(sorted(ALLOWED_EFFORT_LEVELS)),
+                )
+                continue
+            cleaned[key] = level_text
+        if cleaned:
+            parsed[provider_key] = cleaned
+    return parsed
 
 
 def _parse_models_section(raw: dict, *, source: str = "inline registry") -> ModelsSection:
@@ -378,13 +486,15 @@ def _parse_models_section(raw: dict, *, source: str = "inline registry") -> Mode
             raise ValueError("models.catalog and models.profiles must be non-empty")
         default_profile = section.get("default_profile", "balanced")
         merged_routing = {**_DEFAULT_ROUTING, **{str(t): str(r) for t, r in routing.items()}}
+        parsed_catalog = {str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()}
         return ModelsSection(
-            catalog={str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()},
+            catalog=parsed_catalog,
             routing=merged_routing,
             profiles={
                 str(pf): {str(pr): {str(role): str(key) for role, key in rm.items()} for pr, rm in provs.items()}
                 for pf, provs in profiles.items()
             },
+            effort=_parse_effort_table(section.get("effort"), parsed_catalog, log=log),
             default_profile=str(default_profile),
             active_profile=str(default_profile),
             source=source,
@@ -807,6 +917,8 @@ class BrandSection:
     founded: int = 0
     tagline: str = ""
     about: str = ""
+    tagline_en: str = ""
+    about_en: str = ""
     opengraph_subtitle: str = ""
     # Absolute http(s) URL to the station logo, surfaced as the HA media_player
     # entity_picture fallback when a segment has no real cover (voice/ad/idle).
@@ -1462,6 +1574,8 @@ def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection,
         founded=int(brand_raw.get("founded", 0)),
         tagline=brand_raw.get("tagline", ""),
         about=brand_raw.get("about", ""),
+        tagline_en=brand_raw.get("tagline_en", ""),
+        about_en=brand_raw.get("about_en", ""),
         opengraph_subtitle=brand_raw.get("opengraph_subtitle", ""),
         artwork_url=artwork_url,
         hosts=brand_hosts,
@@ -1574,7 +1688,10 @@ def _validate(config: StationConfig) -> None:
         errors.append(_err("playlist.jamendo_limit", "must be between 1 and 200"))
 
     if not (config.anthropic_api_key or config.openai_api_key):
-        log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
+        log.warning(
+            "No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter uses packaged clips; "
+            "ad breaks are skipped until an AI key is added"
+        )
     if config.homeassistant.mood_llm_enabled and not config.anthropic_api_key:
         log.warning("Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY — using heuristic home mood")
     if config.homeassistant.enabled and not config.ha_token:
@@ -2236,6 +2353,22 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         audio_raw["broadcast_chain"] = True
     elif _bc_env in _FALSY:
         audio_raw["broadcast_chain"] = False
+
+    # Env override for the playback-seam cart. Default on. A typo must not
+    # silently turn the station sounds off, so junk forces the default and warns.
+    _bi_env = os.getenv("MAMMAMIRADIO_BOUNDARY_IMAGING", "").strip().lower()
+    if _bi_env in _TRUTHY:
+        audio_raw["boundary_imaging"] = True
+    elif _bi_env in _FALSY:
+        audio_raw["boundary_imaging"] = False
+    elif _bi_env:
+        import logging as _bi_logging
+
+        _bi_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_BOUNDARY_IMAGING=%r (use true/1/yes or false/0/no); leaving transitions on",
+            _bi_env,
+        )
+        audio_raw["boundary_imaging"] = True
 
     ha_raw = raw.get("homeassistant", {})
     # Env-var overrides for HA add-on: HA_URL and HA_ENABLED

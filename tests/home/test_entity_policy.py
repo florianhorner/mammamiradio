@@ -9,6 +9,9 @@ audio path (INSTANT AUDIO).
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -343,13 +346,55 @@ def test_personal_moment_setter_rejects_invalid_id_and_non_boolean(tmp_path):
 
 
 def test_set_entity_muted_write_failure_cleans_up_tmp_file_and_raises(tmp_path):
-    with patch("pathlib.Path.write_text", side_effect=OSError("disk full")), pytest.raises(OSError):
+    previous = json.dumps({"schema_version": 2, "muted": {}, "personal_moment_opt_ins": {}, "policy_revision": 0})
+    dest = policy_path(tmp_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(previous, encoding="utf-8")
+    with patch("mammamiradio.home.atomic_json.os.replace", side_effect=OSError("disk full")), pytest.raises(OSError):
         set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee")
-    leftover_tmp = list(policy_path(tmp_path).parent.glob(".*.tmp")) if policy_path(tmp_path).parent.exists() else []
+    leftover_tmp = list(dest.parent.glob(".ha_entity_policy.json.*.tmp")) if dest.parent.exists() else []
     assert leftover_tmp == []
+    assert dest.read_text(encoding="utf-8") == previous
 
 
 def test_policy_file_is_owner_only_permissions(tmp_path):
     set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee")
     mode = policy_path(tmp_path).stat().st_mode & 0o777
     assert mode == 0o600
+
+
+def test_policy_temp_file_is_created_owner_only(tmp_path):
+    modes: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        modes.append(os.stat(name).st_mode & 0o777)
+        return fd, name
+
+    previous_umask = os.umask(0o000)
+    try:
+        with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+            set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee")
+    finally:
+        os.umask(previous_umask)
+
+    assert modes == [0o600]
+
+
+def test_policy_temp_names_are_unique(tmp_path):
+    names: list[str] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        names.append(Path(name).name)
+        return fd, name
+
+    with patch("mammamiradio.home.atomic_json.tempfile.mkstemp", side_effect=recording_mkstemp):
+        set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee")
+        set_entity_muted(tmp_path, "switch.coffee_machine", False, label="Coffee")
+
+    assert len(names) == 2
+    assert names[0] != names[1]
+    assert all(n.startswith(".ha_entity_policy.json.") and n.endswith(".tmp") for n in names)

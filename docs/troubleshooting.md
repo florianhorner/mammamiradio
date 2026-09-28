@@ -10,12 +10,15 @@ Start with the way you run Mamma Mi Radio. Home Assistant app operators and loca
 
 ## Local source or Docker
 
-For a source checkout, use the project environment and install both the app and developer tools:
+For a source checkout, use the project environment and install developer tools before the locked runtime and app:
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 ./start.sh
 ```
 
@@ -26,7 +29,7 @@ docker compose ps
 docker compose logs --tail=200
 ```
 
-If a source run or test reports a missing module such as `dotenv`, activate `.venv` and repeat the install command above. If Docker is unhealthy, keep the first error from `docker compose logs` and use the same symptom guide below.
+If a source run or test reports a missing module such as `dotenv` or a runtime-lock version mismatch, activate `.venv` and repeat the four `python -m pip` commands above. See [Local setup](../CONTRIBUTING.md#local-setup) for the full setup guide. If Docker is unhealthy, keep the first error from `docker compose logs` and use the same symptom guide below.
 
 ## Shared readiness checks
 
@@ -89,28 +92,26 @@ Jamendo cannot repair a broken starter package: it is optional, default-off,
 asynchronous enrichment. A Jamendo failure must leave starter/local playback
 unchanged. See [Music sources and rights boundaries](music-sources.md).
 
-For the supplied Docker image or Home Assistant app, local MP3s belong in the
-  deployment's persistent `/data/music` directory. Populate that data area
-  through the deployment's supported storage tooling; do not patch files into
-  a running Home Assistant app container. A source checkout instead reads
-  repo-local `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
+For the Home Assistant app, put songs in the Media panel folder named by the
+app's Music folder setting (default `mammamiradio`). When that Media storage is
+not mounted, the app uses `/data/music`. The supplied Docker image uses
+`/data/music`. The scanner finds changes within one minute; use **Rotazione →
+Local music → Scan now** to refresh immediately. The control room names the
+folder in use. Populate it through Home Assistant's Media panel or the
+deployment's supported storage tooling; do not patch files into a running Home
+Assistant app container. A source checkout uses `music/`, or the path set by
+`MAMMAMIRADIO_MUSIC_DIR`.
 
 **"Clear pool" does not delete local music files, and the songs come back.**
 This is by design and is not a bug in the button. `POST /api/playlist/purge`
-empties the in-memory rotation only. On the next producer pass with an empty
-crate, `_recover_local_rotation` in `scheduling/producer.py` re-scans the music
-directory and loads whatever MP3s it finds, so operator-supplied songs return
-within one cycle. Local music also outranks the bundled starter catalog at
-startup (`playlist.py`), so a stale `/data/music` can shadow the starter set
-entirely and make the station look like it is ignoring the bundled crate.
+empties the in-memory rotation only. The scanner adds files back on its next
+scan and overlays the active music base without restarting the station.
 To stop specific songs permanently, use the per-row **✕ Ban** button, which
 writes a durable blocklist honored at every ingest doorway including norm-cache
-rescue. To remove the files themselves, delete them from the music directory
-through the deployment's storage tooling and restart, or switch to an explicit
-source. Confirm the starter catalog is ready in Motore first: emptying the music
-directory while no other source is available leaves the crate to the recovery
-ladder until the next restart, because no runtime path refills rotation from the
-starter catalog once the station is already running.
+rescue. Delete files through the deployment's storage tooling, then select
+**Scan now**. Confirm another source is ready first: emptying the only music
+source leaves the crate on the audible recovery ladder until music is added
+again.
 
 When listeners are connected, `/readyz` flips back to `503 starting` if playback
 has been truly silent for more than 30 seconds — silent means no listener queue
@@ -129,7 +130,7 @@ clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, an active drain backed by the packaged starter catalog queues a `verified starter-catalog runway` directly; starter songs do not need normalization-cache copies. The packaged clip appears only when no eligible runway is admitted. The active-drain miss then reads `no music runway queued behind the canned clip`; Resume and idle retain the narrower `no cache music queued behind the canned clip` message. Either way you should not see the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, Resume, idle wake-up, and an active drain backed by the packaged starter catalog queue a verified starter song directly; starter songs do not need normalization-cache copies. Idle wake-up and drain log this as `inserting verified starter-catalog runway`; the Resume routes log `Resume runway: inserting verified starter-catalog runway` and report `runway_source=starter` on the `Session resumed` line. The packaged clip appears only when no eligible runway is admitted. Those misses then read `no music runway queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
 If the clip still repeats after an active drain, look for a starter
 manifest/admission failure first.
@@ -139,6 +140,12 @@ but Jamendo artifacts are deliberately excluded and cannot survive for rescue.
 Source-checkout developers with MP3s in the repo-local `music/` directory can
 use them with external extraction off and Jamendo off. Those files remain the
 operator's responsibility.
+
+On a standalone install with external media, if `/status` shows
+`production.current` at `finding` on one external track for minutes and no new
+`Queued music` line appears, the producer is waiting on that download, which
+has no overall time limit. Restart to recover; set `MAMMAMIRADIO_ALLOW_YTDLP=false`
+and restart to keep it from recurring.
 
 ## Jamendo stays off or temporarily unavailable
 
@@ -203,7 +210,8 @@ permissions or free disk space and try Stop again. Do not assume the station
 paused merely because the button was pressed.
 
 Resume first reserves readable immediate audio, preferring a warm norm-cache
-song, then `continuity_1.mp3`, then `emergency_tone.mp3`. It stays paused if no
+song, then a verified starter catalog song when that is the active source, then
+`continuity_1.mp3`, then `emergency_tone.mp3`. It stays paused if no
 runway is readable or if the persisted marker cannot be removed. When every
 recovery asset is missing, the response offers **Force Start**. Confirming it is
 an explicit corrupt-install escape: it removes the stop marker, requests host
@@ -221,7 +229,17 @@ For the add-on, inspect the equivalent paths read-only in the installed image;
 do not patch or restart the live container as a test. A healthy Resume log names
 `runway_source` and the current `continuity_epoch`. Stop advances that epoch
 before it purges, so a later `stale_continuity` discard is expected proof that
-pre-Stop work was fenced, not a new audio failure.
+pre-Stop work was fenced, not a new audio failure. Many other controls advance
+the same epoch, so it is not a Stop marker: a Resume interrupted by a real Stop
+answers `409` and logs `session_resume_superseded`, while a Resume interrupted by
+any other control logs `a live control superseded the starter candidate` and still
+reserves the packaged ladder. `starter verification took longer than 2.0s` means
+slow storage fell back to the clip, not a broken catalog; `an earlier starter
+verification is still running` is the retry that declined to stack a second one. `Resume declined: another
+Resume is still starting the station` is a double tap or a concurrent Home
+Assistant play, and clears on its own. `starter-catalog preparation failed;
+continuing down the ladder` from an idle or drain bridge means the starter rung
+raised and the clip or emergency tone covered it; the traceback names the cause.
 
 Setup can remain **Ready** while playback is paused. That is intentional:
 `/api/setup/status` reports configuration/source readiness, while `/readyz` and
@@ -252,6 +270,24 @@ INFO Chart ingest: filtered 3 non-music entries
 
 If a legitimate song is being rejected, check `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`. The list is deliberately narrow (podcast, bbc comedy, audiobook, news briefing, asmr, …) so real titles almost never trip it. If a real Italian song title legitimately contains one of these markers, remove the marker from the list rather than loosening the check.
 
+## An external download was refused or stopped partway
+
+This applies only to a standalone installation with the `external-media`
+extra. Before any audio is transferred, the station refuses a live, scheduled,
+or just-ended stream, and a result more than four times as long as the track it
+stands for. That limit is never below 14 minutes. When yt-dlp cannot fetch part
+of the audio stream, the download fails instead of airing with a jump.
+
+For a rotation track the log names the reason, the track stays unavailable
+until the next restart, and the station plays other music:
+
+```text
+WARNING yt-dlp failed for Some Artist – Some Title: refused a live stream before download — marking track unavailable
+```
+
+An admin add, a Direction pick, or a listener song request gets the same notice
+as any other failed download.
+
 ## The station keeps rejecting the same track
 
 If a track fails `validate_download` (too short, corrupt, missing duration), the cached copy at `cache_dir/{cache_key}.mp3` used to stay put. The next selection of the same track returned it as a cache hit and the gate rejected it again. Endless loop.
@@ -276,9 +312,22 @@ A listener song request was pinned to the "play next" slot from two places: once
 
 The current ownership chain marks the initial claim with `song_pinned`, reserves every pending matched recording at producer admission and playback, then transfers the exact promised source into a one-shot `ListenerRequestHandoff` after the dedication queues. Queue admission marks that segment and releases the handoff, so later equivalent requests still cannot steal it or make it play anonymously. If you see a repeat, trace the complete reservation → dedication commit → handoff admission chain described in `docs/architecture.md`, including the producer and playback reservation gates; the pin marker alone is no longer the full invariant.
 
+## No station sounds between songs and talk
+
+The short stings between a song and talk, plus bumpers around packaged ad spots, come from the Engine Room **Transitions** dial. Live ad breaks contain their own bumpers and are not changed by this dial. It is on unless someone turned it off.
+
+If the cut is plain:
+
+- In Engine Room, check that Transitions is on. On a Home Assistant add-on the dial returns to its startup setting (on by default) after a restart; a standalone station keeps the choice in `.env` (`MAMMAMIRADIO_BOUNDARY_IMAGING`).
+- Confirm the imaging pack is installed at the configured `assets_dir` (the four files are `stingers/music_to_speech.mp3`, `stingers/speech_to_music.mp3`, `bumpers/ad_in.mp3`, and `bumpers/ad_out.mp3`).
+- Custom carts must match the stream sample rate, bitrate, and channel count, use constant bitrate, and stay within 1.5 seconds and 1 MiB.
+- In the station log, look for `Boundary imaging asset unusable (missing or unreadable)` or the same warning with a format/load reason. A missing or unusable file is a clean cut, not a failed stream. Restoring or replacing the file takes effect at the next eligible seam without restarting.
+- In `/status`, inspect `runtime_health.boundary_imaging.skips`. `asset_missing` counts unusable carts. `switch_off` means the dial is off; `prev_none` and `generation_changed` mean playback has no preceding programme for this listener room. `prev_imaging`, `prev_rescue`, `next_rescue`, `next_error`, `next_music_tail`, `interrupt`, and `live_ad` keep imaging from stacking or delaying recovery and urgent audio. `skip`, `session_stopped`, and `stale_continuity` count carts interrupted before their final byte by a listener control or a changed programme timeline.
+- **Aired** counts fully completed playback carts this session. It can stay at 0 while hearing producer-rendered live-ad bumpers or music-tail crossfades. Local-library song/talk stings use the same playback counter as other song/talk seams.
+
 ## The stream works but banter or ads are bland
 
-That usually means script generation failed and the app fell back to stock copy.
+Banter may use stock copy when script generation fails. Failed live ads instead try an approved packaged recording, then continuity audio if no recording is usable.
 
 Chaos recovery copy follows the spoken mode too: Normal Mode uses English-led
 stock, while Italian stock is used only when Super Italian Mode is enabled and
@@ -325,6 +374,7 @@ quality profile if `OPENAI_API_KEY` is set (the role-specific catalog entry in
 `radio.toml`—when changing a script model or its token price.
 When Anthropic returns an authentication failure (for example `invalid x-api-key`) or a non-retryable provider configuration error (for example a 404/model-not-found from an invalid Claude model ID), the app suspends Anthropic for 10 minutes in-process and routes script generation to OpenAI immediately to avoid repeated provider spam. Concurrent banter, ad, and transition generations share a single attempt lock: the first call trips the circuit; sibling calls queued on the lock see the block and fall straight to OpenAI instead of each racing through their own failed request. After the 10-minute cooldown the next call logs a provider backoff expiry and makes exactly one retry; a successful retry clears the block, a fresh failure re-arms it for another 10 minutes.
 A temporary overload or rate limit (HTTP 429/529) uses a separate, much shorter breaker: it benches Anthropic for a bounded cooldown (default 20s, honoring a `Retry-After` header when present, clamped to 5–60s) so affected later segments go straight to OpenAI, then retries Anthropic automatically once the cooldown expires. A 429 is scoped to the failing model; a 529 overload benches Anthropic account-wide. This path needs no operator action — `/status` reports it as a self-recovering transient state, not an auth/config block.
+OpenAI script calls have a separate breaker. Authentication and quota failures pause the key for 10 minutes; a model 404, network error, timeout, or server failure uses a 20-second pause (429 honors bounded `Retry-After`). A 400/422 request rejection does not pause other scripts. A successful response clears the pause. A missing local model route uses stock copy without marking the provider down. Saving the OpenAI key clears its old breaker, and an earlier key's late failure cannot disable the replacement. OpenAI speech has its own health state.
 
 Check:
 
@@ -332,6 +382,7 @@ Check:
 - outbound network access is available
 - `/status` or the dashboard shows recent producer errors
 - `/api/capabilities` and `/status` now include `provider_health.anthropic` (`degraded`, `retry_after_s`, `auth_failures`)
+- `/api/capabilities` and `/status` include `provider_health.openai` (`degraded`, `retry_after_s`) and `provider_probe_in_flight` for the current admin check. **Checking AI hosts** should appear only while that check is running. If the key remains unconfirmed afterward, use **Check AI connection** in Motore; replace a key only when the provider refused it.
 
 If generated banter airs but listener memory or song callbacks are not growing,
 check the post-air extractor path separately:
@@ -372,6 +423,11 @@ Each OpenAI host can define `edge_fallback_voice` in `radio.toml` so they fall b
 
 To inspect script-side OpenAI behavior (banter/ads/news/transitions/post-air memory extraction), grep logs for `openai_script_call` — every OpenAI script call emits a structured record with `model`, `caller`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `json_ok`, and `fallback_reason` (one of `anthropic_absent`, `anthropic_auth_blocked`, `anthropic_auth_failed`, `anthropic_max_tokens_truncated`, `anthropic_max_tokens_truncated_retrying`, `anthropic_nonretryable`, `anthropic_transient`, `anthropic_transient_blocked`, `anthropic_usage_limit`, `anthropic_usage_limit_blocked`, `anthropic_exception`, `openai_empty_or_length`; the reason fields land in the provenance ledger / Show Memory rows — the default log format renders only the message line). A truncated Anthropic response (cut off at the token budget, partial or empty JSON) now gets ONE in-house retry at a ~1.75× budget before any provider fallback, and after a truncation-exhausted fallback OpenAI's visible-output floor inherits the escalated (not original) budget. The OpenAI side has its own single retry: a completion cut at its cap (`finish_reason="length"`, reasoning tokens starving the visible JSON) or a genuinely empty one retries once with a bigger cap — unless the model reports it finished or refused (`stop`/`content_filter`), which a bigger budget can't fix — before the stock-copy fallback. When hosts sound generic, grep the log for `truncated at max_tokens`, `retrying with escalated budget`, `escalation retry succeeded`, and the early-warning `budget pressure` WARNING (fires when a successful generation used ≥80% of its budget — raise the budget before the next truncation, don't wait for it); with the ledger enabled, the Show Memory rows carry the `fallback_reason` values above. Useful for comparing models via `OPENAI_SCRIPT_MODEL` or debugging fallback latency.
 
+For repeated stock host lines, check `/status` → `provider_health.script_guard`.
+`rejections` counts the first language failure in a generation, which triggers a repair; `failures` counts terminal or final-text language failures. Both reset on restart. Provider failures and JSON parsing errors do not increment them. Normal Mode transitions accept an English marker followed by an Italian handoff; banter, news and ads keep their existing English floors. This is a word-marker heuristic: English words in titles or artist names also count. Normal Mode has four stock exchanges selected at random, so consecutive repeats remain possible.
+
+Home label requests allow 1,200–4,000 output tokens, scaled to the candidate count. A truncated response gets one retry with the first half of the batch, for at most two application-level requests. SDK-level retries are off, so each request is one attempt under its own deadline, scaled to the tokens it asked for: 45 seconds at 1,200 rising to 120 at 4,000, the same scaling the script generator uses. The deadline is per attempt rather than shared, because a shared one expires while the half-batch retry is still working and throws away labels it has already produced. Each call rechecks the original privacy permission. A provider blip costs one poll interval, not the catalog. A second truncation preserves the catalog; successful labels leave the pending set so later polls advance. Persistent truncation does not guarantee progress. Logs contain counts and fixed failure categories, never household output. Memory extraction starts at 900 output tokens and ads at 1,100; their existing truncation escalation still applies.
+
 Voice validation now runs at config load, not at synthesis time:
 
 - Every configured voice is checked against `mammamiradio/audio/voice_catalog.py` (OpenAI catalog for `engine = "openai"`, Italian edge-tts catalog for `engine = "edge"`, and the curated Azure catalog for known Azure Italian voices). Ad voices and sonic-brand sweepers can also carry their own `engine` plus `edge_fallback_voice`.
@@ -379,16 +435,22 @@ Voice validation now runs at config load, not at synthesis time:
 - If OpenAI, Azure, or ElevenLabs is missing credentials or fails at runtime, the segment falls back to the configured Edge voice. Each cloud route carries a circuit breaker: when a route-wide failure lands (timeout, 5xx, revoked key), every waiting and later part skips straight to Edge — at most the one or two requests already in flight pay the timeout, and healthy concurrent voices on the same provider keep rendering in parallel (dialogue lines are never serialized behind each other). Transient route failures cool down for 30 seconds and then exactly one call probes the provider (a successful probe reopens the route for everyone); non-retryable credential errors stay sidelined until the route changes or the station restarts. A single bad voice ID (HTTP 400 or 404) only sidelines that one voice, not the whole provider route — other configured voices on the same Azure/ElevenLabs/OpenAI credential keep trying the cloud normally. If Edge synthesis also fails (endpoint down, throttle), the failing voice ID is memoized for the session and the next segment goes straight to the fallback voice — one attempt per voice per session, not one per segment.
 - Every runtime cloud fallback now emits a route record such as `TTS fallback provider=elevenlabs ... effective_provider=edge ... reason=...` followed by `Synthesized (Edge fallback): ...`. A plain `Synthesized: ...` line means the voice was intentionally configured for Edge, not that a cloud route silently failed. Ad lines also include the configured character name.
 - The admin runtime card uses those route records: `tts_provider.current_provider` becomes `edge` and `fallback_active` becomes `true` after a live cloud-to-Edge fallback, even when all provider keys are configured. This is runtime evidence, while `Mixed TTS` by itself remains a configuration summary. That runtime state is tracked per provider engine, not per voice: on a station with several voices on the same cloud engine, one voice's successful render clears the degraded state for that engine even if a different voice on the same engine is still falling back to Edge every segment. Grep logs for the specific character name in `Synthesized (Edge fallback)` lines to see which voice is actually degraded.
-- When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
+- When any voice was substituted at load or during live synthesis, `/api/capabilities`
+  reports `tts_degraded: true`. The Engine Room "Voices" line separately reports live
+  cloud-breaker evidence: a rejected key reads *key not working*, exhausted quota reads
+  *quota exhausted*, and a single bad voice reads *1 voice on Edge* without claiming the
+  whole provider is down. A route-wide rejected-key or exhausted-quota response stays off until the key is saved again in
+  **First Listen → Change AI services → Voice providers**; saving it rearms the route live.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
 ## First Listen does not play on this device
 
 Required First Listen proof is hearing the station in the add-on Web UI on this
-device. If **Start sound check** is quiet, check mute and volume on this tab,
-confirm the sound is coming from this browser and not another app, then try
-**Start sound check** again. Technical details under the journey name the stream
-URL. Home Assistant speakers are an optional later route, not this step.
+device. If **Start my station** is quiet, check mute and volume on this tab,
+confirm the sound is coming from this browser and not another app, then choose
+**I can’t hear you** and **Play on this device again**. Technical details under
+the journey name the stream URL. Home Assistant speakers are an optional later
+route, not this step.
 
 ## First Listen: the optional Home Assistant speaker route is quiet
 
@@ -429,6 +491,24 @@ audio that arrives already levelled, there is nothing left for it to fix.
 This is a Music Assistant player setting; nothing changes on the station side.
 The station's own **On-Air Sound** dial is a separate FM colouring, off by
 default, so it is not what you are hearing.
+
+## A song cut off and an alarm beep played
+
+The retired `safety_saves` recipe could treat an ordinary door transition as an
+urgent radio interrupt. That path cut the song and played the emergency bridge
+before a host explanation was ready. Mamma Mi Radio no longer turns safety
+sensors or ordinary entry-door transitions into ritual moments. Use Home
+Assistant automations for safety alerts.
+
+Configured timers can still interrupt the station. Add each timer with a
+`[[homeassistant.timer_interrupt]]` block in `radio.toml`. Direct and Home
+Assistant automation callers can use the admin-authenticated
+`POST /api/interrupt` endpoint. Both paths use the packaged emergency tone.
+Other household moments continue as host talk at a natural break.
+
+Pre-upgrade "Safety moment" receipts may remain visible in the Casa strip and
+the admin Home-moments panel for up to seven days. The station reads those
+receipts as plain text and cannot create new ones. No operator action is needed.
 
 ## Home Assistant references never show up
 
@@ -529,6 +609,23 @@ On the Pi these are single-threaded full-file re-encodes, so a music track that
 needs both a normalize pass and a loudness-reconcile re-encode is the usual
 culprit. A normalization cache hit on an already-reconciled file skips both and
 should log near-instant stages.
+
+## A station page asset returns "not found" instead of loading
+
+A request under `/static/` answers `404` when the station cannot resolve the
+name to a real file inside its own asset directory. That covers a name that
+does not exist, a name that tries to climb out of the directory, a file the
+station is not allowed to follow, and a name carrying characters a path cannot
+hold.
+
+Previously some of those cases produced a server error and a stack trace in
+the add-on log instead of the `404`. If you are reading an older log and see
+one, the request was already being refused; only the way it was reported has
+changed.
+
+Nothing to fix on your side unless a page element is genuinely missing. If one
+is, reinstall or update the add-on so the packaged assets are restored, and
+check the add-on log for the file name the station could not resolve.
 
 ## Tests fail during collection
 

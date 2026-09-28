@@ -17,6 +17,19 @@ async (page) => {
   const previewRequests = [];
   const privacyRequests = [];
   const guideAudioRequests = [];
+  const rememberGuideAudioRequest = (url) => {
+    const requestPath = url.slice(originOf(url).length);
+    if (!/\/static\/audio\/(?:first_listen|voice_examples|home_moments)\/[^/?]+\.mp3(?:\?|$)/.test(requestPath)) return;
+    guideAudioRequests.push(requestPath);
+  };
+  function assertGuideRequests(baseline,key,prefix='') {
+    const paths=guideAudioRequests.slice(baseline);
+    const folder=key==='free-voices'?'voice_examples':(['quiet','laundry','arrival','coffee'].includes(key)?'home_moments':'first_listen');
+    const pattern=new RegExp(`^${prefix}/static/audio/${folder}/${key}\\.mp3\\?v=[0-9a-f]{12}$`);
+    // WebKit can probe bytes 0-1 before requesting the remaining MP3 bytes.
+    assert(paths.length>0, `${key} did not request its local audio asset`);
+    assert(new Set(paths).size===1&&paths.every(path=>pattern.test(path)), `${key} used unexpected audio URLs: ${JSON.stringify(paths)}`);
+  }
   const ingressPrefix = '/api/hassio_ingress/first-listen-smoke';
   const RECEIPT_FAILURE_STATUS = 503;
   const PREVIEW_REQUIRED_STATUS = 409;
@@ -25,8 +38,10 @@ async (page) => {
   let nextPrivacyChoiceFailure = '';
   let ambientOnlyPreview = false;
   let failNextGuideKey = '';
+  let guideResponseGate = null;
   let failNextResume = false;
   let nextResumeResponse = '';
+  let resumeResponseGate = null;
   let nextForceResponse = '';
   let discardNextConfirmResponse = false;
   let nextVerifyResponse = '';
@@ -34,7 +49,19 @@ async (page) => {
   let privacyResponseGate = null;
   let setupResponseGate = null;
   let nextSetupStatusError = null;
+  let nextSetupFailure = '';
+  let timeoutSetupGate = null;
+  let failCapabilities = false;
+  let writingCapabilities = {};
+  let keySaveGate = null;
+  let nextKeyCheckFailure = '';
+  let keyCheckGate = null;
+  let keyChecks = 0;
+  const keySaves = [];
+  let smokeStage = 'bootstrap';
   function responseGate(){let arrive,release;return{arrived:new Promise((resolve)=>{arrive=resolve;}),wait:new Promise((resolve)=>{release=resolve;}),arrive,release};}
+  const initialCapabilitiesGate = responseGate();
+  let capabilitiesResponseGate = initialCapabilitiesGate;
 
   const sourceRows = ({ primary = 'playable', recovery = 'cover_only' } = {}) => [
     { kind: 'charts', label: 'Live charts', status: primary, detail: 'Live chart evidence' },
@@ -155,9 +182,20 @@ async (page) => {
     // session down with it, so stand in for it here and record the asking —
     // the prompt existing at all is part of what this smoke proves.
     window.__firstListenConfirms = [];
+    window.__firstListenOpenedWindows = [];
+    window.__firstListenStationMedia = {
+      activeSrc: '',
+      events: [],
+      playing: false,
+      streamRequests: [],
+    };
     window.confirm = (message) => {
       window.__firstListenConfirms.push(String(message ?? ''));
       return true;
+    };
+    window.open = (...args) => {
+      window.__firstListenOpenedWindows.push(args.map((value) => String(value ?? '')));
+      return null;
     };
     const nativeSetInterval = window.setInterval.bind(window);
     window.__firstListenSmokeIntervals = [];
@@ -170,15 +208,62 @@ async (page) => {
     if (proto && !proto.__firstListenPlayPatched) {
       proto.__firstListenPlayPatched = true;
       const nativePlay = proto.play;
+      const nativePause = proto.pause;
+      const nativeLoad = proto.load;
+      const pausedDescriptor = Object.getOwnPropertyDescriptor(proto, 'paused');
+      const stationState = () => window.__firstListenStationMedia;
       proto.play = function play() {
         if (this && this.id === 'firstListenStationAudio') {
-          queueMicrotask(() => this.dispatchEvent(new Event('playing')));
+          const state = stationState();
+          const src = this.getAttribute('src') || '';
+          const wasPlaying = state.playing;
+          state.events.push({ type: 'play', src });
+          if (src && state.activeSrc !== src) {
+            state.activeSrc = src;
+            state.streamRequests.push(src);
+          }
+          state.playing = Boolean(src);
+          if (!wasPlaying) queueMicrotask(() => this.dispatchEvent(new Event('playing')));
           return Promise.resolve();
         }
         return nativePlay.apply(this, arguments);
       };
+      proto.pause = function pause() {
+        if (this && this.id === 'firstListenStationAudio') {
+          const state = stationState();
+          state.events.push({ type: 'pause', src: this.getAttribute('src') || '' });
+          state.playing = false;
+        }
+        return nativePause.apply(this, arguments);
+      };
+      proto.load = function load() {
+        if (this && this.id === 'firstListenStationAudio') {
+          stationState().events.push({ type: 'load', src: this.getAttribute('src') || '' });
+        }
+        return nativeLoad.apply(this, arguments);
+      };
+      if (pausedDescriptor?.get && pausedDescriptor.configurable) {
+        Object.defineProperty(proto, 'paused', {
+          ...pausedDescriptor,
+          get() {
+            if (this && this.id === 'firstListenStationAudio') return !stationState().playing;
+            return pausedDescriptor.get.call(this);
+          },
+        });
+      }
+      const nativeRemoveAttribute = Element.prototype.removeAttribute;
+      Element.prototype.removeAttribute = function removeAttribute(name) {
+        if (this && this.id === 'firstListenStationAudio' && String(name).toLowerCase() === 'src') {
+          const state = stationState();
+          state.events.push({ type: 'remove-src', src: this.getAttribute('src') || '' });
+          state.activeSrc = '';
+          state.playing = false;
+        }
+        return nativeRemoveAttribute.apply(this, arguments);
+      };
     }
   });
+  page.on('request', (request) => rememberGuideAudioRequest(request.url()));
   await page.route('**/*', async (route) => {
     const requestOrigin = originOf(route.request().url());
     if (!requestOrigin || requestOrigin === baseOrigin) {
@@ -188,18 +273,25 @@ async (page) => {
     blockedOffOriginRequests.push(route.request().url());
     await route.fulfill({ status: 204, contentType: 'text/plain', body: '' });
   });
-  await page.route('**/static/audio/first_listen/*.mp3*', async (route) => {
+  await page.route(/\/static\/audio\/(?:first_listen|voice_examples|home_moments)\/[^/?]+\.mp3(?:\?|$)/, async (route) => {
     const requestAddress = route.request().url();
     const requestPath = requestAddress.slice(originOf(requestAddress).length);
     const filename = requestPath.split('?', 1)[0].split('/').at(-1) || '';
     const guideKey = filename.replace(/\.mp3$/i, '');
-    guideAudioRequests.push(requestPath);
-    if (failNextGuideKey === guideKey) {
-      failNextGuideKey = '';
+    rememberGuideAudioRequest(requestAddress);
+    if (guideResponseGate) {
+      const gate = guideResponseGate;
+      guideResponseGate = null;
+      gate.arrive();
+      await gate.wait;
       await route.abort('failed');
       return;
     }
-    if (requestPath.startsWith(`${ingressPrefix}/static/audio/first_listen/`)) {
+    if (failNextGuideKey === guideKey) {
+      await route.abort('failed');
+      return;
+    }
+    if (requestPath.startsWith(`${ingressPrefix}/static/audio/`)) {
       const directPath = requestPath.slice(ingressPrefix.length);
       const response = await route.fetch({ url: `${baseUrl}${directPath}` });
       await route.fulfill({ response });
@@ -408,6 +500,7 @@ async (page) => {
   });
   await page.route('**/api/resume**', async (route) => {
     resumeRequests.push(route.request().url());
+    if(resumeResponseGate&&(!resumeResponseGate.force||route.request().url().includes('force=true'))){const gate=resumeResponseGate;resumeResponseGate=null;gate.arrive();await gate.wait;}
     if (failNextResume) {
       failNextResume = false;
       await route.abort('failed');
@@ -436,14 +529,89 @@ async (page) => {
     await fulfillJson(route, { ok: true });
   });
   await page.route('**/api/setup/status', async (route) => {
+    const failure=nextSetupFailure;nextSetupFailure='';
+    if(failure==='timeout'){const gate=timeoutSetupGate;await gate.wait;await route.abort().catch(()=>{});return;}
+    if(failure==='network'){await route.abort('failed');return;}
+    if(failure==='http-json'){await fulfillJson(route,{},503);return;}
+    if(failure==='invalid-json'||failure==='http'){await route.fulfill({status:failure==='http'?503:200,contentType:'text/html',body:'Unavailable'});return;}
+    if(failure==='empty'||failure==='malformed'){await fulfillJson(route,failure==='empty'?{}:{guided_setup:{first_listen:{audio_complete:'yes'}}});return;}
+    if(failure==='render-error'){await fulfillJson(route,{...setupStatusProjection,available_modes:{}});return;}
+
     if(setupResponseGate){const gate=setupResponseGate;setupResponseGate=null;gate.arrive();await gate.wait;}
     if(nextSetupStatusError){const payload=nextSetupStatusError;nextSetupStatusError=null;await fulfillJson(route,payload,403);return;}
     await fulfillJson(route, setupStatusProjection);
   });
   await page.route('**/api/capabilities', async (route) => {
-    await fulfillJson(route, { capabilities: {}, golden_path: {} });
+    if(failCapabilities){await route.abort('failed');return;}
+    if(capabilitiesResponseGate){const gate=capabilitiesResponseGate;capabilitiesResponseGate=null;gate.arrive();await gate.wait;}
+    await fulfillJson(route, { capabilities: writingCapabilities, golden_path: {} });
+  });
+  await page.route('**/api/setup/save-keys', async (route) => {
+    const saved = Object.keys(bodyOf(route));
+    keySaves.push(saved);
+    if(keySaveGate){const gate=keySaveGate;keySaveGate=null;gate.arrive();await gate.wait;}
+    setupStatusProjection.essentials.find(item=>item.key==='llm_keys').configured_keys=saved;
+    await fulfillJson(route,{ok:true,saved});
+  });
+  await page.route('**/api/setup/recheck', route=>fulfillJson(route,setupStatusProjection));
+  await page.route('**/api/setup/provider-check', async route=>{
+    keyChecks++;
+    const failure=nextKeyCheckFailure;nextKeyCheckFailure='';
+    if(failure==='timeout'){await keyCheckGate.wait;await route.abort().catch(()=>{});return;}
+    await fulfillJson(route,{ok:!failure,providers:{}},failure?503:200);
+  });
+  // Home-cue progress fixtures overlay only the director block on the isolated
+  // app's real /status, so every other renderer keeps an authentic payload.
+  // null leaves /status untouched for every scenario that does not opt in.
+  let homeCueStatus = null;
+  const homeCueSideEffects = [];
+  const homeCueDirector = ({ activated = 0, reserved = 0, eligible = 0 } = {}) => ({
+    mode: 'waiting',
+    eligible_count: eligible,
+    cooling_count: 0,
+    reserved_count: reserved,
+    session_counters: { selected: activated + reserved, reserved: activated + reserved, activated, released: 0 },
+    last_outcome: 'waiting',
+    operator_message: 'Waiting for a safe home cue',
+  });
+  page.on('request', (request) => {
+    if (/\/api\/(?:trigger|setup\/home-context-(?:choice|preview))(?:\?|$)/.test(request.url())) homeCueSideEffects.push(request.url());
+  });
+  await page.route(/\/status\?playlist_limit=\d+$/, async (route) => {
+    if (homeCueStatus === null) { await route.fallback(); return; }
+    if (homeCueStatus === 'http') { await route.fulfill({ status: 503, contentType: 'text/html', body: 'Unavailable' }); return; }
+    const response = await route.fetch();
+    const body = await response.json();
+    const details = body.ha_details && typeof body.ha_details === 'object' ? { ...body.ha_details } : {};
+    if (homeCueStatus === 'missing') delete details.home_context_director;
+    else if (homeCueStatus === 'malformed') details.home_context_director = { ...homeCueDirector(), reserved_count: '1', session_counters: 'unavailable' };
+    else details.home_context_director = homeCueDirector(homeCueStatus);
+    await fulfillJson(route, { ...body, ha_details: details });
+  });
+  await page.route(`${baseUrl}/admin`, async (route) => {
+    const response = await route.fetch();
+    const html = await response.text();
+    const bodyTag = /(<\/head>\s*<body\b)([^>]*)(>)/i;
+    const entryAttribute = /\bdata-first-listen-entry="(?:pending|required|complete)"/g;
+    const body = html.match(bodyTag);
+    assert(body && (body[2].match(entryAttribute) || []).length === 1, 'admin bootstrap fixture drifted');
+    // Match the fresh API fixture before initTabs reads the server bootstrap.
+    // The host instance may already contain the operator's completed receipts.
+    await route.fulfill({ response, body: html.replace(bodyTag, (_, open, attributes, close) => (
+      open + attributes.replace(entryAttribute, 'data-first-listen-entry="required"') + close
+    )) });
   });
 
+  // Fault injection owns network responses; a PWA cache must not bypass them.
+  // Native-media acceptance exercises the unchanged service worker separately.
+  await page.addInitScript(()=>{
+    if('serviceWorker' in navigator)navigator.serviceWorker.register=async()=>({});
+    window.__stationMediaHandlers={};
+    if('mediaSession' in navigator){
+      const install=navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+      navigator.mediaSession.setActionHandler=(action,handler)=>{window.__stationMediaHandlers[action]=handler;install(action,handler);};
+    }
+  });
   page.setDefaultTimeout(5000);
   page.setDefaultNavigationTimeout(10000);
   await page.goto(`${baseUrl}/admin`, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -457,18 +625,40 @@ async (page) => {
     null,
     { timeout: 5000 },
   );
+  await initialCapabilitiesGate.arrived;
+  await page.evaluate((projection) => {
+    _lastSetupJson = null;
+    renderSetup(projection);
+  }, setupProjection({ primary: 'unavailable' }));
+  assert(await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"]').count() === 0, 'pending capabilities fabricated chart availability');
+  assert(await page.locator('#firstListenRepairMusicBtn').isDisabled(), 'music repair stayed actionable before capabilities resolved');
+  initialCapabilitiesGate.release();
+  await page.waitForFunction(() => _capsState === 'ready');
+  assert(await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"]').count() === 0, 'capability resolution did not repair chart guidance');
+  assert((await page.locator('#firstListenRepairMusicBtn').innerText()) === 'Open music source setup', 'resolved add-on repair did not name the available setup path');
+  await page.locator('#firstListenSourcePreviewDetails').evaluate((element) => { element.open = false; });
   assert(await page.getByRole('heading',{name:'Hear Mamma Mi Radio, right here.',level:2}).count()===1,'First Listen lost its accessible H2');
   await page.evaluate(() => {
     (window.__firstListenSmokeIntervals || []).forEach(({ id }) => clearInterval(id));
   });
 
   async function runCalmJourneySmoke() {
+    smokeStage = 'journey-start';
     const resetUi = async (setup, overrides = {}) => {
       setupStatusProjection = setup;
       await page.evaluate(({ projection, ui }) => {
+        cancelFirstListenHandoff();
         finalizeFirstListenCompletion();
         stopFirstListenGuide();
         stopFirstListenStationAudio();
+        firstListenStationAudio().removeAttribute('src');
+        firstListenStationAudio().load();
+        document.body.dataset.firstListenEntry='required';
+        _firstListenPlayback.phase='idle';
+        renderFirstListenPlayer();
+        document.getElementById('firstListenDestinations').open=false;
+        document.querySelector('.success-saved').open=false;
+        document.getElementById('firstListenPlayer').scrollTop=0;
         Object.assign(_firstListenUi, {
           projection: null,
           players: [],
@@ -480,6 +670,9 @@ async (page) => {
           discovery: 'untouched',
           dispatch: 'ready',
           verification: 'awaiting',
+          householdProof: 'ready',
+          householdExample: '',
+          householdExamplesHeard: [],
           privacyPreview: 'untouched',
           privacyPreviewValid: false,
           privacyPreviewUseful: false,
@@ -493,10 +686,19 @@ async (page) => {
           optionalStep: '',
           reviewTrigger: null,
           showSuccess: false,
+          successAnnounced: false,
+          restarting: false,
+          connectionStage: 'invite',
+          keySaving: false,
+          connectionChecking: false,
+          connectionCheckFailed: false,
+          keySaveUnconfirmed: false,
+          acknowledgedKeys: [],
           ...ui,
         });
         _lastSetupJson = null;
         renderSetup(projection);
+        if (firstListenProjection().privacyUnlocked && !firstListenProjection().privacyReviewed) showFirstListenConnection('home');
         showAdminTab(
           document.body.dataset.firstListenEntry === 'required' ? 'setup' : 'motore',
           { render: false, persist: false },
@@ -534,6 +736,8 @@ async (page) => {
 
     const assertUnfinished = async (expectedId, expectedPrimary) => {
       const state = await journeyState();
+      const number=['firstListenSpeakerStep','firstListenVerifyStep','firstListenPrivacyStep'].indexOf(expectedId)+1;
+      assert((await page.locator('#firstListenProgressLine').innerText()).startsWith(`Step ${number} of 3.`), 'human step label drifted from progress');
       assert(
         state.current.length === 1 && state.current[0].id === expectedId,
         `unfinished journey has the wrong current step: ${JSON.stringify(state)}`,
@@ -567,7 +771,130 @@ async (page) => {
       attemptId: 'listener_browser-server',
       dispatch: 'accepted',
       verification: 'heard',
+      householdProof: 'skipped',
     });
+
+    const stationMediaSnapshot = () => page.evaluate(() => {
+      const state = window.__firstListenStationMedia;
+      const station = document.getElementById('firstListenStationAudio');
+      return {
+        activeSrc: state.activeSrc,
+        events: state.events.map((event) => ({ ...event })),
+        playing: state.playing,
+        src: station?.getAttribute('src') || null,
+        streamRequests: [...state.streamRequests],
+      };
+    });
+
+    const openHomeChoice = async () => {
+      await page.evaluate(() => showFirstListenConnection('home'));
+      await page.waitForFunction(() => !document.getElementById('firstListenHomeChoice')?.hidden);
+    };
+
+    const startAudibleFirstListen = async ({ home = false } = {}) => {
+      await resetUi(setupProjection());
+      const before = await stationMediaSnapshot();
+      await page.locator('#firstListenPlayBtn').click();
+      await page.waitForFunction(() => (
+        _firstListenUi.dispatch === 'accepted'
+          && !_firstListenUi.busy
+          && window.__firstListenStationMedia.playing
+      ));
+      await page.locator('#firstListenHeardBtn').click();
+      await page.waitForFunction(() => _firstListenUi.verification === 'heard' && !_firstListenUi.busy);
+      if(home){
+        await page.locator('#firstListenProofSkipBtn').click();
+        await page.locator('#firstListenConnectionSkip').click();
+      }
+      const started = await stationMediaSnapshot();
+      assert(started.src?.endsWith('/stream?first_listen=1'), `First Listen opened the wrong stream: ${started.src}`);
+      assert(started.activeSrc === started.src, 'instrumented station connection does not own the audio element source');
+      assert(started.streamRequests.length === before.streamRequests.length + 1, 'sound check did not open exactly one station stream');
+      assert(started.playing, 'sound confirmation paused the station');
+      return {
+        eventIndex: started.events.length,
+        requestCount: started.streamRequests.length,
+        src: started.src,
+      };
+    };
+
+    const assertStationPreserved = async (checkpoint, label, { playing = true } = {}) => {
+      const state = await stationMediaSnapshot();
+      const destructive = state.events.slice(checkpoint.eventIndex).filter(({ type }) => (
+        type === 'remove-src' || type === 'load' || type === 'pause'
+      ));
+      assert(state.src === checkpoint.src, `${label} replaced or cleared the station source`);
+      assert(state.activeSrc === (checkpoint.src||''), `${label} released the station connection`);
+      assert(state.streamRequests.length === checkpoint.requestCount, `${label} opened a second station stream`);
+      assert(destructive.length === 0, `${label} tore down the station: ${JSON.stringify(destructive)}`);
+      assert(state.playing === playing, `${label} left station playing=${state.playing}`);
+      return state;
+    };
+
+    const HOME_CUE_COPY = {
+      streamed: 'A Home cue reached the stream during this station session.',
+      queued: 'A Home cue is queued for a future host break.',
+      waiting: 'Waiting for a Home cue. Keep listening, or check Home Assistant and your writing connection in setup.',
+      unavailable: 'We can’t check Home-cue progress right now. Wait a moment; we’ll check again.',
+    };
+    const cueProgress = () => page.evaluate(() => {
+      const element = document.getElementById('firstListenCueProgress');
+      return {
+        visible: Boolean(element && !element.hidden && element.getClientRects().length),
+        text: element ? element.textContent : null,
+      };
+    });
+    // Progress rides the existing status poll; the smoke drives that poll by hand.
+    const pollHomeCue = async (fixture) => {
+      homeCueStatus = fixture;
+      await page.evaluate(() => refreshFast());
+      return cueProgress();
+    };
+    const assertCueHidden = async (label) => {
+      const cue = await cueProgress();
+      assert(!cue.visible && cue.text === '', `${label} exposed Home-cue progress: ${JSON.stringify(cue)}`);
+    };
+
+    const prepareOwnedStation = async ({ showSuccess = false, sourceOptions = {}, proof = false, privacy = false } = {}) => {
+      await resetUi(
+        setupProjection({ audio: true, privacy, ...sourceOptions }),
+        { ...audioReadyOverrides(), householdProof: proof ? 'ready' : 'skipped' },
+      );
+      if(proof)await page.evaluate(()=>showFirstListenConnection('invite'));
+      const before = await stationMediaSnapshot();
+      await page.evaluate(async ({ success }) => {
+        if (success) {
+          document.body.dataset.firstListenEntry = 'completing';
+          _firstListenUi.showSuccess = true;
+          syncFirstListenSetupMount();
+          updateFirstListenSuccess();
+        }
+        const station = document.getElementById('firstListenStationAudio');
+        _firstListenPlayback.intent=true;
+        await ensureFirstListenMix(_firstListenPlayback.epoch);
+        station.src = `${_base}${FIRST_LISTEN_STREAM}`;
+        await station.play();
+      }, { success: showSuccess });
+      await page.waitForFunction(() => window.__firstListenStationMedia.playing);
+      const started = await stationMediaSnapshot();
+      assert(started.streamRequests.length === before.streamRequests.length + 1, 'owned-station fixture did not open one stream');
+      return {
+        eventIndex: started.events.length,
+        requestCount: started.streamRequests.length,
+        src: started.src,
+      };
+    };
+    assert(await page.evaluate(()=>!__stationMediaHandlers.play&&!__stationMediaHandlers.pause),'idle onboarding claimed station headset controls');
+    await page.evaluate(()=>{
+      if(!('mediaSession' in navigator))return;
+      const install=navigator.mediaSession.setActionHandler;
+      try{
+        navigator.mediaSession.setActionHandler=(action,handler)=>{if(action==='stop')throw new Error('unsupported action');install(action,handler);};
+        _firstListenPlayback.phase='paused';renderFirstListenPlayer();
+        _firstListenPlayback.phase='idle';renderFirstListenPlayer();
+      }finally{navigator.mediaSession.setActionHandler=install;}
+    });
+    assert(await page.evaluate(()=>!__stationMediaHandlers.play&&!__stationMediaHandlers.pause),'partial MediaSession support leaked station controls into idle onboarding');
 
     const assertPrivacyDidNotAdvance = async (label, { receiptChoice = null } = {}) => {
       const state = await page.evaluate(() => ({
@@ -580,10 +907,7 @@ async (page) => {
       assert(state.showSuccess === false, `${label} triggered the success celebration`);
       assert(await page.locator('#journeySurface').isVisible(), `${label} hid the unfinished journey`);
       assert(await page.locator('#firstListenSuccess').isHidden(), `${label} exposed the completed success screen`);
-      assert(
-        await page.locator('#firstListenAiFieldset').evaluate((element) => element.disabled === true),
-        `${label} unlocked optional AI`,
-      );
+      assert(await page.evaluate(()=>!firstListenProjection().privacyReviewed), `${label} incorrectly completed Home review`);
       const journey = await journeyState();
       assert(
         journey.current.length === 1 && journey.current[0].id === 'firstListenPrivacyStep'
@@ -631,17 +955,154 @@ async (page) => {
       await assertUnfinished('firstListenVerifyStep', 'firstListenHeardBtn');
     };
 
-    await resetUi(setupProjection());
+    await resetUi(setupProjection({sources:false}));
+    await page.evaluate(()=>_firstListenUi.projection=null);nextSetupFailure='network';
+    await page.evaluate(()=>refreshSlow());
+    assert(await page.evaluate(()=>!firstListenProjection().legacy&&journeySurface.dataset.currentStep==='1'&&firstListenPlayBtn.disabled&&firstListenPrivacyBody.inert&&!setupAccessError.hidden),'first polling failure fabricated saved progress');
+    for(const failure of ['network','timeout','invalid-json','http','http-json','empty','malformed','render-error']){
+      setupStatusProjection=setupProjection({audio:true});
+      await resetUi(setupStatusProjection,audioReadyOverrides());
+      await page.evaluate(()=>refreshSlow());
+      await page.locator('#firstListenKeepOffBtn').focus();
+      const before=await page.evaluate(()=>JSON.stringify({projection:_firstListenUi.projection,progress:firstListenProgressLine.textContent,focus:document.activeElement?.id}));
+      nextSetupFailure=failure;
+      if(failure==='timeout')timeoutSetupGate=responseGate();
+      try{
+        await page.evaluate(async(failure)=>{
+          const original=window.setTimeout;
+          window.setTimeout=(fn,ms,...args)=>original(fn,failure==='timeout'&&ms===SLOW_POLL_DEADLINE_MS?50:ms,...args);
+          try{await refreshSlow();}finally{window.setTimeout=original;}
+        },failure);
+      }finally{timeoutSetupGate?.release();timeoutSetupGate=null;}
+      assert(await page.locator('#setupAccessError').isVisible(), `${failure} polling failure was silent`);
+      if(failure==='render-error'){nextSetupFailure=failure;await page.evaluate(()=>refreshSlow());assert(await page.locator('#setupAccessError').isVisible(),'repeated malformed setup response hid its error');}
+      assert((await page.locator('#setupAccessError').innerText()).includes('reload this page'), `${failure} polling failure lost concrete recovery action`);
+      const failedReadiness=(await page.locator('#firstListenSourceChip').innerText()).toUpperCase();
+      assert(failedReadiness === 'COULDN’T CHECK MUSIC', `${failure} polling failure kept stale readiness: ${JSON.stringify(failedReadiness)}`);
+      assert((await page.locator('#firstListenSourceSummary').textContent()).includes('last music details'), `${failure} still promised music from stale source details`);
+      assert(before===await page.evaluate(()=>JSON.stringify({projection:_firstListenUi.projection,progress:firstListenProgressLine.textContent,focus:document.activeElement?.id})), `${failure} polling failure changed saved progress or focus`);
+      failCapabilities=true;
+      try{await page.evaluate(()=>refreshSlow());}finally{failCapabilities=false;}
+      assert(await page.locator('#setupAccessError').isHidden(), `${failure} successful polling kept stale error`);
+      assert((await page.locator('#firstListenSourceChip').innerText()).toUpperCase() === 'MUSIC IS READY', `${failure} unchanged setup response failed to restore readiness`);
+      assert(!(await page.locator('#firstListenSourceSummary').textContent()).includes('last music details'), `${failure} recovery kept stale source copy`);
+    }
+
+    for(const kind of ['preview','privacy']){
+      await resetUi(setupProjection({audio:true,privacy:kind==='preview',privacyEnabled:kind==='preview'}),audioReadyOverrides());
+      await page.evaluate(async(kind)=>{
+        const fetchOriginal=window.fetch,timerOriginal=window.setTimeout;
+        window.setTimeout=(fn,ms,...args)=>timerOriginal(fn,ms===FIRST_LISTEN_TIMEOUTS[kind]?25:ms,...args);
+        window.fetch=(url,options)=>String(url).includes(kind==='preview'?'home-context-preview':'home-context-choice')?new Promise((resolve,reject)=>options.signal?.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')))):fetchOriginal(url,options);
+        try{if(kind==='preview')await loadHomeContextPreview();else await chooseFirstListenPrivacy(false);}finally{window.fetch=fetchOriginal;window.setTimeout=timerOriginal;}
+      },kind);
+      assert(await page.evaluate(()=>!_firstListenUi.privacySaving&&_firstListenUi.privacyPreview!=='previewing'&&!_firstListenUi.showSuccess),'hung privacy request froze the journey');
+      assert(await page.locator('#firstListenPrivacyStatus').getAttribute('data-tone')==='blocked','privacy deadline lost its recovery message');
+      if(kind==='privacy')await assertUnfinished('firstListenPrivacyStep','firstListenPreviewBtn');
+      else assert(await page.evaluate(()=>firstListenProjection().privacyEnabled)&&!(await page.locator('#firstListenPrivacyStatus').innerText()).includes('stays off'),'failed preview contradicted the active sharing choice');
+    }
+
+    for(const reviewing of [false,true])for(const responseFailure of ['headers','body','invalid'])for(const pendingReceipt of [false,true])for(const enabled of [true,false]){
+      await resetUi(setupProjection({audio:true,privacy:reviewing&&!pendingReceipt,privacyEnabled:!enabled}),{...audioReadyOverrides(),privacyReceiptChoice:pendingReceipt?!enabled:null});
+      setupStatusProjection=setupProjection({audio:true,privacy:true,privacyEnabled:enabled});
+      await page.evaluate(async({enabled,projection,responseFailure,reviewing})=>{
+        const fetchOriginal=window.fetch,timerOriginal=window.setTimeout;
+        _firstListenUi.reviewStep=reviewing?'privacy':'';_firstListenUi.privacyPreviewValid=true;
+        window.setTimeout=(fn,ms,...args)=>timerOriginal.call(window,fn,ms===FIRST_LISTEN_TIMEOUTS.privacy?25:ms,...args);
+        window.fetch=(url,options)=>{
+          if(!String(url).includes('home-context-choice'))return fetchOriginal(url,options);
+          renderSetup(projection);
+          const lostResponse=new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError'))));
+          return responseFailure==='headers'?lostResponse:Promise.resolve({ok:true,status:200,json:()=>responseFailure==='invalid'?Promise.reject(new SyntaxError('Invalid JSON')):lostResponse});
+        };
+        try{await chooseFirstListenPrivacy(enabled);}finally{window.fetch=fetchOriginal;window.setTimeout=timerOriginal;}
+      },{enabled,projection:setupStatusProjection,responseFailure,reviewing});
+      assert(await page.locator('#firstListenPrivacyStatus').isVisible(),'fresh lost save hid its recovery action');
+      assert((await page.locator('#firstListenPrivacyStatus').innerText()).includes('may already have reached'),'lost save response falsely claimed privacy stayed off');
+      assert(await page.evaluate(()=>firstListenProjection().privacyEnabled)===enabled,'lost privacy response hid the saved server choice');
+      assert(await page.evaluate(()=>_firstListenUi.privacyReceiptChoice===null&&!_firstListenUi.privacyPreviewValid),'lost response retained an earlier privacy receipt or consent preview');
+      await page.evaluate(()=>refreshSlow());
+      assert(await page.evaluate(()=>_firstListenUi.privacyChoice)===enabled,'identical poll did not reconcile privacy after a timed-out save');
+      assert((await page.locator('#firstListenPrivacyChip').innerText()).includes(enabled?'HOME CONTEXT ON':'STAYS OFF'),'privacy summary contradicted saved server state');
+    }
+
+    const initialJourneyProjection = setupProjection();
+    initialJourneyProjection.guided_setup.source_readiness.advanced = {
+      kind: 'custom_rotation', label: 'Custom rotation', status: 'configured_unchecked',
+    };
+    await resetUi(initialJourneyProjection);
     assert(await page.locator('#tab-setup').getAttribute('aria-selected') === 'true', 'fresh install did not land on First Listen');
     assert(await page.locator('#first-listen-panel').isVisible(), 'First Listen is not the primary setup surface');
     assert(await page.locator('#journeySurface').isVisible(), 'calm First Listen surface is missing');
-    assert(await page.locator('#firstListenPath > .first-listen-step').count() === 4, 'required First Listen path is not four stages');
+    assert(await page.locator('#firstListenPath > .first-listen-step').count() === 3, 'required First Listen path is not three stages');
     assert(await page.locator('#firstListenAiStep').evaluate((el) => el.closest('#firstListenPath') === null), 'optional AI stayed inside required progress');
-    assert(await page.locator('.first-listen-step').count() === 5, 'optional AI left the First Listen surface');
-    assert((await page.locator('#firstListenOptionalHeading').textContent()).trim() === 'Optional enhancement', 'optional AI lost its section label');
-    assert((await page.locator('#firstListenProgressLine').innerText()).includes('of 4'), 'required progress is not Step N of 4');
-    assert((await page.locator('#firstListenPlayBtn').innerText()) === 'Start sound check', 'primary playback action is not Start sound check');
-    assert((await page.locator('.guide-audio[data-guide="welcome"] .guide-audio-play').innerText()) === 'Preview 16-second welcome', 'welcome preview copy drifted');
+    assert(await page.locator('.first-listen-step').count() === 4, 'optional AI left the First Listen surface');
+    assert((await page.locator('#firstListenOptionalHeading').textContent()).trim() === 'Your ongoing show', 'optional AI lost its section label');
+    assert((await page.locator('#firstListenProgressLine').innerText()).includes('Step 1 of 3'), 'required progress should open on the first interactive step');
+    assert((await page.locator('#firstListenProgressLine').innerText()).includes('of 3'), 'required progress is not Step N of 3');
+    const readyHeading=(await page.locator('#firstListenSourceChip').innerText()).toUpperCase();
+    assert(readyHeading === 'MUSIC IS READY', `readiness heading drifted from music continuity: ${JSON.stringify(readyHeading)}`);
+    assert(await page.locator('#firstListenSourceStep .first-listen-number, #firstListenSourceStep[aria-current="step"]').count() === 0, 'readiness received numbered human progress');
+    const sourcePreview = page.locator('#firstListenSourcePreviewDetails');
+    const sourceReview = sourcePreview.locator('> summary');
+    assert(await sourcePreview.isVisible(), 'native music readiness disclosure is missing');
+    assert(!(await sourcePreview.evaluate((element) => element.open)), 'healthy source preview expanded itself without being asked');
+    const sourceStepCopy = await page.locator('#firstListenSourceSummary').textContent();
+    assert(sourceStepCopy.includes('Music will continue'), `readiness overpromised primary music readiness: ${sourceStepCopy}`);
+    const sourcePreviewSummaryBox = await sourcePreview.locator('> summary').boundingBox();
+    assert(sourcePreviewSummaryBox?.height >= 43.5, `source preview summary fell below 44px: ${JSON.stringify(sourcePreviewSummaryBox)}`);
+    await sourcePreview.locator('> summary').click();
+    assert(await page.locator('#firstListenSourcePreview .first-listen-source-row:visible').count() === 1, 'healthy readiness made optional sources look required');
+    const otherSources = sourcePreview.locator('.first-listen-other-sources');
+    await otherSources.locator('> summary').click();
+    assert(await otherSources.getByRole('button', { name: 'Open music source setup' }).isEnabled(), 'optional music sources have no available setup action');
+    await page.evaluate(() => renderFirstListenSources(_firstListenUi.projection.guided_setup.source_readiness));
+    assert(await otherSources.evaluate(element => element.open), 'music polling closed the other-sources disclosure');
+    assert(await otherSources.locator('> summary').evaluate(element => getComputedStyle(element,'::before').content.includes('›')), 'expandable help lost its disclosure arrow');
+    const sourcePreviewCopy = (await page.locator('#firstListenSourcePreview').innerText()).replace(/\s+/g, ' ');
+    assert(
+      sourcePreviewCopy.includes('Live charts') && !sourcePreviewCopy.includes('Recovery cover')
+        && !sourcePreviewCopy.includes('Checking what can play'),
+      `source preview did not render the known sources: ${sourcePreviewCopy}`,
+    );
+    assert(
+      !/proves transport|Configured · not checked|Candidates only|Cover only|Not bundled/.test(sourcePreviewCopy),
+      `required journey leaked machine readiness vocabulary: ${sourcePreviewCopy}`,
+    );
+    assert(
+      sourcePreviewCopy.includes('Optional. Open music source setup to turn it on.')
+        && sourcePreviewCopy.includes('No local songs were found. Add MP3 files to the station’s music folder.')
+        && !sourcePreviewCopy.includes('Bundled demo music')
+        && !sourcePreviewCopy.includes('Add your own, or use live charts.'),
+      `source preview lost setup-specific guidance: ${sourcePreviewCopy}`,
+    );
+    const plainStatusLabels = await page.locator('#firstListenSourcePreview .status-chip').evaluateAll((chips) => chips.map((chip) => ({
+      ariaLabel: chip.getAttribute('aria-label'),
+      source: chip.closest('.first-listen-source-row')?.querySelector('.first-listen-source-name')?.textContent?.trim(),
+      text: chip.textContent?.trim(),
+      title: chip.getAttribute('title'),
+    })));
+    assert(
+      plainStatusLabels.length === 3
+        && plainStatusLabels.every(({ ariaLabel, source, text, title }) => ariaLabel === `${source}: ${text}` && title === text),
+      `plain source chips exposed internal states: ${JSON.stringify(plainStatusLabels)}`,
+    );
+    assert(await page.locator('#firstListenSpeakerChip').evaluate(element => {
+      const style = getComputedStyle(element);
+      return element.tagName === 'SPAN' && style.borderTopWidth === '0px' && style.backgroundColor === 'rgba(0, 0, 0, 0)';
+    }), 'noninteractive step status still looks like a button');
+    await sourceReview.click();
+    assert(await page.locator('#firstListenSourceBody').isHidden(), 'music details stayed open after disclosure closed');
+    const speakerHelp = await page.locator('#firstListenSpeakerHelp').innerText();
+    assert(
+      speakerHelp.includes('Listen on this device') && speakerHelp.includes('Listen elsewhere') && !speakerHelp.includes('HACS'),
+      'step 1 lost its focused local playback boundary',
+    );
+    assert(await page.locator('#firstListenHomeAssistantGuide').count() === 0, 'advanced Home Assistant routing returned to the core ritual');
+    assert((await page.locator('#firstListenPlayBtn').innerText()) === 'Start my station', 'primary playback action is not Start my station');
+    const hasRetainedWelcome=await page.evaluate(async()=>{const pack=await (await fetch(_base+'/static/audio/spoken_assets.json')).json();return pack.assets.some(asset=>asset.path==='first_listen/welcome.mp3');});
+    assert(hasRetainedWelcome, 'retired welcome lost its validated compatibility asset');
+    assert(await page.locator('.guide-audio[data-guide="welcome"]').count() === 0, 'standalone welcome returned as a competing action');
     assert(await page.locator('.program-mark img').getAttribute('src') === '/static/favicon.svg', 'standalone mark is not the canonical favicon');
     assert(await page.locator('#firstListenAiStep').getAttribute('aria-current') === null, 'optional AI received aria-current');
     assert(await page.locator('#firstListenQuickAction').count() === 0, 'legacy duplicate quick action returned');
@@ -660,53 +1121,174 @@ async (page) => {
     await page.locator('.first-listen-station-controls').click();await page.locator('#tab-rotazione').click();
     await page.evaluate(()=>{_st.jamendo={enabled:false,state:'needs_config',client_id_configured:true,client_id_source:'bundled',shared_access_available:true,noncommercial_acknowledged:false};renderJamendoStatus(_st.jamendo)});
     await page.locator('#jamendoSourceActions button').click();
-    await page.waitForFunction(() => document.body.dataset.firstListenSetupView === 'music-sources' && document.activeElement?.id === 'jamendoSetupHeading');assert(await page.locator('#setupMusicSources').isVisible() && await page.locator('#journeySurface').isHidden(), 'Jamendo setup did not replace the required journey');
+    await page.waitForFunction(() => _activeTab === 'rotazione' && document.getElementById('musicSourceSettings').open && document.activeElement?.id === 'jamendoSetupHeading');assert(await page.locator('#setupMusicSources').isVisible() && await page.locator('#journeySurface').isHidden(), 'Jamendo setup did not open inside Rotazione');
     const jamendoClear=page.locator('#jamendoClearClientId');assert(await jamendoClear.count()===1&&await jamendoClear.isHidden(), 'Clear remained visible for bundled access');
-    await page.locator('.first-listen-station-controls').click();await page.locator('#tab-setup').click();
+    await page.locator('#tab-setup').click();
     assert(await page.locator('#journeySurface').isVisible() && await page.locator('#setupMusicSources').isHidden(), 'Setup tab did not restore First Listen');
 
-    const welcomeGuide = page.locator('.guide-audio[data-guide="welcome"]');
-    const welcomeGuideButton = welcomeGuide.locator('.guide-audio-play');
-    const welcomeRequestBaseline = guideAudioRequests.length;
-    await welcomeGuideButton.click();
-    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'playing');
-    assert(guideAudioRequests.length === welcomeRequestBaseline + 1, 'welcome guide did not request its local audio asset');
-    assert(
-      /^\/static\/audio\/first_listen\/welcome\.mp3\?v=[0-9a-f]{12}$/.test(guideAudioRequests.at(-1)),
-      `welcome guide used the wrong local URL: ${guideAudioRequests.at(-1)}`,
-    );
-    assert((await welcomeGuideButton.innerText()) === 'Pause example', 'welcome guide did not expose pause after playback started');
-    await welcomeGuideButton.click();
-    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'paused');
-    assert((await welcomeGuideButton.innerText()) === 'Continue example', 'welcome guide did not expose resume after pause');
-    await welcomeGuideButton.click();
-    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'playing');
-    await page.locator('#firstListenGuideAudio').evaluate((audio) => audio.dispatchEvent(new Event('ended')));
-    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'ended');
-    assert((await welcomeGuideButton.innerText()) === 'Play again', 'ended guide did not expose replay');
-    assert(await page.locator('#firstListenGuideAudio').getAttribute('src') === null, 'ended guide retained its audio URL');
+    const stationStartProof = {resume:resumeRequests.length,verify:verifyRequests.length,privacy:privacyRequests.length};
+    await page.locator('#firstListenPlayBtn').click();
+    await page.waitForFunction(()=>_firstListenUi.dispatch==='accepted'&&!_firstListenUi.busy);
+    assert(await page.evaluate(() => window.__firstListenStationMedia?.playing === true), 'Start my station did not begin the real station');
+    assert(resumeRequests.length===stationStartProof.resume+1&&verifyRequests.length===stationStartProof.verify&&privacyRequests.length===stationStartProof.privacy, 'station start advanced confirmation or consent proof');
 
-    const soundGuide = page.locator('#firstListenVerifyBody > .guide-audio[data-guide="sound-check"]');
+    const soundGuide = page.locator('#firstListenVerifyBody .guide-audio[data-guide="sound-check"]');
     failNextGuideKey = 'sound-check';
     await resetUi(setupProjection(), { dispatch: 'accepted' });
+    await page.locator('#firstListenSoundHelp > summary').click();
     const soundGuideButton = soundGuide.locator('.guide-audio-play');
     const soundGuideRequestBaseline = guideAudioRequests.length;
     await soundGuideButton.click();
     await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="sound-check"]')?.dataset.state === 'error');
-    assert(guideAudioRequests.length === soundGuideRequestBaseline + 1, 'sound-check guide error fixture did not request audio once');
-    assert((await soundGuideButton.innerText()) === 'Try example again', 'failed guide did not expose retry');
+    assertGuideRequests(soundGuideRequestBaseline,'sound-check');
+    assert((await soundGuideButton.innerText()) === 'Try explanation again', 'failed guide did not expose retry');
     assert(await page.locator('#firstListenGuideAudio').getAttribute('src') === null, 'failed guide retained its terminal audio URL');
+    failNextGuideKey = '';
+    const soundGuideRetryBaseline = guideAudioRequests.length;
     await soundGuideButton.click();
     await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="sound-check"]')?.dataset.state === 'playing');
-    assert(guideAudioRequests.length === soundGuideRequestBaseline + 2, 'guide retry did not request a fresh audio response');
+    assertGuideRequests(soundGuideRetryBaseline,'sound-check');
+    await page.evaluate(()=>{stopFirstListenGuide();renderFirstListenProgress();});
+    await page.waitForFunction(()=>!_firstListenUi.guideKey&&!firstListenGuideLocksRoomProof(),null,{timeout:1000});
+    await soundGuideButton.click();
+    await page.waitForFunction(()=>document.querySelector('[data-guide="sound-check"]').dataset.state==='playing');
+
     await soundGuideButton.click();
     await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="sound-check"]')?.dataset.state === 'paused');
+    await page.evaluate(() => {
+      const button = document.querySelector('.guide-audio[data-guide="not-yet"] .guide-audio-play');
+      return toggleFirstListenGuide('not-yet', button);
+    });
+    assert(await page.evaluate(() => document.querySelector('.guide-audio[data-guide="not-yet"]')?.dataset.state !== 'error' && firstListenGuideAudio().getAttribute('src')?.includes('/not-yet.mp3?')), 'switching clips did not load the new guide');
+    assert(await soundGuide.getAttribute('data-state') === 'idle', 'switching clips did not reset the previous guide');
+    assert(await soundGuideButton.innerText() === 'Hear why we ask', 'switching clips lost the previous idle label');
+    assert((await page.locator('#firstListenGuideAudio').getAttribute('src')).includes('/not-yet.mp3?'), 'switching clips did not load the new source');
+    await page.evaluate(() => stopFirstListenGuide());
+    const proofGuide = page.locator('.household-example[data-home-moment="quiet"]');
+    const proofGuideButton = proofGuide.locator('.household-example-play');
 
     await resetUi(setupProjection({ primary: 'unavailable', recovery: 'cover_only' }));
     await assertUnfinished('firstListenSpeakerStep', 'firstListenPlayBtn');
-    assert((await page.locator('#firstListenSourceChip').innerText()) === 'BACKUP AUDIO AVAILABLE', 'degraded source lost its honest runtime status');
+    assert((await page.locator('#firstListenSourceChip').innerText()).toUpperCase() === 'MUSIC NEEDS ATTENTION', 'degraded source lost its honest runtime status');
     assert((await page.locator('#firstListenSourceSummary').innerText()).includes('Backup audio'), 'degraded source did not explain what the listener gets');
     assert((await page.locator('#firstListenSourceRepair').innerText()).includes('continue'), 'degraded source blocked an otherwise usable First Listen');
+    assert(await sourcePreview.evaluate((element) => element.open), 'degraded source preview did not open on the health transition');
+    const degradedPreviewCopy = (await page.locator('#firstListenSourcePreview').innerText()).replace(/\s+/g, ' ');
+    assert(
+      !/proves transport|Configured · not checked|Candidates only|Cover only|Not bundled|Transport cover only|No bundled library/.test(degradedPreviewCopy),
+      `degraded source preview leaked machine readiness vocabulary: ${degradedPreviewCopy}`,
+    );
+    assert(
+      degradedPreviewCopy.includes('Backup audio only. It keeps the station on while real music is found.')
+        && !degradedPreviewCopy.includes('Live charts') && degradedPreviewCopy.includes('Add MP3 files'),
+      `degraded source preview lost its plain-language way out: ${degradedPreviewCopy}`,
+    );
+    await sourceReview.click();
+    assert(!(await sourcePreview.evaluate((element) => element.open)), 'operator could not close the degraded source preview');
+    await page.evaluate(() => renderFirstListenProgress());
+    assert(!(await sourcePreview.evaluate((element) => element.open)), 'routine refresh reopened the source preview after the operator closed it');
+    const announcementChanges=await page.evaluate(()=>{
+      const observer=new MutationObserver(()=>{});
+      observer.observe(document.getElementById('firstListenSourceChip'),{childList:true,characterData:true,subtree:true});
+      renderFirstListenProgress();
+      const changes=observer.takeRecords().length;observer.disconnect();return changes;
+    });
+    assert(announcementChanges===0, 'unchanged readiness repeated its live announcement');
+    await sourceReview.click();
+
+    await resetUi(setupProjection({ primary: 'unavailable', recovery: 'on_air' }));
+    assert((await page.locator('#firstListenSourceChip').innerText()).toUpperCase() === 'MUSIC NEEDS ATTENTION', 'recovery audio was mistaken for a healthy primary source');
+    const recoveryPreviewCopy = (await page.locator('#firstListenSourcePreview').innerText()).replace(/\s+/g, ' ');
+    assert(
+      recoveryPreviewCopy.includes('Backup audio is playing, so the station stays on.')
+        && recoveryPreviewCopy.includes('open music source setup')
+        && !recoveryPreviewCopy.includes('open music source tools')
+        && !recoveryPreviewCopy.includes('proves transport'),
+      `recovery-on-air preview still speaks machine: ${recoveryPreviewCopy}`,
+    );
+    const sourceFallbackProjection = setupProjection({ recovery: 'not_bundled' });
+    sourceFallbackProjection.guided_setup.source_readiness.rows.find((row) => row.kind === 'jamendo').status = 'candidates_only';
+    await resetUi(sourceFallbackProjection);
+    const candidatesRow = page.locator('#firstListenSourcePreview [data-source-kind="jamendo"]');
+    const notBundledRecoveryRow = page.locator('#firstListenSourcePreview [data-source-kind="recovery"]');
+    const sourceFallbackMatrixCopy = {
+      candidatesDetail: await candidatesRow.locator('.first-listen-source-detail').textContent(),
+      candidatesLabel: await candidatesRow.locator('.status-chip').textContent(),
+      recoveryRows: await notBundledRecoveryRow.count(),
+    };
+    assert(
+      sourceFallbackMatrixCopy.candidatesDetail === 'Songs found. Still listening to check they play cleanly.'
+        && sourceFallbackMatrixCopy.candidatesLabel === 'Almost ready'
+        && sourceFallbackMatrixCopy.recoveryRows === 0,
+      `source fallback matrix lost its plain-language copy: ${JSON.stringify(sourceFallbackMatrixCopy)}`,
+    );
+
+    const originalRejectEnable=rejectNextEnable;rejectNextEnable=false;
+    for(const [pendingSave,enabled] of [[true,false],[true,true],[false,false]]){
+      smokeStage=`completion-poll-${pendingSave}-${enabled}`;
+      const checkpoint=await prepareOwnedStation();
+      const gate=responseGate();
+      if(pendingSave){
+        if(enabled){await page.locator('#firstListenPreviewBtn').click();await page.waitForFunction(()=>_firstListenUi.privacyPreviewValid);}
+        privacyResponseGate=gate;
+        await page.locator(enabled?'#firstListenEnableContextBtn':'#firstListenKeepOffBtn').click();await gate.arrived;
+        const requests=privacyRequests.length;
+        await page.evaluate(enabled=>chooseFirstListenPrivacy(enabled),enabled);
+        assert(privacyRequests.length===requests,'pending privacy choice submitted twice');
+        const resumes=resumeRequests.length;
+        await page.evaluate(() => {
+          const trigger=document.querySelector('[data-review-step="verify"]');
+          toggleFirstListenReview('verify',trigger);
+        });
+        assert(await page.locator('#firstListenRetestBtn').isDisabled(),'pending privacy save allowed a retest');
+        await page.evaluate(async()=>{retestFirstListenSpeaker();await startFirstListen();});
+        assert(resumeRequests.length===resumes&&await page.evaluate(()=>!_firstListenUi.retestPending&&firstListenProjection().heard),'pending privacy save invalidated hearing proof');
+      }else await page.locator('#tab-setup').focus();
+      const focus=await page.evaluate(()=>document.activeElement?.id);
+      setupStatusProjection=setupProjection({audio:true,privacy:true,privacyEnabled:enabled});
+      await page.evaluate(()=>refreshSlow());
+      assert(await page.evaluate(()=>_activeTab==='setup'),'completion polling navigated away from the show');
+      const focusAfterPoll=await page.evaluate(()=>document.activeElement?.id);
+      // A server-owned completion may retire the only active ritual card; the
+      // browser then returns focus to the document instead of a hidden step.
+      assert(focusAfterPoll===focus||(!pendingSave&&focusAfterPoll===''),`completion polling moved keyboard focus (pending save: ${pendingSave}): ${JSON.stringify({focus,focusAfterPoll})}`);
+      await assertStationPreserved(checkpoint,'completion polling');
+      if(pendingSave){
+        gate.release();
+        await page.waitForFunction(()=>_firstListenUi.showSuccess&&!_firstListenUi.privacySaving);
+        await assertStationPreserved(checkpoint,'privacy response after completion polling');
+      }
+    }
+    smokeStage='privacy-save-loses-continuity';
+    const pendingContinuity=await prepareOwnedStation(), continuityGate=responseGate();
+    privacyResponseGate=continuityGate;
+    await page.locator('#firstListenKeepOffBtn').click();await continuityGate.arrived;
+    setupStatusProjection=setupProjection({audio:true,privacy:true,primary:'unavailable',recovery:'unavailable'});
+    await page.evaluate(()=>refreshSlow());
+    await assertStationPreserved(pendingContinuity,'continuity lost during privacy save');
+    continuityGate.release();
+    await page.waitForFunction(()=>!_firstListenUi.privacySaving);
+    assert(await page.evaluate(()=>firstListenProjection().privacyReviewed&&!_firstListenUi.showSuccess),'lost continuity discarded privacy or celebrated');
+    assert(await page.locator('#firstListenRepairMusicBtn').isVisible(),'lost continuity hid music repair');
+    await assertStationPreserved(pendingContinuity,'privacy receipt with unavailable continuity');
+    rejectNextEnable=originalRejectEnable;
+
+    for(const completedPoll of [false,true]){smokeStage=`repair-completion-${completedPoll}`;
+      const repairStation=await prepareOwnedStation({sourceOptions:{primary:'unavailable',recovery:'cover_only'}});
+      const gate=responseGate();privacyResponseGate=gate;
+      await page.locator('#firstListenKeepOffBtn').click();await gate.arrived;
+      await page.evaluate(() => openMusicSourceTools());
+      await page.waitForFunction(()=>document.activeElement?.id==='jamendoSetupHeading');
+      await page.locator('#jamendoEnabled').focus();
+      if(completedPoll){setupStatusProjection=setupProjection({audio:true,privacy:true,primary:'unavailable'});await page.evaluate(()=>refreshSlow());}
+      assert(await page.locator('#setupMusicSources').isVisible(),'completion poll swallowed the music repair view');
+      assert(await page.evaluate(()=>document.activeElement?.id)==='jamendoEnabled','completion poll moved focus in music repair');
+      gate.release();await page.waitForFunction(()=>!_firstListenUi.privacySaving,null,{timeout:10000});
+      assert(await page.locator('#setupMusicSources').isVisible()&&await page.locator('#firstListenSuccess').isHidden(),'late privacy response swallowed the music repair view');
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      assert(await page.evaluate(()=>document.activeElement?.id)==='jamendoEnabled','late privacy response moved focus in music repair');
+      await assertStationPreserved(repairStation,'music repair completion');
+    }
 
     const assertEarlyCompletionExit=async(beforeSave)=>{
       const ready=setupProjection({audio:true}),gate=responseGate();await resetUi(ready,audioReadyOverrides());
@@ -714,15 +1296,16 @@ async (page) => {
       await page.locator('#firstListenKeepOffBtn').click();await gate.arrived;
       if(!beforeSave)await page.waitForFunction(()=>_firstListenUi.showSuccess&&document.body.dataset.firstListenEntry==='completing');
       await page.evaluate(()=>openFirstListenStation());gate.release();
-      await page.waitForFunction(()=>!_firstListenUi.privacySaving&&document.body.dataset.firstListenEntry==='complete');
+      await page.waitForFunction(()=>!_firstListenUi.privacySaving,null,{timeout:12000});
       const state=await page.evaluate(()=>({tab:_activeTab,success:_firstListenUi.showSuccess,mount:firstListenSetupContext.parentElement?.id}));
-      assert(state.tab==='scaletta'&&!state.success&&state.mount!=='firstListenPanelMount',`${beforeSave?'pre-save':'pre-status'} exit left stale success: ${JSON.stringify(state)}`);
+      const entry=await page.evaluate(()=>document.body.dataset.firstListenEntry);
+      assert(entry==='complete'&&state.tab==='scaletta'&&!state.success&&state.mount!=='firstListenPanelMount',`${beforeSave?'pre-save':'pre-status'} exit left stale success: ${JSON.stringify({...state,entry})}`);
     };await assertEarlyCompletionExit(true);await assertEarlyCompletionExit(false);
 
     const fallbackCompletion = setupProjection({ primary: 'unavailable', recovery: 'cover_only', audio: true });
     setupStatusProjection = fallbackCompletion;
     await resetUi(fallbackCompletion, audioReadyOverrides());
-    await assertUnfinished('firstListenPrivacyStep', 'firstListenKeepOffBtn');
+    await assertUnfinished('firstListenPrivacyStep', 'firstListenPreviewBtn');
     await page.locator('#firstListenKeepOffBtn').click();
     await page.waitForFunction(() => _firstListenUi.showSuccess === true && !_firstListenUi.privacySaving);
     assert(await page.locator('#firstListenSuccess').isVisible(), 'backup audio did not allow First Listen to complete');
@@ -731,12 +1314,26 @@ async (page) => {
     assert((await page.locator('#firstListenSuccessCopy').innerText()).includes('Backup audio is keeping the station playing'), 'backup completion hid the continuity explanation');
     assert((await page.locator('#firstListenSuccessCopy').innerText()).includes('primary music still needs attention'), 'backup completion hid the repair follow-up');
     assert(await page.locator('#firstListenSuccessRepair').isVisible(), 'backup completion hid its primary-music repair action');
-    assert((await page.locator('#firstListenSuccess .btn-trigger').innerText()) === 'Open full listener', 'success page lost Open full listener');
+    assert((await page.locator('#firstListenSuccess .btn-trigger').innerText()) === 'Listen to the station', 'success page lost its listener destination');
+    const successActionStyles = await page.evaluate(() => {
+      const primary = getComputedStyle(document.querySelector('#firstListenSuccess .btn-trigger'));
+      const secondary = getComputedStyle(document.querySelector('#firstListenSuccess .btn-util'));
+      return {
+        primary: { background: primary.backgroundColor, color: primary.color },
+        secondary: { background: secondary.backgroundColor, color: secondary.color },
+      };
+    });
+    assert(
+      successActionStyles.primary.background !== successActionStyles.secondary.background
+        && successActionStyles.primary.color !== successActionStyles.secondary.color,
+      `success primary action lost visual hierarchy: ${JSON.stringify(successActionStyles)}`,
+    );
     await page.evaluate(()=>{document.getElementById('firstListenGuideAudio').src='smoke-guide.mp3';document.getElementById('firstListenStationAudio').src='smoke-station.mp3';});
+    await page.locator('.success-saved > summary').click();
     await page.getByRole('button', { name: 'Review choices' }).click();
-    await page.waitForFunction(() => document.activeElement?.getAttribute('data-review-step') === 'privacy');
+    await page.waitForFunction(() => ['firstListenPrivacyHeading','firstListenHouseholdProofHeading'].includes(document.activeElement?.id));
     const reviewHandoff=await page.evaluate(()=>({entry:document.body.dataset.firstListenEntry,tab:_activeTab,hidden:document.getElementById('tab-setup').hidden,inMotore:Boolean(firstListenSetupContext.closest('#drawer-diagnostics')),guide:document.getElementById('firstListenGuideAudio').getAttribute('src'),station:document.getElementById('firstListenStationAudio').getAttribute('src')}));
-    assert(reviewHandoff.entry==='complete'&&reviewHandoff.tab==='motore'&&reviewHandoff.hidden&&reviewHandoff.inMotore&&reviewHandoff.guide===null&&reviewHandoff.station===null,`success did not finalize into Motore safely: ${JSON.stringify(reviewHandoff)}`);
+    assert(reviewHandoff.entry==='complete'&&reviewHandoff.tab==='motore'&&reviewHandoff.hidden&&reviewHandoff.inMotore&&reviewHandoff.guide===null&&reviewHandoff.station==='smoke-station.mp3',`success did not finalize into Motore safely: ${JSON.stringify(reviewHandoff)}`);
 
     const noContinuity = setupProjection({ primary: 'unavailable', recovery: 'unavailable', audio: true });
     setupStatusProjection = noContinuity;
@@ -744,7 +1341,105 @@ async (page) => {
     await page.locator('#firstListenKeepOffBtn').click();
     await page.waitForFunction(() => _firstListenUi.privacyChoice === false && !_firstListenUi.privacySaving);
     assert(await page.locator('#firstListenSuccess').isHidden(), 'missing continuity falsely exposed the success screen');
-    await assertUnfinished('firstListenSourceStep', 'firstListenRepairMusicBtn');
+    assert(await page.locator('#firstListenPath [aria-current="step"]').count() === 0, 'music repair reset saved human progress');
+    assert((await page.locator('#firstListenProgressLine').innerText()).includes('choices are saved. Music still needs attention.'), 'music repair falsely claimed First Listen complete');
+    assert(await page.locator('#firstListenRepairMusicBtn').isVisible(), 'music repair lost its action after all three choices were saved');
+    const addOnRecoveryUnavailable = await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"], #firstListenSourcePreview [data-source-kind="recovery"]').count();
+    assert(
+      addOnRecoveryUnavailable === 0 && (await page.locator('#firstListenRepairMusicBtn').innerText()) === 'Open music source setup',
+      `add-on unavailable source exposed the wrong repair path: ${addOnRecoveryUnavailable}`,
+    );
+    await page.locator('#firstListenRepairMusicBtn').click();
+    await page.waitForFunction(() => (
+      _activeTab === 'rotazione' && document.getElementById('musicSourceSettings').open
+        && document.activeElement?.id === 'jamendoSetupHeading'
+    ));
+    assert(
+      await page.locator('#setupMusicSources').isVisible() && await page.locator('#journeySurface').isHidden(),
+      'add-on repair action did not open an available music-source setup path',
+    );
+    await page.locator('#tab-setup').click();
+    assert(
+      await page.locator('#journeySurface').isVisible() && await page.locator('#setupMusicSources').isHidden(),
+      'Setup tab did not restore First Listen after source repair',
+    );
+    await page.evaluate(() => {
+      _caps = null;
+      _capsState = 'error';
+      renderFirstListenProgress();
+    });
+    const erroredChartDetail = await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"]').count();
+    assert(
+      erroredChartDetail === 0,
+      `capability error fabricated chart availability: ${erroredChartDetail}`,
+    );
+    assert((await page.locator('#firstListenRepairMusicBtn').innerText()) === 'Open music source setup', 'capability error exposed unavailable chart tools');
+    await page.evaluate(() => {
+      _caps = { capabilities: { charts_reload: true } };
+      _capsState = 'ready';
+      updateSourceControls(_st, _caps);
+      renderFirstListenProgress();
+    });
+    assert((await page.locator('#firstListenRepairMusicBtn').innerText()) === 'Open music source tools', 'charts-capable repair lost its library-tools path');
+    const chartsRecoveryUnavailable = await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"] .first-listen-source-detail').textContent();
+    assert(
+      chartsRecoveryUnavailable.includes('Open music source tools') && !chartsRecoveryUnavailable.includes('Open music source setup'),
+      `charts-capable unavailable source lost its repair path: ${chartsRecoveryUnavailable}`,
+    );
+    await page.locator('#firstListenRepairMusicBtn').click();
+    await page.waitForFunction(() => (
+      _activeTab === 'rotazione'
+        && document.getElementById('libraryTools')?.open
+        && document.activeElement?.id === 'sourceChartsBtn'
+    ));
+    assert(await page.locator('#sourceChartsBtn').isVisible(), 'charts-capable repair focused a hidden source control');
+    await page.locator('#tab-setup').click();
+    await resetUi(setupProjection({ primary: 'unavailable', recovery: 'on_air' }));
+    const chartsRecoveryCopy = await page.locator('#firstListenSourcePreview [data-source-kind="recovery"] .first-listen-source-detail').textContent();
+    assert(
+      chartsRecoveryCopy.includes('Real music still needs a source — open music source tools.')
+        && !chartsRecoveryCopy.includes('open music source setup'),
+      `charts-capable recovery guidance lost its available repair path: ${chartsRecoveryCopy}`,
+    );
+    await page.evaluate(() => {
+      _caps = { capabilities: {} };
+      _capsState = 'ready';
+      updateSourceControls(_st, _caps);
+      renderFirstListenProgress();
+    });
+
+    smokeStage = 'listener-music-options';
+    const includedProjection=setupProjection({primary:'not_configured'});
+    Object.assign(includedProjection.guided_setup.source_readiness,{healthy:true,current_rotation:{kind:'starter'},advanced:{kind:'custom',label:'Starter crate',status:'playable'}});
+    await resetUi(includedProjection);
+    const listenerKinds=await page.locator('#firstListenSourcePreview [data-source-kind]').evaluateAll(rows=>rows.map(row=>row.dataset.sourceKind));
+    assert(JSON.stringify(listenerKinds)===JSON.stringify(['custom','jamendo','local_music']),'included music exposed impossible or obsolete options');
+    assert((await page.locator('#firstListenSourcePreview').textContent()).includes('Included music'),'starter music lost its listener name');
+    assert(await page.locator('#firstListenSources [data-source-kind]').count()===6,'listener filtering removed technical source diagnostics');
+    for(const capability of [true,false]){
+      await page.evaluate(charts=>{_caps={capabilities:{charts_reload:charts}};renderFirstListenProgress();},capability);
+      assert(await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"]').count()===(capability?1:0),'chart options ignored actual capability');
+    }
+    for(const status of ['unavailable','playable']){
+      includedProjection.guided_setup.source_readiness.rows.find(row=>row.kind==='jamendo').status=status;
+      await resetUi(includedProjection);
+      assert((await page.locator('#firstListenSourcePreview [data-source-kind="jamendo"] .status-chip').textContent())===(status==='playable'?'Ready':'Unavailable'),'a failed configured music source was hidden or labelled optional');
+    }
+    Object.assign(includedProjection.guided_setup.source_readiness.rows.find(row=>row.kind==='local'),{status:'unavailable',candidates:0,playable:0,on_air:false});
+    await resetUi(includedProjection);
+    for(const scan of [{complete:true,in_progress:false,error:'',files_found:0,active:0},{complete:false,in_progress:false,error:'Scan failed',files_found:0,active:0},{complete:true,in_progress:false,error:'',files_found:2,active:0},{complete:true,in_progress:true,error:'',files_found:0,active:0},{complete:true,in_progress:false,error:''},null]){
+      await page.evaluate(scan=>{_st.local_library=scan;renderFirstListenProgress();},scan);
+      const empty=scan?.complete===true&&scan.in_progress===false&&!scan.error&&scan.files_found===0&&scan.active===0;
+      assert((await page.locator('#firstListenSourcePreview [data-source-kind="local_music"] .status-chip').textContent())===(empty?'Optional':'Unavailable'),'empty-library wording concealed a failed or unknown scan');
+    }
+    Object.assign(includedProjection.guided_setup.source_readiness.rows.find(row=>row.kind==='local'),{status:'not_configured',attempted:true,failure:'Check music folders'});
+    await resetUi(includedProjection);
+    await page.evaluate(()=>{_st.local_library={complete:true,in_progress:false,error:'',files_found:0,active:0};renderFirstListenProgress();});
+    assert((await page.locator('#firstListenSourcePreview [data-source-kind="local_music"] .status-chip').textContent())==='Unavailable','a missing music folder was labelled optional');
+    includedProjection.guided_setup.source_readiness.rows.find(row=>row.kind==='recovery').status='on_air';
+    await resetUi(includedProjection);
+    assert(await page.locator('#firstListenSourcePreview [data-source-kind="recovery"]').count()===1&&await page.locator('.first-listen-other-sources [data-source-kind="recovery"]').count()===0,'playing backup audio appeared as an addable music option');
+    assert(!(await page.locator('#firstListenSourcePreview [data-source-kind="recovery"]').textContent()).includes('still needs a source'),'playing backup contradicted available music');
 
     await resetUi(setupProjection());
     await assertUnfinished('firstListenSpeakerStep', 'firstListenPlayBtn');
@@ -754,7 +1449,7 @@ async (page) => {
     assert(await page.evaluate(() => document.activeElement?.id) === 'firstListenVerifyHeading', 'accepted playback did not focus the human sound check');
     assert(await page.locator('#firstListenPrivacyStep').getAttribute('data-state') !== 'current', 'playing event unlocked privacy before a saved Yes');
 
-    await page.locator('#firstListenVerifyBody > .guide-audio .guide-audio-play').click();
+    await page.locator('#firstListenSoundHelp .guide-audio-play').click();
     await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="sound-check"]')?.dataset.state === 'playing');
     const proofCountWhileGuidePlays = verifyRequests.length;
     assert(
@@ -787,8 +1482,8 @@ async (page) => {
 
     await page.locator('#firstListenNotYetBtn').click();
     await page.waitForFunction(() => _firstListenUi.verification === 'not_yet' && !_firstListenUi.busy);
-    assert(verifyRequests.at(-1)?.heard === false, 'Not yet was not recorded explicitly');
-    assert(await page.locator('#firstListenRepair').isVisible(), 'Not yet did not expose contextual recovery');
+    assert(verifyRequests.at(-1)?.heard === false, 'No sound yet was not recorded explicitly');
+    assert(await page.locator('#firstListenRepair').isVisible(), 'No sound yet did not expose contextual recovery');
     await assertUnfinished('firstListenVerifyStep', 'firstListenRetryBtn');
 
     await page.locator('#firstListenRepair .guide-audio-play').click();
@@ -870,7 +1565,7 @@ async (page) => {
     assert(await page.evaluate(() => _firstListenUi.showSuccess) === false, 'HTTP 403 triggered the success celebration');
     assert(await page.locator('#journeySurface').isVisible(), 'HTTP 403 hid the unfinished journey');
     assert(await page.locator('#firstListenSuccess').isHidden(), 'HTTP 403 exposed the completed success screen');
-    assert(await page.locator('#firstListenAiFieldset').evaluate((element) => element.disabled === true), 'HTTP 403 unlocked optional AI');
+    assert(await page.evaluate(()=>!firstListenProjection().privacyReviewed), 'HTTP 403 incorrectly completed Home review');
     assert((await page.locator('#firstListenPrivacyStatus').innerText()).includes('couldn’t finish that'), 'HTTP 403 did not show a blocked way forward');
 
     await resetUi(setupProjection({ audio: true }), audioReadyOverrides());
@@ -887,7 +1582,7 @@ async (page) => {
     assert(await page.evaluate(() => _firstListenUi.showSuccess) === false, 'missing-ok response triggered the success celebration');
     assert(await page.locator('#journeySurface').isVisible(), 'missing-ok response hid the unfinished journey');
     assert(await page.locator('#firstListenSuccess').isHidden(), 'missing-ok response exposed the completed success screen');
-    assert(await page.locator('#firstListenAiFieldset').evaluate((element) => element.disabled === true), 'missing-ok response unlocked optional AI');
+    assert(await page.evaluate(()=>!firstListenProjection().privacyReviewed), 'missing-ok response incorrectly completed Home review');
 
     for (const [mode, label] of [
       ['success_missing_persisted', 'privacy success without persisted proof'],
@@ -948,7 +1643,7 @@ async (page) => {
     }
 
     await resetUi(setupProjection({ audio: true }), audioReadyOverrides());
-    await assertUnfinished('firstListenPrivacyStep', 'firstListenKeepOffBtn');
+    await assertUnfinished('firstListenPrivacyStep', 'firstListenPreviewBtn');
     const previewBaseline = previewRequests.length;
     const privacyBaseline = privacyRequests.length;
     await page.locator('#firstListenKeepOffBtn').click();
@@ -957,7 +1652,7 @@ async (page) => {
     assert(privacyRequests.length === privacyBaseline + 1 && privacyRequests.at(-1).enabled === false, 'private path did not save an explicit false');
     assert(await page.locator('#firstListenSuccess').isVisible(), 'fresh private completion did not reach the success moment');
     assert(await page.locator('#journeySurface').isHidden(), 'success moment left the journey competing on screen');
-    assert((await page.locator('#firstListenSuccessPrivacy').innerText()) === 'Home stays private', 'success receipt lost the private choice');
+    assert((await page.locator('#firstListenSuccessPrivacy').textContent()) === 'Home stays private', 'success receipt lost the private choice');
     assert(await page.locator('#firstListenSuccess .btn-trigger:visible').count() === 1, 'success page does not have one obvious action');
 
     await resetUi(setupProjection({ audio: true }), audioReadyOverrides());
@@ -982,7 +1677,735 @@ async (page) => {
       'preview expiry did not require exactly one fresh-preview retry',
     );
     assert(await page.locator('#firstListenSuccess').isVisible(), 'fresh enabled completion did not reach the success moment');
-    assert((await page.locator('#firstListenSuccessPrivacy').innerText()) === 'Home context is on', 'success receipt lost the enabled choice');
+    assert((await page.locator('#firstListenSuccessPrivacy').textContent()) === 'Home context is on', 'success receipt lost the enabled choice');
+
+    smokeStage = 'continuous-private-achievement';
+    const privateStation = await startAudibleFirstListen();
+    await openHomeChoice();
+    await page.locator('#firstListenKeepOffBtn').click();
+    await page.waitForFunction(() => _firstListenUi.showSuccess && !_firstListenUi.privacySaving);
+    await assertStationPreserved(privateStation, 'private achievement transition');
+    assert(await page.locator('#firstListenSuccess').isVisible(), 'audible private path did not keep achievement inside First Listen');
+
+    const successGuide = page.locator('#firstListenSuccess .guide-audio[data-guide="success"]');
+    assert(await page.evaluate(()=>_firstListenUi.successAnnounced),'fresh completion did not announce itself');
+    await page.waitForFunction(() => (
+      document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'playing'
+        && window.__firstListenStationMedia.playing
+    ));
+    await assertStationPreserved(privateStation, 'success narration duck');
+    const celebrationRequests=guideAudioRequests.length;
+    await page.evaluate(()=>{updateFirstListenSuccess();renderFirstListenProgress();updateFirstListenSuccess();});
+    assert(guideAudioRequests.length===celebrationRequests,'polling replayed the celebration');
+    await page.locator('#firstListenGuideAudio').evaluate((audio) => audio.dispatchEvent(new Event('ended')));
+    await page.waitForFunction(() => (
+      window.__firstListenStationMedia.playing
+        && document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'ended'
+    ));
+    const afterSuccessGuide = await assertStationPreserved(privateStation, 'success narration resume');
+    assert(await page.locator('#firstListenSuccess').isVisible(), 'success narration dismissed the achievement');
+    // Privacy-off: leftover session counters must never surface without consent.
+    await pollHomeCue({ activated: 3, reserved: 1, eligible: 2 });
+    await assertCueHidden('private completion');
+    await assertStationPreserved(privateStation, 'private Home-cue poll');
+    homeCueStatus = null;
+    for(const [width,height,zoom] of [[320,568,false],[375,812,false],[768,1024,false],[1440,900,false],[320,568,true]]){
+      await page.setViewportSize({width,height});
+      await page.evaluate(zoom=>{document.documentElement.style.fontSize=zoom?'200%':'';},zoom);
+      const geometry=await page.evaluate(()=>({overflow:document.documentElement.scrollWidth>innerWidth+1,targets:[...document.querySelectorAll('#firstListenSuccess button,#firstListenSuccess summary')].filter(e=>e.getClientRects().length).map(e=>({width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height}))}));
+      assert(!geometry.overflow&&geometry.targets.every(r=>r.width>=44&&r.height>=44),`finale geometry failed at ${width}/${zoom}: ${JSON.stringify(geometry)}`);
+    }
+    await page.evaluate(()=>document.documentElement.style.fontSize='');await page.setViewportSize({width:1280,height:900});
+    const reviewExit = { ...privateStation, eventIndex: afterSuccessGuide.events.length };
+    await page.locator('.success-saved > summary').click();
+    await page.getByRole('button', { name: 'Review choices' }).click();
+    await assertStationPreserved(reviewExit, 'Review choices exit');
+
+    smokeStage='paused-completion';
+    await startAudibleFirstListen();
+    await page.locator('#firstListenPlayerToggle').click();
+    const pausedCelebration=guideAudioRequests.length;
+    await openHomeChoice();
+    await page.locator('#firstListenKeepOffBtn').click();
+    await page.waitForFunction(()=>_firstListenUi.showSuccess&&!_firstListenUi.privacySaving);
+    assert(guideAudioRequests.length===pausedCelebration,'paused completion started a recording');
+    assert(!(await stationMediaSnapshot()).playing,'paused completion resumed the station');
+    assert(!(await page.locator('#firstListenSuccessCopy').innerText()).includes('keeps playing'),'paused completion claimed playback');
+
+    smokeStage = 'failed-privacy-keeps-stream';
+    const failedPrivacyStation = await startAudibleFirstListen();
+    failNextPrivacyReceipt = true;
+    await openHomeChoice();
+    await page.locator('#firstListenKeepOffBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyReceiptChoice === false && !_firstListenUi.privacySaving);
+    await assertStationPreserved(failedPrivacyStation, 'failed privacy persistence');
+    assert(await page.locator('#firstListenSuccess').isHidden(), 'failed privacy persistence exposed achievement');
+
+    smokeStage = 'home-cue-failed-share';
+    const failedShareStation = await startAudibleFirstListen();
+    await openHomeChoice();
+    await page.locator('#firstListenPreviewBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+    failNextPrivacyReceipt = true;
+    await page.locator('#firstListenEnableContextBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyReceiptChoice === true && !_firstListenUi.privacySaving);
+    await pollHomeCue({ activated: 2, reserved: 1 });
+    await assertCueHidden('unconfirmed Home sharing');
+    await assertStationPreserved(failedShareStation, 'unconfirmed Home sharing poll');
+    homeCueStatus = null;
+
+    smokeStage = 'continuous-enabled-achievement';
+    const enabledStation = await startAudibleFirstListen();
+    await openHomeChoice();
+    await page.locator('#firstListenPreviewBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+    rejectNextEnable = false;
+    // Pending save: positive counters stay out of sight until consent is confirmed.
+    const pendingShare = responseGate();
+    privacyResponseGate = pendingShare;
+    await page.locator('#firstListenEnableContextBtn').click();
+    await pendingShare.arrived;
+    await pollHomeCue({ activated: 2, reserved: 1 });
+    await assertCueHidden('pending Home sharing');
+    pendingShare.release();
+    await page.waitForFunction(() => _firstListenUi.showSuccess && !_firstListenUi.privacySaving);
+    const enabledSuccess = await assertStationPreserved(enabledStation, 'enabled achievement transition');
+    assert((await page.locator('#firstListenSuccessPrivacy').textContent()) === 'Home context is on', 'audible enabled path lost its choice');
+
+    smokeStage = 'home-cue-progress';
+    // Confirmed consent renders the evidence already polled, with no extra request.
+    let cue = await cueProgress();
+    assert(cue.visible && cue.text === HOME_CUE_COPY.streamed, `confirmed sharing did not show stream evidence: ${JSON.stringify(cue)}`);
+    await page.waitForFunction(() => (
+      ['playing', 'ended'].includes(document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state)
+    ));
+    await page.locator('#firstListenGuideAudio').evaluate((audio) => {
+      if (document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'playing') audio.dispatchEvent(new Event('ended'));
+    });
+    await page.waitForFunction(() => (
+      window.__firstListenStationMedia.playing
+        && document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'ended'
+    ));
+    const cueFocus = await page.evaluate(() => document.activeElement?.id || '');
+    const cueSideEffects = homeCueSideEffects.length;
+    const cueRequests = privacyRequests.length;
+    const assertCueLeftTheShowAlone = async (label) => {
+      await assertStationPreserved(enabledStation, `${label} Home-cue poll`);
+      assert(await page.evaluate(() => document.activeElement?.id || '') === cueFocus, `${label} Home-cue poll moved focus`);
+      assert(await page.locator('#firstListenListenerBtn').isEnabled(), `${label} Home-cue poll disabled the listener handoff`);
+      assert(await page.locator('#firstListenSuccess').isVisible(), `${label} Home-cue poll dismissed the achievement`);
+      assert(
+        await page.evaluate(() => document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state) === 'ended',
+        `${label} Home-cue poll replayed the celebration`,
+      );
+      assert(homeCueSideEffects.length === cueSideEffects && privacyRequests.length === cueRequests, `${label} Home-cue poll sent a generation or consent request`);
+    };
+    // A later save in flight, or a receipt still unconfirmed, closes the gate again.
+    for (const unconfirmed of [{ privacySaving: true }, { privacyReceiptChoice: true }]) {
+      await page.evaluate((state) => { Object.assign(_firstListenUi, state); renderFirstListenCueProgress(); }, unconfirmed);
+      await assertCueHidden(`unconfirmed ${Object.keys(unconfirmed)[0]}`);
+      await page.evaluate(() => { Object.assign(_firstListenUi, { privacySaving: false, privacyReceiptChoice: null }); renderFirstListenCueProgress(); });
+      cue = await cueProgress();
+      assert(cue.visible && cue.text === HOME_CUE_COPY.streamed, `confirmed consent did not restore progress: ${JSON.stringify(cue)}`);
+    }
+    // Counter reset: the stream claim is derived per poll, never latched.
+    cue = await pollHomeCue({ activated: 0, reserved: 0, eligible: 0 });
+    assert(cue.visible && cue.text === HOME_CUE_COPY.waiting, `counter reset kept a stale stream claim: ${JSON.stringify(cue)}`);
+    await assertCueLeftTheShowAlone('counter reset');
+    cue = await pollHomeCue({ eligible: 4 });
+    assert(cue.text === HOME_CUE_COPY.waiting, `eligibility alone claimed progress: ${JSON.stringify(cue)}`);
+    cue = await pollHomeCue({ reserved: 1, eligible: 2 });
+    assert(cue.text === HOME_CUE_COPY.queued, `reserved cue was not reported as queued: ${JSON.stringify(cue)}`);
+    await assertCueLeftTheShowAlone('queued');
+    cue = await pollHomeCue({ activated: 1, reserved: 2, eligible: 1 });
+    assert(cue.text === HOME_CUE_COPY.streamed, `stream evidence lost precedence over the queue: ${JSON.stringify(cue)}`);
+    // Dependency failure: a failed poll or unusable evidence says so, then recovers.
+    for (const failure of ['http', 'missing', 'malformed']) {
+      cue = await pollHomeCue(failure);
+      assert(cue.visible && cue.text === HOME_CUE_COPY.unavailable, `${failure} status kept stale Home-cue progress: ${JSON.stringify(cue)}`);
+      await assertCueLeftTheShowAlone(failure);
+      cue = await pollHomeCue({ reserved: 1 });
+      assert(cue.text === HOME_CUE_COPY.queued, `valid poll after ${failure} did not restore progress: ${JSON.stringify(cue)}`);
+    }
+    homeCueStatus = null;
+    const stationControlsExit = { ...enabledStation, eventIndex: enabledSuccess.events.length };
+    await page.locator('#firstListenSuccess').getByRole('button', { name: 'Open station controls' }).click();
+    await assertStationPreserved(stationControlsExit, 'Station controls exit');
+
+    smokeStage='guided-connection';
+    const connectionStation=await startAudibleFirstListen({home:false});
+    assert(await page.locator('#firstListenPrivacyStep').getAttribute('aria-current')==='step','proof scene did not become the current step');
+    assert(await page.locator('#firstListenHouseholdProof').isVisible(),'household proof did not appear after sound confirmation');
+    assert(await page.locator('#firstListenConnectionInvite').isHidden(),'key request appeared before the household proof');
+    assert(await page.locator('#firstListenExampleNextBtn').isHidden(),'next example appeared before the evening finished');
+    assert(await page.locator('#firstListenExamplePreviousBtn').isHidden(),'first example offered a previous scene');
+    assert(await page.locator('#firstListenHouseholdProof .household-scene').count()===4,'proof slot lost a reviewed replacement candidate');
+    assert(await page.locator('#firstListenHouseholdProof .household-scene:visible').count()===1,'proof slot exposed more than one scene');
+    assert(await page.locator('#firstListenHouseholdProof [data-household-proof]:visible').count()===1,'selected proof scene is not playable');
+    assert(await page.evaluate(()=>typeof toggleHouseholdExample==='function'),'household examples lost their play helper');
+    assert((await page.locator('#householdQuietNote').innerText()).includes('An imagined evening. No details from your home.'),'proof lost its invented-context disclosure');
+    const eveningArt=page.locator('.evening-scene img');
+    await eveningArt.evaluate(image=>image.decode());
+    assert(await eveningArt.getAttribute('alt')==='A small radio sends golden sound toward a lit home beneath an evening moon.','evening artwork lost its accessible description');
+    assert(await eveningArt.evaluate(image=>image.naturalWidth===1280&&image.naturalHeight===640),'evening artwork did not load from the packaged asset');
+    assert(await page.locator('#firstListenProgressLine').innerText()==='Step 3 of 3 · Make it yours','evening step lost its approved progress label');
+    await page.locator('[data-household-example="quiet"]').click();
+    await page.waitForFunction(()=>_firstListenUi.guideKey==='quiet'&&!firstListenGuideAudio().paused);
+    const quietDebug=await page.evaluate(()=>({
+      src:firstListenGuideAudio().getAttribute('src'),
+      currentSrc:firstListenGuideAudio().currentSrc,
+    }));
+    assert(
+      /\/static\/audio\/home_moments\/quiet\.mp3\?v=02fc7d83734a/.test(quietDebug.src||quietDebug.currentSrc||''),
+      `day-one moment loaded the wrong source: ${JSON.stringify(quietDebug)}`,
+    );
+    const proofFocus=await page.evaluate(()=>document.activeElement?.getAttribute('data-household-example'));
+    // Accelerate real decoded media; let its native ended event settle the scene.
+    await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=8;});
+    await page.waitForFunction(()=>_firstListenUi.householdProof==='heard',null,{timeout:10000});
+    await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=1;});
+    assert(await page.locator('#firstListenHouseholdProof').isVisible(),'natural completion hid proof Replay');
+    assert(await page.evaluate(()=>document.activeElement?.getAttribute('data-household-example'))===proofFocus,'natural completion stole focus');
+    assert((await page.locator('[data-household-example="quiet"]').innerText()).includes('Replay'),'native end lost Replay');
+    assert(await page.locator('#firstListenExampleNextBtn').innerText()==='Next: the laundry','evening did not offer laundry next');
+    assert(await page.locator('#firstListenShowcaseNote').isVisible(),'richer examples were offered without their availability disclosure');
+    assert(await page.evaluate(()=>firstListenGuideAudio().paused&&_firstListenUi.guideKey===''),'evening completion autoplayed another recording');
+    await page.locator('[data-household-example="quiet"]').click();
+    await page.waitForFunction(()=>_firstListenUi.guideKey==='quiet'&&!firstListenGuideAudio().paused);
+    await page.locator('[data-household-example="quiet"]').click();
+    assert(await page.locator('#firstListenConnectionInvite').isVisible(),'proof completion did not reveal the key explanation');
+    assert((await page.locator('#householdQuietNote').innerText()).includes('Recorded example'),'key request blurred staged proof with the listener home');
+    assert(await page.locator('#firstListenConnectionPromise').innerText()==='You choose what they get to know.','proof completion overwrote the approved choice note');
+    assert(await page.locator('#firstListenKeepListeningBtn').innerText()==='Keep Home private','proof completion overwrote the private choice');
+    assert((await page.locator('#firstListenPrivacyHeading').innerText())==='Make it yours','privacy step lost its polished heading');
+    assert(await page.locator('[data-guide="free-voices"]').isHidden(),'free audition appeared before voice choice');
+    assert(await page.locator('#firstListenSetupDoneBtn').count()===1,'Done with setup is missing');
+    assert(await page.locator('#firstListenSetupReturnBtn').count()===1,'Back to setup is missing');
+
+    smokeStage='household-example-sequence';
+    const sequencePrivacyCount=privacyRequests.length,sequencePreviewCount=previewRequests.length;
+    // Leave a next-example load in flight, then go back. Its late response must
+    // neither restart audio nor mark the unheard laundry recording complete.
+    const sequenceGate=responseGate();
+    guideResponseGate=sequenceGate;
+    try{
+      await page.evaluate(()=>{window.__pendingExample=nextFirstListenExample();});
+      await sequenceGate.arrived;
+      assert(await page.locator('[data-home-moment="laundry"]').getAttribute('data-state')==='loading','next-example load was not held');
+      await page.locator('#firstListenExamplePreviousBtn').click();
+      await page.evaluate(()=>window.__pendingExample);
+      assert(await page.evaluate(()=>selectedFirstListenExample()==='quiet'&&!_firstListenUi.householdExamplesHeard.includes('laundry')),'back from a pending example advanced completion');
+      assert(await page.locator('#firstListenGuideAudio').getAttribute('src')===null,'back from a pending example retained its source');
+    }finally{sequenceGate.release();}
+    assert(await page.evaluate(()=>firstListenGuideAudio().paused&&_firstListenUi.guideKey===''),'returning to evening autoplayed it');
+
+    for(const [index,key] of ['laundry','arrival','coffee'].entries()){
+      smokeStage=`household-example-${key}`;
+      const requestBaseline=guideAudioRequests.length;
+      await page.locator('#firstListenExampleNextBtn').click();
+      await page.waitForFunction(key=>_firstListenUi.guideKey===key&&document.querySelector(`[data-home-moment="${key}"]`).dataset.state==='playing',key);
+      assertGuideRequests(requestBaseline,key);
+      assert(await page.locator('#firstListenHouseholdProof .household-scene:visible').count()===1,`${key} exposed multiple scenes`);
+      assert(await page.locator(`[data-explainer-scenario="${key}"]`).isVisible(),`${key} is not the selected scene`);
+      assert(await page.locator('#firstListenExamplePosition').innerText()===`Example ${index+2} of 4`,`${key} lost its sequence position`);
+      assert(await page.locator('#firstListenShowcaseNote').isVisible(),`${key} hid the new-install limitation`);
+      assert((await page.locator('#firstListenShowcaseNote').innerText()).includes('aren’t available on new installations yet'),`${key} implied new-install household support`);
+      assert(await page.locator('#firstListenMakeYoursBtn').isVisible()&&await page.locator('#firstListenMakeYoursBtn').isEnabled(),`${key} made the remaining recordings compulsory`);
+      assert(await page.locator('#firstListenExampleNextBtn').isHidden(),`${key} allowed an unheard recording to advance`);
+      const exampleButton=page.locator(`[data-household-example="${key}"]`);
+      if(key==='laundry'){
+        await exampleButton.click();
+        await page.evaluate(()=>nextFirstListenExample());
+        assert(await page.evaluate(()=>selectedFirstListenExample()==='laundry'&&firstListenGuideAudio().paused),'pausing an unfinished example advanced it');
+        await page.locator('#firstListenMakeYoursBtn').click();
+        assert(await page.locator('#firstListenAiBody').isVisible(),'setup was not available during an unfinished optional example');
+        assert(await page.locator('#firstListenGuideAudio').getAttribute('src')===null,'leaving an optional example retained its audio');
+        await page.evaluate(()=>showFirstListenConnection('invite'));
+        assert(await page.evaluate(()=>selectedFirstListenExample()==='laundry'&&!_firstListenUi.householdExamplesHeard.includes('laundry')),'setup return lost the unfinished example');
+        await exampleButton.click();
+        await page.waitForFunction(()=>_firstListenUi.guideKey==='laundry'&&document.querySelector('[data-home-moment="laundry"]').dataset.state==='playing');
+      }
+      const transcript=page.locator(`[data-home-moment="${key}"] .guide-transcript`);
+      await transcript.locator('summary').click();
+      assert((await transcript.locator('p').innerText()).includes('Marco:'),`${key} lost its recorded transcript`);
+      await transcript.locator('summary').click();
+      const completionRequests=guideAudioRequests.length;
+      const focusedExample=await page.evaluate(()=>document.activeElement?.outerHTML);
+      await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=8;});
+      await page.waitForFunction(key=>_firstListenUi.householdExamplesHeard.includes(key),key,{timeout:10000});
+      await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=1;});
+      await page.evaluate(()=>renderFirstListenProgress());
+      assert(await page.evaluate(()=>firstListenGuideAudio().paused&&_firstListenUi.guideKey===''),`${key} completion autoplayed another recording`);
+      assert(guideAudioRequests.length===completionRequests,`${key} completion fetched the next recording`);
+      assert(await page.evaluate(()=>document.activeElement?.outerHTML)===focusedExample,`${key} completion stole focus`);
+      assert((await exampleButton.innerText()).startsWith('Replay'),`${key} lost replay after completion`);
+      assert(await page.locator('#firstListenExampleNextBtn').isHidden()===(key==='coffee'),`${key} has the wrong next control`);
+    }
+    assert(privacyRequests.length===sequencePrivacyCount&&previewRequests.length===sequencePreviewCount,'recorded examples read or changed Home context');
+    await page.locator('#firstListenExamplePreviousBtn').click();
+    assert(await page.evaluate(()=>selectedFirstListenExample()==='arrival'&&firstListenGuideAudio().paused),'previous example did not return silently');
+    assert(await page.locator('[data-household-example="arrival"]').innerText()==='Replay arrival','previous example lost its replay affordance');
+    await assertStationPreserved(connectionStation,'optional household examples');
+
+    await page.locator('#firstListenMakeYoursBtn').click();
+    assert(await page.locator('#firstListenWritingVisual').isVisible(),'writing lost its graphical comparison');
+    assert(await page.locator('#firstListenConnectionNext').isHidden(),'missing key masqueraded as connected progression');
+    await page.locator('#firstListenVoiceOptions > summary').click();
+    assert(await page.locator('[data-guide="ai"] .guide-audio-play').isVisible(),'writing pane hid its recorded voice exchange');
+    assert(await page.locator('#firstListenAiStep').getAttribute('aria-current')===null,'connection added a fourth numbered step');
+    await page.locator('#firstListenVoicesBtn').click();
+    assert(await page.locator('[data-guide="free-voices"]').isVisible(),'voice pane hid the free audition');
+    const freeBaseline=guideAudioRequests.length;
+    await page.locator('[data-guide="free-voices"] .guide-audio-play').click();
+    await page.waitForFunction(()=>_firstListenUi.guideKey==='free-voices'&&!firstListenGuideAudio().paused);
+    const freeDebug=await page.evaluate(()=>({
+      src:firstListenGuideAudio().getAttribute('src'),
+      currentSrc:firstListenGuideAudio().currentSrc,
+    }));
+    assert(
+      /\/static\/audio\/voice_examples\/free-voices\.mp3\?v=[0-9a-f]{12}/.test(freeDebug.src||freeDebug.currentSrc||''),
+      `free-voices loaded the wrong source: ${JSON.stringify(freeDebug)} requests=${JSON.stringify(guideAudioRequests.slice(freeBaseline))}`,
+    );
+    if(guideAudioRequests.slice(freeBaseline).length)assertGuideRequests(freeBaseline,'free-voices');
+    await page.locator('#firstListenConnectionNext').click();
+    await page.locator('#firstListenConnectionSkip').click();
+    await page.waitForFunction(()=>!_firstListenUi.guideKey);
+    assert(await page.locator('#firstListenHomeChoice').isVisible(),'voices did not continue to Home');
+    await assertStationPreserved(connectionStation,'guided connection');
+
+    smokeStage='writing-before-home';
+    await startAudibleFirstListen();
+    const writingPrivacy=[previewRequests.length,privacyRequests.length];
+    await page.locator('#firstListenProofSkipBtn').click();
+    assert(await page.evaluate(()=>firstListenProjection().haAccess&&!firstListenProjection().privacyReviewed),'writing fixture lacks unreviewed HA access');
+    assert(await page.locator('#setupAnthropicKey').isEnabled(),'Home consent still gates writing');
+    assert(await page.locator('#setupSaveBtn').isDisabled(),'empty key is savable');
+    await page.locator('#setupAnthropicKey').fill('dummy-test-key-never-sent-to-provider');
+    const saveGate=responseGate();keySaveGate=saveGate;
+    await page.locator('#setupSaveBtn').click();await saveGate.arrived;
+    assert(await page.locator('#firstListenConnectionSkip').isDisabled(),'pending save allows navigation');
+    assert(await page.locator('#setupSaveBtn').isDisabled(),'pending save allows duplicate submission');
+    saveGate.release();
+    await page.waitForFunction(()=>!_firstListenUi.keySaving&&!_firstListenUi.connectionChecking);
+    assert(await page.evaluate(()=>firstListenConnectionEvidence().state==='degraded'),'unverified save claimed connected');
+    assert(await page.locator('#firstListenConnectionNext').isHidden(),'unverified key claimed primary progression');
+    assert(await page.locator('#firstListenConnectionCheck').isVisible(),'unverified key has no recheck action');
+    await page.locator('#setupAnthropicKey').fill('unfinished-replacement');
+    writingCapabilities={anthropic_key_status:'valid'};
+    await page.evaluate(()=>refreshSlow());
+    assert(await page.locator('#setupAnthropicKey').isVisible()&&await page.locator('#setupAnthropicKey').inputValue()==='unfinished-replacement','polling hid unfinished replacement input');
+    assert(await page.evaluate(()=>document.activeElement?.id)==='setupAnthropicKey','polling stole unfinished key focus');
+    assert(await page.locator('#firstListenConnectionNext').isDisabled(),'unsaved replacement advances as verified');
+    await page.locator('#setupAnthropicKey').fill('');
+    writingCapabilities={};await page.evaluate(()=>refreshSlow());
+    for(const failure of ['http','timeout']){
+      nextKeyCheckFailure=failure;
+      if(failure==='timeout'){
+        keyCheckGate=responseGate();
+        await page.evaluate(()=>{window.__keyCheckTimer=window.setTimeout;window.setTimeout=(fn,ms,...args)=>window.__keyCheckTimer(fn,ms===FIRST_LISTEN_TIMEOUTS.play?25:ms,...args);});
+      }
+      try{
+        await page.locator('#firstListenConnectionCheck').click();
+        await page.waitForFunction(()=>!_firstListenUi.connectionChecking&&_firstListenUi.connectionCheckFailed);
+        assert(await page.locator('#firstListenConnectionCheck').isEnabled(),`${failure} key check lost Retry`);
+        assert((await page.locator('#setupKeysLabel').innerText()).includes('Couldn’t check'),`${failure} key check failed silently`);
+      }finally{
+        if(failure==='timeout'){keyCheckGate.release();await page.evaluate(()=>{window.setTimeout=window.__keyCheckTimer;delete window.__keyCheckTimer;});}
+      }
+    }
+    for(const [capabilities,state] of [[{anthropic_key_status:'rejected'},'blocked'],[{anthropic_key_status:'valid',anthropic_degraded:true},'degraded'],[{anthropic_key_status:'valid'},'ready']]){
+      writingCapabilities=capabilities;
+      const checks=keyChecks;
+      await page.locator('#firstListenConnectionCheck').click();
+      await page.waitForFunction(()=>!_firstListenUi.connectionChecking);
+      assert(keyChecks===checks+1,'recheck did not probe the connection');
+      assert(await page.evaluate(()=>firstListenConnectionEvidence().state)===state,`key check failed to settle to ${state}`);
+    }
+    assert(await page.locator('#firstListenConnectionNext').isVisible(),'valid writing has no primary continuation');
+    assert(await page.locator('#setupKeysForm').isHidden(),'verified connection retained its input form');
+    assert(await page.locator('#firstListenAiSummary').isHidden()&&await page.locator('#firstListenAiChip').isHidden(),'connected writing repeats its receipt');
+    assert(JSON.stringify(writingPrivacy)===JSON.stringify([previewRequests.length,privacyRequests.length]),'connecting writing changed Home permission');
+    await page.locator('#setupKeysEditBtn').click();
+    await page.locator('#setupAnthropicKey').fill('dummy-replacement');
+    await page.evaluate(()=>refreshSlow());
+    assert(await page.locator('#setupAnthropicKey').inputValue()==='dummy-replacement','polling lost unfinished key entry');
+    assert(await page.locator('#firstListenConnectionNext').isDisabled(),'unsaved replacement advances as verified');
+    failCapabilities=true;
+    await page.locator('#setupSaveBtn').click();
+    await page.waitForFunction(()=>!_firstListenUi.keySaving&&!_firstListenUi.connectionChecking);
+    failCapabilities=false;
+    assert(await page.evaluate(()=>firstListenConnectionEvidence().state!=='ready'),'replacement inherited the old key success after failed refresh');
+    writingCapabilities={};
+
+    smokeStage='early-private-return';
+    const earlyPrivateStation=await startAudibleFirstListen();
+    const earlyPrivateCounts=[previewRequests.length,privacyRequests.length];
+    await page.locator('#firstListenProofPrivateBtn').click();
+    await page.waitForFunction(()=>_firstListenUi.showSuccess&&!_firstListenUi.privacySaving);
+    assert(previewRequests.length===earlyPrivateCounts[0]&&privacyRequests.length===earlyPrivateCounts[1]+1&&!privacyRequests.at(-1).enabled,'early private exit did not stay private');
+    await page.locator('#firstListenSetupReturnBtn').click();
+    assert(await page.locator('#firstListenAiBody').isVisible(),'early private Back to setup was a no-op');
+    await page.locator('#firstListenConnectionBack').click();
+    assert(await page.locator('#firstListenHomeChoice').isVisible(),'completed writing Back lost Home review');
+    assert(await page.evaluate(()=>document.activeElement?.id==='firstListenPrivacyHeading'&&document.activeElement.getClientRects().length>0),'completed writing Back focused a hidden heading');
+    await assertStationPreserved(earlyPrivateStation,'early private return');
+
+    smokeStage='household-example-private-exit';
+    const optionalPrivateStation=await startAudibleFirstListen({home:false});
+    const optionalPrivateCounts=[previewRequests.length,privacyRequests.length];
+    await page.locator('[data-household-example="quiet"]').click();
+    await page.waitForFunction(()=>document.querySelector('[data-home-moment="quiet"]').dataset.state==='playing');
+    await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=8;});
+    await page.waitForFunction(()=>_firstListenUi.householdProof==='heard',null,{timeout:10000});
+    await page.locator('#firstListenGuideAudio').evaluate(audio=>{audio.playbackRate=1;});
+    failNextGuideKey='laundry';
+    await page.locator('#firstListenExampleNextBtn').click();
+    await page.waitForFunction(()=>document.querySelector('[data-home-moment="laundry"]').dataset.state==='error');
+    failNextGuideKey='';
+    assert(await page.locator('#firstListenMakeYoursBtn').isEnabled(),'failed optional recording blocked setup');
+    assert(await page.locator('#firstListenExampleNextBtn').isHidden(),'failed optional recording unlocked the next example');
+    await page.locator('[data-household-example="laundry"]').click();
+    await page.waitForFunction(()=>document.querySelector('[data-home-moment="laundry"]').dataset.state==='playing');
+    await page.locator('#firstListenKeepListeningBtn').click();
+    await page.waitForFunction(()=>_firstListenUi.showSuccess&&!_firstListenUi.privacySaving);
+    // The existing finale may immediately play its celebration on this same
+    // audio element; only household-example playback must have ended.
+    assert(await page.evaluate(()=>!HOUSEHOLD_EXAMPLES[_firstListenUi.guideKey]&&!String(firstListenGuideAudio().getAttribute('src')||'').includes('/home_moments/')),'private exit left an optional example playing');
+    assert(previewRequests.length===optionalPrivateCounts[0]&&privacyRequests.length===optionalPrivateCounts[1]+1&&!privacyRequests.at(-1).enabled,'optional example exit did not remain private');
+    await assertStationPreserved(optionalPrivateStation,'optional example private exit');
+
+    smokeStage='reload-resume';
+    await startAudibleFirstListen();
+    setupStatusProjection=setupProjection({audio:true});
+    const reloadCounts=[verifyRequests.length,previewRequests.length,privacyRequests.length];
+    await page.reload();
+    await page.waitForFunction(()=>firstListenProjection().heard);
+    await page.evaluate(()=>(window.__firstListenSmokeIntervals||[]).forEach(({id})=>clearInterval(id)));
+    assert(!(await stationMediaSnapshot()).playing,'saved progress autoplays after reload');
+    assert(await page.locator('#firstListenPlayerToggle').isVisible(),'reload stranded the station without Resume');
+    await page.locator('#firstListenPlayerToggle').click();
+    await page.waitForFunction(()=>window.__firstListenStationMedia.playing);
+    const resumed=await stationMediaSnapshot();
+    assert(resumed.streamRequests.length===1&&resumed.src.endsWith('/stream?first_listen=live'),'Resume replayed the opening or duplicated the stream');
+    assert(await page.evaluate(()=>firstListenProjection().heard&&!_firstListenUi.retestPending),'Resume reset durable sound proof');
+    assert(JSON.stringify(reloadCounts)===JSON.stringify([verifyRequests.length,previewRequests.length,privacyRequests.length]),'Resume repeated confirmation or consent');
+
+    smokeStage='live-station-controls';
+    const graph=await page.evaluate(()=>{window.__transportOwner={audio:firstListenStationAudio(),source:_firstListenPlayback.source,context:_firstListenPlayback.context};return true;});
+    assert(graph,'media owner capture failed');
+    for(const [endpoint,handler] of [['/api/skip','doSkip'],['/api/track/ban-now-playing','doBanNowPlaying']]){
+      for(const mode of ['success','failure','paused','late-pause']){
+        if(!(await stationMediaSnapshot()).playing)await page.locator('#firstListenPlayerToggle').click();
+        await page.waitForFunction(()=>window.__firstListenStationMedia.playing);
+        if(mode==='paused')await page.locator('#firstListenPlayerToggle').click();
+        const baseline=await stationMediaSnapshot(),gate=responseGate();
+        const routeHandler=async route=>{gate.arrive();await gate.wait;await fulfillJson(route,{ok:mode!=='failure'},mode==='failure'?503:200);};
+        await page.route('**'+endpoint,routeHandler);
+        const pending=page.evaluate(name=>window[name](document.getElementById('skipBtn')),handler);
+        await gate.arrived;
+        if(mode==='late-pause')await page.locator('#firstListenPlayerToggle').click();
+        gate.release();await pending;
+        if(mode==='success')await page.waitForFunction(()=>window.__firstListenStationMedia.playing);
+        const after=await stationMediaSnapshot();
+        assert(after.streamRequests.length===baseline.streamRequests.length+(mode==='success'?1:0),`${handler}/${mode} used stale audio or reopened unexpectedly`);
+        if(mode==='paused'||mode==='late-pause')assert(!after.playing,`${handler}/${mode} overrode Pause`);
+        assert(await page.evaluate(()=>firstListenStationAudio()===__transportOwner.audio&&_firstListenPlayback.source===__transportOwner.source&&_firstListenPlayback.context===__transportOwner.context),'transport replaced the audio owner');
+        await page.unroute('**'+endpoint,routeHandler);
+      }
+    }
+
+    smokeStage='stopped-continue-force-success';
+    await page.evaluate(()=>updateStopState(true));
+    nextResumeResponse='force_available';nextForceResponse='running';
+    const stoppedProof=await page.evaluate(()=>({verification:_firstListenUi.verification,choice:_firstListenUi.privacyChoice}));
+    await page.locator('#firstListenPlayerToggle').click();
+    await page.waitForFunction(()=>window.__firstListenStationMedia.playing);
+    assert((await stationMediaSnapshot()).src.endsWith('first_listen=live'),'stopped Continue did not rejoin the running station');
+    assert(JSON.stringify(await page.evaluate(()=>({verification:_firstListenUi.verification,choice:_firstListenUi.privacyChoice})))===JSON.stringify(stoppedProof),'stopped Continue reset saved proof');
+
+    smokeStage = 'explicit-admin-tab-exit';
+    const adminTabExit = await prepareOwnedStation();
+    await page.evaluate(() => document.getElementById('tab-rotazione').click());
+    await assertStationPreserved(adminTabExit, 'admin tab exit');
+
+    smokeStage = 'explicit-music-source-exit';
+    const musicToolsExit = await prepareOwnedStation({
+      sourceOptions: { primary: 'unavailable', recovery: 'unavailable' },
+      privacy: true,
+    });
+    await page.locator('#firstListenRepairMusicBtn').click();
+    await assertStationPreserved(musicToolsExit, 'music-source tools exit');
+
+    // Source repair keeps the station; only the decorative guide stops.
+    smokeStage = 'music-source-exit-during-guide';
+    const guideExit = await prepareOwnedStation({
+      sourceOptions: { primary: 'unavailable', recovery: 'unavailable' },
+      proof: true,
+    });
+    await proofGuideButton.click();
+    await page.waitForFunction(() => (
+      document.querySelector('.household-example[data-home-moment="quiet"]')?.dataset.state === 'playing'
+        && window.__firstListenStationMedia.playing
+    ));
+    const guideParked = await stationMediaSnapshot();
+    assert(guideParked.src === guideExit.src, 'guide narration replaced the station source');
+    assert(guideParked.streamRequests.length === guideExit.requestCount, 'guide narration opened a second station stream');
+    // Re-baseline past the pause the guide itself took, so the assertions below
+    // see the exit teardown alone.
+    const guideExitCheckpoint = { ...guideExit, eventIndex: guideParked.events.length };
+    await page.evaluate(() => openMusicSourceTools());
+    await assertStationPreserved(guideExitCheckpoint, 'music-source exit during guide playback');
+    const guideExitEvents = (await stationMediaSnapshot()).events.slice(guideExitCheckpoint.eventIndex);
+    assert(
+      guideExitEvents.filter((event) => event.type === 'play').length === 0,
+      `music-source exit resumed the station before releasing it: ${JSON.stringify(guideExitEvents)}`,
+    );
+
+    for (const exit of ['admin-tab', 'music-source']) {
+      smokeStage = `${exit}-during-guide-load`;
+      const station = await prepareOwnedStation({
+        sourceOptions: { primary: 'unavailable', recovery: 'unavailable' },
+        proof: true,
+      });
+      const gate = responseGate();
+      guideResponseGate = gate;
+      try {
+        // Keep the real media play() pending until navigation aborts it.
+        await page.evaluate(() => {
+          const button = document.querySelector('.household-example[data-home-moment="quiet"] .household-example-play');
+          window.__pendingGuideAttempt = toggleFirstListenGuide('quiet', button);
+        });
+        await gate.arrived;
+        assert(await proofGuide.getAttribute('data-state') === 'loading', `${exit} fixture did not hold the guide load`);
+        const parked = await assertStationPreserved(station, smokeStage);
+        const checkpoint = { ...station, eventIndex: parked.events.length };
+        if (exit === 'admin-tab') {
+          await page.evaluate(() => document.getElementById('tab-rotazione').click());
+        } else {
+          await page.evaluate(() => openMusicSourceTools());
+        }
+        await page.evaluate(() => window.__pendingGuideAttempt);
+        assert(await proofGuide.getAttribute('data-state') === 'idle', `${exit} interrupted load stamped a false guide error`);
+        assert(await proofGuideButton.innerText() === 'Hear the evening', `${exit} interrupted load overwrote the idle label`);
+        assert(await proofGuideButton.getAttribute('aria-pressed') === 'false', `${exit} interrupted load left the button pressed`);
+        assert(await page.locator('#firstListenGuideAudio').getAttribute('src') === null, `${exit} interrupted load retained its source`);
+        await assertStationPreserved(checkpoint, smokeStage);
+        if (exit === 'music-source') {
+          const events = (await stationMediaSnapshot()).events.slice(checkpoint.eventIndex);
+          assert(!events.some(({ type }) => type === 'play'), 'pending guide music-source exit restarted the station');
+        }
+      } finally {
+        gate.release();
+      }
+    }
+
+    smokeStage = 'same-guide-pause-during-load';
+    const loadingGuideStation = await prepareOwnedStation({ proof: true });
+    const loadingGuideGate = responseGate();
+    guideResponseGate = loadingGuideGate;
+    try {
+      await page.evaluate(() => {
+        const button = document.querySelector('.household-example[data-home-moment="quiet"] .household-example-play');
+        window.__pendingGuideAttempt = toggleFirstListenGuide('quiet', button);
+      });
+      await loadingGuideGate.arrived;
+      assert(await proofGuide.getAttribute('data-state') === 'loading', 'same-guide fixture did not hold the guide load');
+      await assertStationPreserved(loadingGuideStation, smokeStage);
+      await proofGuideButton.click();
+      await page.evaluate(() => window.__pendingGuideAttempt);
+      assert(await proofGuide.getAttribute('data-state') === 'paused', 'same-guide pause during load stamped a false guide error');
+      assert(await proofGuideButton.innerText() === 'Continue evening', 'same-guide pause during load lost its continue label');
+      assert(await proofGuideButton.getAttribute('aria-pressed') === 'false', 'same-guide pause during load left the button pressed');
+      assert(await page.locator('#firstListenGuideAudio').getAttribute('src') !== null, 'same-guide pause during load reset its source');
+      await assertStationPreserved(loadingGuideStation, smokeStage);
+    } finally {
+      loadingGuideGate.release();
+    }
+
+    smokeStage = 'guide-playback-rejection';
+    const rejectedGuideStation = await prepareOwnedStation({ proof: true });
+    await page.evaluate(async () => {
+      const audio = document.getElementById('firstListenGuideAudio');
+      const nativePlay = audio.play;
+      audio.play = () => Promise.reject(new DOMException('Playback denied', 'NotAllowedError'));
+      try {
+        const button = document.querySelector('.household-example[data-home-moment="quiet"] .household-example-play');
+        await toggleFirstListenGuide('quiet', button);
+      } finally {
+        audio.play = nativePlay;
+      }
+    });
+    assert(await proofGuide.getAttribute('data-state') === 'error', 'genuine playback rejection lost its error state');
+    assert(await proofGuideButton.innerText() === 'Try evening again', 'genuine playback rejection lost its retry label');
+    assert(await page.locator('#firstListenGuideAudio').getAttribute('src') === null, 'genuine playback rejection retained its source');
+    await assertStationPreserved(rejectedGuideStation, smokeStage);
+
+    smokeStage = 'explicit-listener-exit';
+    const listenerExit = await prepareOwnedStation({ showSuccess: true });
+    const openedWindowBaseline = await page.evaluate(() => window.__firstListenOpenedWindows.length);
+    await page.getByRole('button', { name: 'Listen to the station', exact: true }).click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready&&location.pathname.endsWith('/listen'));
+    let listenerFrame = page.frameLocator('#firstListenListenerFrame');
+    assert(await listenerFrame.locator('.mmr-stage').isVisible(),'handoff did not reuse the listener page');
+    assert(await listenerFrame.locator('#radio-audio').getAttribute('src')===null,'listener opened its own audio during handoff');
+    assert(await page.locator('#firstListenPlayerToggle').isHidden(),'handoff showed duplicate playback controls');
+    await assertStationPreserved(listenerExit,'existing listener handoff');
+    assert(await page.evaluate(()=>window.__firstListenOpenedWindows.length)===openedWindowBaseline,'handoff opened a duplicate window');
+    await listenerFrame.getByRole('button',{name:'Pause station',exact:true}).first().click();
+    await page.waitForFunction(()=>!_firstListenPlayback.intent&&!window.__firstListenStationMedia.playing);
+    await listenerFrame.getByRole('button',{name:'Listen now',exact:true}).first().click();
+    await page.waitForFunction(()=>_firstListenPlayback.intent&&window.__firstListenStationMedia.playing);
+    const resumedHandoff=await stationMediaSnapshot();
+    assert(resumedHandoff.streamRequests.length===listenerExit.requestCount+1&&resumedHandoff.src.endsWith('first_listen=live'),'listener resume did not rejoin live');
+    const resumedCheckpoint={src:resumedHandoff.src,requestCount:resumedHandoff.streamRequests.length,eventIndex:resumedHandoff.events.length};
+    await page.evaluate(()=>history.back());
+    await page.waitForFunction(()=>!_firstListenHandoff.frame&&location.pathname.endsWith('/admin'));
+    assert(await page.locator('#firstListenPlayerToggle').isVisible(),'Back lost the local controls');
+    await assertStationPreserved(resumedCheckpoint,'Back to Admin');
+    await page.evaluate(()=>history.forward());
+    await page.waitForFunction(()=>_firstListenHandoff.ready);
+    listenerFrame=page.frameLocator('#firstListenListenerFrame');
+    await listenerFrame.locator('a[href="#dediche"]').first().click();
+    await page.waitForFunction(()=>_firstListenHandoff.frame.contentWindow.location.hash==='#dediche');
+    assert(await listenerFrame.locator('#dediche').isVisible(),'listener anchor navigation broke the reused page');
+    await page.evaluate(()=>history.back());
+    await page.waitForFunction(()=>_firstListenHandoff.ready&&_firstListenHandoff.frame.contentWindow.location.hash!=='#dediche');
+    smokeStage='listener-admin-shortcuts';
+    listenerFrame=page.frameLocator('#firstListenListenerFrame');
+    await listenerFrame.locator('#admin-view-link').click();
+    await page.waitForFunction(()=>!_firstListenHandoff.frame&&location.pathname.endsWith('/admin'));
+    assert(await page.locator('#listener-view-link').isVisible(),'listener shortcut did not restore Admin');
+    await assertStationPreserved(resumedCheckpoint,'listener shortcut to Admin');
+    await page.locator('#listener-view-link').click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready&&location.pathname.endsWith('/listen'));
+    assert(await page.frameLocator('#firstListenListenerFrame').locator('#admin-view-link').isVisible(),'Admin shortcut did not open the listener view');
+    await assertStationPreserved(resumedCheckpoint,'Admin shortcut to listener');
+    await page.evaluate(()=>openFirstListenStation());
+    await assertStationPreserved(resumedCheckpoint,'repeated listener return');
+    await page.evaluate(()=>history.back());
+    await page.waitForFunction(()=>_firstListenHandoff.ready);
+    await page.evaluate(()=>{
+      if('mediaSession' in navigator)navigator.mediaSession.metadata=new MediaMetadata({title:'Last listener track'});
+      _firstListenHandoff.binding.notify=()=>{throw new Error('lost listener controls');};
+      renderFirstListenPlayer();
+    });
+    assert(await page.locator('#firstListenListenerRetry').isVisible(),'disconnected listener hid its recovery action');
+    assert((await page.locator('#firstListenListenerRecoveryStatus').innerText()).includes('lost its controls'),'disconnected listener hid its explanation');
+    assert(await page.evaluate(()=>!('mediaSession' in navigator)||navigator.mediaSession.metadata===null),'detached listener left stale track metadata');
+    await page.locator('#firstListenListenerRetry').click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready);
+    await page.evaluate(()=>openFirstListenStation());
+
+    smokeStage='listener-paused-handoff';
+    await prepareOwnedStation({showSuccess:true});
+    await page.locator('#firstListenPlayerToggle').click();
+    const pausedBefore=await stationMediaSnapshot();
+    await page.locator('#firstListenListenerBtn').click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready);
+    await assertStationPreserved({src:pausedBefore.src,requestCount:pausedBefore.streamRequests.length,eventIndex:pausedBefore.events.length},'paused handoff',{playing:false});
+    assert(await page.frameLocator('#firstListenListenerFrame').getByRole('button',{name:'Listen now',exact:true}).first().isVisible(),'paused handoff did not offer explicit play');
+    await page.evaluate(()=>openFirstListenStation());
+
+    smokeStage='home-cue-listener-handoff';
+    // A progress failure explains itself and never stands between the user and the show.
+    const cueHandoff=await prepareOwnedStation({showSuccess:true});
+    await page.evaluate(()=>{_firstListenUi.privacyChoice=true;renderFirstListenProgress();});
+    const cueDuringOutage=await pollHomeCue('http');
+    assert(cueDuringOutage.visible&&cueDuringOutage.text===HOME_CUE_COPY.unavailable,`status outage hid its Home-cue explanation: ${JSON.stringify(cueDuringOutage)}`);
+    assert(await page.locator('#firstListenListenerBtn').isEnabled(),'Home-cue outage disabled the listener handoff');
+    await page.locator('#firstListenListenerBtn').click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready);
+    await assertStationPreserved(cueHandoff,'Home-cue listener handoff');
+    await page.evaluate(()=>openFirstListenStation());
+    await pollHomeCue({reserved:1});
+    homeCueStatus=null;
+
+    smokeStage='listener-load-failures';
+    for(const kind of ['error-page','missing-script','late-ready']){
+      smokeStage=`listener-load-${kind}`;
+      const checkpoint=await prepareOwnedStation({showSuccess:true});
+      const loading=responseGate();let finished;const settled=new Promise(resolve=>{finished=resolve;});
+      const gate=async route=>{
+        loading.arrive();
+        try{if(kind==='late-ready'){await loading.wait;await route.abort();}
+        else await route.fulfill({status:503,contentType:'text/html',body:'Unavailable'});}
+        finally{finished();}
+      };
+      const pattern=kind==='error-page'?'**/listen':'**/static/listener.js*';
+      // Repeated iframe/history visits can reuse the parsed script without a
+      // request. A distinct asset URL makes each injected failure observable.
+      const documentGate=async route=>{
+        const response=await route.fetch();
+        await route.fulfill({response,body:(await response.text()).replace('/static/listener.js?v=',`/static/listener.js?h4-fault=${kind}&v=`)});
+      };
+      if(kind!=='error-page')await page.route('**/listen',documentGate);
+      await page.route(pattern,gate);
+      const loadRequest=page.waitForRequest(pattern,{timeout:12000});
+      await page.locator('#firstListenListenerBtn').click();
+      assert(await page.locator('#firstListenPlayerToggle').isVisible(),`${kind} hid controls before ready`);
+      await loadRequest;await loading.arrived;
+      if(kind==='late-ready'){
+        await page.evaluate(()=>{window.__lateListenerBridge=mmrConnectListener(_firstListenHandoff.frame.contentWindow);});
+        await page.locator('#firstListenListenerBtn').click();loading.release();
+        await page.evaluate(()=>{window.__lateListenerCallback=false;__lateListenerBridge.subscribe(()=>{window.__lateListenerCallback=true;});__lateListenerBridge.play();__lateListenerBridge.pause();});
+        assert(await page.evaluate(()=>!__lateListenerCallback),'cancelled listener retained its playback authority');
+      }else{
+        await page.waitForFunction(()=>!_firstListenHandoff.frame,null,{timeout:12000});
+        assert((await page.locator('#firstListenHandoffStatus').innerText()).includes('could not open'),`${kind} did not offer recovery`);
+      }
+      await settled;await page.unroute(pattern,gate);
+      if(kind!=='error-page')await page.unroute('**/listen',documentGate);
+      assert(await page.evaluate(()=>!_firstListenHandoff.ready&&!_firstListenHandoff.binding),'late readiness reopened a cancelled listener');
+      await assertStationPreserved(checkpoint,kind);
+    }
+
+    smokeStage='restart-first-listen';
+    for(const [origin,enabled,playing] of [['fresh',false,true],['existing',true,true],['legacy',false,false]]){
+      await prepareOwnedStation();
+      if(!playing)await page.locator('#firstListenPlayerToggle').click();
+      const saved=setupProjection({audio:true,privacy:true,privacyEnabled:enabled});
+      if(origin==='legacy')delete saved.guided_setup.first_listen;
+      else saved.guided_setup.first_listen.install_origin=origin;
+      setupStatusProjection=saved;
+      await page.evaluate(saved=>{_lastSetupJson='';renderSetup(saved);openFirstListenStation();showAdminTab('motore');},saved);
+      await page.evaluate(()=>{_firstListenUi.householdExample='coffee';_firstListenUi.householdExamplesHeard=['quiet','laundry','arrival','coffee'];});
+      const before=await stationMediaSnapshot(),writes=[resumeRequests.length,verifyRequests.length,privacyRequests.length,previewRequests.length];
+      await page.locator('#firstListenRestartBtn').click();
+      assert(await page.evaluate(()=>selectedFirstListenExample()==='quiet'&&_firstListenUi.householdExamplesHeard.length===0),'restart retained the example sequence from the earlier journey');
+      assert(await page.evaluate(()=>document.activeElement.id==='firstListenShowTitle'),'restart lost welcome focus');
+      assert(await page.evaluate(()=>!firstListenVerifyStatus.textContent&&!firstListenLiveRegion.textContent),'restart retained stale sound or completion announcements');
+      for(let poll=0;poll<2;poll++)await page.evaluate(saved=>{_lastSetupJson='';renderSetup(saved);},saved);
+      assert((await page.locator('#firstListenProgressLine').innerText()).startsWith('Step 1 of 3'),`${origin}: old receipts advanced restart`);
+      assert(await page.evaluate(()=>!firstListenProjection().privacyReviewed),`${origin}: restart reused its old privacy review`);
+      assert(await page.evaluate(()=>firstListenProjection().privacyEnabled)===enabled,`${origin}: restart changed effective privacy`);
+      assert(JSON.stringify(writes)===JSON.stringify([resumeRequests.length,verifyRequests.length,privacyRequests.length,previewRequests.length]),'restart made a settings or playback request');
+      await assertStationPreserved({src:before.src,requestCount:before.streamRequests.length,eventIndex:before.events.length},'restart',{playing});
+      await page.locator('#firstListenPlayBtn').click();
+      await page.waitForFunction(()=>_firstListenUi.dispatch==='accepted'&&!_firstListenUi.busy);
+      const replayed=await stationMediaSnapshot();
+      assert(replayed.streamRequests.length===before.streamRequests.length+1&&replayed.src.endsWith('/stream?first_listen=1'),'explicit replay reused the old stream');
+      assert(!(await page.locator('#firstListenVerifySummary').innerText()).includes('then the first song'),'returning sound check promised a fresh opening');
+      assert(await page.locator('.first-listen-opening-transcript').isHidden(),'returning sound check showed a transcript for audio it will not play');
+      await page.locator('#firstListenNotYetBtn').click();
+      await page.waitForFunction(()=>_firstListenUi.verification==='not_yet'&&!_firstListenUi.busy);
+      await page.evaluate(saved=>{_lastSetupJson='';renderSetup(saved);},saved);
+      assert(await page.evaluate(()=>!firstListenProjection().heard&&!firstListenProjection().privacyUnlocked),'old confirmation unlocked replay after No sound yet');
+      await page.locator('#firstListenRetryBtn').click();
+      await page.waitForFunction(()=>_firstListenUi.dispatch==='accepted'&&!_firstListenUi.busy);
+      assert(!(await page.locator('#firstListenVerifyStatus').textContent()),'retry retained the previous sound error');
+      await page.locator('#firstListenHeardBtn').click();
+      await page.waitForFunction(()=>_firstListenUi.verification==='heard'&&!_firstListenUi.busy);
+      assert(await page.evaluate(()=>!firstListenProjection().privacyReviewed),'restart skipped its privacy choice');
+      const beforeReview=privacyRequests.length;
+      if(enabled){
+        assert((await page.locator('#firstListenProofPrivateBtn').innerText())==='Review my Home choice','saved sharing was mislabeled private');
+        await page.locator('#firstListenProofPrivateBtn').click();
+        assert(await page.locator('#firstListenHomeChoice').isVisible()&&privacyRequests.length===beforeReview,'saved-on proof exit failed or silently revoked consent');
+      }else await openHomeChoice();
+      await page.locator('#firstListenKeepOffBtn').click();
+      await page.waitForFunction(()=>_firstListenUi.showSuccess&&!_firstListenUi.privacySaving);
+      assert(await page.evaluate(()=>!_firstListenUi.restarting&&_firstListenUi.successAnnounced),'restarted flow did not reach its finale');
+    }
 
     await resetUi(setupProjection({ audio: true }), audioReadyOverrides());
     await page.locator('#firstListenPreviewBtn').click();
@@ -996,7 +2419,7 @@ async (page) => {
     const enabledReceiptChip = await page.locator('#firstListenPrivacyChip').innerText();
     assert(enabledReceiptChip.toLowerCase() === 'review not saved', `enabled receipt failure hid unsaved progress: ${enabledReceiptChip}`);
     assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context is on'), 'enabled receipt repair lost the active live choice');
-    assert(await page.locator('#firstListenAiFieldset').evaluate((element) => element.disabled === true), 'enabled receipt failure unlocked optional AI');
+    assert(await page.evaluate(()=>!firstListenProjection().privacyReviewed), 'enabled receipt failure incorrectly completed Home review');
     await page.locator('#firstListenPreviewBtn').click();
     await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
     assert((await page.locator('#firstListenEnableContextBtn').innerText()) === 'Save shared choice again', 'enabled receipt repair lost its persistence-only action');
@@ -1013,19 +2436,31 @@ async (page) => {
     assert(await page.evaluate(() => _firstListenUi.privacyChoice) === null, 'private receipt failure claimed the review was saved');
     assert((await page.locator('#haContextPreview').innerText()).includes('Home context stays off'), 'private receipt repair lost the safe live state');
     assert((await page.locator('#firstListenKeepOffBtn').innerText()) === 'Save private choice again', 'private receipt repair lost its persistence-only action');
-    assert(await page.locator('#firstListenAiFieldset').evaluate((element) => element.disabled === true), 'private receipt failure unlocked optional AI');
+    assert(await page.evaluate(()=>!firstListenProjection().privacyReviewed), 'private receipt failure incorrectly completed Home review');
     await page.locator('#firstListenKeepOffBtn').click();
     await page.waitForFunction(() => _firstListenUi.privacyChoice === false && _firstListenUi.privacyReceiptChoice === null && !_firstListenUi.privacySaving);
     assert(privacyRequests.length === privateReceiptBaseline + 2, 'private receipt repair did not retry exactly once');
 
-    await resetUi(setupProjection({
-      audio: true,
-      privacyEnabled: true,
-      privacyChoiceExplicit: true,
-    }));
-    const reloadedPrivacyChip = await page.locator('#firstListenPrivacyChip').innerText();
-    assert(reloadedPrivacyChip.toLowerCase() === 'review not saved', `reloaded active choice lost receipt recovery: ${reloadedPrivacyChip}`);
-    assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context is on'), 'reloaded active choice lost live privacy truth');
+    for (const enabled of [false, true]) {
+      const beforeChoice = privacyRequests.length;
+      await resetUi(
+        setupProjection({ audio: true, privacyEnabled: enabled, privacyChoiceExplicit: true }),
+        audioReadyOverrides(),
+      );
+      assert((await page.locator('#firstListenPrivacyChip').innerText()).toLowerCase() === 'review', 'an initial configured privacy choice was labelled a failed save');
+      assert((await page.locator('#firstListenKeepOffBtn').innerText()) === (enabled ? 'Switch to private' : 'Keep Home private'), 'initial privacy action implies an earlier save attempt');
+      if (enabled) {
+        assert((await page.locator('#firstListenPrivacySummary').innerText()).includes('Home context is on'), 'reloaded active choice lost live privacy truth');
+        await page.locator('#firstListenPreviewBtn').click();
+        await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+        assert(await page.getByRole('button', { name: 'Save shared choice', exact: true }).isEnabled(), 'configured sharing could not save its first review');
+      }
+      assert(privacyRequests.length === beforeChoice, 'configured privacy submitted consent without a click');
+      await page.locator(enabled ? '#firstListenEnableContextBtn' : '#firstListenKeepOffBtn').click();
+      await page.waitForFunction(choice => _firstListenUi.privacyChoice === choice && !_firstListenUi.privacySaving, enabled);
+      assert(privacyRequests.length === beforeChoice + 1, 'configured privacy did not save exactly once');
+      assert(await page.locator('#firstListenSuccess').isVisible(), 'configured privacy did not complete after acknowledgement');
+    }
 
     ambientOnlyPreview = true;
     await resetUi(setupProjection({ audio: true }), audioReadyOverrides());
@@ -1059,7 +2494,14 @@ async (page) => {
     await page.locator('#tab-scaletta').click();
     await page.locator('#tab-scaletta').press('ArrowLeft');
     assert(await page.locator('#tab-motore').getAttribute('aria-selected') === 'true', 'keyboard navigation wrapped through hidden First Listen');
-    assert(await page.locator('.first-listen-step[data-state="complete"] > .first-listen-head > .first-listen-review:visible').count() === 4, 'completed choices are not visibly revisitable');
+    const setupDisclosure = page.locator('#setupGroup > summary');
+    if (await page.locator('#setupGroup').evaluate((element) => element.open)) await setupDisclosure.click();
+    await setupDisclosure.click();
+    assert(
+      await page.locator('#setupGroup').evaluate((element) => element.open && element.dataset.userPinned === 'true'),
+      'opening completed Setup did not pin it for review',
+    );
+    assert(await page.locator('.first-listen-step[data-state="complete"] > .first-listen-head > .first-listen-review:visible').count() === 3, 'completed choices are not visibly revisitable');
     const speakerReview = page.locator('#firstListenSpeakerStep > .first-listen-head > .first-listen-review');
     await speakerReview.click();
     let reviewState = await journeyState();
@@ -1086,7 +2528,7 @@ async (page) => {
     assert(await page.locator('#firstListenReceiptRepair').isVisible(), 'same-speaker retest receipt failure reused old durable heard proof');
     assert(await page.locator('#firstListenHeardBtn').isDisabled(), 'same-speaker retest receipt failure unlocked stale human proof');
 
-    await resetUi(setupProjection({ fresh: false, onboardingRequired: true }));
+    await resetUi(setupProjection({ fresh: false, audio: true, privacy: true, onboardingRequired: false }));
     const noSavedResumeBaseline = resumeRequests.length;
     const noSavedSpeakerVerifyReview = page.locator('#firstListenVerifyStep > .first-listen-head > .first-listen-review');
     await noSavedSpeakerVerifyReview.click();
@@ -1105,7 +2547,13 @@ async (page) => {
     const existingNoSources = setupProjection({ fresh: false, onboardingRequired: true, sources: false });
     setupStatusProjection = existingNoSources;
     await resetUi(existingNoSources);
-    await assertUnfinished('firstListenPrivacyStep', 'firstListenKeepOffBtn');
+    assert((await page.locator('#firstListenSourceChip').textContent()).trim().toLowerCase() === 'still checking', 'unknown sources lost their checking status');
+    assert(
+      (await page.locator('#firstListenSourcePreview').textContent()).includes('Checking what can play'),
+      'unknown sources lost the honest what-plays-next placeholder',
+    );
+    assert(await sourceReview.isHidden(), 'source review competed with the active privacy moment');
+    await assertUnfinished('firstListenPrivacyStep', 'firstListenPreviewBtn');
     assert(await page.locator('#firstListenSpeakerStep').getAttribute('data-state') === 'complete', 'existing install was forced through speaker choice');
     assert(await page.locator('#firstListenVerifyStep').getAttribute('data-state') === 'complete', 'existing install was forced through audible proof');
     await page.locator('#firstListenKeepOffBtn').click();
@@ -1122,9 +2570,11 @@ async (page) => {
       onboardingRequired: false,
       llmKeys: ['ANTHROPIC_API_KEY'],
     }));
+    writingCapabilities={anthropic_key_status:'valid'};
+    await page.evaluate(()=>refreshSlow());
     await assertCompleted();
     const aiChipText = await page.locator('#firstListenAiChip').innerText();
-    assert(aiChipText.toLowerCase() === 'ai service connected', `configured AI provider was not summarized safely: ${aiChipText}`);
+    assert(aiChipText.toLowerCase()==='writing connected', `configured AI provider was not summarized safely: ${aiChipText}`);
     assert(!(await page.locator('#firstListenAiSummary').innerText()).includes('ANTHROPIC_API_KEY'), 'configured AI summary exposed a raw key name');
     const aiReview = page.locator('#firstListenAiStep > .first-listen-head > .first-listen-review');
     assert((await aiReview.innerText()) === 'Review AI setup', 'configured AI has no deliberate review action');
@@ -1133,6 +2583,7 @@ async (page) => {
     assert(await page.locator('#setupKeysForm').isHidden(), 'configured AI opened replacement fields without an edit action');
     assert(await page.locator('#setupAnthropicKey').inputValue() === '', 'stored AI key value was rendered into the page');
     assert(await page.locator('#setupAnthropicKey').getAttribute('placeholder') === 'Leave blank to keep saved key', 'blank-field safety meaning is missing');
+    writingCapabilities={};
 
     await resetUi(setupProjection());
     failNextResume = true;
@@ -1224,8 +2675,8 @@ async (page) => {
           const rect = element.getBoundingClientRect();
           return rect.left < -1 || rect.right > root.clientWidth + 1;
         }).map((element) => element.id || element.textContent.trim().slice(0, 40));
-        const smallTargets = [...surface.querySelectorAll('button, summary')].filter((element) => {
-          if (!element.getClientRects().length) return false;
+        const smallTargets = [...surface.querySelectorAll('button, summary, a')].filter((element) => {
+          if (!element.checkVisibility({checkVisibilityCSS:true})) return false;
           const rect = element.getBoundingClientRect();
           return rect.height < 43.5 || rect.width < 43.5;
         }).map((element) => ({
@@ -1250,6 +2701,14 @@ async (page) => {
           });
         });
         const titles=[...surface.querySelectorAll('.first-listen-heading')].filter((el)=>el.getClientRects().length).map((el)=>({id:el.id,width:el.getBoundingClientRect().width}));
+        const brokenStatusWords=[...surface.querySelectorAll('#firstListenSourceStep .status-chip')].filter(chip=>chip.checkVisibility()).flatMap(chip=>{
+          const text=chip.firstChild;
+          if(text?.nodeType!==Node.TEXT_NODE)return[];
+          return [...text.textContent.matchAll(/\S+/g)].filter(word=>{
+            const range=document.createRange();range.setStart(text,word.index);range.setEnd(text,word.index+word[0].length);
+            return range.getClientRects().length>1;
+          }).map(word=>word[0]);
+        });
         const escapedRects = [...surface.querySelectorAll('*')].filter((element) => {
           if (!element.getClientRects().length || element.classList.contains('sr-only')) return false;
           const rect = element.getBoundingClientRect();
@@ -1272,6 +2731,7 @@ async (page) => {
           titles,
           escapedRects,
           touchTargetProbes,
+          brokenStatusWords,
         };
       });
     const assertJourneyGeometry = (width, geometry, label) => {
@@ -1281,6 +2741,7 @@ async (page) => {
       assert(geometry.escapedRects.length === 0, `${label} ${width}px visible journey content escaped its surface: ${JSON.stringify(geometry.escapedRects)}`);
       assert(geometry.titles.every((title) => title.width >= 48), `${label} ${width}px title collapsed: ${JSON.stringify(geometry.titles)}`);
       assert(geometry.smallTargets.length === 0, `${label} ${width}px exposed a target below 44px: ${JSON.stringify(geometry.smallTargets)}`);
+      assert(geometry.brokenStatusWords.length===0,`${label} ${width}px split a music status word: ${geometry.brokenStatusWords.join(', ')}`);
       assert(geometry.touchTargetProbes.every((target)=>target.width>=43.5&&target.height>=43.5),`${label} ${width}px stylesheet touch target fell below 44px: ${JSON.stringify(geometry.touchTargetProbes)}`);
     };
     for (const [width, height] of journeyViewports) {
@@ -1288,13 +2749,34 @@ async (page) => {
       const geometry = await measureJourneyGeometry();
       viewportResults.push({ state: 'active', width, ...geometry });assertJourneyGeometry(width, geometry, 'active');
     }
-
+    if(!(await sourcePreview.evaluate((element) => element.open)))await sourceReview.click();
+    assert(await sourcePreview.isVisible(), 'source preview was not exposed for responsive geometry checks');
+    for (const [width, height] of journeyViewports) {
+      await page.setViewportSize({ width, height });
+      const geometry = await measureJourneyGeometry();
+      viewportResults.push({ state: 'source-review', width, ...geometry });assertJourneyGeometry(width, geometry, 'source review');
+    }
     await resetUi(completed);
     await assertCompleted();
     for (const [width, height] of journeyViewports) {
       await page.setViewportSize({ width, height });
       const geometry = await measureJourneyGeometry();
       viewportResults.push({ state: 'completed', width, ...geometry });assertJourneyGeometry(width, geometry, 'completed');
+    }
+
+    // The new graphics, provider link and voice drawer must also fit; checking
+    // only arrival would miss the load-bearing decisions later in the journey.
+    for(const stage of ['invite','writing','voices','home']){
+      await resetUi(setupProjection({audio:true}),audioReadyOverrides());
+      await page.evaluate(stage=>showFirstListenConnection(stage),stage);
+      for(const [width,height] of journeyViewports){
+        await page.setViewportSize({width,height});
+        const geometry=await measureJourneyGeometry();
+        viewportResults.push({state:stage,width,...geometry});assertJourneyGeometry(width,geometry,stage);
+      }
+      await page.setViewportSize({width:320,height:568});
+      await page.evaluate(()=>document.documentElement.style.fontSize='200%');
+      assertJourneyGeometry(320,await measureJourneyGeometry(),`${stage} 200% zoom`);
     }
 
     await resetUi(setupProjection());
@@ -1318,12 +2800,180 @@ async (page) => {
     );
     const activeZoomJourneyGeometry = await measureJourneyGeometry();
     assertJourneyGeometry(320, activeZoomJourneyGeometry, 'active 200% zoom');
+    if(!(await sourcePreview.evaluate((element) => element.open)))await sourceReview.click();
+    const sourceReviewZoomJourneyGeometry = await measureJourneyGeometry();
+    assertJourneyGeometry(320, sourceReviewZoomJourneyGeometry, 'source review 200% zoom');
 
     await resetUi(completed);
     await page.evaluate(() => {document.documentElement.style.fontSize = '200%';});
     const completedZoomJourneyGeometry = await measureJourneyGeometry();
     assertJourneyGeometry(320, completedZoomJourneyGeometry, 'completed 200% zoom');
 
+    smokeStage = 'explicit-pause-cancels-delayed-start';
+    await page.setViewportSize({width:1280,height:900});
+    for(const force of [false,true]){
+      await resetUi(setupProjection());
+      const gate=responseGate();gate.force=force;resumeResponseGate=gate;
+      if(force)nextResumeResponse='force_available';
+      const before=await stationMediaSnapshot();
+      await page.locator('#firstListenPlayBtn').click();await gate.arrived;
+      await page.locator('#firstListenPlayerToggle').click();
+      const reply=page.waitForResponse(response=>response.url().includes('/api/resume')&&response.url().includes('force=true')===force);
+      gate.release();await reply;
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      assert(!(await stationMediaSnapshot()).playing,'a delayed start ignored Pause');
+      assert((await stationMediaSnapshot()).streamRequests.length===before.streamRequests.length,'a canceled start opened a stream');
+    }
+    smokeStage = 'persistent-player-ducking';
+    for(const mode of ['late-before-continue','late-after-continue','rejected']){
+      await resetUi(setupProjection());
+      await page.evaluate(mode=>{
+        const audio=firstListenStationAudio(),play=audio.play;
+        audio.play=function(){audio.play=play;return mode==='rejected'?Promise.reject(new Error('play rejected')):new Promise(resolve=>{window.__releaseStationPlay=()=>play.call(audio).then(resolve);});};
+      },mode);
+      await page.locator('#firstListenPlayBtn').click();
+      await page.waitForFunction(()=>firstListenStationAudio().getAttribute('src'));
+      if(mode==='rejected')await page.waitForFunction(()=>!_firstListenUi.busy);
+      else{
+        await page.locator('#firstListenPlayerToggle').click();
+        if(mode==='late-before-continue'){
+          await page.evaluate(()=>__releaseStationPlay());
+          assert(!(await stationMediaSnapshot()).playing,'late play ignored paused intent');
+        }
+      }
+      const continueGate=responseGate();resumeResponseGate=continueGate;
+      await page.locator('#firstListenPlayerToggle').click();await continueGate.arrived;
+      await page.evaluate(()=>firstListenStationAudio().dispatchEvent(new Event('playing')));
+      assert(await page.evaluate(()=>_firstListenUi.dispatch==='starting'),'stale playing event accepted a pending attempt');
+      continueGate.release();
+      await page.waitForFunction(()=>_firstListenUi.dispatch==='accepted'&&!_firstListenUi.busy);
+      await page.evaluate(()=>firstListenStationAudio().dispatchEvent(new Event('pause')));
+      assert(await page.evaluate(()=>_firstListenPlayback.phase==='playing'),'stale pause event interrupted current playback');
+      await assertUnfinished('firstListenVerifyStep','firstListenHeardBtn');
+      if(mode==='late-after-continue'){
+        await page.locator('#firstListenHeardBtn').click();
+        await page.waitForFunction(()=>_firstListenUi.verification==='heard'&&!_firstListenUi.busy);
+        await page.evaluate(()=>__releaseStationPlay());
+        assert(await page.evaluate(()=>_firstListenUi.verification==='heard'),'stale play reset the new hearing receipt');
+      }
+    }
+    const continuous=await startAudibleFirstListen();
+    const proofBefore=await page.evaluate(()=>({heard:_firstListenUi.verification,choice:_firstListenUi.privacyChoice}));
+    await proofGuideButton.click();
+    await page.waitForFunction(()=>_firstListenPlayback.gain?.gain.value<0.2);
+    await assertStationPreserved(continuous,'proof-scene duck');
+    await proofGuideButton.click();
+    await page.waitForFunction(()=>_firstListenPlayback.gain?.gain.value>0.99);
+    await assertStationPreserved(continuous,'manual guide pause');
+    await page.locator('#firstListenDestinations > summary').click();
+    await assertStationPreserved(continuous,'destination help');
+    assert(await page.locator('#firstListenCopyStream').isHidden(),'local-only preview offered an unreachable stream address');
+    await page.locator('#firstListenPlayerToggle').click();
+    assert(!(await stationMediaSnapshot()).playing,'Pause music did not pause');
+    const paused=await stationMediaSnapshot();
+    await page.locator('#firstListenPlayerToggle').click();
+    await page.waitForFunction(()=>window.__firstListenStationMedia.playing);
+    const continued=await stationMediaSnapshot();
+    assert(continued.src.endsWith('first_listen=live')&&continued.streamRequests.length===paused.streamRequests.length+1,'Continue music resumed buffered history');
+    assert(JSON.stringify(await page.evaluate(()=>({heard:_firstListenUi.verification,choice:_firstListenUi.privacyChoice})))===JSON.stringify(proofBefore),'Pause/Continue changed saved progress');
+
+    smokeStage='persistent-player-geometry';
+    for(const [width,height,zoom] of [[320,568,false],[375,812,false],[1440,900,false],[320,568,true]]){
+      await page.setViewportSize({width,height});await resetUi(setupProjection());
+      if(zoom)await page.evaluate(()=>document.documentElement.style.fontSize='200%');
+      await page.locator('#firstListenPlayBtn').click();
+      await page.waitForFunction(()=>_firstListenUi.dispatch==='accepted'&&!_firstListenUi.busy);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      const clearance=await page.evaluate(()=>({actions:firstListenVerifyActions.getBoundingClientRect().bottom,player:firstListenPlayer.getBoundingClientRect().top}));
+      assert(clearance.actions<=clearance.player,`confirmation choices overlap the player at ${width}/${zoom}: ${JSON.stringify(clearance)}`);
+      await page.evaluate(()=>undoableToast('Banned and skipped — won’t come back',()=>{},30000));
+      const notice=await page.locator('#undoStack').boundingBox();
+      assert(notice.y+notice.height<=clearance.player,`undo notice covers player at ${width}/${zoom}`);
+      await page.locator('#firstListenDestinations > summary').click();
+      const geometry=await page.locator('#firstListenPlayer').evaluate(p=>({width:p.clientWidth,scroll:p.scrollWidth,targets:[...p.querySelectorAll('button,summary,a')].filter(e=>e.getClientRects().length).map(e=>({width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height}))}));
+      assert(geometry.scroll<=geometry.width+1&&geometry.targets.every(r=>r.width>=44&&r.height>=44),`player geometry failed at ${width}/${zoom}: ${JSON.stringify(geometry)}`);
+      await page.locator('#firstListenPlayer a').scrollIntoViewIfNeeded();
+      await page.locator('#firstListenDestinations > summary').click();
+      await page.locator('#firstListenPlayerToggle').click();
+      assert(!(await stationMediaSnapshot()).playing,'expanded player prevented explicit Pause');
+    }
+    await page.setViewportSize({width:1280,height:900});
+
+    smokeStage = 'audio-graph-failure-matrix';
+    await page.evaluate(()=>{
+      window.__realFirstListenAudio={Context:window.AudioContext,WebkitContext:window.webkitAudioContext,playback:{..._firstListenPlayback},timeout:window.setTimeout};
+    });
+    for(const mode of ['unsupported','constructor','gain','gain-connect','resume','timeout','source','bypass','broken-bypass','normal']){
+      await resetUi(setupProjection());
+      await page.evaluate(mode=>{
+        const p=_firstListenPlayback;
+        Object.assign(p,{context:null,source:null,gain:null,mixTask:null,mixReady:false,mixUnavailable:false,unrecoverable:false});
+        const trace=window.__mixTrace={mode,contexts:0,bindings:0,routes:[],release:null};
+        window.setTimeout=(fn,ms,...args)=>window.__realFirstListenAudio.timeout.call(window,fn,mode==='timeout'&&ms===8000?10:ms,...args);
+        class Context extends EventTarget{
+          constructor(){super();trace.contexts++;if(mode==='constructor')throw new Error('constructor');this.state='running';this.currentTime=0;this.destination={destination:true};}
+          createGain(){
+            if(mode==='gain')throw new Error('gain');
+            return{gain:{value:1,cancelScheduledValues(){},setValueAtTime(v){this.value=v;},linearRampToValueAtTime(v){this.value=v;}},connect(){if(mode==='gain-connect')throw new Error('gain-connect');}};
+          }
+          resume(){if(mode==='resume')return Promise.reject(new Error('resume'));if(mode==='timeout')return new Promise(resolve=>{trace.release=resolve;});this.state='running';this.dispatchEvent(new Event('statechange'));return Promise.resolve();}
+          createMediaElementSource(){
+            if(mode==='source')throw new Error('source');trace.bindings++;
+            return{disconnect(){trace.routes=[];},connect(target){if(['bypass','broken-bypass'].includes(mode)&&!target.destination)throw new Error('connect');if(mode==='broken-bypass')throw new Error('bypass');trace.routes.push(target.destination?'direct':'gain');}};
+          }
+        }
+        window.AudioContext=mode==='unsupported'?undefined:Context;
+        window.webkitAudioContext=undefined;
+      },mode);
+      await page.locator('#firstListenPlayBtn').click();
+      await page.waitForFunction(()=>!_firstListenUi.busy);
+      const snapshot=await page.evaluate(()=>({playing:__firstListenStationMedia.playing,bindings:__mixTrace.bindings,mixed:_firstListenPlayback.mixReady,source:Boolean(_firstListenPlayback.source),phase:_firstListenPlayback.phase,dispatch:_firstListenUi.dispatch,status:document.getElementById('firstListenSpeakerStatus').innerText}));
+      assert(snapshot.playing===(mode!=='broken-bypass'),`${mode}: audio fallback lied about playback: ${JSON.stringify(snapshot)}`);
+      assert(snapshot.bindings<=1,`${mode}: station was bound twice`);
+      if(mode==='broken-bypass'){
+        assert((await page.locator('#firstListenPlayerToggle').innerText())==='Reload player','failed bound output lacks recovery');
+      }else if(mode==='normal'){
+        await page.evaluate(()=>openFirstListenListener());
+        await page.waitForFunction(()=>_firstListenHandoff.ready);
+        const attached=page.frameLocator('#firstListenListenerFrame');
+        await page.evaluate(()=>{_firstListenPlayback.context.state='suspended';_firstListenPlayback.context.dispatchEvent(new Event('statechange'));});
+        assert((await page.locator('#firstListenPlayerToggle').innerText())==='Continue music','suspended output lacks Continue');
+        await attached.getByRole('button',{name:'Listen now',exact:true}).first().click();
+        await page.waitForFunction(()=>_firstListenPlayback.phase==='playing');
+        await page.evaluate(()=>{_firstListenPlayback.context.state='closed';_firstListenPlayback.context.dispatchEvent(new Event('statechange'));});
+        assert((await page.locator('#firstListenPlayerToggle').innerText())==='Reload player','closed output lacks Reload');
+        assert(await attached.getByRole('button',{name:'Reload player',exact:true}).first().isVisible(),'attached listener hid closed-context recovery');
+        await page.evaluate(()=>openFirstListenStation());
+      }else{
+        await page.evaluate(async () => {
+          const button=document.querySelector('.guide-audio[data-guide="sound-check"] .guide-audio-play');
+          await toggleFirstListenGuide('sound-check',button);
+        });
+        await page.waitForFunction(()=>document.querySelector('.guide-audio[data-guide="sound-check"]').dataset.state==='error');
+        assert(await page.locator('#firstListenGuideAudio').evaluate(audio=>audio.paused),'unsupported mixing overlapped full-volume audio');
+        assert((await stationMediaSnapshot()).playing,'unsupported mixing stopped native music');
+        if(mode==='timeout'){
+          await page.evaluate(()=>__mixTrace.release());
+          assert(await page.evaluate(()=>!_firstListenPlayback.source),'late context resume bound a canceled graph');
+        }
+        if(mode==='bypass')assert(await page.evaluate(()=>JSON.stringify(__mixTrace.routes)==='["direct"]'),'bypass did not retain exactly one direct route');
+      }
+    }
+    await page.evaluate(()=>{
+      stopFirstListenStationAudio();
+      window.AudioContext=__realFirstListenAudio.Context;window.webkitAudioContext=__realFirstListenAudio.WebkitContext;window.setTimeout=__realFirstListenAudio.timeout;
+      Object.assign(_firstListenPlayback,__realFirstListenAudio.playback,{intent:false,phase:'idle'});
+    });
+
+    smokeStage = 'ordinary-listener-admin-shortcuts';
+    await page.locator('#listener-view-link').click();
+    await page.waitForFunction(() => location.pathname === '/listen');
+    assert(await page.locator('#admin-view-link').isVisible(), 'idle Admin shortcut did not open the listener page');
+    await page.locator('#admin-view-link').click();
+    await page.waitForFunction(() => location.pathname === '/admin');
+    assert(await page.locator('#listener-view-link').isVisible(), 'standalone listener shortcut did not open Admin');
+
+    smokeStage = 'ingress-guide-audio';
     await page.route(`${baseUrl}${ingressPrefix}/admin`, async (route) => {
       const response = await route.fetch({ url: `${baseUrl}/admin` });
       await route.fulfill({ response });
@@ -1333,18 +2983,15 @@ async (page) => {
     await page.evaluate(() => {
       (window.__firstListenSmokeIntervals || []).forEach(({ id }) => clearInterval(id));
     });
-    await resetUi(setupProjection());
+    await resetUi(setupProjection(), { dispatch: 'accepted' });
+    await page.locator('#firstListenSoundHelp > summary').click();
     const ingressGuideBaseline = guideAudioRequests.length;
-    const ingressGuideButton = page.locator('.guide-audio[data-guide="welcome"] .guide-audio-play');
+    const ingressGuideButton = page.locator('.guide-audio[data-guide="sound-check"] .guide-audio-play');
     await ingressGuideButton.click();
-    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'playing');
-    assert(guideAudioRequests.length === ingressGuideBaseline + 1, 'ingress guide did not request its audio asset');
-    assert(
-      new RegExp(`^${ingressPrefix}/static/audio/first_listen/welcome\\.mp3\\?v=[0-9a-f]{12}$`).test(guideAudioRequests.at(-1)),
-      `ingress guide escaped its base path: ${guideAudioRequests.at(-1)}`,
-    );
+    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="sound-check"]')?.dataset.state === 'playing');
+    assertGuideRequests(ingressGuideBaseline,'sound-check',ingressPrefix);
     await ingressGuideButton.click();
-    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="welcome"]')?.dataset.state === 'paused');
+    await page.waitForFunction(() => document.querySelector('.guide-audio[data-guide="sound-check"]')?.dataset.state === 'paused');
 
     assert(pageErrors.length === 0, `uncaught page errors: ${pageErrors.join(' | ')}`);
     return {
@@ -1354,6 +3001,7 @@ async (page) => {
         'degraded-source',
         'accepted-not-heard',
         'guide-audio-lifecycle',
+        'guide-clip-switching',
         'receipt-recovery-no-replay',
         'receipt-recovery-retry',
         'receipt-recovery-reload',
@@ -1367,6 +3015,31 @@ async (page) => {
         'privacy-off',
         'privacy-preview-expiry',
         'privacy-enabled',
+        'continuous-private-achievement',
+        'continuous-enabled-achievement',
+        'failed-privacy-keeps-stream',
+        'navigation-preserves-stream',
+        'live-station-controls',
+        'guided-connection',
+        'household-example-sequence',
+        'household-example-private-exit',
+        'writing-before-home',
+        'early-private-return',
+        'reload-resume',
+        'stopped-continue-force-success',
+        'listener-page-handoff',
+        'listener-paused-handoff',
+        'listener-load-failures',
+        'paused-completion',
+        'restart-first-listen',
+        'audio-graph-failure-matrix',
+        'persistent-player-geometry',
+        'explicit-pause-cancels-delayed-start',
+        'music-source-exit-during-guide',
+        'admin-tab-during-guide-load',
+        'music-source-during-guide-load',
+        'same-guide-pause-during-load',
+        'guide-playback-rejection',
         'privacy-receipt-repair',
         'ambient-only-preview',
         'resume-unreachable',
@@ -1385,5 +3058,9 @@ async (page) => {
     };
   }
 
-  return runCalmJourneySmoke();
+  try {
+    return await runCalmJourneySmoke();
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)} [stage=${smokeStage}]`);
+  }
 }

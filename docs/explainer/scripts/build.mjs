@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import scenarios, { transcriptFor } from "../scenarios.mjs";
 
@@ -10,7 +10,11 @@ const siteLinks = runInNewContext(`(${configMatch[1]})`);
 const escapeHtml = (value) => String(value).replace(/[&<>\"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[character]));
 const renderedSiteLinks = Object.values(siteLinks)
   .filter((link) => link?.href && link?.label)
-  .map((link) => `<a href="${escapeHtml(link.href)}" target="_blank" rel="noreferrer noopener">${escapeHtml(link.label)}</a>`)
+  .map((link) => {
+    const external = /^https:\/\//.test(link.href);
+    const externalAttrs = external ? ' target="_blank" rel="noreferrer noopener"' : "";
+    return `<a href="${escapeHtml(link.href)}"${externalAttrs}>${escapeHtml(link.label)}</a>`;
+  })
   .join("");
 const renderedIndex = indexTemplate.replace(
   /<nav id="site-links" class="footer-links" aria-label="Project links"><\/nav>/,
@@ -28,8 +32,8 @@ if (audioIds.length === 0) throw new Error("No scenario ids found in index.html"
 
 // scenarios.mjs is the single source of truth; the picker buttons in
 // index.html must agree with it in both directions, and at least one moment
-// must be reachable by a fresh install (narrow ambient context: sun and
-// weather only). A page whose every demo needs a home grant oversells.
+// must be the fresh-install ceiling after opt-in (sun and weather only). A page
+// whose every demo needs a wider home grant oversells.
 const truthIds = Object.keys(scenarios);
 for (const id of audioIds) {
   if (!truthIds.includes(id)) throw new Error(`index.html offers "${id}" but scenarios.mjs does not define it`);
@@ -38,7 +42,24 @@ for (const id of truthIds) {
   if (!audioIds.includes(id)) throw new Error(`scenarios.mjs defines "${id}" but index.html never offers it`);
 }
 if (!truthIds.some((id) => scenarios[id].reachability === "day-one")) {
-  throw new Error("No scenario is fresh-install reachable (reachability: \"day-one\") — the page would demonstrate only gated capability");
+  throw new Error("No scenario is day-one (fresh-install ceiling after opt-in) — the page would demonstrate only gated capability");
+}
+
+// H4 ships the same recordings inside First Listen. Keep its reachability
+// vocabulary and the public explainer in lockstep; matching audio hashes alone
+// cannot catch a semantic relabel.
+const h4Manifest = JSON.parse(
+  await readFile("../../mammamiradio/web/static/audio/home_moments/spoken_assets.json", "utf8"),
+);
+const h4Reachability = Object.fromEntries(
+  h4Manifest.assets.map((asset) => [asset.path.replace(/\.mp3$/, ""), asset.reachability]),
+);
+for (const id of truthIds) {
+  if (scenarios[id].reachability !== h4Reachability[id]) {
+    throw new Error(
+      `Scenario "${id}" reachability (${scenarios[id].reachability}) disagrees with the H4 Home-moment pack (${h4Reachability[id] ?? "missing"})`,
+    );
+  }
 }
 // Every scenario must carry what a visitor who cannot hear the clip needs,
 // and a cue point may only exist alongside the produced manifest that
@@ -88,6 +109,9 @@ for (const id of truthIds) {
 await mkdir("dist/public", { recursive: true });
 await mkdir("dist/public/fonts", { recursive: true });
 await mkdir("dist/public/audio", { recursive: true });
+// The shorts are a static sub-site. Clear only their prior build output so a
+// renamed episode cannot survive a later build as a ghost route.
+await rm("dist/shorts", { recursive: true, force: true });
 await Promise.all([
   ...audioIds.map((id) => copyFile(`public/audio/${id}.mp3`, `dist/public/audio/${id}.mp3`)),
   writeFile("dist/index.html", renderedIndex),
@@ -104,6 +128,7 @@ await Promise.all([
   copyFile("public/fonts/playfair-display-italic.woff2", "dist/public/fonts/playfair-display-italic.woff2"),
   copyFile("public/fonts/outfit.woff2", "dist/public/fonts/outfit.woff2"),
   copyFile("public/fonts/jetbrains-mono.woff2", "dist/public/fonts/jetbrains-mono.woff2"),
+  cp("shorts", "dist/shorts", { recursive: true }),
 ]);
 // The copy list above is hand-maintained, so the failure it just fixed —
 // app.js importing a module dist/ never received — can come back the next time

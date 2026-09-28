@@ -352,7 +352,19 @@ class Track:
 
     @property
     def display(self) -> str:
-        """Human-readable label used in logs and APIs."""
+        """Human-readable label used in logs and APIs.
+
+        An artist-less track (an untagged local file — ``local_library`` refuses
+        to invent an artist from a filename slug) renders here with a dangling
+        leading separator. That is WRONG, and deliberately not fixed here: this
+        value reaches ``up_next[].title`` on the frozen v1 integration surface,
+        so changing it is a contract change. See
+        ``docs/contract-proposals/003-title-only-track-label.md``; it lands with
+        a contract window, not in an ordinary fix.
+
+        Every listener- and operator-facing surface already renders these tracks
+        title-only, because they read ``metadata.title_only`` rather than this.
+        """
         return f"{self.artist} – {self.title}"
 
     @cached_property
@@ -879,9 +891,21 @@ class Segment:
     # Provider-owned single-use resources are released only through this hook;
     # queue mutation and playback finalizers call ``release()`` exactly once.
     playback_start_callback: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    audible_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     release_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     _playback_started: bool = field(default=False, init=False, repr=False, compare=False)
+    _audible_committed: bool = field(default=False, init=False, repr=False, compare=False)
     _released: bool = field(default=False, init=False, repr=False, compare=False)
+
+    @property
+    def released(self) -> bool:
+        """Whether ``release()`` has run. A released segment can never be admitted.
+
+        ``mark_playback_started`` refuses it, so anything measuring runway must
+        refuse it too; otherwise a released queue head reads as ready audio and
+        the playback loop skips it at the moment it should air.
+        """
+        return self._released
 
     def mark_playback_started(self) -> bool:
         """Synchronously admit a segment and notify its provider before airing.
@@ -910,12 +934,29 @@ class Segment:
         self.playback_start_callback = None
         return True
 
+    def mark_audible(self) -> None:
+        """Run listener-audible bookkeeping at most once without risking audio."""
+        if self._released or self._audible_committed:
+            return
+        self._audible_committed = True
+        callback = self.audible_callback
+        self.audible_callback = None
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            # Bookkeeping is subordinate to the live stream. The callback owns
+            # any domain-specific logging or retry state it needs.
+            logger.debug("Segment audible callback failed for %s", self.path, exc_info=True)
+
     def release(self) -> None:
         """Idempotently release any provider-owned resource carried by this segment."""
         if self._released:
             return
         self._released = True
         self.playback_start_callback = None
+        self.audible_callback = None
         callback = self.release_callback
         self.release_callback = None
         if callback is None:
@@ -1318,11 +1359,21 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
+    # Queue reservations keep an owed ad break from filling lookahead with
+    # duplicates while pacing/history wait for listener-audible truth.
+    ad_break_reservations: dict[str, str] = field(default_factory=dict)
+    packaged_ad_history: deque[str] = field(default_factory=lambda: deque(maxlen=8))
     # Session-only ad receipts for completed breaks. Stores aggregate counts
     # in memory and resets with the process.
     ad_experiment_completed_breaks: int = 0
     ad_experiment_brand_airings: dict[str, int] = field(default_factory=dict)
     session_stopped: bool = False
+    # Advanced by the operator Stop route, and by nothing else. A Resume that
+    # awaits (starter-catalog verification does) needs to tell "a Stop landed
+    # under me, stay paused" apart from "some other live control ran"; it cannot
+    # read that from ``session_stopped``, which is already True for the whole
+    # resume, nor from ``continuity_epoch``, which every reservation advances.
+    session_stop_revision: int = 0
     # True only after an explicit assetless force-resume, until a listener
     # accepts the first rebuilt segment. Readiness stays "starting" meanwhile.
     force_recovery_active: bool = False
@@ -1531,6 +1582,8 @@ class StationState:
     urgent_interrupt_drained_audio: bool = False
     chaos_cutover_epoch: int = 0
     chaos_script_fallbacks: int = 0
+    language_guard_rejections: int = 0  # First language rejection, followed by a repair attempt.
+    language_guard_failures: int = 0  # Terminal or post-processing language rejection.
     chaos_audio_failures: int = 0
     chaos_last_degraded_reason: str = ""
     # Pinned track: select_next_track returns this immediately then clears it
@@ -1587,6 +1640,12 @@ class StationState:
     _listener_request_rl: dict = field(default_factory=dict)
     # Shareware trial: counts canned banter clips actually streamed to listener
     canned_clips_streamed: int = 0
+    # Whether the station can currently produce a real advertisement: an AI key
+    # and at least one ad brand. False makes the scheduler skip the ad break
+    # instead of filling it with a placeholder, and leaves ``songs_since_ad`` owed
+    # rather than forgiven. The producer settles it during prewarm and again
+    # before every pacing decision.
+    ad_programme_available: bool = True
     # Persona store for compounding listener memory (set by main.py at startup)
     persona_store: PersonaStore | None = None
     # Evening running-gag ledger (Impossible Moments v2 A); set by main.py at startup
@@ -1637,6 +1696,10 @@ class StationState:
     anthropic_last_error: str = ""
     anthropic_last_error_at: float = 0.0
     anthropic_auth_failures: int = 0
+    openai_disabled_until: float = 0.0
+    openai_last_error: str = ""
+    openai_last_error_at: float = 0.0
+    openai_blocked_key_hash: str = field(default="", repr=False)
     # Active key-validation verdict (set by a startup/on-save/on-demand auth ping;
     # distinct from the time-based suspend above). "rejected" means the provider
     # actively refused the key (401) — a persistent "replace the key" condition the
@@ -1686,6 +1749,10 @@ class StationState:
     # Runtime integrity counters for long-lived sessions
     runtime_sync_events: int = 0
     shadow_queue_corrections: int = 0
+    # Playback-seam cart. Session-local: a restart clears the counts. The dial
+    # itself lives on config.audio.boundary_imaging.
+    boundary_carts_aired: int = 0
+    boundary_imaging_skips: dict[str, int] = field(default_factory=dict)
     playback_epoch: int = 0
     # Producer rescue-bridge telemetry (#547 observability). Every time a
     # drain/resume/idle bridge enqueues rescue audio the station is, briefly,
@@ -2891,6 +2958,7 @@ class StationState:
         self.audible_playback_epoch = self.playback_epoch
         self.current_stream_audible = True
         self.force_recovery_active = False
+        segment.mark_audible()
         now = time.time()
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         try:
@@ -3135,6 +3203,7 @@ class StationState:
         artist_cooldown: int = 3,
         max_artist_per_hour: int = 3,
         excluded_cache_keys: Collection[str] | None = None,
+        restrict_to_source: str | None = None,
     ) -> Track:
         """Pick the next track using weighted random selection with diversity rules.
 
@@ -3142,6 +3211,12 @@ class StationState:
         tracks that haven't played recently, from under-represented artists,
         and with smooth energy transitions.  Falls back to progressively
         relaxed filters if the pool is too small.
+
+        A genuinely starter-only pool keeps bag order (one manifest cycle, no
+        repeats until every starter has aired). A mixed crate — locals overlaid
+        on the starter bag — uses the weighted selector, with local files as
+        the base whenever they are present. ``restrict_to_source`` narrows the
+        pool for recovery callers that must stay on one source.
         """
         if not self.playlist:
             raise RuntimeError("Playlist is empty")
@@ -3154,7 +3229,8 @@ class StationState:
             starter_blocked = track.source == "starter" and (
                 track.cache_key not in self.starter_cycle_remaining or track.cache_key in self.starter_cycle_reserved
             )
-            if not starter_blocked:
+            source_blocked = bool(restrict_to_source) and track.source != restrict_to_source
+            if not starter_blocked and not source_blocked:
                 # Consuming the pin is a semantic write: go through the setter so
                 # the revision advances and a listener/operator pin owner can
                 # still tell its own pin apart from a newer one.
@@ -3165,6 +3241,8 @@ class StationState:
                     raise RuntimeError("Playlist has no eligible tracks")
 
         pool = [track for track in self.playlist if track.cache_key not in excluded]
+        if restrict_to_source:
+            pool = [track for track in pool if track.source == restrict_to_source]
         if not pool:
             raise RuntimeError("Playlist has no eligible tracks")
 
@@ -3188,7 +3266,11 @@ class StationState:
                         "Starter cycle is waiting for queued tracks to begin playback"
                     )
                 raise RuntimeError("Playlist has no eligible tracks in the current starter cycle")
-            if self.playlist_source is not None and self.playlist_source.kind == "starter":
+            # Strict bag order applies only to a genuinely starter-only pool.
+            # A mixed local+starter rotation must reach the weighted selector
+            # below so local files can receive their x2 base-weight lift.
+            starter_only_pool = all(track.source == "starter" for track in pool)
+            if starter_only_pool:
                 # Startup supplied one manifest-digest-pinned bag cycle in
                 # playlist order. Honor that order; reserve after queue
                 # admission and consume only at playback start, so a render
@@ -3314,6 +3396,17 @@ class StationState:
                 w *= 1.0 - math.exp(-0.1 * songs_ago)
             else:
                 w *= 1.2  # Never-played bonus
+
+            # Operator files are the base of a mixed crate. This is an ordinary
+            # base-weight factor, so it composes with every other one — including
+            # the Record Hunt lift, which means a local hunt match can out-weigh a
+            # starter non-match by 2 x HEADING_MAX_LIFT. That is intended:
+            # HEADING_MAX_LIFT bounds the hunt lift, not a track's total weight,
+            # exactly as the never-played and popularity factors already stack.
+            # How much of the show your own music takes therefore grows with how
+            # many files you have; it is not a fixed share.
+            if track.source == "local":
+                w *= 2.0
 
             # Artist diversity: penalize over-represented artists in recent history
             recent_artist_count = recent_artist_10.get(track.artist, 0)
@@ -3461,6 +3554,27 @@ class StationState:
         self.segments_produced += 1
         label = ", ".join(brands) if brands else "Ad break"
         self._log("ad", f"Ad: {label}")
+
+    def reserve_ad_break(self, reservation_id: str, identity: str = "") -> bool:
+        """Reserve one queued break without crediting it as aired."""
+        token = reservation_id.strip()
+        if not token or token in self.ad_break_reservations:
+            return False
+        self.ad_break_reservations[token] = identity.strip()
+        return True
+
+    def release_ad_break(self, reservation_id: str) -> None:
+        """Release a queued break that left the timeline before audibility."""
+        self.ad_break_reservations.pop(reservation_id, None)
+
+    def commit_ad_break(self, reservation_id: str) -> str | None:
+        """Commit one reserved break at the first listener-audible chunk."""
+        identity = self.ad_break_reservations.pop(reservation_id, None)
+        if identity is None:
+            return None
+        if identity:
+            self.packaged_ad_history.append(identity)
+        return identity
 
     def after_station_id(self) -> None:
         """Advance counters after a station ID stinger."""

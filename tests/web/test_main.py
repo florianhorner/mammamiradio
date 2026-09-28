@@ -1275,6 +1275,88 @@ async def test_startup_provenance_observer_runs_fsync_work_off_event_loop(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("already_sealed", "observation_during_export", "failed_export", "cancelled"))
+async def test_private_home_export_is_background_singleflight_and_preserves_runtime(tmp_path, caplog, scenario):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home import migration
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.profile import export_legacy_home_profile_v1, load_home_profile_v1
+
+    config = _privacy_startup_config(tmp_path)
+    state_dir, db_path = config.cache_dir / "state", config.cache_dir / "mammamiradio.db"
+    witness = migration.capture_legacy_home_preflight_v1(state_dir, database_preexisted=True)
+    migration.persist_legacy_home_database_preflight_v1(db_path, witness)
+    if scenario != "observation_during_export":
+        migration.seal_legacy_home_provenance_v1(
+            state_dir, migration.LEGACY_HOME_MANIFEST_V1.entity_ids, db_path=db_path, bridge_app_version="0+test"
+        )
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    started, release = threading.Event(), threading.Event()
+    event_loop_thread = threading.get_ident()
+    calls = 0
+
+    def slow_export(*args):
+        nonlocal calls
+        assert threading.get_ident() != event_loop_thread
+        calls += 1
+        if calls == 1:
+            started.set()
+            assert release.wait(timeout=5)
+            if scenario == "failed_export":
+                raise OSError("PRIVATE-EXPORT-ERROR-CANARY")
+        return export_legacy_home_profile_v1(*args)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock) as produce,
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock) as play,
+        patch(f"{MODULE}.export_legacy_home_profile_v1", side_effect=slow_export),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert await asyncio.to_thread(started.wait, 1)
+        task = app.state.legacy_home_provenance_task
+        assert not task.done() and task in app.state.background_tasks
+        assert not app.state.home_profile_ready
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+        await asyncio.sleep(0)
+        produce.assert_awaited()
+        play.assert_awaited()
+        observer = app.state.station_state.home_entity_ids_observer
+        if scenario == "observation_during_export":
+            observer(migration.LEGACY_HOME_MANIFEST_V1.entity_ids)
+            assert app.state.legacy_home_provenance_task is task
+        if scenario == "cancelled":
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()  # Shutdown must wait for the filesystem worker.
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not app.state.home_profile_ready
+            assert load_home_profile_v1(state_dir, db_path) is not None
+            return
+        release.set()
+        await task
+        if scenario == "failed_export":
+            assert not app.state.home_profile_ready
+            assert "PRIVATE-EXPORT-ERROR-CANARY" not in caplog.text
+            observer(migration.LEGACY_HOME_MANIFEST_V1.entity_ids)
+            assert app.state.legacy_home_provenance_task is not task
+            await app.state.legacy_home_provenance_task
+        assert app.state.home_profile_ready
+        assert load_home_profile_v1(state_dir, db_path) is not None
+        assert calls == (1 if scenario == "already_sealed" else 2)
+        completed = app.state.legacy_home_provenance_task
+        observer(migration.LEGACY_HOME_MANIFEST_V1.entity_ids)
+        assert app.state.legacy_home_provenance_task is completed
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+
+
+@pytest.mark.asyncio
 async def test_startup_wires_release_campaign_from_cache_dir():
     """Release campaign state is startup-owned and shared with streamer/producer."""
     from mammamiradio.core.models import Track
@@ -1745,7 +1827,8 @@ async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_
 
 
 @pytest.mark.asyncio
-async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(tmp_path):
+@pytest.mark.parametrize("env_choice", [None, False])
+async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(tmp_path, env_choice):
     """An off boot clears stale disk buckets in memory even when disk remains
     unwritable, so a later in-process enable cannot resurrect private events."""
     from mammamiradio.core.models import Track
@@ -1774,7 +1857,7 @@ async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(t
 
     with (
         patch(f"{MODULE}.load_config", return_value=config),
-        patch(f"{MODULE}._explicit_bool_env", return_value=False),
+        patch(f"{MODULE}._explicit_bool_env", return_value=env_choice),
         patch(f"{MODULE}.read_persisted_source", return_value=None),
         patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
@@ -1786,6 +1869,7 @@ async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(t
         await startup()
         await app.state.home_context_off_ledger_persist_task
 
+    assert app.state.home_context_choice_explicit is True
     ledger = app.state.station_state.evening_ledger
     assert ledger.buckets == {}
     # The no-op save models the prior persistence failure: stale data really
@@ -1974,6 +2058,153 @@ async def test_startup_prewarm_is_capped_to_two_on_addon(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "fresh",
+        "failed",
+        "raised",
+        "existing",
+        "stopped",
+        "handoff",
+        "keyed",
+        "italian",
+        "timeout",
+        "source_revision",
+        "chaos_cutover_epoch",
+        "continuity_epoch",
+        "stop_during_start",
+        "stop_resume",
+        "new_key",
+        "banter_rejected",
+        "revoked_during_banter",
+    ],
+)
+async def test_first_install_orders_the_recorded_show_without_blocking_other_starts(tmp_path, scenario):
+    from mammamiradio.core.models import Segment, SegmentType, Track
+    from mammamiradio.main import app, startup
+
+    config = _privacy_startup_config(tmp_path)
+    config.super_italian_mode = scenario == "italian"
+    config.pacing.lookahead_segments = 1
+    config.audio.bitrate = 192
+    config.cache_dir.mkdir(parents=True)
+    if scenario == "existing":
+        (config.cache_dir / "mammamiradio.db").touch()
+    if scenario == "stopped":
+        (config.cache_dir / "session_stopped.flag").touch()
+    gate, entered, producing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    prepared = []
+    observed = []
+    admitted_late = []
+    keyed = scenario == "keyed"
+    bypass = scenario in {"existing", "stopped", "handoff", "keyed", "italian"}
+
+    async def music(queue, state, config, *, stale_check=None):
+        prepared.append("music")
+        entered.set()
+        await gate.wait()
+        if scenario == "failed":
+            return False
+        if scenario == "raised":
+            raise RuntimeError("prewarm failed")
+        # Model the real admission boundary: the fence is re-read AFTER the
+        # awaited render, not only before it. A late opening track must not
+        # land once ownership is revoked.
+        if stale_check is not None and stale_check() is not None:
+            admitted_late.append("music")
+            return False
+        await queue.put(Segment(type=SegmentType.MUSIC, path=tmp_path / "song.mp3"))
+        return True
+
+    async def speech(queue, state, config, *, stale_check):
+        if stale_check() is not None:
+            return False
+        if scenario == "banter_rejected":
+            # The break could not be rendered at all. The fence is clean, so
+            # this is the leg's own verdict rather than a revocation, and it
+            # still has to end the opening.
+            return False
+        prepared.append("banter")
+        if scenario == "revoked_during_banter":
+            # Ownership moved while the break rendered. The break itself is
+            # real and belongs on air; only what would follow it is revoked.
+            state.source_revision += 1
+        await queue.put(Segment(type=SegmentType.BANTER, path=tmp_path / "chair.mp3"))
+        return True
+
+    async def produce(queue, *_args, **_kwargs):
+        observed.extend(segment.type.value for segment in queue._queue)
+        producing.set()
+
+    def handoff(queue, *_):
+        if scenario == "handoff":
+            queue.put_nowait(Segment(type=SegmentType.MUSIC, path=tmp_path / "resume.mp3"))
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.has_script_llm", side_effect=lambda _: keyed),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="Song", artist="A", duration_ms=180000)], None, ""),
+        ),
+        patch(f"{MODULE}._admit_restart_handoff", side_effect=handoff),
+        patch(f"{MODULE}.prewarm_first_segment", side_effect=music),
+        patch(f"{MODULE}.queue_first_listen_banter", side_effect=speech),
+        patch(f"{MODULE}.run_producer", side_effect=produce),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}._FIRST_LISTEN_OPENING_WAIT_SECONDS", 0.02 if scenario == "timeout" else 15),
+    ):
+        await startup()
+        await asyncio.wait_for(entered.wait(), 2)
+        if bypass or scenario == "timeout":
+            await asyncio.wait_for(producing.wait(), 2)
+        else:
+            assert not producing.is_set(), "producer overtook the opening song"
+        if scenario in {"source_revision", "chaos_cutover_epoch", "continuity_epoch"}:
+            setattr(app.state.station_state, scenario, 1)
+        if scenario == "stop_resume":
+            app.state.station_state.session_stopped = True
+            app.state.station_state.continuity_epoch += 1
+            app.state.station_state.session_stopped = False
+        if scenario == "stop_during_start":
+            app.state.station_state.session_stopped = True
+        if scenario == "new_key":
+            keyed = True
+        gate.set()
+        await asyncio.wait_for(producing.wait(), 2)
+        await asyncio.gather(app.state.prewarm_task, app.state.producer_task, return_exceptions=True)
+
+    if scenario in {"fresh", "revoked_during_banter"}:
+        assert "banter" in prepared, prepared
+    else:
+        assert "banter" not in prepared, prepared
+    if scenario == "fresh":
+        assert observed == ["music", "banter", "music"]
+        assert app.state.queue.maxsize == 3
+        assert app.state.station_state.listeners_active == 0
+    if scenario in {"failed", "raised"}:
+        assert prepared == ["music"]
+    if scenario == "timeout":
+        # The wait revokes opening_pending before releasing the producer, so the
+        # sequence must stop there. Running the trailing prewarm anyway would
+        # contradict "do not retry the opening" and take a Pi FFmpeg admission
+        # slot the producer is already competing for.
+        assert prepared == ["music"], prepared
+    if scenario == "banter_rejected":
+        # No host break means no third chair to introduce. Producing a second
+        # opening track here would air two songs back to back and call it the
+        # recorded show.
+        assert prepared == ["music"], prepared
+    if scenario == "revoked_during_banter":
+        # The break aired; the track behind it did not. The fence is re-read
+        # after the break returns, which is the only place this revocation is
+        # visible — the break's own check ran before the source moved.
+        assert prepared == ["music", "banter"], prepared
+
+
+@pytest.mark.asyncio
 async def test_startup_reads_persisted_source_before_fetching():
     from mammamiradio.core.models import PlaylistSource, Track
 
@@ -1993,7 +2224,7 @@ async def test_startup_reads_persisted_source_before_fetching():
         order.append("read")
         return persisted
 
-    def _fetch(_config, received):
+    def _fetch(_config, received, **_):
         order.append("fetch")
         assert received is persisted
         return [Track(title="S", artist="A", duration_ms=1, spotify_id="x")], persisted, ""
@@ -2079,6 +2310,15 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
     ps = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
     tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+    startup_home_order: list[str] = []
+
+    def record_household_prune(*_args: object) -> int:
+        startup_home_order.append("prune")
+        return 2
+
+    def record_first_home_load(*_args: object) -> set[str]:
+        startup_home_order.append("first_home_load")
+        return set()
 
     with (
         patch(f"{MODULE}.load_config", return_value=mock_config),
@@ -2087,6 +2327,14 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
         patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
         patch(f"{MODULE}.purge_suspect_cache_files", return_value=3) as mock_purge,
+        patch(
+            f"{MODULE}.prune_stale_atomic_json_tmp_files",
+            side_effect=record_household_prune,
+        ) as mock_prune_household_json,
+        patch(
+            f"{MODULE}.muted_entity_ids",
+            side_effect=record_first_home_load,
+        ),
         patch(f"{MODULE}.prune_stale_tmp_files", return_value=2) as mock_prune_tmp,
         patch(f"{MODULE}.prune_stale_handoff_tmp_files", return_value=4) as mock_prune_handoff_tmp,
         patch(f"{MODULE}.prune_stale_keepsake_tmp_files", return_value=1) as mock_prune_keepsake_tmp,
@@ -2096,6 +2344,16 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
         await startup()
         mock_purge.assert_called_once()
+        mock_prune_household_json.assert_called_once_with(
+            mock_config.cache_dir,
+            (
+                mock_config.cache_dir / "ha_registry.json",
+                mock_config.cache_dir / "state" / "ha_entity_policy.json",
+                mock_config.cache_dir / "moments.json",
+                mock_config.cache_dir / "evening_ledger.json",
+            ),
+        )
+        assert startup_home_order == ["prune", "first_home_load"]
         # Stale temp render scratch is pruned once at startup (#407).
         mock_prune_tmp.assert_called_once_with(mock_config.tmp_dir)
         mock_prune_handoff_tmp.assert_called_once_with(mock_config.cache_dir)
@@ -2226,7 +2484,9 @@ async def test_shutdown_cancels_tasks():
     producer_task = AsyncMock()
     playback_task = AsyncMock()
     listener_session_task = AsyncMock()
-    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
+    local_library_task = MagicMock()
+    local_library_task.done.return_value = False
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task, local_library_task):
         task.cancel = MagicMock()
 
     main_mod._prewarm_task = prewarm_task
@@ -2235,6 +2495,7 @@ async def test_shutdown_cancels_tasks():
     main_mod.app.state.prewarm_task = prewarm_task
     main_mod.app.state.producer_task = producer_task
     main_mod.app.state.playback_task = playback_task
+    main_mod.app.state.local_library_task = local_library_task
     main_mod.app.state.stream_hub = MagicMock()
     main_mod.app.state.station_state = SimpleNamespace(
         listener_session_tasks={listener_session_task},
@@ -2251,18 +2512,20 @@ async def test_shutdown_cancels_tasks():
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
 
-    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task, local_library_task):
         task.cancel.assert_called_once()
     mock_gather.assert_called_once_with(
         prewarm_task,
         producer_task,
         playback_task,
+        local_library_task,
         listener_session_task,
         return_exceptions=True,
     )
     assert main_mod.app.state.prewarm_task is None
     assert main_mod.app.state.producer_task is None
     assert main_mod.app.state.playback_task is None
+    assert main_mod.app.state.local_library_task is None
     main_mod.app.state.stream_hub.close.assert_called_once()
 
     # Cleanup
@@ -2288,9 +2551,18 @@ async def test_shutdown_cancels_background_tasks():
     # must cancel it too.
     verdict_task = AsyncMock()
     verdict_task.cancel = MagicMock()
+    verdict_task.done = MagicMock(return_value=False)
+    recheck_task, probe_task = AsyncMock(), AsyncMock()
+    for task in (recheck_task, probe_task):
+        task.cancel = MagicMock()
+        task.done = MagicMock(return_value=False)
     main_mod.app.state.provider_verdict_task = verdict_task
+    main_mod.app.state._setup_recheck_provider_task = recheck_task
+    main_mod.app.state._provider_check_task = probe_task
     main_mod.app.state.background_tasks = {bg_task}
     main_mod.app.state.stream_hub = MagicMock()
+    if hasattr(main_mod.app.state, "local_library_task"):
+        delattr(main_mod.app.state, "local_library_task")
 
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
@@ -2300,11 +2572,16 @@ async def test_shutdown_cancels_background_tasks():
     _args, _kwargs = mock_gather.call_args
     assert bg_task in _args
     assert verdict_task in _args
+    for task in (recheck_task, probe_task):
+        task.cancel.assert_called_once()
+        assert task in _args
     assert _kwargs.get("return_exceptions") is True
 
     # Cleanup
     main_mod.app.state.background_tasks = set()
     main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state._setup_recheck_provider_task = None
+    main_mod.app.state._provider_check_task = None
 
 
 @pytest.mark.asyncio
@@ -2449,6 +2726,8 @@ async def test_startup_fails_closed_on_playlist_fetch_exception(tmp_path: Path):
     # The compatibility list is deliberately empty while starter approval is pending.
     assert app.state.station_state.playlist == list(DEMO_TRACKS)
     assert app.state.station_state.startup_source_error == "network down"
+    assert app.state.station_state.source_readiness.entries["recovery"].bundled is True
+    assert app.state.runtime_identity.startswith("Version ")
     assert app.state.station_state.playlist_source.kind == "starter"
 
 
@@ -3887,3 +4166,73 @@ async def test_startup_trim_leaves_a_norm_cache_rescue_candidate(tmp_path, caplo
     # deep rung where a recently-heard song still beats the emergency tone. The
     # policy itself is unit-tested both ways in tests/audio/test_norm_cache.py.
     assert select_norm_cache_rescue(cache_dir, state, allow_recent_repeat=True) is not None
+
+
+@pytest.mark.parametrize("revision", ["abc123456789", "abc123456789-dirty", ""])
+def test_runtime_build_label(revision):
+    from mammamiradio.main import _runtime_build_label
+
+    with patch(f"{MODULE}.subprocess.run", return_value=SimpleNamespace(stdout=revision)) as run:
+        label = _runtime_build_label()
+    assert label == (revision.replace("-dirty", " · development changes") or "build unavailable")
+    assert run.call_args.kwargs["timeout"] == 0.5
+
+
+def test_runtime_build_label_without_git():
+    from mammamiradio.main import _runtime_build_label
+
+    with patch(f"{MODULE}.subprocess.run", side_effect=OSError("git unavailable")):
+        assert _runtime_build_label() == "build unavailable"
+    with patch(f"{MODULE}.Path.exists", return_value=False):
+        assert _runtime_build_label() == "build unavailable"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_a_pending_resume_starter_verification():
+    """Resume leaves a slow verification running; teardown must be the one to cancel it,
+    so its late result cannot run eligibility bookkeeping after shutdown begins."""
+    import mammamiradio.main as main_mod
+    from mammamiradio.core.models import StationState
+
+    main_mod._prewarm_task = None
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.background_tasks = set()
+    main_mod.app.state.stream_hub = MagicMock()
+    main_mod.app.state.station_state = StationState()
+    verify_task = MagicMock()
+    verify_task.done.return_value = False
+    main_mod.app.state.resume_starter_prepare_task = verify_task
+
+    with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+        await main_mod.shutdown()
+
+    verify_task.cancel.assert_called_once()
+    _args, _kwargs = mock_gather.call_args
+    assert verify_task in _args
+
+    main_mod.app.state.resume_starter_prepare_task = None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_leaves_a_finished_resume_starter_verification_alone():
+    import mammamiradio.main as main_mod
+    from mammamiradio.core.models import StationState
+
+    main_mod._prewarm_task = None
+    main_mod._producer_task = None
+    main_mod._playback_task = None
+    main_mod.app.state.provider_verdict_task = None
+    main_mod.app.state.background_tasks = set()
+    main_mod.app.state.stream_hub = MagicMock()
+    main_mod.app.state.station_state = StationState()
+    finished = MagicMock()
+    finished.done.return_value = True
+    main_mod.app.state.resume_starter_prepare_task = finished
+
+    with patch("asyncio.gather", new_callable=AsyncMock):
+        await main_mod.shutdown()
+
+    finished.cancel.assert_not_called()
+    main_mod.app.state.resume_starter_prepare_task = None
