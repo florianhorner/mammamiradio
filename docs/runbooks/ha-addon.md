@@ -637,7 +637,7 @@ validator before its first registry write.
 | Image tag pulled | `:X.Y.Z` (published by `addon-release.yml`) | `:<short-sha>` (published by `addon-build.yml` on every `main` build) |
 | Audience | everyone | the maintainer's soak Pi |
 
-Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
+Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `README.md`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
 
 **Cutting an edge release.** Edge releases are **manual and deliberate** — there is no CI bot. The HA Supervisor pulls `{image}:{version}` (the `version:` field *is* the Docker tag) and decides "update available" by a version-string compare, so advancing the edge `version:` to a new value surfaces an in-place Update on the soak Pi. To cut one:
 
