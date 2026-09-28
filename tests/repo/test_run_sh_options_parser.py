@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
-import yaml
 
 from mammamiradio.core import config as config_module
 from mammamiradio.core.config import (
@@ -584,6 +583,9 @@ def test_no_test_hardcodes_the_live_edge_version():
 def test_addon_versions_parse_as_yaml_strings():
     # Supervisor reads the add-on version as a string. An unquoted all-digit
     # short SHA parses as an integer, and a leading zero turns it into octal.
+    # PyYAML comes from requirements.txt; importing it here keeps the other
+    # tests in this module collectable when a local venv lacks it.
+    yaml = pytest.importorskip("yaml")
     for config in (STABLE_CONFIG, EDGE_CONFIG):
         version = yaml.safe_load(config.read_text(encoding="utf-8"))["version"]
         assert isinstance(version, str), f"{config.relative_to(REPO_ROOT)}: quote the version value"
