@@ -51,13 +51,13 @@ account, no central service, no subscription.
 ## Playing it on your speakers
 
 The stream plays in the browser on the device you use, and through whatever
-that device outputs to. The optional [Mamma Mi Radio
-integration](https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback)
+that device outputs to. The optional
+[Mamma Mi Radio integration](https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback)
 from HACS adds the station as a media source for Home Assistant speakers.
 
 ## Everything else
 
 The Documentation tab of the **Mamma Mi Radio** app covers configuration, the
 guided first run, speaker setup, and what to do when something sounds wrong.
-It is also online as [the add-on
-documentation](https://github.com/florianhorner/mammamiradio/blob/main/ha-addon/mammamiradio/DOCS.md).
+It is also online as
+[the add-on documentation](https://github.com/florianhorner/mammamiradio/blob/main/ha-addon/mammamiradio/DOCS.md).

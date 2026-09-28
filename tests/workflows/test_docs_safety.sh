@@ -204,6 +204,99 @@ expect_default_listing_guard() {
   fi
 }
 
+# Explicit-argument mode intersects the arguments with the listing set instead
+# of applying the rule to every file handed in, so the two branches of that
+# loop need their own proof: a listing README named on the command line is
+# still held to absolute URLs, and any other doc named the same way keeps its
+# relative links. The default-scope cases above never enter that loop.
+#
+# _listing_arg_fixture <label> <file> <printf-content>
+# Builds the same safe tree as the default-scope helpers, writes the content
+# into <file>, runs the check with <file> as the only argument, and leaves the
+# exit status in LISTING_ARG_STATUS and the output in LISTING_ARG_OUTPUT.
+_listing_arg_fixture() {
+  local label=$1
+  local guarded_file=$2
+  local content=$3
+  local fixture_root="$TMP/listing-arg-$label"
+
+  mkdir -p \
+    "$fixture_root/scripts" \
+    "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
+    "$fixture_root/docs/runbooks"
+  cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
+  cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
+  cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+
+  for file in \
+    CLAUDE.md \
+    README.md \
+    CONTRIBUTING.md \
+    ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
+    ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
+    docs/architecture.md \
+    docs/conductor.md \
+    docs/festival-mode.md \
+    docs/listener-qs-train.md \
+    docs/troubleshooting.md \
+    docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
+    docs/runbooks/ha-addon.md; do
+    printf '# Safe\n' > "$fixture_root/$file"
+  done
+
+  # shellcheck disable=SC2059  # caller supplies the printf format deliberately
+  printf "$content" > "$fixture_root/$guarded_file"
+
+  LISTING_ARG_STATUS=0
+  LISTING_ARG_OUTPUT=$(bash "$fixture_root/scripts/check-docs-safety.sh" "$guarded_file" 2>&1) \
+    || LISTING_ARG_STATUS=$?
+}
+
+# expect_listing_arg_rejects <label> <file> <printf-content> <expected-message>
+expect_listing_arg_rejects() {
+  local label=$1
+  local guarded_file=$2
+  local content=$3
+  local expected=$4
+
+  _listing_arg_fixture "$label" "$guarded_file" "$content"
+  if [ "$LISTING_ARG_STATUS" -eq 0 ]; then
+    echo "FAIL: explicit-argument listing check let $guarded_file through ($label)"
+    exit 1
+  fi
+  # The checker reports the path as it resolves it, without a ./ prefix.
+  if ! grep -Fq "${guarded_file#./}" <<< "$LISTING_ARG_OUTPUT" || ! grep -Fq "$expected" <<< "$LISTING_ARG_OUTPUT"; then
+    echo "FAIL: explicit-argument listing check returned the wrong failure for $guarded_file ($label)"
+    echo "$LISTING_ARG_OUTPUT"
+    exit 1
+  fi
+}
+
+# expect_listing_arg_accepts <label> <file> <printf-content>
+expect_listing_arg_accepts() {
+  local label=$1
+  local guarded_file=$2
+  local content=$3
+
+  _listing_arg_fixture "$label" "$guarded_file" "$content"
+  if [ "$LISTING_ARG_STATUS" -ne 0 ]; then
+    echo "FAIL: explicit-argument check unexpectedly rejected $guarded_file ($label)"
+    echo "$LISTING_ARG_OUTPUT"
+    exit 1
+  fi
+  if grep -Fq "relative link in a store listing" <<< "$LISTING_ARG_OUTPUT"; then
+    echo "FAIL: listing rule leaked into $guarded_file ($label)"
+    echo "$LISTING_ARG_OUTPUT"
+    exit 1
+  fi
+}
+
 expect_default_persistence_guard() {
   local label=$1
   local guarded_file=$2
@@ -427,6 +520,45 @@ expect_default_listing_guard "relative-link-stable" "ha-addon/mammamiradio/READM
   "relative link in a store listing"
 expect_default_listing_guard "relative-link-edge" "ha-addon/mammamiradio-edge/README.md" \
   '# Listing\n\n![Shot](../../docs/screenshots/listener.png)\n' \
+  "relative link in a store listing"
+
+# The same rule when the listing README is named on the command line, which is
+# how a pre-commit run or a test hands files in: the explicit-argument branch
+# intersects the arguments with the listing set instead of skipping the check.
+expect_listing_arg_rejects "explicit-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Guide](../../docs/architecture.md)\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "explicit-edge-image" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n![Shot](../../docs/screenshots/listener.png)\n' \
+  "relative link in a store listing"
+# ...and the other half of that intersection: a doc that is not a listing keeps
+# its relative links even when it is the only argument.
+expect_listing_arg_accepts "explicit-non-listing" "docs/troubleshooting.md" \
+  '# Guide\n\n[Operations](operations.md)\n'
+# A bare fragment needs no base to resolve, and an absolute URL is what the rule
+# asks for, so neither may be reported.
+expect_listing_arg_accepts "fragment-and-absolute" "ha-addon/mammamiradio/README.md" \
+  '# Top\n\n[Back](#top)\n\n[Docs](https://example.invalid/docs.md)\n\n![Shot](https://example.invalid/shot.png)\n'
+# A site-absolute path is not an absolute URL: Home Assistant would serve it
+# from its own host. Same for a protocol-relative one.
+expect_listing_arg_rejects "root-absolute" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n![Shot](/docs/screenshots/listener.png)\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "protocol-relative" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n[Docs](//github.com/florianhorner/mammamiradio)\n' \
+  "relative link in a store listing"
+# The frontend keeps raw HTML, so href/src attributes are held to the same rule.
+expect_listing_arg_rejects "html-img-src" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n<img src="../../docs/screenshots/listener.png" alt="Shot">\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "html-a-href" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n<a href="../mammamiradio/DOCS.md">Docs</a>\n' \
+  "relative link in a store listing"
+expect_listing_arg_accepts "html-absolute" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n<a href="https://example.invalid/docs.md">Docs</a> <img src="https://example.invalid/shot.png">\n'
+# A ./-prefixed argument names the same listing file.
+expect_listing_arg_rejects "dot-slash-argument" "./ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Guide](../../docs/architecture.md)\n' \
   "relative link in a store listing"
 
 expect_default_persistence_guard "claude" "CLAUDE.md"

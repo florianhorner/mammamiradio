@@ -1264,8 +1264,10 @@ else
     # The two listings read the same except for the Edge warning, which sits
     # above the shared marker. Same reasoning as the artwork: nothing copies
     # these files, so the equivalence only holds if something checks it.
-    STABLE_BODY=$(sed -n '/<!-- shared-listing-body/,$p' ha-addon/mammamiradio/README.md)
-    EDGE_BODY=$(sed -n '/<!-- shared-listing-body/,$p' ha-addon/mammamiradio-edge/README.md)
+    # A missing README already failed above; `sed` on it must not trip errexit
+    # and skip every check after this one.
+    STABLE_BODY=$(sed -n '/<!-- shared-listing-body/,$p' ha-addon/mammamiradio/README.md 2>/dev/null || true)
+    EDGE_BODY=$(sed -n '/<!-- shared-listing-body/,$p' ha-addon/mammamiradio-edge/README.md 2>/dev/null || true)
     if [ -z "$STABLE_BODY" ] || [ -z "$EDGE_BODY" ]; then
         fail "both listing READMEs need the <!-- shared-listing-body --> marker"
     elif [ "$STABLE_BODY" = "$EDGE_BODY" ]; then

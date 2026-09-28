@@ -757,20 +757,37 @@ def relative_link_issues(path: Path, text: str) -> list[Issue]:
     return issues
 
 
+_LISTING_SCHEMES = frozenset({"http", "https", "mailto"})
+_HTML_TARGET_RE = re.compile(r"""\b(?:href|src)\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+
+
+def _listing_target_ok(target: str) -> bool:
+    """Only a fully qualified URL resolves inside the Home Assistant frontend.
+
+    A bare ``#fragment`` needs no base. Everything else, including a
+    site-absolute ``/docs/x.png`` (which Home Assistant would serve from its own
+    host) and a protocol-relative ``//host/x``, is reported.
+    """
+    return not target or target.startswith("#") or urlsplit(target).scheme in _LISTING_SCHEMES
+
+
 def listing_link_issues(path: Path, text: str) -> list[Issue]:
-    """Flag repo-relative links and images in an app's store listing.
+    """Flag links and images in an app's store listing that are not full URLs.
 
     Supervisor renders the per-app README inside the Home Assistant frontend,
     which has no repo-relative base, so ``../../docs/x.md`` resolves to nothing
     and an image silently shows as broken. Only absolute URLs survive the trip.
-    A bare ``#fragment`` is left alone: it needs no base to resolve.
+    Raw HTML ``href``/``src`` attributes are held to the same rule, because the
+    frontend keeps ``<img>`` tags.
     """
     issues: list[Issue] = []
     links, _ = markdown_links(text)
+    seen: set[tuple[int, str]] = set()
     for link in links:
         target = html.unescape(link.target.strip())
-        if not target or target.startswith("#") or _is_external(target):
+        if _listing_target_ok(target):
             continue
+        seen.add((link.line, target))
         issues.append(
             Issue(
                 path,
@@ -779,6 +796,19 @@ def listing_link_issues(path: Path, text: str) -> list[Issue]:
                 f"Home Assistant cannot resolve this, use an absolute URL: {target}",
             )
         )
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        for match in _HTML_TARGET_RE.finditer(line):
+            target = html.unescape(match.group(1).strip())
+            if _listing_target_ok(target) or (line_no, target) in seen:
+                continue
+            issues.append(
+                Issue(
+                    path,
+                    line_no,
+                    "relative link in a store listing",
+                    f"Home Assistant cannot resolve this, use an absolute URL: {target}",
+                )
+            )
     return issues
 
 

@@ -103,7 +103,7 @@ if [ "$#" -gt 0 ]; then
   LISTING_FILES=()
   for ARG in "$@"; do
     for KNOWN in "${DEFAULT_LISTING_FILES[@]}"; do
-      if [ "$ARG" = "$KNOWN" ]; then
+      if [ "${ARG#./}" = "$KNOWN" ]; then
         LISTING_FILES+=("$ARG")
       fi
     done

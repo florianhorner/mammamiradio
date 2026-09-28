@@ -369,7 +369,7 @@ The Apps page is drawn from files in the app folder, not from the repo root and 
 | The longer intro body on the app's page | `README.md` **in the app folder** |
 | Documentation tab | `DOCS.md` |
 | Changelog link | `CHANGELOG.md` |
-| Square catalog icon / header logo | `icon.png` (1:1, 128px recommended) / `logo.png` |
+| Square catalog icon / header logo | `icon.png` (1:1, shipped at 256px) / `logo.png` (shipped at 512px); nothing checks the dimensions |
 | Experimental badge | `stage:` |
 | Sidebar entry and its icon | `ingress` + `panel_title` / `panel_icon` (defaults to `mdi:puzzle`; we set `mdi:radio`) |
 

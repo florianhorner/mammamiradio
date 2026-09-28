@@ -1,5 +1,5 @@
 name: Mamma Mi Radio
-description: Marco and Giulia host a late-night Italian radio show from your Home Assistant. It plays out of the box from a credited offline music collection and prerecorded breaks, writes live breaks once you add an AI key, and mentions your home only after you opt in. Optional Jamendo expansion, no account, no subscription.
+description: Marco and Giulia host a late-night Italian radio show from your Home Assistant. It plays out of the box from a credited offline music collection, writes live breaks with your AI key, and mentions your home only after you opt in. Optional Jamendo expansion, no subscription.
 slug: mammamiradio
 version: 2.18.0
 stage: stable
