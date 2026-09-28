@@ -49,7 +49,14 @@ cp .env.example .env
 
 Install developer tools first, then the hash-locked runtime dependencies. Installing the application with `--no-deps` preserves those versions; `pip check` verifies its declared requirements. Quality CI and both container builds use the same runtime lock. The dependency tests also verify the requested runtime extras against installed package metadata.
 
-For a targeted runtime update, use Python 3.11 and `pip-compile --generate-hashes --output-file=requirements.txt --strip-extras --upgrade-package PACKAGE==VERSION pyproject.toml`. Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
+For a targeted runtime update, activate a Python 3.11 environment and install the pinned lock-generation tool first. Replace `PACKAGE==VERSION` with the dependency and version you intend to update:
+
+```bash
+python -m pip install pip-tools==7.6.1
+python -m piptools compile --generate-hashes --output-file=requirements.txt --strip-extras --upgrade-package PACKAGE==VERSION pyproject.toml
+```
+
+Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
 
 If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 

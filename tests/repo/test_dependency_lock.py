@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.metadata
+import subprocess
 import tomllib
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -105,6 +107,66 @@ def test_images_install_hashed_runtime_before_source(dockerfile: str) -> None:
     source = (ROOT / dockerfile).read_text()
     assert "COPY requirements.txt " in source
     _assert_locked_install_order(source.replace("pip3", "pip"), development=False)
+
+
+def test_standalone_image_build_runs_on_prs_for_all_image_inputs() -> None:
+    workflow = yaml.load((ROOT / ".github/workflows/docker.yml").read_text(), Loader=yaml.BaseLoader)
+    paths = workflow["on"]["pull_request"]["paths"]
+    for source in (
+        ".github/workflows/docker.yml",
+        "Dockerfile",
+        ".dockerignore",
+        "requirements.txt",
+        "pyproject.toml",
+        "mammamiradio/main.py",
+        "mammamiradio/assets/example.mp3",
+        "radio.toml",
+        "model_registry.toml",
+        "scripts/docker-entrypoint.sh",
+    ):
+        assert any(fnmatchcase(source, pattern) for pattern in paths), f"No PR image build for {source}"
+
+
+def test_standalone_image_pr_build_has_no_publication_permissions() -> None:
+    workflow = yaml.load((ROOT / ".github/workflows/docker.yml").read_text(), Loader=yaml.BaseLoader)
+    smoke = workflow["jobs"]["standalone-smoke"]
+    release = workflow["jobs"]["build-and-push"]
+    assert smoke["if"] == "github.event_name == 'pull_request'"
+    assert release["if"] == "github.event_name != 'pull_request'"
+    assert workflow["on"]["push"]["tags"] == ["v*"]
+    assert "workflow_dispatch" in workflow["on"]
+    assert "pull_request_target" not in workflow["on"]
+    assert smoke["permissions"] == {"contents": "read"}
+    checkout = next(step for step in smoke["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] == "false"
+    assert "secrets." not in str(smoke)
+    assert "login-action" not in str(smoke)
+
+
+@pytest.mark.parametrize("failed_command", ["", "build", "run"], ids=["success", "build-failure", "check-failure"])
+def test_standalone_image_pr_smoke_propagates_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_command: str
+) -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/docker.yml").read_text())
+    script = next(step["run"] for step in workflow["jobs"]["standalone-smoke"]["steps"] if "run" in step)
+    calls = tmp_path / "docker-calls"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_TEST_CALLS"\n'
+        'if [ "$1" = "$DOCKER_TEST_FAIL" ]; then exit 42; fi\nexit 0\n'
+    )
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("DOCKER_TEST_CALLS", str(calls))
+    monkeypatch.setenv("DOCKER_TEST_FAIL", failed_command)
+    result = subprocess.run(
+        ["/bin/bash", "-e", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    expected = ["build --platform linux/amd64 --tag mammamiradio:pr-smoke ."]
+    if failed_command != "build":
+        expected.append("run --rm --network none --entrypoint python mammamiradio:pr-smoke -m pip check")
+    assert calls.read_text().splitlines() == expected
+    assert result.returncode == (42 if failed_command else 0), result.stderr
 
 
 def test_addon_build_contexts_stage_the_canonical_runtime_lock() -> None:
