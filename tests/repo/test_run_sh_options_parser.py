@@ -547,9 +547,10 @@ def test_parser_omits_an_empty_music_folder():
 
 
 def test_music_folder_option_copy_matches_on_both_channels():
-    for config, version in ((STABLE_CONFIG, "2.18.0"), (EDGE_CONFIG, "a3bcb37")):
+    # Release versions are deliberately not asserted here: every Edge cut and
+    # stable release changes them, and validate-addon.sh checks their format.
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
         text = config.read_text(encoding="utf-8")
-        assert f"version: {version}\n" in text
         assert "\n  - media:rw\n" in text
         assert "\n  music_folder: mammamiradio\n" in text
         assert "\n  music_folder: str?\n" in text
@@ -560,6 +561,34 @@ def test_music_folder_option_copy_matches_on_both_channels():
     ):
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert f"\n  music_folder:\n    name: Music folder\n    {description}\n" in text
+
+
+def test_no_test_hardcodes_the_live_edge_version():
+    # An Edge cut changes only the Edge version line. A test that pins the
+    # current value fails every cut, so no Python or shell test may contain it.
+    match = re.search(r"^version: (\S+)$", EDGE_CONFIG.read_text(encoding="utf-8"), re.MULTILINE)
+    assert match is not None
+    pinned = match.group(1).strip("'\"")
+    # Whole tokens only: an all-digit short SHA must not match inside a longer number.
+    literal = re.compile(rf"(?<![0-9A-Za-z]){re.escape(pinned)}(?![0-9A-Za-z])")
+    offenders = [
+        str(path.relative_to(REPO_ROOT))
+        for suffix in ("*.py", "*.sh")
+        for path in sorted((REPO_ROOT / "tests").rglob(suffix))
+        if literal.search(path.read_text(encoding="utf-8", errors="ignore"))
+    ]
+    assert offenders == [], f"tests hardcode the live Edge version {pinned}: {offenders}"
+
+
+def test_addon_versions_parse_as_yaml_strings():
+    # Supervisor reads the add-on version as a string. An unquoted all-digit
+    # short SHA parses as an integer, and a leading zero turns it into octal.
+    # PyYAML comes from requirements.txt; importing it here keeps the other
+    # tests in this module collectable when a local venv lacks it.
+    yaml = pytest.importorskip("yaml")
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
+        version = yaml.safe_load(config.read_text(encoding="utf-8"))["version"]
+        assert isinstance(version, str), f"{config.relative_to(REPO_ROOT)}: quote the version value"
 
 
 def test_parser_exports_anthropic_api_key():

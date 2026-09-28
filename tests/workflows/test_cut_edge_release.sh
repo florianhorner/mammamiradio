@@ -315,7 +315,8 @@ run_cut() {
       GIT_MOCK_TOPLEVEL="$REPO_ROOT" GIT_MOCK_MAIN_SHORT="$MAIN_SHORT" \
       GIT_MOCK_REVLIST="$REVLIST" \
       "$@" "$BASH_BIN" "$SCRIPT" ${CUT_ARGS[@]+"${CUT_ARGS[@]}"} 2>&1)" || RUN_RC=$?
-  WROTE_VERSION="$(grep '^version:' "$EDGE_CONFIG" | awk '{print $2}')"
+  WROTE_LINE="$(grep '^version:' "$EDGE_CONFIG")"
+  WROTE_VERSION="$(printf '%s\n' "$WROTE_LINE" | awk '{print $2}' | tr -d '"')"
   cp "$EDGE_ORIG" "$EDGE_CONFIG"
   CUT_ARGS=()
 }
@@ -334,6 +335,7 @@ run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
 [ "$RUN_RC" -eq 0 ]                  || fail "happy path should exit 0 (got $RUN_RC): $RUN_OUT"
 created_pr                           || fail "happy path should open a PR"
 [ "$WROTE_VERSION" = "$MAIN_SHORT" ] || fail "happy path should write version: $MAIN_SHORT (got $WROTE_VERSION)"
+[ "$WROTE_LINE" = "version: \"$MAIN_SHORT\"" ] || fail "happy path should write a quoted version so an all-digit SHA stays a string (got $WROTE_LINE)"
 grep -q "cut edge release $MAIN_SHORT" "$GIT_MOCK_LOG" || fail "commit message should pin $MAIN_SHORT"
 grep -q "edge-release/$MAIN_SHORT" "$GIT_MOCK_LOG"     || fail "should branch on $MAIN_SHORT"
 validator_called_for "$MAIN_SHORT"                    || fail "happy path should validate release beat for $MAIN_SHORT"
