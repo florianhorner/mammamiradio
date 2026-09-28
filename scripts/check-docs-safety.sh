@@ -101,10 +101,19 @@ if [ "$#" -gt 0 ]; then
   # Supervisor. An explicit file list is intersected with them rather than
   # subjected wholesale, because every other doc may use relative links freely.
   LISTING_FILES=()
+  REPO_ROOT_PHYS="$(cd "$REPO_ROOT" && pwd -P)"
   for ARG in "$@"; do
+    # Compare physical paths so ./, //, or an absolute spelling of a listing
+    # file still reaches the listing rule; fall back to the literal string
+    # when the file does not exist (the missing-file report covers it).
+    ARG_PHYS=""
+    if [ -f "$ARG" ]; then
+      ARG_PHYS="$(cd "$(dirname "$ARG")" && pwd -P)/$(basename "$ARG")"
+    fi
     for KNOWN in "${DEFAULT_LISTING_FILES[@]}"; do
-      if [ "${ARG#./}" = "$KNOWN" ]; then
+      if [ "${ARG#./}" = "$KNOWN" ] || { [ -n "$ARG_PHYS" ] && [ "$ARG_PHYS" = "$REPO_ROOT_PHYS/$KNOWN" ]; }; then
         LISTING_FILES+=("$ARG")
+        break
       fi
     done
   done

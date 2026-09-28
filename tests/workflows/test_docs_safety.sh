@@ -560,6 +560,24 @@ expect_listing_arg_accepts "html-absolute" "ha-addon/mammamiradio/README.md" \
 expect_listing_arg_rejects "dot-slash-argument" "./ha-addon/mammamiradio/README.md" \
   '# Listing\n\n[Guide](../../docs/architecture.md)\n' \
   "relative link in a store listing"
+# Prose wraps. A link whose text breaks across lines, or a reference
+# definition whose destination sits on the next line, must still be seen.
+expect_listing_arg_rejects "wrapped-link" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\nRead [the add-on\ndocumentation](../../docs/x.md) first.\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "reference-next-line" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\nSee [the docs][ref].\n\n[ref]:\n../../docs/x.md\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "html-unquoted-srcset" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n<img src=https://example.invalid/a.png srcset="https://example.invalid/a.png 1x, ../b.png 2x">\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "scheme-without-host" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Docs](http:../../docs/x.md)\n' \
+  "relative link in a store listing"
+# Example markup inside a code fence is documentation, not a link.
+# shellcheck disable=SC2016  # the backticks are literal fence markers
+expect_listing_arg_accepts "fenced-example" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n```html\n<img src="../local.png">\n```\n\nSee [docs](https://example.invalid/docs.md).\n'
 
 expect_default_persistence_guard "claude" "CLAUDE.md"
 expect_default_persistence_guard "addon-readme" "ha-addon/README.md"

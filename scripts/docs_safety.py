@@ -758,7 +758,10 @@ def relative_link_issues(path: Path, text: str) -> list[Issue]:
 
 
 _LISTING_SCHEMES = frozenset({"http", "https", "mailto"})
-_HTML_TARGET_RE = re.compile(r"""\b(?:href|src)\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+_HTML_TARGET_RE = re.compile(
+    r"""\b(?:href|src|srcset|poster|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""",
+    re.IGNORECASE,
+)
 
 
 def _listing_target_ok(target: str) -> bool:
@@ -766,9 +769,76 @@ def _listing_target_ok(target: str) -> bool:
 
     A bare ``#fragment`` needs no base. Everything else, including a
     site-absolute ``/docs/x.png`` (which Home Assistant would serve from its own
-    host) and a protocol-relative ``//host/x``, is reported.
+    host), a protocol-relative ``//host/x`` and a host-less ``http:x``, is
+    reported.
     """
-    return not target or target.startswith("#") or urlsplit(target).scheme in _LISTING_SCHEMES
+    if not target or target.startswith("#"):
+        return True
+    parsed = urlsplit(target)
+    if parsed.scheme == "mailto":
+        return True
+    return parsed.scheme in _LISTING_SCHEMES and bool(parsed.netloc)
+
+
+def _listing_paragraphs(text: str) -> list[tuple[int, str]]:
+    """Join each paragraph outside a code fence into one line.
+
+    The Markdown scanners in this module work line by line, so a link whose
+    text wraps onto the next line, or a reference definition whose destination
+    sits on the line after the label, is invisible to them. A store listing is
+    short prose where wrapping is routine, so the listing rule reads it one
+    paragraph at a time instead. Each entry is ``(first line number, text)``.
+    """
+    paragraphs: list[tuple[int, str]] = []
+    current: list[str] = []
+    current_start = 0
+    in_fence = False
+    fence_marker = ""
+    fence_length = 0
+
+    def flush() -> None:
+        if current:
+            paragraphs.append((current_start, " ".join(part.strip() for part in current)))
+            current.clear()
+
+    for line_number, line in enumerate(text.splitlines(), 1):
+        stripped = line.lstrip()
+        fence = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence:
+            marker = fence.group(1)[0]
+            length = len(fence.group(1))
+            if not in_fence:
+                flush()
+                in_fence = True
+                fence_marker = marker
+                fence_length = length
+            elif marker == fence_marker and length >= fence_length:
+                in_fence = False
+            continue
+        if in_fence:
+            continue
+        if not stripped:
+            flush()
+            continue
+        if not current:
+            current_start = line_number
+        current.append(line)
+    flush()
+    return paragraphs
+
+
+def _listing_targets(paragraph: str) -> list[str]:
+    targets: list[str] = []
+    links, _ = markdown_links(paragraph)
+    targets.extend(link.target for link in links)
+    for match in _HTML_TARGET_RE.finditer(paragraph):
+        value = next(group for group in match.groups() if group is not None)
+        # srcset lists "url descriptor, url descriptor"; every URL counts.
+        for candidate in value.split(","):
+            first = candidate.strip().split()
+            if first:
+                targets.append(first[0])
+    return targets
 
 
 def listing_link_issues(path: Path, text: str) -> list[Issue]:
@@ -777,34 +847,20 @@ def listing_link_issues(path: Path, text: str) -> list[Issue]:
     Supervisor renders the per-app README inside the Home Assistant frontend,
     which has no repo-relative base, so ``../../docs/x.md`` resolves to nothing
     and an image silently shows as broken. Only absolute URLs survive the trip.
-    Raw HTML ``href``/``src`` attributes are held to the same rule, because the
-    frontend keeps ``<img>`` tags.
+    Raw HTML ``href``/``src``-style attributes are held to the same rule,
+    because the frontend keeps ``<img>`` tags. Paragraphs are joined first so a
+    wrapped link cannot hide from the check.
     """
     issues: list[Issue] = []
-    links, _ = markdown_links(text)
-    seen: set[tuple[int, str]] = set()
-    for link in links:
-        target = html.unescape(link.target.strip())
-        if _listing_target_ok(target):
-            continue
-        seen.add((link.line, target))
-        issues.append(
-            Issue(
-                path,
-                link.line,
-                "relative link in a store listing",
-                f"Home Assistant cannot resolve this, use an absolute URL: {target}",
-            )
-        )
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        for match in _HTML_TARGET_RE.finditer(line):
-            target = html.unescape(match.group(1).strip())
-            if _listing_target_ok(target) or (line_no, target) in seen:
+    for line_number, paragraph in _listing_paragraphs(text):
+        for raw_target in _listing_targets(paragraph):
+            target = html.unescape(raw_target.strip())
+            if _listing_target_ok(target):
                 continue
             issues.append(
                 Issue(
                     path,
-                    line_no,
+                    line_number,
                     "relative link in a store listing",
                     f"Home Assistant cannot resolve this, use an absolute URL: {target}",
                 )

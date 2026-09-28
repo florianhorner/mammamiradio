@@ -180,7 +180,10 @@ assert_rejects "options drift" "edge options block drifted"
 
 stage_file "ha-addon/mammamiradio/README.md"
 rm -f "ha-addon/mammamiradio/README.md"
-assert_rejects "stable README.md missing" "Missing: ha-addon/mammamiradio/README.md"
+# The marker check after it must still run: a missing file used to trip
+# errexit inside the sed substitution and end the run early.
+assert_rejects "stable README.md missing" "Missing: ha-addon/mammamiradio/README.md" \
+  "both listing READMEs need the <!-- shared-listing-body --> marker" "edge host_network: true"
 
 stage_file "ha-addon/mammamiradio-edge/README.md"
 rm -f "ha-addon/mammamiradio-edge/README.md"
