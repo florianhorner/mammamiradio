@@ -801,7 +801,12 @@ def _listing_paragraphs(text: str) -> list[tuple[int, str]]:
             paragraphs.append((current_start, " ".join(part.strip() for part in current)))
             current.clear()
 
-    for line_number, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line_number = index + 1
+        line = lines[index]
+        index += 1
         stripped = line.lstrip()
         fence = re.match(r"(`{3,}|~{3,})", stripped)
         if fence:
@@ -820,6 +825,18 @@ def _listing_paragraphs(text: str) -> list[tuple[int, str]]:
         if not stripped:
             flush()
             continue
+        definition = _REFERENCE_DEFINITION.match(line)
+        if definition:
+            # A reference definition is a line-anchored construct, so each one
+            # is its own paragraph; only an empty destination pulls in the next
+            # line, which CommonMark allows.
+            flush()
+            if not definition.group(2).strip() and index < len(lines) and lines[index].strip():
+                paragraphs.append((line_number, f"{line.strip()} {lines[index].strip()}"))
+                index += 1
+            else:
+                paragraphs.append((line_number, line))
+            continue
         if not current:
             current_start = line_number
         current.append(line)
@@ -827,11 +844,15 @@ def _listing_paragraphs(text: str) -> list[tuple[int, str]]:
     return paragraphs
 
 
+_CODE_SPAN_RE = re.compile(r"`+[^`]*`+")
+
+
 def _listing_targets(paragraph: str) -> list[str]:
     targets: list[str] = []
     links, _ = markdown_links(paragraph)
     targets.extend(link.target for link in links)
-    for match in _HTML_TARGET_RE.finditer(paragraph):
+    # `data = 5` inside a code span is prose about code, not an attribute.
+    for match in _HTML_TARGET_RE.finditer(_CODE_SPAN_RE.sub(" ", paragraph)):
         value = next(group for group in match.groups() if group is not None)
         # srcset lists "url descriptor, url descriptor"; every URL counts.
         for candidate in value.split(","):
