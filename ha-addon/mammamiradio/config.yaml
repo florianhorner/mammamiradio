@@ -1,7 +1,7 @@
 name: Mamma Mi Radio
 description: Marco and Giulia host a late-night Italian radio show from your Home Assistant. Credited offline music collection, optional Jamendo, no subscription.
 slug: mammamiradio
-version: 2.18.0
+version: 3.0.0
 stage: stable
 url: https://github.com/florianhorner/mammamiradio
 image: ghcr.io/florianhorner/mammamiradio-addon-{arch}

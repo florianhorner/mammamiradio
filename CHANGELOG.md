@@ -6,54 +6,99 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-- **The hosts move to the Claude 5 generation.** Opus 5 and Sonnet 5 write the show, the cost counter uses current prices, and the balanced profile's Claude hosts cost less than before.
-- **First Listen opens in English.** The Admin station opening uses recorded Marco/Giulia voices; ordinary listener playback keeps its existing Italian opening. Maintainers can regenerate just the welcome or Admin opening, with retained-pack checks before synthesis and staged publication with rollback.
+## [3.0.0] - 2026-09-29
 
-- **The top strip in the control room no longer stamps a box across the page.** The live console and its tabs sit in a strip that stays at the top while you scroll, and that strip painted a solid panel behind itself at all times. The page's warm glow is at its warmest exactly there, so the panel read as a hard-edged rectangle across the top of the screen. The strip is now clear while the page is sitting still, and fills in only once it is actually holding its place with content sliding underneath it, which is the moment the fill is doing something. Tabbing into a panel you have scrolled also stops putting the control you jumped to underneath the strip.
-- **Security: the optional music-download helper now requires a patched version.** The standalone `external-media` extra accepted a version of the `yt-dlp` helper carrying a known flaw (CVE-2026-55404). The flaw needs that helper to be asked for shortcut files, and someone to then open one. The station never asks for those: it requests audio and nothing else, so its own downloads were not a way in. The helper is still yours once installed, and you may run it yourself, so fresh installs now refuse anything below the fixed release. Home Assistant add-on users were never affected either way, because the add-on does not ship this helper and its build refuses to finish if the helper is present. If you already installed the extra on a standalone setup, reinstall it to pick up the fixed version: a floor only applies while something is being installed, never to a copy already sitting on your machine.
-- **Opening music source setup no longer leaves the station playing to nobody.** Stepping out of First Listen into the music source tools swapped the screen but left the hidden player running underneath, so the station kept a listener it could not show you and the sound carried on with no way to stop it. That exit now releases the player like every other way out of First Listen does. A host example playing at that moment stops with it, instead of restarting for an instant on the way out.
-- **Your own music stops waiting behind the whole starter bag.** When your files and the bundled starter songs share a playlist, the station used to play the starter bag in order and only reach your music once it was exhausted. Both are now picked together, with your own songs weighted twice as heavily, so how often you hear them grows with how many you have added. A playlist of starter songs alone still plays its bag in order without early repeats, and the recovery that fills an empty queue still reaches for a starter song, so fixing the mix cannot cost you a bundled track when the station needs one.
-- **A file that points back at itself no longer stops a tidy-up.** Before the station removes a working file it checks that the file really is its own. That check could stop with an error instead of an answer when a file pointed back at itself, and it did so while the station was clearing scratch audio between segments and while it was deciding which recordings to keep for a smooth restart. It now answers plainly, and leaves alone anything it cannot account for. On the standalone container image the same check had quietly stopped noticing such files at all, so a stray one could be mistaken for part of the station's own packaged audio.
-- **A page file the station cannot find is reported as missing.** Asking for a station page file that cannot be found is now answered as not found. It previously failed outright and wrote a long technical trace into the add-on log, which told an operator nothing they could act on. Nothing to do differently; troubleshooting says what to check if part of a page really is missing.
-- Operators now see **Mamma Mi Radio** in the First Listen recovery step when Home Assistant cannot find the Live source.
-- **You can now keep a moment before it disappears.** Everything the station recorded was on a timer. A shared clip was deleted after a day, and the written record of what was said after two weeks, so anything the hosts did that was worth hearing twice was gone before you could come back to it. The control room now has a **Keep this** button. Press it while the hosts are talking, or in the seconds after a break ends and the music comes back, and it is saved for good with a link you can share. A song cannot be kept, and neither can a break that opens over the end of one: those recordings belong to whoever made them. A kept link never expires, and Archivio lists everything you have kept so you can take one back off the shelf.
+### Meet your station before setting it up
 
-- **The Jamendo row says what is wrong instead of counting failures.** The card used to read "Preparing one Jamendo track" with a running total of skipped songs and no reason, so a provider failing every attempt looked identical to one about to succeed. The count is gone. The row now states, in plain language, what went wrong and whether you need to do anything — while it is trying, between retries, and when it gives up. Two reasons carry a real fix: a client ID Jamendo will not accept, and a working folder the station cannot use. Everything else says plainly that no action is needed. Status words on the card are written for people rather than machines, and a song that prepares correctly no longer carries the reason an earlier one was skipped.
-- **Jamendo failures reach you with the right reason.** Several reasons the station reports most often were being rewritten to a generic "no response" before reaching the screen, including a rejected client ID, which was shown as a network problem and told you to wait instead of to check the ID. Every reason the station can report now has its own wording, reaches the screen it belongs on, and is read out to screen readers when it changes. A test keeps the list from drifting again.
-- **Clear pool no longer looks broken.** Clearing the rotation pool never deleted your own music files, and the station reloads them within moments, so songs appeared to come back on their own. The button and its confirmation now say that plainly and point at what to do instead. Ban a song to keep it out for good, or remove the file from the music folder.
+Press **Start my station** and Marco and Giulia welcome you in English, then
+hand over to the live show. You can hear whether this is your kind of radio
+before adding an AI key or inviting Home Assistant into the conversation.
+If you cannot hear it, First Listen helps you get sound working. Once you are
+through, it gives you the control room back.
 
-- **Jamendo keeps a discovered track when only its links change.** After the connection fix, Edge still never reached a ready lease. Discovery found tracks, but exact-ID revalidation compared the whole candidate, including private audio URLs and share-page paths that Jamendo rewrites between list and ID lookups, so it rejected every row. Revalidation now compares track ID, title, artist, license, and duration. The ID lookup omits discovery license filters, while the exact payload still goes through license checks. The provider uses the latest stream and share URLs. Starter and local music continue when Jamendo is unavailable.
+The show arrives with its own records and its own stories: twelve credited
+tracks, about 47 minutes of offline music, and 21 recorded host breaks.
+The fictional sponsors turn up without an AI key too, with eleven finished
+ads across English and Italian. The Modern Night Drive station sounds tie
+music and talk together. Other stock speech can still use online Edge voices.
 
-- **Jamendo connects again and now logs failed attempts.** The Edge provider joined two metadata fields with a comma. Jamendo returned HTTP 200 but rejected the fields in the response body. Discovery and exact-track checks now request only the license data the station uses. Invalid requests and account errors stop further attempts; rate limits use the existing retry schedule. Operators can see whether Jamendo is preparing, ready, retrying, or blocked without exposing client IDs, private audio URLs, or provider response text. Starter and local music continue when Jamendo is unavailable.
-- **Changing the music source no longer skips the songs it kept.** Loading a new source keeps a little audio from the old one so the station never falls silent, and keeps the exact song a host has just promised a listener. Those kept songs were then refused at the moment they should have played, one after another: the announcement aired and the song did not follow, and on a station with nothing else ready the skipping reached for emergency audio. Kept songs now play, whether you switch sources, use Clear pool, or refill an empty music folder mid-show.
-- **A request the station has finished with says so.** When the page could no longer follow a request, it told every listener their message was still with the hosts and invited them to send it again. For a request that had already been read on air, that produced a second copy of a song they had just heard. The page now tells those two situations apart, and only suggests resending if you did not hear it.
-- **Song requests now stay with the artist you named.** Open-ended requests no longer cue an unrelated search result: matches are checked against the requested artist or song, and titles are cleaned of video-site clutter. The listener page follows the request while it searches, then shows the verified match or a clear next step when the station cannot find or prepare it. It stops watching after ten minutes instead of checking forever, eases off when the station is unreachable, and hands the form back with an honest note — the request itself stays with the hosts.
-- **An empty music crate no longer loops the station ident every second.** With no starter tracks, no local MP3s, and Jamendo waiting for two songs that cannot exist, Home Assistant Green kept rebuilding its four-second send-ahead cushion by bursting `continuity_1.mp3` from the first syllable. The recovery clip now follows the same send timeline as any other segment, operator files in the music folder are picked up while the crate is empty, and Jamendo can start when there is no base rotation to wait for.
+The Home Assistant store now introduces Marco and Giulia, explains what plays
+without a key and points you to setup help before you install.
 
-- **A steered stretch stops replaying the same few songs.** Point the station somewhere with Record Hunt and it favours what it found, for as long as you leave the course set. When the hunt only resolved a handful of tracks, that favouring kept landing on the same ones, and a song could come back within half an hour. A found track now waits for the rest of its set before it can play again. The course still gets the same share of the show; it works through the crate instead of reaching for the same record.
-- **Now Playing no longer credits a host who was not on the break.** External players had no way to tell who was speaking during a host break, so they listed every host the station has configured, including the rotating guest host on breaks he never joined. The live feed now names only the hosts who spoke, and names nobody on a pre-recorded clip rather than guessing.
-- **Hosts no longer invent how many people are home.** The station knows whether someone is home or away. It does not know how many people are there, or which room anyone is in. That gap could come out on air as a confident guess. The hosts are now told not to fill it in, and the experimental setting that names your home's mood follows the same rule.
-- **Setup no longer points you at an add-on you are not running.** When First Listen could not reach Home Assistant, it told you to check the add-on's Home Assistant access. On a station run outside the add-on there is no such screen, so the only offered way out led nowhere. A standalone station now names the two settings it reads, and says the radio plays without a home connection so the step can be skipped.
-- **Playing the station through Music Assistant.** Music Assistant can level the audio a second time on its way to a speaker, which flattens music the station has already levelled. Troubleshooting now explains which setting to change, and what the skip buttons do on a live radio stream.
-- **The stream now shows your tagline where players expect a genre.** The genre label a music player displays for the stream was being filled with the station's internal writing brief, the notes that tell the hosts how to sound. Those notes were never meant for anyone's screen. The label now carries the public tagline from your brand settings, and is left off entirely when no tagline is set rather than falling back to the brief.
-- **Marco and Giulia now talk you through First Listen.** Each step of the opening flow carries a short recorded example in the hosts' own voices, about twelve seconds, played only when you ask for it. Nothing waits on them: a clip is fetched at the moment you press play, and one that is slow or missing leaves the written guidance and the setup itself exactly where they were. Every clip has its transcript underneath for reading instead of listening.
-- **Every step in First Listen says where it stands.** The status labels on play-it-here, sound check, home details and AI steps were being written but never shown, so a step that needed a second look read the same as a finished one. They are visible again, and each state carries a shape as well as a colour — a check, a triangle, a cross — so the difference reads without depending on colour.
-- **A speaker pointed straight at the stream no longer stutters between segments.** The station now runs a few seconds ahead of what you hear, so the short pause while a new ad, host break, or station ID is prepared stays inside that head start instead of reaching the speaker.
-- **"Tracks in Rotation" now counts the records, not the plays.** The listener page's rotation stat showed how many songs had played this session, which is not what the label promised. It now shows how many the station actually has loaded, and says so plainly when the crate is still empty.
-- **First Listen never traps an install it cannot serve.** A station running without Home Assistant access still runs the guided path and can always reach the AI-key step, and a proven prior install upgrading into this release keeps its classification and its home behavior — only a bare or unreadable leftover database file still fails closed to the cautious path.
-- **Marco and Giulia introduce themselves.** The guided narration in First Listen never said who was talking, and a few of its lines still described Home Assistant sending the station to a speaker, which is not what happens when the station plays on the device in front of you. The hosts now open the way a radio show opens, by name, and every line matches what its step actually does.
-- **First Listen now plays on this device.** A fresh add-on install starts the station in the setup tab and asks whether you heard it. It still works with stock hosts and no AI key, repairs an unsaved listening check without replaying audio, and keeps filtered Home context behind an explicit privacy preview. Home Assistant speakers and the HACS media source remain available later; they are not required to finish setup. All origin and receipt work remains outside the instant-audio startup path.
-- **Shared moments now say only what the station can prove.** Their public page shows the duration recorded with the clip, and leaves it unsaid when older metadata cannot prove it or records a length no clip could really have. When a song cannot be shared, the listener is told that only included tracks qualify, and is asked to keep the radio playing and tap Share right after the next included track ends.
-- **The station stops giving up on Jamendo songs it has already downloaded.** Preparing a track got a flat thirty seconds regardless of how long the song was. That is generous on a laptop and not enough on a Home Assistant Green, where every attempt was abandoned about half a minute in even though the download itself had finished. Preparing now gets a budget that scales with the length of the song, and it is capped so that one long song cannot hold half the station's preparation capacity for its own length. Starter and local music continue either way.
-- **A fresh control room no longer looks broken before you touch it.** First Listen has one honest progress sentence and does not call an untouched Home details choice unsaved. Demo Radio is shown as the working included station it is, host descriptions use readable body text, and native admin controls stay dark with the rest of the control room.
+### More music can join the show
 
-### Added
+Jamendo access now comes with the app. Turn on the optional expansion and
+new songs can join your rotation without a client ID to track down. It stays
+off until you enable it and acknowledge non-commercial API use; provider
+confirmation for this station model remains pending. If a track cannot be
+prepared, the music-source card explains what happened and what to do next.
 
-- **Mamma Mi Radio now uses the approved Modern Night Drive pack.** The station ID and sweeper use Neon Relay. Velvet Horizon defines the remaining cues and beds, including Casa Notte and the nine ad scenes. Ad breaks have separate `in`, `mid`, and `out` bumpers. The pack contains 47 checksum-bound outputs, each with its own retained project-authored source. Reviewers record approval on the digest-bound listening board. The runtime manifest omits that record. Recovery audio and custom-pack fallbacks are unchanged.
-- **Music now has a rights-aware offline starter-catalog contract.** One manifest owns the twelve locked attribution-only tracks (six Incompetech under CC BY 4.0, six Jamendo under CC BY 3.0), hashes, ISRCs, source and license links, attribution, modification notices, durations, packaging facts, and evidence references. The listener gains safe current-track credits and the complete included-catalog list. Release remains intentionally blocked until all twelve normalized files, at least 45 minutes of audio, complete human-audition evidence, and the 75 MiB package limit pass the media proof gates.
-- **Jamendo is available as an explicit transient music source.** The persistent Rotazione row and **Motore → Setup → Music sources** flow require a client ID and current non-commercial-use acknowledgement. At most one track is prepared at a time, inserted only after two starter/local tracks, and deleted after play or cancellation; provider-reported attribution is shown without claiming clearance. The option stays off by default while provider confirmation is pending.
-- **External extraction is now a standalone opt-in capability.** `yt-dlp` moved to the optional `external-media` extra and is absent from both current Home Assistant add-ons; legacy enablement is ignored there. Local search remains available, external-only operations return actionable `403` responses, and listener song requests become shout-outs instead of starting downloads.
-- **Music sharing now fails closed around the eligible bundled window.** Only a complete bundled-starter window is shareable; Jamendo, local, mixed, partial, and unknown music return `403 music_share_unavailable`.
+Your own records get more room, too. Add songs through Home Assistant's Media
+folder and select **Scan now** to bring them into rotation without restarting.
+The queue shows their titles and artists. When mixed with the starter collection,
+your songs get twice the per-track weight, and a song you ban stays banned
+after a rescan.
+
+### Keep the bit that made you laugh
+
+Press **Keep this** during an eligible host exchange or fictional ad to save
+it without an expiry date. Come back to it in Archivio, share it, or remove
+it when you are done. Songs and breaks containing third-party music cannot
+be kept.
+
+### A show that feels more joined up
+
+- Hear short station sounds between songs and talk, or switch them off while
+  listening with **Transitions**. In the Home Assistant app, that choice resets
+  to the startup setting after a restart.
+- Resume has a better route back to a real song when the music cache is cold.
+  Recovery avoids duplicate bridges and repeated fragments, and Stop still
+  works while the next audio is being prepared.
+- Skip tells you whether the handoff is waiting or has started. Scaletta makes
+  sources and artists easier to read, and one button takes you between the
+  listener page and the control room.
+- You can check whether an AI service is responding instead of guessing from
+  a saved key. **Check AI connection** reports what it can establish; voice
+  fallback has its own status.
+- Ad breaks use complete generated copy or approved recordings. Fast fine
+  print stays with the brands it suits, and the hosts have more varied lines
+  to carry the show between songs.
+
+### Before upgrading from 2.18.0
+
+- The Home Assistant app no longer downloads YouTube tracks or live charts.
+  Use the included collection, your files or optional Jamendo. Requests needing
+  a download become shout-outs. Standalone users who installed `external-media`
+  should reinstall that extra to receive the updated `yt-dlp>=2026.7.4` minimum.
+- With Home Assistant Media mounted, the station reads the **Music folder**
+  there, default `mammamiradio`. Old `/data/music` songs stay where they are but
+  do not play in this mode. Copy them into the named Media folder, then select
+  **Scan now**. Include local Media in your Home Assistant backup; back up a
+  NAS library separately. Without Media mounted, `/data/music` remains the
+  normal location and stays in the app backup.
+- If you previously saved your own Jamendo client ID, startup attempts to
+  recover it into `/config/secrets.env`; an existing file-backed value wins.
+  The old configuration field is removed. Recovery does not enable Jamendo
+  or accept its terms.
+- Fresh installs keep Home context off by default. You hear the station,
+  preview the filtered details and choose whether to share. Today's guided
+  opt-in covers daylight and one unambiguous weather source. Existing settings
+  are retained when the app can establish the earlier installation state;
+  otherwise it asks you to review setup.
+- Automatic Home safety-alert interruptions are removed. Configured timer
+  interrupts and explicit admin interrupts remain. Home Assistant remains
+  responsible for household safety alerts.
+- Existing home-aware stations prepare a private compatibility profile for
+  a later update; broader category sharing is not enabled here. Keep the
+  station database and state directory together in backups.
+
+### Also fixed
+
+Standalone downloads reject live, excessively long or incomplete audio before
+it reaches the show. Public errors and metadata disclose less internal detail,
+household cache files begin with owner-only permissions, and shared clips
+respect recording boundaries. Images and automated checks install the same
+checked runtime dependency lock.
 
 ## [2.18.0] - 2026-08-07
 

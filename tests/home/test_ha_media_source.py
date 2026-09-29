@@ -484,7 +484,8 @@ def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
     assert "no account system, central service, or project-operated analytics upload" in rendered
     assert "Edge is keyless but still online" in rendered
     assert "If you explicitly choose a Home Assistant speaker" in rendered
-    assert "v3 is not released yet" in rendered
+    assert "Stable 3.0.0 is available." in rendered
+    assert "v3 is not released yet" not in rendered
     assert "## Operator checks" in readme
 
 
