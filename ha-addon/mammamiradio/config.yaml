@@ -1,5 +1,5 @@
 name: Mamma Mi Radio
-description: AI-powered Italian radio station — two AI hosts banter, react to your home, and start with an attributed offline music collection. Optional Jamendo expansion, no subscriptions.
+description: Marco and Giulia host a late-night Italian radio show from your Home Assistant. Credited offline music collection, optional Jamendo, no subscription.
 slug: mammamiradio
 version: 2.18.0
 stage: stable
