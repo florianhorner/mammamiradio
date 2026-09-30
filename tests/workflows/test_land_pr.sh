@@ -22,12 +22,24 @@ TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
 export RETIRED_READER_CALLS="$TMPDIR_T/retired-reader-calls"
 
+# Keep ordinary landing cases independent of the checked-out branch's version
+# history. Cut/freeze admission has its own fixtures in test_dependabot_automerge_gate.sh.
+mkdir -p "$TMPDIR_T/repo/ha-addon/mammamiradio"
+git init -q "$TMPDIR_T/repo"
+cp "$REPO_ROOT/ha-addon/mammamiradio/config.yaml" "$TMPDIR_T/repo/ha-addon/mammamiradio/config.yaml"
+cd "$TMPDIR_T/repo"
+git config user.name 'land-pr test'
+git config user.email 'tests@example.com'
+git add ha-addon/mammamiradio/config.yaml
+FIXTURE_TREE="$(git write-tree)"
+ANC_FULL="$(git commit-tree "$FIXTURE_TREE" -m 'test: landing base fixture')"
+HEAD_FULL="$(git commit-tree "$FIXTURE_TREE" -p "$ANC_FULL" -m 'test: landing head fixture')"
+git update-ref refs/heads/test-head "$HEAD_FULL"
+git symbolic-ref HEAD refs/heads/test-head
+git update-ref refs/remotes/origin/main "$ANC_FULL"
+
 HEAD_FULL="$(git rev-parse HEAD)"
 HEAD_SHORT="$(git rev-parse --short HEAD)"
-# Ancestor cases need HEAD~1 — a depth-1 shallow clone has no parent commit.
-# CI checks out full history (quality.yml), which keeps HEAD~1 available.
-ANC_FULL="$(git rev-parse HEAD~1 2>/dev/null)" \
-  || fail "HEAD~1 unavailable (shallow clone?) — checkout with fetch-depth >= 2"
 ANC_SHORT="$(git rev-parse --short HEAD~1)"
 BOGUS_SHA="0000000"
 
@@ -50,8 +62,8 @@ EMPTY_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"en
 # Behavior is driven by env vars:
 #   GH_MOCK_STATE         PR state (default OPEN)
 #   GH_MOCK_MERGE_STATE   mergeStateStatus (default CLEAN)
-#   GH_MOCK_HEAD          headRefOid (default real repo HEAD)
-#   GH_MOCK_BASE          baseRefOid (default real repo HEAD~1)
+#   GH_MOCK_HEAD          headRefOid (default fixture HEAD)
+#   GH_MOCK_BASE          baseRefOid (default fixture HEAD~1)
 #   GH_MOCK_COMMIT_DATE   committedDate returned as irrelevant legacy metadata
 #   GH_MOCK_HELP_LINES    emit a large help stream for the capability probe
 # Every invocation is appended to $GH_MOCK_LOG for assertions.
@@ -393,8 +405,7 @@ chmod +x "$GIT_SHIM_DIR/git"
 READER_OK="$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
 : > "$GIT_SHIM_LOG"
 # The base must be one the local origin/main does NOT cover, or nothing fetches.
-# HEAD~1 is off-main in a branch checkout but is main's tip in CI's merge-commit
-# checkout; the suite's synthetic BEHIND_BASE_FULL is off-main in both.
+# The fixture's HEAD~1 is origin/main; BEHIND_BASE_FULL is a divergent sibling.
 PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL"
 [ "$RUN_RC" -eq 0 ] || fail "clean PR should still arm with the fetch enabled: $RUN_OUT"
 grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "wrapper must refresh origin/main before verifying"
