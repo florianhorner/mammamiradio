@@ -11,18 +11,19 @@ from mammamiradio.home.authorization import (
     HomeAuthorizationMode,
     expand_muted_with_ambient_sources,
 )
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 
 def test_expand_muted_adds_synthetic_id_for_muted_real_source() -> None:
-    ambient_sources = {NARROW_WEATHER_ENTITY_ID: "weather.forecast_home", NARROW_DAYLIGHT_ENTITY_ID: "sun.sun"}
+    ambient_sources = {NARROW_WEATHER_ENTITY_ID: "weather.example_weather", NARROW_DAYLIGHT_ENTITY_ID: "sun.sun"}
 
-    expanded = expand_muted_with_ambient_sources({"weather.forecast_home"}, ambient_sources)
+    expanded = expand_muted_with_ambient_sources({"weather.example_weather"}, ambient_sources)
 
-    assert expanded == {"weather.forecast_home", NARROW_WEATHER_ENTITY_ID}
+    assert expanded == {"weather.example_weather", NARROW_WEATHER_ENTITY_ID}
 
 
 def test_expand_muted_is_a_noop_without_mapping_or_mutes() -> None:
-    assert expand_muted_with_ambient_sources(set(), {NARROW_WEATHER_ENTITY_ID: "weather.forecast_home"}) == set()
+    assert expand_muted_with_ambient_sources(set(), {NARROW_WEATHER_ENTITY_ID: "weather.example_weather"}) == set()
     assert expand_muted_with_ambient_sources({"sun.sun"}, {}) == {"sun.sun"}
 
 
@@ -53,7 +54,7 @@ def _weather(entity_id: str, *, state: str = "sunny", temperature=22.4, unit: st
 def test_narrow_projection_converts_fahrenheit_before_bucketing() -> None:
     # 72 °F is 22.2 °C, which buckets to 20. Bucketing the raw 72 would put a
     # tropical reading in front of the host.
-    states = dict([_weather("weather.forecast_home", temperature=72, unit="°F")])
+    states = dict([_weather("weather.example_weather", temperature=72, unit="°F")])
 
     projection = HomeAuthorization.narrow().project(states)
 
@@ -64,7 +65,7 @@ def test_narrow_projection_converts_fahrenheit_before_bucketing() -> None:
 
 
 def test_narrow_projection_reads_the_unit_of_measurement_fallback() -> None:
-    entity_id, payload = _weather("weather.forecast_home", temperature=72)
+    entity_id, payload = _weather("weather.example_weather", temperature=72)
     del payload["attributes"]["temperature_unit"]
     payload["attributes"]["unit_of_measurement"] = "°F"
 
@@ -74,7 +75,7 @@ def test_narrow_projection_reads_the_unit_of_measurement_fallback() -> None:
 
 
 def test_narrow_projection_fails_closed_without_a_unit() -> None:
-    entity_id, payload = _weather("weather.forecast_home")
+    entity_id, payload = _weather("weather.example_weather")
     del payload["attributes"]["temperature_unit"]
 
     projection = HomeAuthorization.narrow().project({entity_id: payload})
@@ -86,7 +87,7 @@ def test_narrow_projection_fails_closed_without_a_unit() -> None:
 def test_narrow_projection_fails_closed_on_an_unreadable_unit(unit: str) -> None:
     # A relaxed allowlist would pass the missing-unit test above while letting
     # an unrecognized unit through, so pin the rejection explicitly.
-    entity_id, payload = _weather("weather.forecast_home", unit=unit)
+    entity_id, payload = _weather("weather.example_weather", unit=unit)
 
     projection = HomeAuthorization.narrow().project({entity_id: payload})
 
@@ -94,7 +95,7 @@ def test_narrow_projection_fails_closed_on_an_unreadable_unit(unit: str) -> None
 
 
 def test_narrow_projection_buckets_a_kelvin_reading() -> None:
-    entity_id, payload = _weather("weather.forecast_home", temperature=294.15, unit="K")
+    entity_id, payload = _weather("weather.example_weather", temperature=294.15, unit="K")
 
     projection = HomeAuthorization.narrow().project({entity_id: payload})
 
@@ -104,12 +105,12 @@ def test_narrow_projection_buckets_a_kelvin_reading() -> None:
 def test_legacy_projection_preserves_existing_state_shape() -> None:
     states = dict(
         [
-            _weather("weather.forecast_home"),
-            ("person.florian", {"entity_id": "person.florian", "state": "home", "attributes": {}}),
+            _weather("weather.example_weather"),
+            ("person.example_resident", {"entity_id": "person.example_resident", "state": "home", "attributes": {}}),
         ]
     )
 
-    authorization = HomeAuthorization.legacy()
+    authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     projection = authorization.project(states)
 
     assert authorization.mode is HomeAuthorizationMode.LEGACY
@@ -125,7 +126,7 @@ def test_narrow_projection_keeps_only_synthetic_normalized_ambient_basics() -> N
         [
             _weather("weather.local", temperature=72, unit="°F"),
             ("sun.sun", {"entity_id": "sun.sun", "state": "above_horizon", "attributes": {"azimuth": 187}}),
-            ("person.florian", {"entity_id": "person.florian", "state": "home", "attributes": {}}),
+            ("person.example_resident", {"entity_id": "person.example_resident", "state": "home", "attributes": {}}),
             ("climate.bedroom", {"entity_id": "climate.bedroom", "state": "heat", "attributes": {}}),
             ("vacuum.secret", {"entity_id": "vacuum.secret", "state": "cleaning", "attributes": {}}),
         ]

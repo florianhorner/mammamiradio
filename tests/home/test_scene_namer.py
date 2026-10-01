@@ -415,7 +415,7 @@ async def test_scene_naming_a_resident_keeps_ladder(config, state, monkeypatch):
     from mammamiradio.home import scene_namer
 
     person = ScoredEntity(
-        entity_id="person.florian_horner",
+        entity_id="person.example_resident_one",
         area=None,
         domain="person",
         score=1.9,
@@ -499,7 +499,7 @@ async def test_scene_counting_people_keeps_ladder(config, state, monkeypatch):
     from mammamiradio.home import scene_namer
 
     person = ScoredEntity(
-        entity_id="person.florian_horner",
+        entity_id="person.example_resident_one",
         area=None,
         domain="person",
         score=1.9,

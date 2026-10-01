@@ -2765,6 +2765,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   </div>
                   <div id="firstListenHomeChoice" hidden>
                   <div class="setup-home-preview-section" id="homeContextPreviewSection">
+                    <p class="setup-note" id="homeCompatibilityNotice" role="status" hidden></p>
                     <div class="semantic-visual permission-primer">
                       <div class="home-inspiration" aria-hidden="true"><span>☀<small>Daylight</small></span><span>☁<small>Weather</small></span><span>♫<small>Their next conversation</small></span></div>
                       <p class="privacy-promise" id="firstListenHomePromise">Preview the details. You decide what goes on air.</p>
@@ -3023,6 +3024,7 @@ const FIRST_LISTEN_STREAM='/stream?first_listen=1';
 const FIRST_LISTEN_LIVE_STREAM='/stream?first_listen=live';
 const FIRST_LISTEN_ARRIVAL_COPY=document.getElementById('firstListenShowCopy')?.innerHTML||'';
 const FIRST_LISTEN_ERRORS={
+  home_check_pending:{title:'Home access is still being checked',message:'The station keeps playing.',action:'Try the Home preview again in a moment.'},
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then try again.'},
   ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
   ha_unreachable:{title:'We can’t reach Home Assistant',message:'The station could not connect in time.',action:'Check that Home Assistant is online, then try again.'},
@@ -4717,7 +4719,7 @@ async function removeQueueItem(id,el){
 
 function statusDot(state,label,title=''){
   // Title serves as tooltip (desktop) AND aria-label (screen readers + mobile).
-  // Florian flagged on 2026-04-21: color + shape alone don't convey meaning,
+  // Pair color and shape with text so status remains understandable,
   // and tooltips don't work on mobile. The label itself must carry semantic
   // weight; the title repeats it in a full sentence for a11y.
   const safeTitle=title||label;
@@ -5978,6 +5980,7 @@ function updateFirstListenSuccess(){
   renderFirstListenCueProgress();
   if(!show){success.classList.remove('is-celebrating');return}
   const projection=firstListenProjection();
+  renderHomeCompatibilityNotice(projection);
   const sourceState=firstListenSourceState(projection);
   const speaker=_firstListenUi.selectedName||'this device';
   const privacy=projection.privacyEnabled?'Home context is on':'Home stays private';
@@ -6146,7 +6149,8 @@ function firstListenProjection(){
     (!pendingReceiptProjected&&serverProofMatches&&(first.accepted_attempt_id||first.accepted_at||verification.attempt_id))||
     _firstListenUi.attemptId||_firstListenUi.dispatch==='accepted'||_firstListenUi.dispatch==='receipt_failed'
   );
-  const heard=Boolean(
+  const freshSoundRequired=guided.home_context?.compatibility?.fresh_sound_required===true;
+  const heard=!freshSoundRequired&&Boolean(
     (!localProofPending&&!pendingReceiptProjected&&serverProofMatches&&(first.audio_complete||first.heard_at||verification.heard===true||verification.status==='heard'))||
     localHeard
   );
@@ -6159,9 +6163,9 @@ function firstListenProjection(){
     : Boolean(privacy.enabled||privacy.status==='enabled');
   const haAccess=(privacy||{}).homeassistant_access!==false;
   const showAi=legacy||first.show_ai===true||heard||privacyReviewed;
-  const existingAccess=!replay&&(legacy||first.install_origin==='existing');
+  const existingAccess=!freshSoundRequired&&!replay&&(legacy||first.install_origin==='existing');
   const privacyUnlocked=heard||(existingAccess&&!_firstListenUi.selectionDirty&&!proofPending);
-  return{guided,first,verification,privacy,legacy,accepted,heard,privacyReviewed,privacyEnabled,privacyUnlocked,showAi,haAccess,proofPending};
+  return{guided,first,verification,privacy,legacy,accepted,heard,privacyReviewed,privacyEnabled,privacyUnlocked,showAi,haAccess,proofPending,freshSoundRequired};
 }
 const FIRST_LISTEN_SOURCE_ROWS=[
   {kind:'live_charts',aliases:['live_charts','charts','youtube'],label:'Live charts'},
@@ -6386,8 +6390,23 @@ function firstListenPendingPrivacyChoice(projection,localChoice=_firstListenUi.p
   }
   return null;
 }
+function renderHomeCompatibilityNotice(projection){
+  const compatibility=projection.guided.home_context?.compatibility||{};
+  const homeNotice=document.getElementById('homeCompatibilityNotice');
+  if(homeNotice){
+    const notices={
+      checking:'Checking saved Home access. The station keeps playing; Home stays private during the check.',
+      needs_consent:'Home stays private. Confirm the sound, then preview daylight and weather to share just those details. Eligible installations can recover matching private evidence; other older installations need later Home Profile support for broader Home moments.',
+      ambient:'This installation shares only daylight and weather. Keeping Home private revokes access; the narrow scope stays in place.'
+    };
+    const message=notices[compatibility.status]||'';
+    if(homeNotice.textContent!==message)homeNotice.textContent=message;
+    homeNotice.hidden=!homeNotice.textContent;
+  }
+ }
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
+  renderHomeCompatibilityNotice(projection);
   const sourceState=firstListenSourceState(projection);
   const source=sourceState.source;
   const sourceRows=Array.isArray(source.rows)?source.rows:[];
@@ -6396,7 +6415,7 @@ function renderFirstListenProgress(){
   const {healthy,recoveryOnAir,recoveryAvailable,continuityAvailable}=sourceState;
   renderFirstListenSources(source);
 
-  const priorInstall=!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
+  const priorInstall=!projection.freshSoundRequired&&!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
   document.getElementById('firstListenRestartBtn').disabled=firstListenRestartBusy();
   const restartNote=document.getElementById('firstListenRestartNote');
   restartNote.hidden=!_firstListenUi.restarting;
@@ -7086,6 +7105,8 @@ async function verifyFirstListen(heard,el){
       return;
     }
     _firstListenUi.verification=requestedHeard?'heard':'not_yet';
+    const compatibility=_firstListenUi.projection?.guided_setup?.home_context?.compatibility;
+    if(compatibility?.status==='needs_consent')compatibility.fresh_sound_required=!requestedHeard;
     _firstListenUi.repairOpen=!requestedHeard;
     if(requestedHeard){
       _firstListenUi.attemptId=String(resp?.attempt_id||resp?.accepted_attempt_id||_firstListenUi.attemptId||'');
@@ -7167,7 +7188,7 @@ async function chooseFirstListenPrivacy(enabled,el){
   const requestedEnabled=Boolean(enabled);
   const projection=firstListenProjection();
   if(!projection.privacyUnlocked||_firstListenUi.privacySaving||(requestedEnabled&&!_firstListenUi.privacyPreviewValid))return;
-  const priorInstall=!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
+  const priorInstall=!projection.freshSoundRequired&&!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
   const reviewingPrivacy=_firstListenUi.reviewStep==='privacy';
   const reviewTrigger=_firstListenUi.reviewTrigger;
   const continuityAvailable=firstListenSourceState(projection).continuityAvailable;
@@ -7320,7 +7341,7 @@ function renderFirstListen(setup,modeLabel,stationLabel){
   const meta=document.getElementById('setupMeta');
   const next=document.getElementById('setupNext');
   const badge=document.getElementById('setupReadyBadge');
-  const priorInstall=projection.legacy||projection.first.install_origin==='existing';
+  const priorInstall=!projection.freshSoundRequired&&(projection.legacy||projection.first.install_origin==='existing');
   if(meta)meta.textContent='Listening works without an AI key. Home permission is a separate choice.';
   if(priorInstall&&!projection.privacyReviewed){
     if(headline)headline.textContent='Your existing station stays as it is.';
@@ -7646,7 +7667,7 @@ function _typeRecentSegments(segments,gen){
 // Cap the typewriter to lines an operator would actually wait out — a long
 // ad-block recap typed at ~55ms/char could otherwise leave this diagnostic
 // panel blank for many seconds during exactly the moment an operator wants
-// to read it (adversarial review finding). Longer lines render instantly,
+// to read it. Longer lines render instantly,
 // same as the reduced-motion path.
 const TT_TYPE_MAX_CHARS=200;
 function _recentLineEl(host,text,reduced,segments,tagHost){

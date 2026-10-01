@@ -13,13 +13,10 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-_AUTHORIZED_HOME_RETURN_SOURCES = {
-    "ha:person.florian_horner": "Residente uno",
-    "ha:person.sabrina": "Residente due",
-}
-_CURATED_RESIDENT_NAMES_PATTERN = "|".join(
-    re.escape(name) for name in sorted(set(_AUTHORIZED_HOME_RETURN_SOURCES.values()))
-)
+from mammamiradio.home.bindings import EMPTY_HOME_BINDINGS, HomeBindings
+
+_CURATED_RESIDENT_NAMES = ("Residente uno", "Residente due")
+_CURATED_RESIDENT_NAMES_PATTERN = "|".join(re.escape(name) for name in _CURATED_RESIDENT_NAMES)
 _GENERIC_AUDIENCE_PATTERN = re.compile(
     r"\b(?:you|your|listener\w*|audience|everyone|everybody|anyone|someone|somebody|people|"
     r"they|them|their|(?:another|other)\s+person|friends?|folks?|guys?|all|voi|tu|tutti|"
@@ -35,6 +32,7 @@ class HomeReturnAuthority:
     fact_id: str
     source_entity_id: str
     resident_name: str
+    resident_names: tuple[str, ...] = _CURATED_RESIDENT_NAMES
 
     def allows(self, text: str) -> bool:
         """Allow one return phrase bound to the named resident, and nothing else.
@@ -48,7 +46,7 @@ class HomeReturnAuthority:
         if not isinstance(text, str) or _GENERIC_AUDIENCE_PATTERN.search(text):
             return False
         authorized_name = self.resident_name.casefold()
-        for resident_name in set(_AUTHORIZED_HOME_RETURN_SOURCES.values()):
+        for resident_name in self.resident_names:
             if resident_name.casefold() == authorized_name:
                 continue
             if re.search(rf"\b{re.escape(resident_name)}\b", text, re.IGNORECASE):
@@ -74,10 +72,16 @@ class HomeReturnAuthority:
         return False
 
 
-def home_return_authority_for_directive(source: str, directive: str) -> HomeReturnAuthority | None:
+def home_return_authority_for_directive(
+    source: str, directive: str, *, bindings: HomeBindings = EMPTY_HOME_BINDINGS
+) -> HomeReturnAuthority | None:
     """Derive authority only from curated directives with return semantics."""
 
-    resident_name = _AUTHORIZED_HOME_RETURN_SOURCES.get(str(source or ""))
+    resident_name = (
+        dict(bindings.resident_returns).get(str(source or "").removeprefix("ha:"))
+        if str(source or "").startswith("ha:person.")
+        else None
+    )
     directive_text = str(directive or "")
     if resident_name is None or resident_name.casefold() not in directive_text.casefold():
         return None
@@ -88,6 +92,7 @@ def home_return_authority_for_directive(source: str, directive: str) -> HomeRetu
         fact_id=f"resident-return-{digest}",
         source_entity_id=source.removeprefix("ha:"),
         resident_name=resident_name,
+        resident_names=tuple(alias for _, alias in bindings.resident_returns),
     )
 
 

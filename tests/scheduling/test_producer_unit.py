@@ -64,6 +64,7 @@ from mammamiradio.scheduling.producer import (
     run_producer,
 )
 from mammamiradio.web.mp3_frames import Mp3HandoffSplit
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -106,7 +107,7 @@ def _make_state() -> StationState:
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
         listeners_active=1,  # simulate a live listener so the producer gate passes
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
 
 
@@ -118,7 +119,7 @@ def _make_starter_state() -> StationState:
         playlist=tracks,
         playlist_source=starter_source(len(tracks)),
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
 
 
@@ -468,7 +469,7 @@ async def test_listener_handoff_music_does_not_inherit_displaced_air_next(tmp_pa
         playlist=[requested],
         pending_requests=[later_request],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
     assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, requested)
     state.pinned_track = requested
@@ -516,7 +517,7 @@ async def test_operator_music_air_next_keeps_promised_song_behind_its_dedication
     state = StationState(
         playlist=[requested],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
     dedication_queue_id = "listener-dedication"
     assert state.arm_listener_request_handoff(
@@ -2031,7 +2032,7 @@ async def test_on_air_listener_promise_retries_after_source_switch(tmp_path, fre
     state = StationState(
         playlist=[seed, requested],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
     config = _make_config()
     config.tmp_dir = tmp_path
@@ -6182,8 +6183,9 @@ async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return(
     config = _make_config()
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
-        "ha:person.florian_horner",
+        "ha:person.example_resident_one",
         "Residente uno è appena tornato a casa. Un caloroso bentornato.",
+        bindings=SYNTHETIC_BINDINGS,
     )
     lines = [(config.hosts[0], "Bentornato Residente uno.")]
 
@@ -6213,8 +6215,9 @@ async def test_listener_truth_guard_rejects_return_line_that_names_another_resid
     config = _make_config()
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
-        "ha:person.florian_horner",
+        "ha:person.example_resident_one",
         "Residente uno è appena tornato a casa. Un caloroso bentornato.",
+        bindings=SYNTHETIC_BINDINGS,
     )
     safe_lines = [(config.hosts[0], "The studio keeps moving, amici.")]
 

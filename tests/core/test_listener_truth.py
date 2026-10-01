@@ -9,6 +9,7 @@ from mammamiradio.core.listener_truth import (
     find_unsafe_listener_claim,
     home_return_authority_for_directive,
 )
+from tests.home_fixtures import REACTIVE_TRIGGERS, SYNTHETIC_BINDINGS
 
 
 @pytest.mark.parametrize(
@@ -89,8 +90,9 @@ def test_aggregate_or_unrelated_copy_remains_allowed(text: str):
 
 def test_named_resident_return_requires_curated_fact_and_same_line_name():
     authority = home_return_authority_for_directive(
-        "ha:person.florian_horner",
+        "ha:person.example_resident_one",
         "Residente uno è appena tornato a casa. Un caloroso bentornato.",
+        bindings=SYNTHETIC_BINDINGS,
     )
     assert authority is not None
     assert contains_unsafe_listener_claims("Bentornato Residente uno.", return_authority=authority) is False
@@ -138,8 +140,9 @@ def test_named_resident_return_requires_curated_fact_and_same_line_name():
 
 def test_named_resident_authority_can_be_spent_on_only_one_line():
     authority = home_return_authority_for_directive(
-        "ha:person.sabrina",
+        "ha:person.example_resident_two",
         "Residente due è appena tornato a casa. Un caloroso bentornato.",
+        bindings=SYNTHETIC_BINDINGS,
     )
     assert authority is not None
     assert (
@@ -154,8 +157,7 @@ def test_named_resident_authority_can_be_spent_on_only_one_line():
 def test_door_unlock_and_non_curated_sources_never_authorize_return_copy():
     assert (
         home_return_authority_for_directive(
-            "ha:lock.lock_ultra_8d3c",
-            "The front door unlocked.",
+            "ha:lock.example_entry_lock", "The front door unlocked.", bindings=SYNTHETIC_BINDINGS
         )
         is None
     )
@@ -165,20 +167,18 @@ def test_door_unlock_and_non_curated_sources_never_authorize_return_copy():
 def test_curated_resident_source_without_return_semantics_never_authorizes_return_copy():
     assert (
         home_return_authority_for_directive(
-            "ha:person.florian_horner",
-            "Residente uno ha scelto il prossimo disco.",
+            "ha:person.example_resident_one", "Residente uno ha scelto il prossimo disco.", bindings=SYNTHETIC_BINDINGS
         )
         is None
     )
 
 
 def test_unlock_directive_claims_only_the_observed_lock_state():
-    from mammamiradio.home.ha_context import REACTIVE_TRIGGERS
 
     directive = next(
         text
         for entity_id, trigger_state, text, _cooldown in REACTIVE_TRIGGERS
-        if entity_id == "lock.lock_ultra_8d3c" and trigger_state == "unlocked"
+        if entity_id == "lock.example_entry_lock" and trigger_state == "unlocked"
     )
     lowered = directive.casefold()
     assert "si è appena sbloccata" in lowered

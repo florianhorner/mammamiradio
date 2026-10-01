@@ -1797,7 +1797,7 @@
     // Fetch has no built-in timeout — a stalled connection (flaky wifi,
     // captive portal, hung server) would otherwise leave dataset.submitting
     // set and the button disabled forever, with no error shown and no
-    // recovery short of a page reload (adversarial review finding). Bound
+    // recovery short of a page reload. Bound
     // it so a hang always falls through to the existing catch/reset path.
     const fetchController = new AbortController();
     const fetchTimeout = setTimeout(() => fetchController.abort(), 8000);
@@ -1810,7 +1810,7 @@
       });
       // Keep the timeout armed through the body read, not just the headers —
       // a response that stalls mid-body would otherwise hang r.json() with
-      // no abort path once cleared here (Codex re-review finding). The same
+      // no abort path once cleared here. The same
       // AbortSignal cancels an in-flight body read, so this is sufficient.
       const d = await r.json();
       clearTimeout(fetchTimeout);

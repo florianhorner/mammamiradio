@@ -184,8 +184,8 @@ def test_load_entity_policy_permission_error_returns_empty_on_first_ever_read(tm
 
 def test_load_entity_policy_read_error_falls_back_to_last_known_good_not_empty(tmp_path):
     """A transient disk error must not silently un-mute everything — this is a
-    privacy control, so it degrades to the last confirmed policy, not empty
-    (codex adversarial review: fail-open here defeats the mute promise)."""
+     privacy control, so it degrades to the last confirmed policy, not empty
+    ; failing open would defeat the mute promise."""
     set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee")
     good_policy = load_entity_policy(tmp_path)
     assert good_policy["muted"]

@@ -76,6 +76,7 @@ from mammamiradio.hosts.scriptwriter import (
     write_transition,
 )
 from mammamiradio.release_campaign import ReleaseBeatOffer
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 
 @pytest.fixture()
@@ -746,7 +747,7 @@ async def test_write_banter_keeps_good_banter_when_home_fact_id_unrecoverable(co
     from mammamiradio.home.context_director import HomeContextDirector, PromptFact
 
     fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
-    state.home_context_director = HomeContextDirector()
+    state.home_context_director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     invalid = {
         "lines": [{"host": config.hosts[0].name, "text": "È una bella giornata di sole."}],
         "new_joke": None,
@@ -2354,7 +2355,7 @@ async def test_context_off_retires_stale_running_gag_before_no_llm_return(config
     gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
     state.moment_store = store
     state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
-    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_key = "vacuum.example_vacuum_one|breakout"
     state.ha_running_gag_moment_id = gag_id
 
     lines, _commit = await write_banter(state, config)
@@ -2374,7 +2375,7 @@ async def test_context_off_running_gag_never_reaches_prompt_after_reenable(confi
     config.homeassistant.context_enabled = False
     private_gag = "The robot vacuum staged its third breakout tonight."
     state.ha_running_gag = private_gag
-    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_key = "vacuum.example_vacuum_one|breakout"
     state.ha_running_gag_moment_id = "private-gag-moment"
     prompts: list[str] = []
 
@@ -2413,7 +2414,7 @@ async def test_context_off_retires_running_gag_even_when_studio_directive_surviv
     state.ha_pending_directive = "Play the explicit studio bit next."
     state.ha_pending_directive_source = source
     state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
-    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_key = "vacuum.example_vacuum_one|breakout"
     state.ha_running_gag_moment_id = "private-gag-moment"
 
     lines, _commit = await write_banter(state, config)

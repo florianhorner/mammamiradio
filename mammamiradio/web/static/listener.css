@@ -41,7 +41,7 @@ html, body {
    transform: translateZ(0) for compositor-layer promotion (avoids sticky +
    backdrop-filter scroll repaint flicker), and tt-wake's animation-fill-mode:
    both would otherwise permanently clobber that with translateY(0) once the
-   entrance finishes (adversarial review finding). */
+   entrance finishes. */
 @keyframes tt-wake-fade {
   from { opacity: 0; }
   to   { opacity: 1; }

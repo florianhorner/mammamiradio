@@ -54,8 +54,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mammamiradio.home.atomic_json import atomic_write_json, chmod_owner_only, unlink_legacy_fixed_tmp
+from mammamiradio.home.bindings import EMPTY_HOME_BINDINGS, HomeBindings
 from mammamiradio.home.gag_select import weighted_offer
-from mammamiradio.home.ha_context import BRONZE_ENTITIES, GOLD_ENTITIES, SILVER_ENTITIES
 from mammamiradio.home.ha_enrichment import HomeEvent
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,6 @@ _DEFAULT_GAG_DOMAINS: frozenset[str] = frozenset({"switch", "fan", "lock", "vacu
 # (their state is the last-press time, a unique transition each time) — they are
 # kept out of the default domain set and bloat-guarded by the numeric exclusion.
 
-_TIER_WEIGHTS = {3.0: GOLD_ENTITIES, 2.0: SILVER_ENTITIES, 1.0: BRONZE_ENTITIES}
 _RECENCY_HALFLIFE_SECONDS = 7200.0  # salience halves ~every 2 hours
 _RECENCY_LAMBDA = math.log(2) / _RECENCY_HALFLIFE_SECONDS
 
@@ -91,8 +90,9 @@ _DAY_ROLLOVER_HOUR = 4  # an "evening" belongs to the day it started; 4am rolls 
 # -----------------------------------------------------------------------------
 
 
-def _tier_weight(entity_id: str) -> float:
-    for weight, members in _TIER_WEIGHTS.items():
+def _tier_weight(entity_id: str, *, bindings: HomeBindings = EMPTY_HOME_BINDINGS) -> float:
+    for weight, priority in ((3.0, "gold"), (2.0, "silver"), (1.0, "bronze")):
+        members = bindings.tier(priority)
         if entity_id in members:
             return weight
     return 1.0
@@ -172,11 +172,11 @@ class GagBucket:
     # long gone by the time offer_gag() picks this bucket.
     ritual_family: str = ""
 
-    def salience(self, *, now: float) -> float:
+    def salience(self, *, now: float, bindings: HomeBindings = EMPTY_HOME_BINDINGS) -> float:
         """tier_weight x log(count+1) x recency_decay(now - last_ts)."""
         age = max(0.0, now - self.last_ts)
         recency = math.exp(-_RECENCY_LAMBDA * age)
-        return _tier_weight(self.entity_id) * math.log(self.count + 1) * recency
+        return _tier_weight(self.entity_id, bindings=bindings) * math.log(self.count + 1) * recency
 
     def to_dict(self) -> dict:
         return {
@@ -235,6 +235,7 @@ class EveningLedger:
     gag that just aired.
     """
 
+    bindings: HomeBindings = field(default=EMPTY_HOME_BINDINGS, repr=False)
     session_id: int = 0
     started_at: float = 0.0
     last_active: float = 0.0
@@ -380,7 +381,7 @@ class EveningLedger:
             eligible,
             now=now,
             inject_probability=GAG_INJECT_PROBABILITY,
-            weight=lambda bucket, n: bucket.salience(now=n),
+            weight=lambda bucket, n: bucket.salience(now=n, bindings=self.bindings),
             rng=rng,
         )
         if chosen is None:

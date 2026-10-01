@@ -2,6 +2,7 @@ from pathlib import Path
 
 from mammamiradio.core.models import Segment, SegmentType, StationState
 from mammamiradio.home.context_director import DirectorObservation, HomeContextDirector
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 
 def _reserved_fact(director: HomeContextDirector):
@@ -24,7 +25,7 @@ def _reserved_fact(director: HomeContextDirector):
 
 
 def test_stream_start_activates_fact_cooldown_and_later_discard_cannot_release_it():
-    director = HomeContextDirector(clock=lambda: 100.0, id_factory=lambda: "fact-1")
+    director = HomeContextDirector(clock=lambda: 100.0, id_factory=lambda: "fact-1", bindings=SYNTHETIC_BINDINGS)
     fact = _reserved_fact(director)
     segment = Segment(
         type=SegmentType.BANTER,
@@ -41,7 +42,7 @@ def test_stream_start_activates_fact_cooldown_and_later_discard_cannot_release_i
 
 
 def test_discard_releases_only_unstarted_fact_reservation():
-    director = HomeContextDirector(clock=lambda: 100.0, id_factory=lambda: "fact-1")
+    director = HomeContextDirector(clock=lambda: 100.0, id_factory=lambda: "fact-1", bindings=SYNTHETIC_BINDINGS)
     fact = _reserved_fact(director)
     segment = Segment(
         type=SegmentType.BANTER,

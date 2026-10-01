@@ -422,7 +422,7 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
 
     assert (
-        "const priorInstall=!_firstListenUi.restarting&&"
+        "const priorInstall=!projection.freshSoundRequired&&!_firstListenUi.restarting&&"
         "(projection.legacy||projection.first.install_origin==='existing')" in progress
     )
     assert "const existingProof=priorInstall&&!_firstListenUi.selectionDirty&&!projection.proofPending" in progress
@@ -1044,7 +1044,7 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
 
     choice = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert (
-        "const priorInstall=!_firstListenUi.restarting&&"
+        "const priorInstall=!projection.freshSoundRequired&&!_firstListenUi.restarting&&"
         "(projection.legacy||projection.first.install_origin==='existing')" in choice
     )
     assert "const reviewingPrivacy=_firstListenUi.reviewStep==='privacy'" in choice

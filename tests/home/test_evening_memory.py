@@ -31,14 +31,15 @@ from mammamiradio.home.evening_memory import (
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.playlist.downloader import _CACHE_PROTECTED
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 BASE = 1_780_000_000.0  # fixed epoch — deterministic ages
 
-COFFEE = "switch.bar_kaffeemaschine_steckdose"  # switch domain (GOLD tier) — candidate
-WASHER = "switch.bad_gross_waschmaschine_steckdose"  # switch domain (SILVER tier) — candidate
-POWER = "sensor.haushalt_stromverbrauch_gesamt"  # sensor domain, numeric — never a gag
-PERSON = "person.florian_horner"  # person.* always excluded
-LIGHT = "light.magic_areas_light_groups_wohnzimmer_all_lights"  # light domain — excluded by default
+COFFEE = "switch.example_coffee_switch"  # switch domain (GOLD tier) — candidate
+WASHER = "switch.example_laundry_switch"  # switch domain (SILVER tier) — candidate
+POWER = "sensor.example_household_power"  # sensor domain, numeric — never a gag
+PERSON = "person.example_resident_one"  # person.* always excluded
+LIGHT = "light.example_living_lights"  # light domain — excluded by default
 
 
 def ev(
@@ -124,16 +125,16 @@ def test_non_allowlisted_and_person_excluded():
 def test_salience_gold_beats_silver_same_count():
     gold = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=3, last_ts=BASE)
     silver = GagBucket(WASHER, "Lavatrice", "spento", "acceso", count=3, last_ts=BASE)
-    assert gold.salience(now=BASE) > silver.salience(now=BASE)
+    assert gold.salience(now=BASE, bindings=SYNTHETIC_BINDINGS) > silver.salience(now=BASE, bindings=SYNTHETIC_BINDINGS)
 
 
 def test_salience_rises_with_count_and_decays_with_age():
     low = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=2, last_ts=BASE)
     high = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=8, last_ts=BASE)
-    assert high.salience(now=BASE) > low.salience(now=BASE)
+    assert high.salience(now=BASE, bindings=SYNTHETIC_BINDINGS) > low.salience(now=BASE, bindings=SYNTHETIC_BINDINGS)
     fresh = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=3, last_ts=BASE)
     stale = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=3, last_ts=BASE - 7200)
-    assert fresh.salience(now=BASE) > stale.salience(now=BASE)
+    assert fresh.salience(now=BASE, bindings=SYNTHETIC_BINDINGS) > stale.salience(now=BASE, bindings=SYNTHETIC_BINDINGS)
 
 
 # --- session lifecycle -------------------------------------------------------
@@ -403,7 +404,7 @@ def test_domain_candidacy_fires_for_any_operators_switch():
 
 def test_default_domains_are_candidates():
     led = EveningLedger()
-    for eid in ("switch.x", "fan.y", "lock.z", "vacuum.q", "binary_sensor.doorbell"):
+    for eid in ("switch.x", "fan.y", "lock.example_z", "vacuum.q", "binary_sensor.doorbell"):
         assert led._is_gag_candidate(ev(eid, "off", "on", BASE + 1)), eid
 
 
@@ -460,7 +461,7 @@ def test_forced_radio_event_still_honors_denylist_and_sentinels():
     assert not led._is_gag_candidate(
         ev("sensor.custom_threshold", "unavailable", "80", BASE + 1, force_gag_candidate=True)
     )
-    assert not led._is_gag_candidate(ev("person.someone", "away", "home", BASE + 1, force_gag_candidate=True))
+    assert not led._is_gag_candidate(ev("person.example_someone", "away", "home", BASE + 1, force_gag_candidate=True))
 
 
 def test_forced_radio_event_cooldown_spent_only_after_mark_spoken(monkeypatch):
@@ -582,7 +583,7 @@ def test_passive_domains_do_not_advance_last_active():
     """weather/sun change on their own — they must not keep a quiet evening alive."""
     led = EveningLedger()
     led.observe([ev("switch.coffee", "off", "on", BASE + 1)], now=BASE + 1)
-    led.observe([ev("weather.forecast_home", "cloudy", "sunny", BASE + 100)], now=BASE + 100)
+    led.observe([ev("weather.example_weather", "cloudy", "sunny", BASE + 100)], now=BASE + 100)
     led.observe([ev("sun.sun", "above_horizon", "below_horizon", BASE + 200)], now=BASE + 200)
     assert led.last_active == BASE + 1
 
@@ -591,7 +592,7 @@ def test_quiet_home_with_only_passive_changes_rolls_over():
     led = EveningLedger()
     led.observe([ev("switch.coffee", "off", "on", BASE + 1)], now=BASE + 1)
     # Only weather changes for the whole gap window — nobody's home.
-    led.observe([ev("weather.forecast_home", "sunny", "rainy", BASE + 7200)], now=BASE + 7200)
+    led.observe([ev("weather.example_weather", "sunny", "rainy", BASE + 7200)], now=BASE + 7200)
     later = BASE + 1 + EVENING_GAP_SECONDS + 60
     led.observe([ev("switch.coffee", "off", "on", later)], now=later)
     assert led.session_id == 2

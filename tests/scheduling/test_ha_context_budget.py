@@ -30,6 +30,7 @@ from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import _HAContextRefreshCoordinator
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -85,14 +86,14 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
     import mammamiradio.home.ha_context as ha_context
 
     config = _config(tmp_path, timeout=0.005, poll_interval=0.01)
-    state = StationState(home_authorization=HomeAuthorization.legacy())
+    state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
     observer = MagicMock()
     state.home_entity_ids_observer = observer
     prior = _snapshot("old ambient", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
     response = _states_response(
         [
             {
-                "entity_id": "switch.bar_kaffeemaschine_steckdose",
+                "entity_id": "switch.example_coffee_switch",
                 "state": "on",
                 "attributes": {},
             }
@@ -171,9 +172,9 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
 
             adopted, fresh = await coordinator.prepare_for_segment()
             assert fresh
-            assert "switch.bar_kaffeemaschine_steckdose" in adopted.raw_states
+            assert "switch.example_coffee_switch" in adopted.raw_states
             publish.assert_called_once()
-            observer.assert_called_once_with(frozenset({"switch.bar_kaffeemaschine_steckdose"}))
+            observer.assert_called_once_with(frozenset({"switch.example_coffee_switch"}))
         finally:
             release_worker.set()
             await coordinator.close()
@@ -185,11 +186,11 @@ async def test_close_while_projection_worker_runs_ignores_late_candidate_and_cle
     import mammamiradio.home.ha_context as ha_context
 
     config = _config(tmp_path, timeout=0.004, poll_interval=0.01)
-    state = StationState(home_authorization=HomeAuthorization.legacy())
+    state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
     prior = _snapshot("safe", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
     client = AsyncMock()
     client.get.return_value = _states_response(
-        [{"entity_id": "switch.bar_kaffeemaschine_steckdose", "state": "on", "attributes": {}}]
+        [{"entity_id": "switch.example_coffee_switch", "state": "on", "attributes": {}}]
     )
     worker_started = threading.Event()
     release_worker = threading.Event()
@@ -628,7 +629,7 @@ async def test_stale_gap_resynchronizes_ambient_context_without_delayed_events(t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("directive_source", ["ha", "ha:person.florian_horner"])
+@pytest.mark.parametrize("directive_source", ["ha", "ha:person.example_resident_one"])
 async def test_stale_fallback_withholds_pending_ha_directives_and_running_gags(tmp_path, directive_source):
     config = _config(tmp_path)
     state = StationState(
@@ -1057,7 +1058,7 @@ async def test_inflight_mute_then_unmute_discards_the_pre_mute_candidate(tmp_pat
     import mammamiradio.home.ha_context as ha_context
 
     config = _config(tmp_path, poll_interval=1.0)
-    state = StationState(home_authorization=HomeAuthorization.legacy())
+    state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
     private_id = "switch.private"
     live_id = "switch.live"
     prior = _snapshot(

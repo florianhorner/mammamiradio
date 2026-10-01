@@ -18,6 +18,7 @@ from mammamiradio.core.models import Segment, SegmentType, StationState
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.moment_receipts import STORE_FILENAME, MomentStore
 from mammamiradio.web.streamer import _finalize_moment_receipts
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 from tests.web.test_streamer_routes import _make_test_app
 
 NOW = 1_800_000_000.0
@@ -50,7 +51,7 @@ def _banter_segment(**metadata: object) -> Segment:
 def _enable_ha(app) -> None:
     app.state.config.homeassistant.enabled = True
     app.state.config.ha_token = "ha-token"
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
 
 
 # --- payload surfaces -------------------------------------------------------------
@@ -214,7 +215,7 @@ async def test_narrow_authorization_hides_persisted_receipts_from_public_and_adm
 @pytest.mark.asyncio
 async def test_admin_status_survives_moment_projection_failure():
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     store, _ = _store_with_aired_row()
     app.state.station_state.moment_store = store
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

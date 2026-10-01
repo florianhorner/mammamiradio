@@ -42,11 +42,12 @@ from mammamiradio.core.first_listen import (
 from mammamiradio.core.models import GenerationWasteReason, PlaylistSource, SourceReadinessEvidence, StationState
 from mammamiradio.core.sync import init_db
 from mammamiradio.home.atomic_json import prune_stale_atomic_json_tmp_files
-from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
+from mammamiradio.home.authorization import HomeAuthorization
+from mammamiradio.home.compatibility import HomeCompatibility, read_home_compatibility
 from mammamiradio.home.context_director import HomeContextDirector
 from mammamiradio.home.entity_policy import muted_entity_ids, policy_path
 from mammamiradio.home.evening_memory import LEDGER_FILENAME, EveningLedger
-from mammamiradio.home.ha_context import _ha_registry_cache_path
+from mammamiradio.home.ha_context import _ha_registry_cache_path, invalidate_all_home_context
 from mammamiradio.home.migration import (
     LegacyHomePreflightV1,
     capture_legacy_home_preflight_v1,
@@ -54,10 +55,8 @@ from mammamiradio.home.migration import (
     load_legacy_home_database_preflight_v1,
     persist_legacy_home_database_preflight_v1,
     rewrite_legacy_home_preflight_cold_v1,
-    seal_legacy_home_provenance_v1,
 )
 from mammamiradio.home.moment_receipts import STORE_FILENAME, MomentStore
-from mammamiradio.home.profile import export_legacy_home_profile_v1
 from mammamiradio.hosts.persona import PersonaStore
 from mammamiradio.hosts.scriptwriter import has_script_llm
 from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
@@ -391,8 +390,7 @@ async def startup():
     home_context_explicit_choice = _explicit_bool_env("MAMMAMIRADIO_HA_CONTEXT_ENABLED")
     if home_context_explicit_choice is None and not config.homeassistant.context_enabled:
         home_context_explicit_choice = False
-    if home_context_explicit_choice is None:
-        config.homeassistant.context_enabled = False
+    config.homeassistant.context_enabled = False
     logger.info("Station: %s (%s)", config.display_station_name, config.station.language)
 
     from mammamiradio.audio.tts import configure_openai_tts_model
@@ -555,19 +553,10 @@ async def startup():
             persist_legacy_home_database_preflight_v1(db_path, legacy_preflight)
         except (OSError, sqlite3.DatabaseError, RuntimeError, ValueError) as exc:
             logger.error("Could not verify redundant Home install origin; failing narrow for this boot: %s", exc)
-    home_authorization = (
-        HomeAuthorization.legacy()
-        if load_authoritative_legacy_home_preflight_v1(config.cache_dir / "state", db_path) is not None
-        else HomeAuthorization.narrow()
+    legacy_origin_verified = (
+        load_authoritative_legacy_home_preflight_v1(config.cache_dir / "state", db_path) is not None
     )
-    logger.info("Home context authorization: %s", home_authorization.mode.value)
-    if (
-        home_authorization.allows_label_generation
-        and config.homeassistant.enabled
-        and config.ha_token
-        and config.anthropic_api_key
-    ):
-        logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
+    home_authorization = HomeAuthorization.narrow()
     persona_store = PersonaStore(db_path)
     if not await persona_store.prepare_listener_session_process():
         logger.warning("Listener-session receipt preparation will retry at the first station epoch")
@@ -577,58 +566,68 @@ async def startup():
     except importlib.metadata.PackageNotFoundError:  # pragma: no cover - editable installs provide metadata
         bridge_app_version = "0+unknown"
     app.state.runtime_identity = f"Version {bridge_app_version} · {_runtime_build_label()}"
-    provenance_announced = False
-    provenance_task: asyncio.Task | None = None
-    observed_home_entity_ids: frozenset[str] | None = None
+    pending_home_compatibility: HomeCompatibility | None = None
+    home_compatibility: HomeCompatibility | None = None
     app.state.home_profile_ready = False
+    app.state.home_consent_choice = None
+    app.state.home_compatibility_result = None
     app.state.legacy_home_provenance_task = None
 
-    def _prepare_home_snapshot(entity_ids: frozenset[str] | None):
-        provenance = None
-        if entity_ids is not None:
-            provenance = seal_legacy_home_provenance_v1(
-                config.cache_dir / "state",
-                entity_ids,
-                db_path=db_path,
-                bridge_app_version=bridge_app_version,
+    async def _verify_home_compatibility() -> None:
+        nonlocal pending_home_compatibility
+        worker = asyncio.create_task(asyncio.to_thread(read_home_compatibility, config.cache_dir / "state", db_path))
+        try:
+            pending_home_compatibility = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # A filesystem worker cannot be cancelled; drain it before shutdown.
+            await asyncio.gather(worker, return_exceptions=True)
+            raise
+        except Exception:
+            logger.warning("Private Home evidence is unavailable; Home remains off")
+            pending_home_compatibility = HomeCompatibility(
+                HomeAuthorization.narrow(), "needs_consent", requires_consent=True
             )
-        return provenance, export_legacy_home_profile_v1(config.cache_dir / "state", db_path)
+        app.state.home_compatibility_result = pending_home_compatibility
 
-    async def _seal_home_provenance() -> None:
-        nonlocal provenance_announced
-        while True:
-            entity_ids = observed_home_entity_ids
-            worker = asyncio.create_task(asyncio.to_thread(_prepare_home_snapshot, entity_ids))
-            try:
-                provenance, profile = await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                # The filesystem worker cannot be cancelled; drain before
-                # shutdown releases state or permits another startup writer.
-                await asyncio.gather(worker, return_exceptions=True)
-                raise
-            except Exception:
-                logger.warning("Private Home compatibility snapshot is incomplete; will retry")
-                return
-            if (provenance is not None or profile is not None) and not provenance_announced:
-                provenance_announced = True
-                logger.info("Legacy Home continuity provenance is ready")
-            if profile is not None:
-                app.state.home_profile_ready = True
-                logger.info("Private Home compatibility snapshot is ready")
-                return
-            if entity_ids == observed_home_entity_ids:
-                return
-            # An observation arrived during the sealed-boot attempt. Process it
-            # in this same task so it is neither dropped nor written in parallel.
-
-    def _observe_home_entity_ids(entity_ids: frozenset[str] | None) -> None:
-        nonlocal provenance_task, observed_home_entity_ids
-        observed_home_entity_ids = entity_ids
-        if app.state.home_profile_ready or (provenance_task is not None and not provenance_task.done()):
+    def _adopt_home_compatibility() -> None:
+        """Called synchronously only at the producer's preparation boundary."""
+        nonlocal pending_home_compatibility, home_compatibility
+        if pending_home_compatibility is not None:
+            home_compatibility = pending_home_compatibility
+            pending_home_compatibility = None
+            state.home_authorization = home_compatibility.authorization
+            state.home_compatibility_status = home_compatibility.status
+            state.home_ambient_consent_required = home_compatibility.requires_consent
+            state.home_ambient_consent_granted = (
+                home_compatibility.consent_granted
+                if app.state.home_consent_choice is None
+                else app.state.home_consent_choice
+            )
+            if state.home_ambient_consent_required and not state.home_ambient_consent_granted:
+                state.home_compatibility_status = "needs_consent"
+            state.home_context_policy_generation += 1
+            state.home_context_director = HomeContextDirector(bindings=home_compatibility.authorization.bindings)
+            state.evening_ledger.bindings = home_compatibility.authorization.bindings
+            invalidate_all_home_context()
+            app.state.home_context_preview_proof = None
+            app.state.home_narrow_audio_confirmed = False
+            app.state.home_profile_ready = home_compatibility.status == "verified"
+        if home_compatibility is None:
             return
-        provenance_task = asyncio.create_task(_seal_home_provenance())
-        app.state.legacy_home_provenance_task = provenance_task
-        _register_background_task(app.state, provenance_task)
+        permitted = not state.home_ambient_consent_required or state.home_ambient_consent_granted
+        should_enable = state.home_context_requested and permitted
+        if should_enable and not config.homeassistant.context_enabled:
+            if (
+                state.home_authorization.allows_label_generation
+                and config.homeassistant.enabled
+                and config.ha_token
+                and config.anthropic_api_key
+            ):
+                logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
+            config.homeassistant.context_enabled = True
+            coordinator = getattr(state, "ha_context_refresh_mailbox", None)
+            if coordinator is not None:
+                coordinator.enable()
 
     # Dependency checks with install hints
     _ffmpeg_found = bool(shutil.which("ffmpeg"))
@@ -664,8 +663,7 @@ async def startup():
     # The mute policy's entity_denylist is static (config-only) and doesn't
     # purge already-persisted buckets on its own, so a mute applied in a prior
     # session (or a purge whose save_if_dirty() failed) would otherwise
-    # survive a restart and still be offerable as a running gag (codex
-    # adversarial review). Merge the current mute policy into the denylist
+    # survive a restart and still be offerable as a running gag. Merge the current mute policy into the denylist
     # AND purge any matching buckets already on disk.
     _muted_at_boot = muted_entity_ids(config.cache_dir)
     evening_ledger = EveningLedger.load(
@@ -833,7 +831,9 @@ async def startup():
         release_campaign=release_campaign,
         home_context_director=HomeContextDirector(),
         home_authorization=home_authorization,
-        home_entity_ids_observer=_observe_home_entity_ids if home_authorization.allows_household_moments else None,
+        home_compatibility_status="checking",
+        home_context_requested=home_context_explicit_choice is True,
+        home_bindings_adopter=_adopt_home_compatibility,
         session_stopped=_session_stopped,
         chaos_mode_active=_read_persisted_chaos_mode(config),
         immediate_audio_index=_build_immediate_audio_index(
@@ -1046,10 +1046,9 @@ async def startup():
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
     app.state.home_context_off_ledger_persist_task = None
-    if home_authorization.mode is HomeAuthorizationMode.LEGACY:
-        # Already-sealed installations export without HA polling. Schedule only
-        # after audio tasks exist; all snapshot I/O runs in the worker above.
-        _observe_home_entity_ids(None)
+    home_compatibility_task = asyncio.create_task(_verify_home_compatibility(), name="private-home-compatibility")
+    app.state.legacy_home_provenance_task = home_compatibility_task
+    _register_background_task(app.state, home_compatibility_task)
 
     if explicit_home_context_off_purge_pending:
 
@@ -1091,7 +1090,7 @@ async def startup():
             return
         if (
             origin.status is FirstListenInstallOriginStatus.EXISTING
-            and home_authorization.mode is not HomeAuthorizationMode.LEGACY
+            and not legacy_origin_verified
             and first_listen_origin_capture.database_bare
         ):
             # A partial cold boot can leave behind a new SQLite file before the
@@ -1112,15 +1111,9 @@ async def startup():
                 and not bool(app.state.home_context_choice_explicit)
                 and origin.status is FirstListenInstallOriginStatus.EXISTING
             ):
-                # Compatibility is reversible and starts only after both audio
-                # workers have been scheduled.  A coordinator already created
-                # by the producer is explicitly re-enabled; otherwise it will
-                # observe the updated config when it initializes.
-                config.homeassistant.context_enabled = True
-                coordinator = getattr(state, "ha_context_refresh_mailbox", None)
-                if coordinator is not None and hasattr(coordinator, "enable"):
-                    coordinator.enable()
-                logger.info("Restored omitted Home context for a proven pre-feature install")
+                # This is only intent. The producer adopts verified authority
+                # and committed consent before allowing any background Home read.
+                state.home_context_requested = True
 
     first_listen_origin_task = asyncio.create_task(
         _resolve_first_listen_install_origin(),

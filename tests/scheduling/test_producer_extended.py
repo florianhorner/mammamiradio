@@ -45,6 +45,7 @@ from mammamiradio.scheduling.producer import (
     _maybe_arm_first_home_context_moment,
     run_producer,
 )
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 MODULE = "mammamiradio.scheduling.producer"
@@ -72,7 +73,7 @@ def _make_state() -> StationState:
         listeners_active=1,  # simulate a live listener so the producer gate passes
         # Most tests in this pre-R0 suite exercise the established household
         # feature set. New narrow-mode tests override this explicitly.
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
 
 
@@ -541,7 +542,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_context.events_summary_en = "- Coffee machine: off -> on (1 min ago)"
     mock_context.scored = [
         ScoredEntity(
-            entity_id="switch.bar_kaffeemaschine_steckdose",
+            entity_id="switch.example_coffee_switch",
             area="Kitchen",
             domain="switch",
             score=1.4,
@@ -556,7 +557,7 @@ async def test_ha_context_refreshed_for_banter(tmp_path):
     mock_context.events = deque(
         [
             HomeEvent(
-                entity_id="switch.bar_kaffeemaschine_steckdose",
+                entity_id="switch.example_coffee_switch",
                 label="La macchina del caffe",
                 old_state="spento/a",
                 new_state="acceso/a",
@@ -860,9 +861,7 @@ async def test_ha_context_schedules_label_generation_fire_and_forget(tmp_path):
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
     banter_lines = [(host, "Che bella giornata!")]
 
-    raw_states = {
-        "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}
-    }
+    raw_states = {"switch.example_coffee_switch": {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}}
     mock_context = MagicMock()
     mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = "Il tempo e' bello"
@@ -875,11 +874,11 @@ async def test_ha_context_schedules_label_generation_fire_and_forget(tmp_path):
     mock_context.events_summary_en = ""
     mock_context.scored = [
         ScoredEntity(
-            entity_id="switch.bar_kaffeemaschine_steckdose",
+            entity_id="switch.example_coffee_switch",
             area="Kitchen",
             domain="switch",
             score=1.4,
-            raw_state=raw_states["switch.bar_kaffeemaschine_steckdose"],
+            raw_state=raw_states["switch.example_coffee_switch"],
             label_it="La macchina del caffe",
             label_en="Coffee machine",
             summary_line="La macchina del caffe: acceso/a",
@@ -909,7 +908,7 @@ async def test_ha_context_schedules_label_generation_fire_and_forget(tmp_path):
     assert mock_schedule.call_args.args[0] == raw_states
     assert mock_schedule.call_args.kwargs["cache_dir"] == config.cache_dir
     score_map = mock_schedule.call_args.kwargs["score_by_entity"]
-    assert score_map["switch.bar_kaffeemaschine_steckdose"] == 1.4
+    assert score_map["switch.example_coffee_switch"] == 1.4
 
 
 @pytest.mark.asyncio
@@ -925,9 +924,7 @@ async def test_ha_context_scheduling_exception_does_not_stop_production(tmp_path
     host = config.hosts[0] if config.hosts else HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="warm")
     banter_lines = [(host, "Che bella giornata!")]
 
-    raw_states = {
-        "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}
-    }
+    raw_states = {"switch.example_coffee_switch": {"state": "on", "attributes": {"friendly_name": "Coffee machine"}}}
     mock_context = MagicMock()
     mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = "Il tempo e' bello"

@@ -10,6 +10,7 @@ import pytest
 
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.moment_receipts import MomentStore
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 from tests.web.test_route_smoke import _make_app
 
 
@@ -78,7 +79,7 @@ async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_ro
     config.homeassistant.context_enabled = config.homeassistant.enabled = True
     config.ha_token = "test-token"
     state.ha_context = "enabled"
-    state.home_authorization = HomeAuthorization.legacy()
+    state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     state.moment_store = MomentStore()
     state.ha_last_event_label = "Porta ingresso"
     minute = (time.time() // 60 - 1) * 60
@@ -112,3 +113,19 @@ async def test_public_status_if_none_match_state_change_returns_200_with_new_eta
     second = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
     assert second.status_code == 200 and second.headers["ETag"] != first.headers["ETag"]
     assert second.json()["session_stopped"] is True
+
+
+@pytest.mark.asyncio
+async def test_public_status_does_not_serialize_private_profile_identity():
+    from dataclasses import replace
+
+    app = _make_app()
+    bindings = replace(SYNTHETIC_BINDINGS, identity="private-profile-identity-canary")
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(bindings)
+    app.state.station_state.home_compatibility_status = "verified"
+    response = await _get_public_status(app)
+    assert response.status_code == 200
+    assert "private-profile-identity-canary" not in response.text
+    assert "home_compatibility_status" not in response.text
+    assert "resident_returns" not in response.text
+    assert all(row.entity_id not in response.text for row in bindings.entities)

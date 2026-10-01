@@ -85,6 +85,7 @@ from mammamiradio.web.streamer import (
     router,
     run_playback_loop,
 )
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 SAME_ORIGIN = {"Origin": "http://testserver"}
@@ -10989,7 +10990,7 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 @pytest.mark.asyncio
 async def test_homeassistant_labels_regenerate_schedules_once(tmp_path):
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.cache_dir = tmp_path
     app.state.config.anthropic_api_key = "sk-ant-test"
     cached_context = SimpleNamespace(
@@ -11022,7 +11023,7 @@ async def test_homeassistant_labels_regenerate_excludes_entity_muted_since_last_
     from mammamiradio.home.entity_policy import set_entity_muted
     from mammamiradio.home.ha_context import HomeContext, ScoredEntity
 
-    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    muted_id = "switch.example_coffee_switch"
     set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
 
     stale_cache = HomeContext(
@@ -11046,7 +11047,7 @@ async def test_homeassistant_labels_regenerate_excludes_entity_muted_since_last_
     )
 
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.cache_dir = tmp_path
     app.state.config.anthropic_api_key = "sk-ant-test"
 
@@ -11123,7 +11124,7 @@ async def test_homeassistant_labels_regenerate_has_no_candidates_in_narrow_mode(
 @pytest.mark.asyncio
 async def test_homeassistant_labels_regenerate_disabled_context_returns_unscheduled():
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.homeassistant.context_enabled = False
     app.state.config.anthropic_api_key = "sk-ant-test"
 
@@ -11146,7 +11147,7 @@ async def test_homeassistant_labels_regenerate_no_candidates_is_not_a_conflict()
     # schedule_label_generation returns False with nothing to label; the route
     # must report a successful no-op, not a bogus 409 "already in progress".
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.anthropic_api_key = "sk-ant-test"
     cached_context = SimpleNamespace(
         raw_states={"light.counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}}},
@@ -11394,7 +11395,7 @@ async def test_homeassistant_entity_policy_mute_discards_baselines_before_later_
     entity_id = "switch.coffee_machine"
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.station_state.ha_context_refresh_mailbox = MagicMock()
     prior = HomeContext(
         raw_states={entity_id: {"state": "off", "attributes": {}}},
@@ -11632,7 +11633,9 @@ async def test_homeassistant_entity_policy_hard_mute_blocks_late_label_catalog_p
         patch("mammamiradio.home.catalog._call_anthropic_labels", side_effect=cancellation_resistant_provider),
         patch("mammamiradio.home.catalog.save_catalog") as save,
     ):
-        assert catalog.schedule_label_generation(states, cache_dir=tmp_path, config=app.state.config, force=True)
+        assert catalog.schedule_label_generation(
+            states, cache_dir=tmp_path, config=app.state.config, force=True, bindings=SYNTHETIC_BINDINGS
+        )
         await asyncio.wait_for(provider_entered.wait(), timeout=1)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.patch(
@@ -12443,7 +12446,7 @@ async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_f
     )
     context = HomeContext(scored=[presence], timestamp=time.time())
     state = app.state.station_state
-    state.home_context_director = HomeContextDirector()
+    state.home_context_director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     state.home_context_director.observe([], policy_revision=0)
     queued = Segment(
         type=SegmentType.BANTER,
@@ -12489,11 +12492,11 @@ async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_pat
 
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
-    director = HomeContextDirector()
+    director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     director.observe(
         [
             DirectorObservation(
-                entity_id="weather.forecast_home", domain="weather", state="sunny", score=9.0, temperature_c=24.0
+                entity_id="weather.example_weather", domain="weather", state="sunny", score=9.0, temperature_c=24.0
             )
         ],
         policy_revision=0,
@@ -12511,7 +12514,7 @@ async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_pat
         muted = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "weather.forecast_home", "muted": True},
+            json={"entity_id": "weather.example_weather", "muted": True},
         )
 
     assert muted.status_code == 200
@@ -14404,7 +14407,7 @@ async def test_home_context_enable_rejects_preview_after_policy_revision_changes
             headers=ACTIVE_SETUP_HEADERS,
         ) as client:
             preview = await client.post("/api/setup/home-context-preview", json={})
-            set_entity_muted(tmp_path, "weather.forecast_home", True)
+            set_entity_muted(tmp_path, "weather.example_weather", True)
             enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
 
     assert preview.status_code == 200
@@ -14428,7 +14431,7 @@ async def test_home_context_enable_compensates_policy_change_while_choice_persis
     app.state.config.ha_token = "supervisor-token"
     app.state.station_state.home_authorization = HomeAuthorization.narrow()
     app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
-    entity_id = "weather.forecast_home"
+    entity_id = "weather.example_weather"
     set_entity_muted(tmp_path, entity_id, True)
     preview_result = HomeContextPreviewResult(
         kind="fresh",
@@ -14499,7 +14502,7 @@ async def test_home_context_enable_serializes_entity_policy_widening(tmp_path):
     app.state.config.ha_token = "supervisor-token"
     app.state.station_state.home_authorization = HomeAuthorization.narrow()
     app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
-    entity_id = "weather.forecast_home"
+    entity_id = "weather.example_weather"
     set_entity_muted(tmp_path, entity_id, True)
     preview_result = HomeContextPreviewResult(
         kind="fresh",
@@ -14633,7 +14636,7 @@ async def test_home_context_enable_rejects_stale_preview_proof(tmp_path, invalid
             elif invalidation == "ha_config":
                 app.state.config.ha_token = "rotated-supervisor-token"
             else:
-                app.state.station_state.home_authorization = HomeAuthorization.legacy()
+                app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
 
             enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
 
@@ -14710,11 +14713,11 @@ async def test_keep_home_context_off_clears_all_runtime_context_and_generated_br
     state.ha_running_gag_key = "private-gag"
     state.last_banter_home_fact = MagicMock()
 
-    director = HomeContextDirector()
+    director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     director.observe(
         [
             DirectorObservation(
-                entity_id="weather.forecast_home",
+                entity_id="weather.example_weather",
                 domain="weather",
                 state="sunny",
                 score=9.0,

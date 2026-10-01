@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from mammamiradio.home.ha_context import ENTITY_LABELS, STATE_TRANSLATIONS
+from mammamiradio.home.ha_context import STATE_TRANSLATIONS
 from mammamiradio.home.ha_enrichment import (
     EVENT_BUFFER_SIZE,
     EVENT_RETENTION_SECONDS,
@@ -13,6 +13,7 @@ from mammamiradio.home.ha_enrichment import (
     diff_states,
     prune_events,
 )
+from tests.home_fixtures import ENTITY_LABELS
 
 
 def _event(n: int, *, timestamp: float) -> HomeEvent:
@@ -27,10 +28,10 @@ def _event(n: int, *, timestamp: float) -> HomeEvent:
 
 def test_diff_states_creates_translated_event():
     old_states = {
-        "switch.bar_kaffeemaschine_steckdose": {"state": "off", "attributes": {}},
+        "switch.example_coffee_switch": {"state": "off", "attributes": {}},
     }
     new_states = {
-        "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {}},
+        "switch.example_coffee_switch": {"state": "on", "attributes": {}},
     }
 
     events = diff_states(
@@ -52,12 +53,12 @@ def test_diff_states_creates_translated_event():
 
 def test_diff_states_skips_unknown_but_passes_through_untranslated():
     old_states = {
-        "person.florian_horner": {"state": "unknown", "attributes": {}},
-        "input_select.kaffee_dad_jokes": {"state": "Prima battuta", "attributes": {}},
+        "person.example_resident_one": {"state": "unknown", "attributes": {}},
+        "input_select.example_coffee_joke": {"state": "Prima battuta", "attributes": {}},
     }
     new_states = {
-        "person.florian_horner": {"state": "home", "attributes": {}},
-        "input_select.kaffee_dad_jokes": {"state": "Seconda battuta", "attributes": {}},
+        "person.example_resident_one": {"state": "home", "attributes": {}},
+        "input_select.example_coffee_joke": {"state": "Seconda battuta", "attributes": {}},
     }
 
     events = diff_states(
@@ -71,10 +72,10 @@ def test_diff_states_skips_unknown_but_passes_through_untranslated():
 
     result = list(events)
     # Unknown old state is still skipped
-    assert not any(e.entity_id == "person.florian_horner" for e in result)
+    assert not any(e.entity_id == "person.example_resident_one" for e in result)
     # Untranslated states now pass through as raw values
     assert len(result) == 1
-    assert result[0].entity_id == "input_select.kaffee_dad_jokes"
+    assert result[0].entity_id == "input_select.example_coffee_joke"
     assert result[0].old_state == "Prima battuta"
     assert result[0].new_state == "Seconda battuta"
 
@@ -100,10 +101,10 @@ def test_diff_states_respects_ring_buffer_bound():
         maxlen=EVENT_BUFFER_SIZE,
     )
     old_states = {
-        "lock.lock_ultra_8d3c": {"state": "locked", "attributes": {}},
+        "lock.example_entry_lock": {"state": "locked", "attributes": {}},
     }
     new_states = {
-        "lock.lock_ultra_8d3c": {"state": "unlocked", "attributes": {}},
+        "lock.example_entry_lock": {"state": "unlocked", "attributes": {}},
     }
 
     events = diff_states(
@@ -155,10 +156,10 @@ def test_build_events_summary_strips_angle_brackets_at_llm_boundary():
 def test_diff_states_numeric_passthrough():
     """Numeric states (e.g., power sensor '0' → '450') should generate events."""
     old_states = {
-        "sensor.bar_bali_boot_steckdose_power": {"state": "0", "attributes": {}},
+        "sensor.example_laundry_power": {"state": "0", "attributes": {}},
     }
     new_states = {
-        "sensor.bar_bali_boot_steckdose_power": {"state": "450", "attributes": {}},
+        "sensor.example_laundry_power": {"state": "450", "attributes": {}},
     }
 
     events = diff_states(
@@ -172,7 +173,7 @@ def test_diff_states_numeric_passthrough():
 
     result = list(events)
     assert len(result) == 1
-    assert result[0].entity_id == "sensor.bar_bali_boot_steckdose_power"
+    assert result[0].entity_id == "sensor.example_laundry_power"
     assert result[0].old_state == "0"
     assert result[0].new_state == "450"
 
@@ -180,10 +181,10 @@ def test_diff_states_numeric_passthrough():
 def test_diff_states_numeric_no_translation_passthrough():
     """When STATE_TRANSLATIONS has no entry, raw value is used as-is."""
     old_states = {
-        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "0", "attributes": {}},
+        "sensor.example_coffee_power": {"state": "0", "attributes": {}},
     }
     new_states = {
-        "sensor.kuche_kaffeemaschine_steckdose_power": {"state": "1200", "attributes": {}},
+        "sensor.example_coffee_power": {"state": "1200", "attributes": {}},
     }
 
     events = diff_states(
@@ -205,10 +206,10 @@ def test_diff_states_numeric_no_translation_passthrough():
 def test_diff_states_skips_ignored_states():
     """States in IGNORED_STATES (unknown, unavailable) must be silently skipped."""
     old_states = {
-        "switch.bar_kaffeemaschine_steckdose": {"state": "unknown", "attributes": {}},
+        "switch.example_coffee_switch": {"state": "unknown", "attributes": {}},
     }
     new_states = {
-        "switch.bar_kaffeemaschine_steckdose": {"state": "on", "attributes": {}},
+        "switch.example_coffee_switch": {"state": "on", "attributes": {}},
     }
     events = diff_states(
         old_states,

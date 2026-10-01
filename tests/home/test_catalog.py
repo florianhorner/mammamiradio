@@ -13,7 +13,6 @@ import pytest
 
 from mammamiradio.home.catalog import (
     CATALOG_FILENAME,
-    ENTITY_LABELS,
     compute_hash,
     generate_label_catalog,
     load_catalog,
@@ -25,6 +24,7 @@ from mammamiradio.home.catalog import (
     select_label_candidates,
     validate_label,
 )
+from tests.home_fixtures import ENTITY_LABELS, SYNTHETIC_BINDINGS
 
 
 @pytest.fixture(autouse=True)
@@ -81,10 +81,10 @@ def _config():
 
 
 def test_resolve_label_precedence_curated_catalog_fallback(tmp_path):
-    curated = resolve_label("switch.bar_kaffeemaschine_steckdose", _state(), cache_dir=tmp_path)
+    curated = resolve_label("switch.example_coffee_switch", _state(), cache_dir=tmp_path, bindings=SYNTHETIC_BINDINGS)
     assert curated is not None
     assert curated.tier == "curated"
-    assert curated.label_it == ENTITY_LABELS["switch.bar_kaffeemaschine_steckdose"]
+    assert curated.label_it == ENTITY_LABELS["switch.example_coffee_switch"]
 
     entity_id = "light.counter"
     state = _state("Counter light")
@@ -100,20 +100,28 @@ def test_resolve_label_precedence_curated_catalog_fallback(tmp_path):
     }
     save_catalog(tmp_path, catalog)
 
-    generated = resolve_label(entity_id, state, cache_dir=tmp_path)
+    generated = resolve_label(entity_id, state, cache_dir=tmp_path, bindings=SYNTHETIC_BINDINGS)
     assert generated is not None
     assert generated.tier == "catalog"
     assert generated.label_it == "Luce bancone"
 
     stale_state = _state("Renamed light")
-    fallback = resolve_label(entity_id, stale_state, cache_dir=tmp_path)
+    fallback = resolve_label(entity_id, stale_state, cache_dir=tmp_path, bindings=SYNTHETIC_BINDINGS)
     assert fallback is not None
     assert fallback.tier == "fallback"
     assert fallback.label_it == "Renamed light (Kitchen)"
 
 
 def test_resolve_label_drops_entity_without_safe_name_or_catalog(tmp_path):
-    assert resolve_label("sensor.unlabeled_helper", {"state": "on", "attributes": {}}, cache_dir=tmp_path) is None
+    assert (
+        resolve_label(
+            "sensor.unlabeled_helper",
+            {"state": "on", "attributes": {}},
+            cache_dir=tmp_path,
+            bindings=SYNTHETIC_BINDINGS,
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -121,7 +129,7 @@ def test_resolve_label_drops_entity_without_safe_name_or_catalog(tmp_path):
     [
         # HA's default friendly_name for an unnamed entity is the snake_case
         # object_id — must never reach the host (anti-illusion guard).
-        ("fan.kuche_lufter_shelly", "kuche_lufter_shelly"),
+        ("fan.example_kitchen_fan_shelly", "example_kitchen_fan_shelly"),
         # A full dotted entity_id leaking through friendly_name.
         ("light.office", "light.office"),
     ],
@@ -131,7 +139,7 @@ def test_resolve_label_fallback_drops_raw_object_ids(tmp_path, entity_id, friend
     # validate_label rejects these strings; the fallback tier must honor that
     # and drop the entity rather than airing a raw id.
     assert not validate_label(friendly_name, entity_id)
-    assert resolve_label(entity_id, state, cache_dir=tmp_path) is None
+    assert resolve_label(entity_id, state, cache_dir=tmp_path, bindings=SYNTHETIC_BINDINGS) is None
 
 
 def test_load_catalog_corrupt_json_degrades_to_empty(tmp_path):
@@ -190,6 +198,7 @@ def test_select_label_candidates_sorts_by_score_and_caps_tokens(tmp_path):
         score_by_entity=scores,
         max_entities=50,
         max_input_tokens=800,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     assert len(selected) < 50
@@ -220,9 +229,13 @@ async def test_generate_label_catalog_lock_contention_calls_llm_once(tmp_path):
         ]
 
     with patch("mammamiradio.home.catalog._call_anthropic_labels", new=fake_call):
-        first = asyncio.create_task(generate_label_catalog(states, cache_dir=tmp_path, config=config))
+        first = asyncio.create_task(
+            generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
+        )
         await started.wait()
-        second = asyncio.create_task(generate_label_catalog(states, cache_dir=tmp_path, config=config))
+        second = asyncio.create_task(
+            generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
+        )
         await asyncio.sleep(0)
         release.set()
         await asyncio.gather(first, second)
@@ -249,7 +262,9 @@ async def test_generate_label_catalog_failure_preserves_old_catalog(tmp_path):
     )
 
     with patch("mammamiradio.home.catalog._call_anthropic_labels", new=AsyncMock(side_effect=RuntimeError("429"))):
-        result = await generate_label_catalog({entity_id: state}, cache_dir=tmp_path, config=config, force=True)
+        result = await generate_label_catalog(
+            {entity_id: state}, cache_dir=tmp_path, config=config, force=True, bindings=SYNTHETIC_BINDINGS
+        )
 
     assert result["entries"][entity_id]["label_it"] == "Vecchia luce"
     assert (
@@ -279,7 +294,9 @@ async def test_generate_label_catalog_persist_failure_preserves_old_catalog(tmp_
         patch("mammamiradio.home.catalog._call_anthropic_labels", new=fresh_labels),
         patch("mammamiradio.home.catalog.save_catalog", return_value=False) as save,
     ):
-        result = await generate_label_catalog({entity_id: state}, cache_dir=tmp_path, config=config, force=True)
+        result = await generate_label_catalog(
+            {entity_id: state}, cache_dir=tmp_path, config=config, force=True, bindings=SYNTHETIC_BINDINGS
+        )
 
     save.assert_called_once()
     # Returned catalog and on-disk file both keep the old label, not the new one.
@@ -296,11 +313,11 @@ async def test_schedule_label_generation_flag_prevents_task_buildup(tmp_path):
     states = {"light.counter": _state("Counter light")}
 
     with patch("mammamiradio.home.catalog.generate_label_catalog", new=AsyncMock(return_value={})):
-        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
-        assert not schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
+        assert not schedule_label_generation(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
         await asyncio.sleep(0)
 
 
@@ -315,12 +332,12 @@ async def test_schedule_label_generation_resets_flag_after_failure(tmp_path):
         "mammamiradio.home.catalog.generate_label_catalog",
         new=AsyncMock(side_effect=RuntimeError("boom")),
     ):
-        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
         # Let the background task run to completion (and hit its finally block).
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         # Flag was reset despite the failure: a new refresh can be scheduled.
-        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
@@ -351,7 +368,7 @@ async def test_scheduled_label_generation_revoked_before_provider_call_sends_not
         patch("mammamiradio.home.catalog._call_anthropic_labels", new=provider),
         patch("mammamiradio.home.catalog.save_catalog") as save,
     ):
-        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
         await asyncio.wait_for(scheduled_entered.wait(), timeout=1.0)
         await catalog.revoke_label_generation()
         await asyncio.sleep(0)
@@ -404,7 +421,9 @@ async def test_cancellation_resistant_label_completion_after_revoke_cannot_save_
         patch("mammamiradio.home.catalog._call_anthropic_labels", new=provider),
         patch("mammamiradio.home.catalog.save_catalog") as save,
     ):
-        assert schedule_label_generation(states={entity_id: state}, cache_dir=tmp_path, config=config, force=True)
+        assert schedule_label_generation(
+            states={entity_id: state}, cache_dir=tmp_path, config=config, force=True, bindings=SYNTHETIC_BINDINGS
+        )
         await asyncio.wait_for(provider_entered.wait(), timeout=1.0)
         await catalog.revoke_label_generation()
         await asyncio.sleep(0)
@@ -413,7 +432,7 @@ async def test_cancellation_resistant_label_completion_after_revoke_cannot_save_
     save.assert_not_called()
     assert not catalog.generation_in_progress()
     assert load_catalog(tmp_path)["entries"][entity_id]["label_it"] == "Vecchia luce"
-    assert resolve_label(entity_id, state, cache_dir=tmp_path).label_it == "Vecchia luce"
+    assert resolve_label(entity_id, state, cache_dir=tmp_path, bindings=SYNTHETIC_BINDINGS).label_it == "Vecchia luce"
     assert (
         json.loads((tmp_path / CATALOG_FILENAME).read_text(encoding="utf-8"))["entries"][entity_id]["label_it"]
         == "Vecchia luce"
@@ -545,7 +564,7 @@ async def test_label_truncation_is_bounded_and_rebudgets_first_half(
     labels = [{"entity_id": accepted_id, "label_it": "Luce bancone", "label_en": "Counter light"}]
     # Even syntactically valid JSON must be discarded when marked truncated.
     create.side_effect = [_label_response(labels, stop_reason=stop) for stop in stops]
-    result = await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+    result = await generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
     assert create.await_count == expected_calls
     first = _request_entities(create.await_args_list[0])
     assert len(first) == count
@@ -574,7 +593,9 @@ async def test_successful_half_batches_leave_pending_selection(tmp_path, label_p
 
     create.side_effect = respond
     # First attempt: 4 -> 2, both truncated. Existing data stays intact.
-    assert (await generate_label_catalog(states, cache_dir=tmp_path, config=config))["entries"] == {}
+    assert (await generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS))[
+        "entries"
+    ] == {}
     create.reset_mock()
     seen.clear()
 
@@ -586,12 +607,12 @@ async def test_successful_half_batches_leave_pending_selection(tmp_path, label_p
 
     create.side_effect = successful_half
     for _ in range(3):
-        await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+        await generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
     original = seen[0]
     assert set(original) == set(states)
     assert seen == [original, original[:2], original[2:], [original[2]], [original[3]]]
     assert set(load_catalog(tmp_path)["entries"]) == set(states)
-    await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+    await generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
     assert create.await_count == 5
 
 
@@ -615,7 +636,7 @@ async def test_revoke_during_truncated_provider_call_prevents_retry_and_save(tmp
 
     create.side_effect = cancellation_resistant
     with patch("mammamiradio.home.catalog.save_catalog") as save:
-        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
         await asyncio.wait_for(entered.wait(), timeout=1)
         await catalog.revoke_label_generation()
         await asyncio.sleep(0)
@@ -642,7 +663,7 @@ async def test_catalog_failure_preserves_bytes_without_logging_private_data(tmp_
             text=canary if failure == "parse" else None,
         )
     with patch("mammamiradio.home.catalog.os.replace", side_effect=OSError(canary)):
-        result = await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+        result = await generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
     assert result["entries"] == load_catalog(tmp_path)["entries"] == {}
     assert (tmp_path / CATALOG_FILENAME).read_bytes() == before
     assert caplog.records
@@ -700,7 +721,9 @@ async def test_label_client_disables_sdk_retries(tmp_path, monkeypatch):
     built = _patch_anthropic(monkeypatch, AsyncMock(return_value=_label_response([])))
     config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
 
-    await generate_label_catalog({"light.counter": _state("Counter light")}, cache_dir=tmp_path, config=config)
+    await generate_label_catalog(
+        {"light.counter": _state("Counter light")}, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS
+    )
 
     assert built
     assert built[0].kwargs.get("max_retries") == 0
@@ -733,7 +756,9 @@ async def test_stalled_provider_cannot_hold_the_catalog_lock_open_ended(tmp_path
     )
 
     result = await asyncio.wait_for(
-        generate_label_catalog({entity_id: state}, cache_dir=tmp_path, config=config, force=True),
+        generate_label_catalog(
+            {entity_id: state}, cache_dir=tmp_path, config=config, force=True, bindings=SYNTHETIC_BINDINGS
+        ),
         timeout=5,
     )
 
@@ -768,7 +793,7 @@ async def test_half_batch_retry_survives_a_slow_first_attempt(tmp_path, monkeypa
     states = {f"light.e{index}": _state(f"Counter {index}") for index in range(50)}
     config = SimpleNamespace(anthropic_api_key="sk-ant-test", models=_models_section())
 
-    result = await generate_label_catalog(states, cache_dir=tmp_path, config=config)
+    result = await generate_label_catalog(states, cache_dir=tmp_path, config=config, bindings=SYNTHETIC_BINDINGS)
 
     assert len(seen) == 2
     assert seen[1] < seen[0]

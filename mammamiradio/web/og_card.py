@@ -64,7 +64,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 def _load_font(size: int, italic: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Best-effort font loader.
 
-    Tries bundled fonts/Playfair-*.ttf first (cathedral path), falls back to
+    Tries bundled fonts/Playfair-*.ttf first, falls back to
     macOS system fonts, then Pillow default. Default looks rough but never
     crashes — INSTANT AUDIO principle extends to social previews.
     """
