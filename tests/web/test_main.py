@@ -865,16 +865,17 @@ async def test_first_listen_explicit_keep_off_wins_over_late_existing_install_mi
     from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
     from mammamiradio.core.models import Track
     from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+    from mammamiradio.web import streamer
 
     config = _privacy_startup_config(tmp_path)
     config.is_addon = True
     config.homeassistant.context_enabled = True
-    config.cache_dir.mkdir(parents=True)
-    (config.cache_dir / "mammamiradio.db").touch()
+    _seed_private_home(config, monkeypatch)
     tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
     migration_entered = asyncio.Event()
     allow_migration = asyncio.Event()
     monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+    monkeypatch.setattr(streamer, "_persist_home_context_choice", AsyncMock())
 
     async def migrate(*args, **kwargs):
         migration_entered.set()
@@ -893,13 +894,15 @@ async def test_first_listen_explicit_keep_off_wins_over_late_existing_install_mi
 
         await startup()
         await migration_entered.wait()
-        app.state.home_context_choice_explicit = True
-        config.homeassistant.context_enabled = False
+        await streamer._apply_home_context_choice(app.state, enabled=False)
         allow_migration.set()
         await app.state.first_listen_origin_task
+        assert app.state.station_state.home_context_requested is False
+        await _adopt_private_home()
 
     assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
     assert config.homeassistant.context_enabled is False
+    assert app.state.station_state.home_context_requested is False
     assert app.state.home_context_choice_explicit is True
 
 
