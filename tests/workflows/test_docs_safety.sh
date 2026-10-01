@@ -91,6 +91,8 @@ expect_default_install_guard() {
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
   cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
 
   for file in \
     CLAUDE.md \
@@ -112,11 +114,9 @@ expect_default_install_guard() {
     docs/runbooks/ha-addon.md \
     docs/release-process.md \
     docs/music-sources.md \
-    docs/2026-05-30-ha-context-ingestion-pipeline.md \
     scripts/showreel/README.md \
     scripts/showreel_out/door-bentornato-fable-v2-notes.md \
-    scripts/showreel_out/ma-pr-3836-notes.md \
-    proof/h4-journey-validation.md; do
+    scripts/showreel_out/ma-pr-3836-notes.md; do
     mkdir -p "$(dirname "$fixture_root/$file")"
     printf '# Safe\n' > "$fixture_root/$file"
   done
@@ -128,6 +128,8 @@ expect_default_install_guard() {
   printf '# Canonical guide\n\n`sed -i old/new repository-file`\n\nSettings > Add-ons > Add-on Store.\n' \
     > "$fixture_root/$guarded_file"
 
+  git -C "$fixture_root" init -q
+  git -C "$fixture_root" add .
   if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
     echo "FAIL: default install scope omitted $guarded_file"
     exit 1
@@ -168,6 +170,8 @@ expect_default_listing_guard() {
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
   cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
 
   for file in \
     CLAUDE.md \
@@ -193,6 +197,8 @@ expect_default_listing_guard() {
   # shellcheck disable=SC2059  # caller supplies the printf format deliberately
   printf "$content" > "$fixture_root/$guarded_file"
 
+  git -C "$fixture_root" init -q
+  git -C "$fixture_root" add .
   if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
     echo "FAIL: default listing scope omitted $guarded_file ($label)"
     exit 1
@@ -228,6 +234,8 @@ _listing_arg_fixture() {
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
   cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
 
   for file in \
     CLAUDE.md \
@@ -311,6 +319,8 @@ expect_default_persistence_guard() {
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
   cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
 
   for file in \
     CLAUDE.md \
@@ -332,11 +342,9 @@ expect_default_persistence_guard() {
     docs/runbooks/ha-addon.md \
     docs/release-process.md \
     docs/music-sources.md \
-    docs/2026-05-30-ha-context-ingestion-pipeline.md \
     scripts/showreel/README.md \
     scripts/showreel_out/door-bentornato-fable-v2-notes.md \
-    scripts/showreel_out/ma-pr-3836-notes.md \
-    proof/h4-journey-validation.md; do
+    scripts/showreel_out/ma-pr-3836-notes.md; do
     mkdir -p "$(dirname "$fixture_root/$file")"
     printf '# Safe\n' > "$fixture_root/$file"
   done
@@ -345,6 +353,8 @@ expect_default_persistence_guard() {
   printf '# Unsafe durability\n\nAdmin controls persist to `/data/options.json` across restarts.\n' \
     > "$fixture_root/$guarded_file"
 
+  git -C "$fixture_root" init -q
+  git -C "$fixture_root" add .
   if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
     echo "FAIL: default persistence scope omitted $guarded_file"
     exit 1

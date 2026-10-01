@@ -37,6 +37,30 @@ def test_bindings_are_immutable_and_nonrevealing(bindings):
     assert bindings.labels_it
 
 
+def test_shipped_fixture_keeps_device_prose_anonymous():
+    """Entity prefixes alone cannot prevent copied household labels or directives."""
+    document = synthetic_home_document()
+    labels = {row["role"]: (row["label_en"], row["label_it"]) for row in document["entities"]}
+    assert {role: labels[role] for role in ("television", "living_speaker", "dining_speaker")} == {
+        "television": ("Television", "Televisore"),
+        "living_speaker": ("Speaker one", "Altoparlante uno"),
+        "dining_speaker": ("Speaker two", "Altoparlante due"),
+    }
+    directives = {
+        row["entity_id"]: row["directive"]
+        for row in document["reactive_triggers"]
+        if row["entity_id"].startswith("vacuum.")
+    }
+    assert directives == {
+        "vacuum.example_vacuum_one": (
+            "L'aspirapolvere uno ha iniziato a pulire. Commentate brevemente la pulizia con ironia."
+        ),
+        "vacuum.example_vacuum_two": (
+            "L'aspirapolvere due ha iniziato a pulire. Fate una breve battuta sulla pulizia."
+        ),
+    }
+
+
 def test_empty_legacy_authority_is_rejected():
     with pytest.raises(ValueError):
         HomeAuthorization.legacy(EMPTY_HOME_BINDINGS)

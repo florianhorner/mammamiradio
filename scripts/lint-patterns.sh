@@ -100,6 +100,7 @@ LINT_PATTERNS=(
 DOCS_RETIRED_INSTALL_PATTERNS=(
   'Settings[[:space:]]*(→|>|&gt;)[[:space:]]*Add-ons'
   '[Aa]dd-on [Ss]tore'
+  'Apps[[:space:]]*(→|>|&gt;)[[:space:]]*App store'
 )
 
 # Edge is a deliberate, manually cut channel. A merge to main may build an

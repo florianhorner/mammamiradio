@@ -58,29 +58,7 @@ _FROZEN_BRAND_PROVENANCE = frozenset(
     }
 )
 
-# Keep pre-existing copy fixes out of unrelated plan and proposal PRs. Each
-# entry permits one legacy line at its current line number, not a whole file, so
-# any new occurrence in the same document still fails. Remove an entry when its
-# docs-only correction lands.
-_LEGACY_BRAND_LINES = frozenset(
-    {
-        (
-            "docs/2026-07-27-admitted-audio-queue-refactor.md",
-            12,
-            "Mammami Radio will preserve its current listener, operator, HTTP, and Home",
-        ),
-        (
-            "docs/integrations/ha-privacy-and-upstream-proposals.md",
-            38,
-            "Mammamiradio local behavior: the add-on pushes a compatibility media-player",
-        ),
-        (
-            "docs/integrations/ha-privacy-and-upstream-proposals.md",
-            55,
-            "Mammamiradio local behavior: sensitive domains and attributes are filtered",
-        ),
-    }
-)
+_LEGACY_BRAND_LINES: frozenset[tuple[str, int, str]] = frozenset()
 
 # Skip known binary suffixes. This keeps extensionless text, Dockerfiles, macOS
 # launchers, and SVGs in scope.
@@ -550,14 +528,6 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
     frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
     frozen.mkdir(parents=True)
     (frozen / "ATTRIBUTION.md").write_text(_MISSPELLED_BRAND, encoding="utf-8")
-    legacy_rel, legacy_lineno, legacy_line = sorted(_LEGACY_BRAND_LINES)[0]
-    legacy = tmp_path / legacy_rel
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text(
-        ("\n" * (legacy_lineno - 1)) + f"{legacy_line}\n{_MISSPELLED_BRAND} appears again.\n",
-        encoding="utf-8",
-    )
-
     offenders, unreadable, scanned = _scan_brand(
         tmp_path,
         [
@@ -569,7 +539,6 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
             "clean.html",
             "song.mp3",
             "mammamiradio/assets/imaging/ATTRIBUTION.md",
-            legacy_rel,
         ],
     )
 
@@ -579,7 +548,6 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
         'hyphenated.json:1: {"name": "mammami-radio-explainer"}',
         "underscored.py:1: PACKAGE = 'mammami_radio_tools'",
         "squashed.md:1: Mammamiradio local behavior: does X.",
-        f"{legacy_rel}:{legacy_lineno + 1}: {_MISSPELLED_BRAND} appears again.",
     ]
     assert not unreadable
     assert set(scanned) == {
@@ -589,7 +557,6 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
         "underscored.py",
         "squashed.md",
         "clean.html",
-        legacy_rel,
     }
 
 

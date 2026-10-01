@@ -2,16 +2,10 @@
 # emit-review-evidence.sh — emit or reattest a historical v2 review receipt.
 # RETIRED ADMISSION: manual/legacy only; this utility no longer affects PR readiness.
 #
-# Runtime-independent half of the pre-ship evidence gate. The Claude PreToolUse hook
-# (scripts/hooks/require-preship-squad.sh) cannot fire in Codex — ~/.codex/config.toml has
-# no hook layer at all — so CI needs evidence that travels WITH the PR. The evidence is a
-# content-addressed receipt under proof/preship-reviews/v2/: emission requires a clean
-# review-ledger entry for exactly HEAD's content, and CI re-verifies the binding from
-# trusted base code (.github/workflows/preship-evidence.yml).
-#
-# Receipts are content-addressed additions in per-content directories, so concurrent PRs
-# never conflict on evidence. The legacy fixed-name proof/preship-review.json is retired:
-# 43 commits touched it, a guaranteed merge conflict between any two open PRs.
+# Historical receipts are content-addressed under proof/preship-reviews/v2/.
+# Emission requires a review-ledger entry for exactly HEAD's content. This
+# standalone utility preserves the old format for explicit historical work.
+# It is not an active publication or landing requirement.
 #
 # Two verbs:
 #   scripts/emit-review-evidence.sh                emit a receipt for freshly reviewed HEAD

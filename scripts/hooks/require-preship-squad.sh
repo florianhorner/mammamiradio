@@ -15,16 +15,7 @@
 #      Exception: `gh pr merge --disable-auto` (disarming a queued merge) is
 #      a cancel operation and passes.
 #
-# History of the retired PR rule: on the god-module refactor, PRs were opened with bare
-# `gh pr create` (skipping /ship), so the mandatory pre-ship squad — including its
-# docs/config-consistency check — never ran, and a doc-sync hard-rule violation
-# reached a green, mergeable PR undetected. The merge rule was added 2026-06-12
-# after hand-rolled base-integration (a `git reset --soft origin/main` onto a
-# moved main) nearly shipped phantom reverts; land-pr.sh pins the merge to the
-# exact reviewed head (--match-head-commit). CLAUDE.md: "Pre-ship review squad
-# (mandatory in every worktree)" + "Landing contract".
-#
-# KNOWN LIMITATION (observed live 2026-06-12): this guard greps the WHOLE Bash
+# KNOWN LIMITATION: this guard greps the WHOLE Bash
 # command string, so heredoc/string CONTENT mentioning the guarded commands
 # (e.g. a prompt file being written) trips it too. That false positive is
 # accepted — reword the content or write it via the Write tool. A token-aware

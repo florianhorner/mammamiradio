@@ -11044,6 +11044,7 @@ async def test_homeassistant_labels_regenerate_excludes_entity_muted_since_last_
             )
         ],
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     app = _make_test_app()
@@ -11401,6 +11402,7 @@ async def test_homeassistant_entity_policy_mute_discards_baselines_before_later_
         raw_states={entity_id: {"state": "off", "attributes": {}}},
         timestamp=time.time(),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
     rule = RadioEventRule(id="coffee_started", entity_id=entity_id, to_state="on")
 

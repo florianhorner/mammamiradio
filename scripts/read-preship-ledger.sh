@@ -3,11 +3,10 @@
 #
 # Emits gstack-review-read compatible JSONL (skill/commit/timestamp) followed by
 # ---CONFIG---. The ledger scan is inlined here rather than shelled out to
-# gstack-review-read: that binary lives in the gstack-upgrade clobber zone, and
-# a product repo must not hard-depend on an unversioned third-party binary.
+# gstack-review-read: the reader must not depend on an unversioned third-party binary.
 #
 # Honors $GSTACK_HOME (default ~/.gstack). Exits 0 with only ---CONFIG--- when
-# no ledger exists (land-pr treats that as "no local squad entry").
+# no ledger exists (land-pr treats that as "no local review entry").
 set -euo pipefail
 
 python3 - <<'PY'

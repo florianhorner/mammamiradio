@@ -24,7 +24,7 @@ Usage:
 
     python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
         --lead-track "Night in Venice" --arc banter \
-        --home-event lock.lock_ultra_8d3c:unlocked --mock-ha http://127.0.0.1:8123 \
+        --home-event lock.example_entry_lock:unlocked --mock-ha http://127.0.0.1:8123 \
         --ha-poll-interval 15 \
         --final scripts/showreel_out/door-bentornato.mp3
 """
@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         "--home-event",
         default="",
         metavar="ENTITY:STATE",
-        help="flip a mock-HA entity right after the lead track is caught (e.g. lock.lock_ultra_8d3c:unlocked)",
+        help="flip a mock-HA entity right after the lead track is caught (e.g. lock.example_entry_lock:unlocked)",
     )
     ap.add_argument("--mock-ha", default="http://127.0.0.1:8123", help="mock_ha.py base URL for --home-event")
     ap.add_argument(

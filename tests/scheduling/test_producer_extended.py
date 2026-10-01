@@ -134,6 +134,7 @@ def _first_home_context(*, scored_count: int = 3, summary: str = "Home context r
         timestamp=time.time(),
         scored=[_scored_home_entity(idx) for idx in range(scored_count)],
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
 
@@ -631,6 +632,7 @@ async def test_home_context_disable_during_banter_render_discards_pre_cutover_au
         summary="Kitchen light is on",
         timestamp=time.time(),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     with (
@@ -707,6 +709,7 @@ async def test_home_context_disable_while_prepare_is_paused_never_republishes_st
         raw_states={"light.private_kitchen": {"state": "on", "attributes": {}}},
         timestamp=time.time(),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     async def _paused_prepare(_coordinator):
@@ -2501,6 +2504,7 @@ async def test_producer_consumes_fresh_ha_one_shots_once_then_uses_safe_cache_vi
         timestamp=time.time(),
         events=deque([event], maxlen=20),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     async def _fetch_once(**_kwargs):
@@ -2552,6 +2556,7 @@ async def test_producer_stale_gap_resync_suppresses_delayed_event_consumers(tmp_
         summary="old",
         timestamp=time.time() - 121.0,
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
     delayed_event = HomeEvent("switch.lamp", "Lamp", "off", "on", time.time())
     fresh_context = HomeContext(
@@ -2559,6 +2564,7 @@ async def test_producer_stale_gap_resync_suppresses_delayed_event_consumers(tmp_
         timestamp=time.time(),
         events=deque([delayed_event], maxlen=20),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     async def _fresh_after_gap(**_kwargs):
@@ -2730,6 +2736,7 @@ async def test_timer_interrupt_poll_discards_response_when_home_context_is_disab
     context = HomeContext(
         timestamp=time.time(),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     with (

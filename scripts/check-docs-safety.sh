@@ -83,13 +83,11 @@ DEFAULT_RELEASE_POLICY_FILES=(
   docs/music-sources.md
 )
 
-# Keep this explicit: coupled legacy runtime fixtures are a separate migration.
+# Additional editorial checks for maintained example guides.
 DEFAULT_PUBLIC_EXAMPLE_FILES=(
-  docs/2026-05-30-ha-context-ingestion-pipeline.md
   scripts/showreel/README.md
   scripts/showreel_out/door-bentornato-fable-v2-notes.md
   scripts/showreel_out/ma-pr-3836-notes.md
-  proof/h4-journey-validation.md
 )
 
 if [ "$#" -gt 0 ]; then
@@ -248,6 +246,21 @@ if ! STRUCTURAL_OUTPUT=$(python3 "$SCRIPT_DIR/docs_safety.py" \
   fi
   HITS=$((HITS + STRUCTURAL_HITS))
   FAIL=1
+fi
+
+# Default invocation also covers every tracked text surface. Explicit-file mode
+# remains useful for small documentation fixtures outside a repository.
+if [ "$#" -eq 0 ]; then
+  if ! TREE_OUTPUT=$(python3 "$SCRIPT_DIR/public_tree_safety.py" 2>&1); then
+    printf '%s\n' "$TREE_OUTPUT"
+    TREE_HITS=$(printf '%s\n' "$TREE_OUTPUT" | grep -c '^FAIL:' || true)
+    if [ "$TREE_HITS" -eq 0 ]; then
+      echo "FAIL: repository:1 [public-tree-checker-incomplete]"
+      TREE_HITS=1
+    fi
+    HITS=$((HITS + TREE_HITS))
+    FAIL=1
+  fi
 fi
 
 if [ "$FAIL" -ne 0 ]; then

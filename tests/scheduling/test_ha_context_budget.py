@@ -66,6 +66,8 @@ def _outcome(
 
 
 def _snapshot(summary: str, *, age: float = 0.0, **kwargs) -> HomeContext:
+    if kwargs.get("authorization_mode") == HomeAuthorizationMode.LEGACY.value:
+        kwargs.setdefault("bindings", SYNTHETIC_BINDINGS)
     return HomeContext(summary=summary, timestamp=time.time() - age, **kwargs)
 
 
@@ -87,8 +89,6 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
 
     config = _config(tmp_path, timeout=0.005, poll_interval=0.01)
     state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
-    observer = MagicMock()
-    state.home_entity_ids_observer = observer
     prior = _snapshot("old ambient", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
     response = _states_response(
         [
@@ -168,13 +168,11 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
             await asyncio.wait_for(asyncio.shield(retained), timeout=0.5)
             assert state.ha_context_refresh_stage == "idle"
             publish.assert_not_called()
-            observer.assert_not_called()
 
             adopted, fresh = await coordinator.prepare_for_segment()
             assert fresh
             assert "switch.example_coffee_switch" in adopted.raw_states
             publish.assert_called_once()
-            observer.assert_called_once_with(frozenset({"switch.example_coffee_switch"}))
         finally:
             release_worker.set()
             await coordinator.close()
@@ -819,8 +817,7 @@ async def test_revoke_cancels_inflight_fetch_clears_handoffs_and_requires_explic
 async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_path):
     config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
     prior = _snapshot("private prior", age=0.02)
-    observer = MagicMock()
-    state = StationState(home_entity_ids_observer=observer)
+    state = StationState()
     candidate = _snapshot("private completed candidate")
     outcome = _HomeContextFetchOutcome(
         kind="fresh",
@@ -846,7 +843,6 @@ async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_p
         assert task is not None
         await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
         assert task.done()
-        observer.assert_not_called()
         publish.assert_not_called()
 
         config.homeassistant.context_enabled = False
@@ -858,13 +854,12 @@ async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_p
         assert await coordinator._drain_completed_result() is None
 
         assert coordinator.current_context is None
-        observer.assert_not_called()
         publish.assert_not_called()
         await coordinator.close()
 
 
 @pytest.mark.asyncio
-async def test_normal_completion_rechecks_generation_after_observer_before_publish(tmp_path):
+async def test_normal_completion_rechecks_generation_after_mute_revalidation_before_publish(tmp_path, monkeypatch):
     config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
     prior = _snapshot("private prior", age=0.02)
     state = StationState()
@@ -888,8 +883,13 @@ async def test_normal_completion_rechecks_generation_after_observer_before_publi
         patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
-        observer = MagicMock(side_effect=lambda _entity_ids: coordinator.suspend())
-        state.home_entity_ids_observer = observer
+
+        def revoke_during_revalidation(outcome, _cache_dir):
+            coordinator.suspend()
+            return outcome
+
+        revalidate = MagicMock(side_effect=revoke_during_revalidation)
+        monkeypatch.setattr(producer, "revalidate_home_context_outcome_mutes", revalidate)
         coordinator._start_attempt()
         task = coordinator.in_flight_task
         assert task is not None
@@ -897,7 +897,7 @@ async def test_normal_completion_rechecks_generation_after_observer_before_publi
 
         assert await coordinator._drain_completed_result() is None
 
-        observer.assert_called_once_with(frozenset({"sensor.private_room"}))
+        revalidate.assert_called_once()
         publish.assert_not_called()
         assert coordinator.current_context is None
         await coordinator.close()

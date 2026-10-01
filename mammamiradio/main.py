@@ -1106,14 +1106,13 @@ async def startup():
         # durable I/O; once classified, the lock makes the explicit-choice
         # latch and runtime enablement one ordered decision.
         async with app.state.home_context_choice_lock:
-            if (
-                home_context_explicit_choice is None
-                and not bool(app.state.home_context_choice_explicit)
-                and origin.status is FirstListenInstallOriginStatus.EXISTING
-            ):
-                # This is only intent. The producer adopts verified authority
-                # and committed consent before allowing any background Home read.
-                state.home_context_requested = True
+            if home_context_explicit_choice is not None or bool(app.state.home_context_choice_explicit):
+                return
+            if origin.status is not FirstListenInstallOriginStatus.EXISTING:
+                return
+            # This is only intent. The producer adopts verified authority
+            # and committed consent before allowing any background Home read.
+            state.home_context_requested = True
 
     first_listen_origin_task = asyncio.create_task(
         _resolve_first_listen_install_origin(),
