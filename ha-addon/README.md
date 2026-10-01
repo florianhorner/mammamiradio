@@ -10,8 +10,8 @@ App repository for [mammamiradio](https://github.com/florianhorner/mammamiradio)
 
 Home Assistant Apps require **Home Assistant OS**. Home Assistant Container does not include Apps; if **Settings > Apps** is missing, use the [Docker alternative](../README.md#docker-alternative) instead.
 
-1. In Home Assistant, go to **Settings > Apps** and select **App store**
-2. Open the three-dot menu (top right) and select **Repositories**
+1. In Home Assistant, go to **Settings → Apps → Install app → ⋮ → Repositories**
+2. Open the repository list
 3. Paste `https://github.com/florianhorner/mammamiradio` and select **Add**
 4. Open **Mamma Mi Radio** in the store and select **Install**
 5. Select **Start**, then open the Web UI
@@ -36,7 +36,7 @@ After installing, go to the add-on's **Configuration** tab:
 - **Station Name**: Customize your station's name (default: "Mamma Mi Radio").
 - **AI Quality**: Pick Premium, Balanced, or Economy. The station chooses the right model per task.
 - **Enable Home Assistant Integration**: The master Home Assistant connection (default: on). It enables entity publishing, optional host context, and timer interrupts. Turn it off only when the station should run without Home Assistant access.
-- **Host home context**: A separate privacy choice. Fresh installs leave it off until First Listen audio is confirmed and you explicitly enable a fresh filtered preview; proven pre-feature installs retain their prior behavior. Turning it off keeps entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
+- **Host home context**: A separate privacy choice. Fresh installs leave it off until First Listen audio is confirmed and you explicitly enable a fresh filtered preview; published 3.0.0 preserves prior behavior for proven pre-feature installs. The next update adds a private-profile check; see the [upgrade note](mammamiradio/DOCS.md#upgrade-note-next-update-not-part-of-300). Turning it off keeps entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
 - **Host context refresh interval**: How often that filtered prompt-context snapshot refreshes (default: 300 seconds).
 - **Admin Token** (optional): Shared secret for the admin API. If blank, the add-on trusts your local network — any device on your LAN can open the admin panel (writes stay protected against cross-site requests). Set a value to require the token even on your LAN.
 - **Super Italian Mode**: On, the hosts speak fully in Italian and the listener page goes Italian. Off (default), the hosts target about 75% English with real Italian moments.
@@ -96,7 +96,7 @@ before enabling it.
    [this-device repair](../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
    Home Assistant speakers remain an
    [optional later route](../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
-7. **Make it yours** starts with a recorded evening scene that uses no details from your home. Select **Keep Home private** without fetching Home state, or **Set up AI and Home** after the scene (**Skip this example** goes straight there). In AI setup, add a writing key and select **Choose my Home details**, or select **Skip AI, choose Home details**; then select **Preview my Home** before **Share these details**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. Mute any useful entity the hosts should never use; room-presence stays off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** remain separate: turning host context off keeps entity publishing while stopping full-state and timer reads, host-context polling, and Home-derived host work. Filtered context becomes useful to generated host copy after an AI host key is ready.
+7. **Make it yours** starts with a recorded evening scene that uses no details from your home. Select **Keep Home private** without fetching Home state, or **Set up AI and Home** after the scene (**Skip this example** goes straight there). In AI setup, add a writing key and select **Choose my Home details**, or select **Skip AI, choose Home details**; then select **Preview my Home** before **Share these details**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. The initial scope is coarse daylight and one weather source. Room presence, laundry, and arrivals need later Home Profile support. The Home Assistant integration and **Host home context** remain separate: turning host context off keeps entity publishing while stopping full-state and timer reads, host-context polling, and Home-derived host work. Filtered context becomes useful to generated host copy after an AI host key is ready.
 8. Set **Station Name** to the name people should see and hear; entity IDs and the media-source URI stay stable.
 9. For generated hosts, add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` through **Set up AI and Home** during First Listen, or later under **Motore → Setup** with **Add new host conversations**. It is never required for first audio.
 10. Optionally configure Jamendo under **Motore → Setup → Music sources** after reviewing and accepting the current non-commercial-use boundary.

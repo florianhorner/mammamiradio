@@ -15,7 +15,6 @@ The contract is the door, not the URL.
 
 - [Home Assistant integration](./ha-integration.md) covers setup, station
   control, media-source casting, diagnostics, and recovery behavior.
-- [HA privacy and upstream proposals](./ha-privacy-and-upstream-proposals.md)
   records shipped local privacy behavior and proposal-only upstream ideas.
 
 ## Five-line hello world

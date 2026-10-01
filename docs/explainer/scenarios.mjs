@@ -45,7 +45,7 @@ const scenarios = {
     color: "#f4d048",
     rgb: "244, 208, 72",
     sensors: [
-      ["⌂", "person.guest", "home · 4 min"],
+      ["⌂", "person.example_guest", "home · 4 min"],
       ["↗", "binary_sensor.front_door", "closed"],
       ["☼", "sensor.living_room_lux", "36 lx"],
       ["°", "sensor.outdoor_temperature", "14 °C"],
@@ -86,7 +86,7 @@ const scenarios = {
     rgb: "232, 160, 48",
     sensors: [
       ["◉", "sensor.coffee_machine_power", "842 W"],
-      ["⌂", "person.guest", "home · early"],
+      ["⌂", "person.example_guest", "home · early"],
       ["°", "sensor.kitchen_temperature", "14 °C"],
       ["◌", "binary_sensor.kitchen_presence", "detected"],
       ["☼", "sensor.kitchen_lux", "118 lx"],

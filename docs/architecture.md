@@ -1205,38 +1205,37 @@ Cue text is sanitized via `_sanitize_prompt_data` on the read path before inject
 
 ## Optional Home Assistant context
 
-If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
+Home access requires the HA connection, an explicit Home-context choice, and
+installation authorization. The compatibility behavior below is part of the
+next update, not published 3.0.0.
 
-- `home/authorization.py` is the R0 choke point. A cold install receives only synthetic `sun.ambient` plus `weather.ambient` when exactly one raw `weather.*` source exists and has a valid condition, explicit C/F unit, and temperature; temperature is converted to Celsius and grouped into 5-degree bands. Zero or multiple weather sources yield no weather. Source labels, exact readings, forecasts, locations, areas, residents, and every other HA entity are discarded before downstream matching.
-- a pre-R0 database keeps the established household feature set through a bounded legacy bridge. `home/migration.py` requires matching durable sidecar and DB-local install-origin witnesses; after an exact migration-only 35-ID manifest is observed, it seals only manifest version/digest, app version, and time. It never persists raw states or labels. Sidecar loss is recovered from the DB witness, while malformed or disagreeing witnesses and transplanted provenance fail narrow.
-- authorization mode travels with every `HomeContext`. Fresh, stale, timeout, and module-cache paths reject a context stamped for the other mode. Hard mutes apply both to a raw ambient source and to its synthetic ID.
-- narrow mode skips registry/name loading, generated labels, event diffs, radio-event and ritual matchers, timer interrupts, mood derivation, weather forecast arcs, first-home directives, evening gags, and Moment Receipt projections. `/public-status` and `/status` do not replay persisted household moments, and the manual label-regeneration route reports no candidates.
-- exact-manifest sealing runs once at a time in a tracked background thread so file and directory `fsync` calls never stall the producer event loop. Only an authoritative legacy install receives that observer.
+- `home/compatibility.py` verifies existing private evidence outside audio startup.
+  `home/profile.py` reads `cache/state/home_profile_v1.json` against the frozen
+  snapshot digest, current-owner permissions, installation provenance, and its
+  SQLite identity/content binding. Runtime no longer exports household maps.
+- A verified profile supplies immutable `HomeBindings`: roles, bilingual labels,
+  priorities, ordered triggers, cooldowns, resident aliases, and coffee/weather
+  bindings. Normal filtering and mute controls remain in force.
+- A pending database binding can finish only when its already-written file fully
+  validates. Missing or conflicting evidence is never reconstructed.
+- The producer adopts verified bindings at a segment-preparation boundary,
+  resets Home-derived state, and invalidates context and preview evidence.
+  Cache validity includes binding identity.
+- Pending or failed verification keeps Home cues and background Home reads off;
+  radio playback continues. An old saved enabled option does not grant access.
+- Affected older installations can choose daylight/weather after fresh audible
+  proof and a fresh narrow preview. DB-local consent permanently caps this scope,
+  including after revocation or later profile restoration. Already-narrow
+  installations retain their behavior.
+- Narrow authorization admits synthetic `sun.ambient` and, with exactly one
+  usable weather source, `weather.ambient`. Temperature is converted to Celsius
+  and grouped into five-degree bands. It excludes household entities, generated
+  labels, derived moods, event/ritual matching, timer interrupts, forecasts,
+  running gags, and household receipts.
+- Hard mutes remain independent of verification and consent. An unlocking door
+  never establishes who arrived.
 
-The compatibility update additionally exports `cache/state/home_profile_v1.json`
-through `home/profile.py`. This owner-only snapshot contains the ordered curated
-inventory, bilingual labels, semantic roles, scopes, priorities, trigger rules,
-cooldowns, and anonymous resident/pet bindings. It contains no observed states,
-HA friendly names, credentials, or generated labels. Matching install-origin
-witnesses and valid sealed provenance are prerequisites. An already-sealed
-installation can export at boot without contacting HA.
-
-The database first reserves a random export identity with no digest. This
-pending intent is never ready. File publication and filesystem synchronization
-precede the final binding of the complete canonical document digest; an
-interrupted export can finish only when the file matches the database's own
-intent and the entire compiled snapshot. Conflicting evidence is preserved
-and reported as unready. Export runs once at a time after audio tasks start, and
-retries after a failure on the next observation or boot. This update does not
-consume the snapshot, change authorization, or remove built-in mappings. Schema
-1 preserves the existing fixed mood/formatting semantics; it introduces no new
-consent grants. LEGACY still processes the full filtered HA snapshot, not only
-the curated inventory.
-
-A golden hash pins the complete compiled snapshot, excluding its random identity.
-Keep these constants frozen until the next update can consume existing profiles
-without recompiling them. Semantic roles identify the existing mood/formatting
-rules; their numeric thresholds and ordered logic still live in runtime code.
+The broader behavior below applies only while verified Home access is enabled:
 
 - `ha_context.py` polls the Home Assistant REST API state snapshot on the configured prompt-context interval (default 300s, disable with `ha_context_enabled = false`) and filters it through a default-deny privacy layer
 - sensitive domains (`device_tracker`, `camera`, `alarm_control_panel`), free-text helper domains (`input_text`, `text`), and telemetry/config entities are excluded before prompt assembly
@@ -1254,7 +1253,7 @@ rules; their numeric thresholds and ordered logic still live in runtime code.
 - the weather news flash grounds itself in the real Home Assistant forecast when available, then spins it into absurd local color; with no forecast (HA disconnected or unsupported) it falls back to the fully fictional meteo prompt, so the segment never goes silent. `NEWS_FLASH` shares the same HA-context refresh gate as banter/ad, so the flash reads a freshly refreshed forecast (bounded by the weather cache TTL plus one poll interval) rather than the startup snapshot. The arc follows the station language: Italian stations use `state.ha_weather_arc`, every other language uses `state.ha_weather_arc_en` — never the Italian arc — and the stock fallback line is localized too
 - **temperature normalization.** `home/temperature.py` is the single authority for turning a Home Assistant temperature into Celsius before it reaches a host prompt, the news flash, the Casa card, or the narrow privacy projection. `temperature_unit_of()` reads HA's two conventions (`temperature_unit` for `weather.*`, `unit_of_measurement` for `sensor.*`); `normalize_temperature()` converts °C/°F/K and returns `None` for anything else; `format_celsius()` rounds to one decimal so a converted value is speakable (70 °F airs as `21.1°C`, never `21.111111111111114`) and renders empty for a non-finite value so `inf`/`nan` can never be spoken. `is_plausible_celsius()` filters *physical nonsense only* (−273.15…1000 °C): a Pi's own `sensor.processor_temperature` at 78 °C and a boiler flow at 85 °C are legitimately `device_class: temperature`, and withholding them would delete the entity from `context.scored` entirely, not just drop the number. The narrower "is this a room" judgement stays with the subtractive authorities (`context_director` −90…70, `authorization` −80…60).
 - **the missing-unit policy.** `weather.*` publishes `temperature_unit` and `sensor.*` publishes `unit_of_measurement`, so every path reading one of those requires it: `require_unit=True` on the weather state line, both weather arcs, classified temperature sensors (in **both** `_format_state` and `DirectorObservation.from_home_assistant_state`, so the boundary is self-enforcing rather than relying on one module to filter for the other), and `authorization._temperature_c`. A unit is only ever defaulted to Celsius when it is absent or blank; an explicitly supplied non-string is malformed input and fails closed. **Fallback path:** an unresolvable unit withholds the number rather than assuming Celsius — a weather line keeps its condition, a climate line keeps its mode, and a unitless temperature sensor is dropped entirely. `climate.*` is the single genuine exception and the known gap: HA pre-converts climate values into the household's configured unit and publishes no unit attribute at all, so those keep the legacy Celsius assumption. Pinned by `test_format_state_climate_without_a_unit_attribute_reads_as_celsius` and stated plainly in the release notes rather than implied fixed.
-- **forecast unit lookup.** `weather/get_forecasts` carries no unit, so `fetch_weather_forecast` issues a concurrent `GET /api/states/weather.forecast_home` (`asyncio.gather(..., return_exceptions=True)`, bounded by `_WEATHER_UNIT_TIMEOUT`, well under the 5s optional-enrichment budget) and prefers any inline unit over it. A `CancelledError` from that enrichment deadline is re-raised rather than downgraded, so a cancelled fetch never goes on to mutate the cache globals. If the unit cannot be resolved the arc still airs its condition but without a temperature. **Cache TTL:** `_WEATHER_DEGRADED_CACHE_TTL` (5 min) instead of the full `_WEATHER_CACHE_TTL` (1 h) whenever a retry could plausibly recover the number — an unreadable unit, or any transient failure — so one blip costs one poll rather than an hour of weather. An *empty* forecast keeps the full hour: that is a stable property of the integration, and retrying it every 5 minutes would be a permanent double-request treadmill on the Pi. Losing the temperature logs one WARNING on transition (not per poll), because a mis-scoped token would otherwise strip it from every break forever with nothing above DEBUG to explain why.
+- **forecast unit lookup.** `weather/get_forecasts` carries no unit, so `fetch_weather_forecast` issues a concurrent `GET /api/states/<bound-weather-entity>` using the verified profile’s weather binding (`asyncio.gather(..., return_exceptions=True)`, bounded by `_WEATHER_UNIT_TIMEOUT`, well under the 5s optional-enrichment budget) and prefers any inline unit over it. A `CancelledError` from that enrichment deadline is re-raised rather than downgraded, so a cancelled fetch never goes on to mutate the cache globals. If the unit cannot be resolved the arc still airs its condition but without a temperature. **Cache TTL:** `_WEATHER_DEGRADED_CACHE_TTL` (5 min) instead of the full `_WEATHER_CACHE_TTL` (1 h) whenever a retry could plausibly recover the number — an unreadable unit, or any transient failure — so one blip costs one poll rather than an hour of weather. An *empty* forecast keeps the full hour: that is a stable property of the integration, and retrying it every 5 minutes would be a permanent double-request treadmill on the Pi. Losing the temperature logs one WARNING on transition (not per poll), because a mis-scoped token would otherwise strip it from every break forever with nothing above DEBUG to explain why.
 - numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
 - the listener dashboard shows a "Casa" card with mood, weather, recent events, and the "Live from your home" strip of recently aired home moments via `ha_moments` (incl. `recent`) in `/public-status`
 - the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`, plus the Moment Receipts trail via `moments_admin`
@@ -1387,7 +1386,7 @@ remains responsible for safety alerts. A catalog test keeps the shipped
 sequences.
 
 When a configured HA timer fires, the station interrupts playback with a
-pissed/urgent host segment whenever the packaged bridge is available:
+urgent host segment whenever the packaged bridge is available:
 
 ```text
 HA timer fires (timer.xyz -> idle, with recent finished_at)
@@ -1560,7 +1559,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/playlist/add-external` | POST | Admin | Standalone-only external add; add-ons return actionable `403 external_media_unavailable_in_addon` |
 | `/api/media-sources/jamendo` | PUT | Admin | Retain/replace/clear the client ID and persist explicit enabled + non-commercial acknowledgement intent; returns redacted status |
 | `/api/media-sources/jamendo/retry` | POST | Admin | Coalesce a transient-provider retry (`202` enabled; `409 jamendo_retry_disabled` when off) |
-| `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
+| `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `language_policy.py`, `prompt_world.py`, `relationship.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
 
 Rotation-row mutations use optimistic identity checks rather than trusting a

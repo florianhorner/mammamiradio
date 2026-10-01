@@ -309,16 +309,14 @@ existing receipt. `--overwrite-selection-receipt` deliberately replaces that
 chosen receipt; use it only to correct the same review, never to start a new
 audit history.
 
-Two proof/ conventions coexist, on purpose. Append-only receipts are never
-overwritten: that includes dated human-review receipts like the one above and
-content-addressed pre-ship receipts under `proof/preship-reviews/v2/` (never
-edited in place; `--reattest` retires only a branch's own pre-integration
-receipts before they land — a landed receipt is never removed). Fixed-name
-current-state files (`proof/checks.txt`, `proof/review-findings.json`) use Git
-history as their audit trail. The legacy fixed-name `proof/preship-review.json`
-is retired — pre-ship evidence is v2 receipts only, precisely because a
-fixed-name evidence file made every pair of concurrent PRs conflict. New proof
-artifacts should say which convention they follow.
+Accepted media and human-review receipts remain immutable. Historical
+content-addressed receipts under `proof/preship-reviews/v2/` remain readable
+with the standalone verifier; they are no longer required for PR or landing
+admission and must not be refreshed for ordinary work.
+
+Keep current implementation checks and review handoffs in the workspace's
+gitignored artifacts. Do not recreate retired fixed-name proof files.
+Review, required checks, and normal landing gates still apply.
 
 Content-addressing makes a v2 receipt deterministic and binds it to the reviewed
 tree; it does not authenticate who created it. `source_record_sha256` identifies

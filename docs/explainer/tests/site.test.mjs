@@ -65,7 +65,7 @@ test("the experience has multiple interactive home moments", () => {
 test("no scenario accent is green", () => {
   // The scenario accent drives the entire on-air chrome (live dot, waves,
   // transport, borders). Green is banned twice in docs/design/system.md:
-  // the owner is red-green colorblind. #9cab7e shipped once; never again.
+  // readers need red-green color-vision accessibility. #9cab7e shipped once; never again.
   assert.doesNotMatch(scenariosSource, /#9cab7e/i);
   assert.doesNotMatch(css, /--sage/);
 });
@@ -105,7 +105,7 @@ test("the local concept makes its privacy boundary explicit", () => {
 
 test("public demo identifiers are plainly fictional", () => {
   const personIds = [...`${html}\n${scenariosSource}`.matchAll(/\bperson\.[a-z0-9_]+/g)].map((match) => match[0]);
-  assert.deepEqual([...new Set(personIds)].sort(), ["person.guest"]);
+  assert.deepEqual([...new Set(personIds)].sort(), ["person.example_guest"]);
 });
 
 test("the page offers the install and source exits without a dead live link", () => {
