@@ -11,6 +11,7 @@ import importlib.util
 import json
 import re
 import sys
+import tomllib
 import types
 from dataclasses import dataclass
 from html import unescape
@@ -484,7 +485,9 @@ def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
     assert "no account system, central service, or project-operated analytics upload" in rendered
     assert "Edge is keyless but still online" in rendered
     assert "If you explicitly choose a Home Assistant speaker" in rendered
-    assert "v3 is not released yet" in rendered
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert f"Stable {project['project']['version']} is available." in rendered
+    assert "v3 is not released yet" not in rendered
     assert "## Operator checks" in readme
 
 

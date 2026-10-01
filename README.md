@@ -69,9 +69,8 @@ asks that media player to play the stream. There is no Mamma Mi Radio account,
 subscription, or project-operated analytics upload. You add provider keys only
 when you want freshly written dialogue or premium voices.
 
-**Status:** single maintainer, running daily in one household. Stable 2.18.0 is
-available; v3 is not released yet. The First Listen steps and screenshots below
-describe the current v3 development candidate.
+**Status:** single maintainer, running daily in one household. Stable 3.0.0 is
+available. The First Listen steps and screenshots below describe this release.
 
 ## First listen
 

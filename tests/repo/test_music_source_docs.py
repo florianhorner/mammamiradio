@@ -135,15 +135,28 @@ def test_home_assistant_music_docs_name_each_backup_home() -> None:
     )
 
 
-def test_unreleased_changelogs_share_the_media_boundary() -> None:
-    root = _read("CHANGELOG.md").split("## 2.", 1)[0]
-    addon = _read("ha-addon/mammamiradio/CHANGELOG.md").split("## 2.", 1)[0]
+def test_v3_release_changelogs_share_the_media_boundary() -> None:
+    notes = []
+    for relative in ("CHANGELOG.md", "ha-addon/mammamiradio/CHANGELOG.md"):
+        section = re.search(
+            r"^## \[?3\.0\.0\]?(?: - [^\n]+)?\n(.*?)(?=^## |\Z)",
+            _read(relative),
+            re.MULTILINE | re.DOTALL,
+        )
+        assert section, f"{relative} is missing the 3.0.0 release entry"
+        notes.append(" ".join(section.group(1).split()))
+    root, addon = notes
+    assert root == addon, "The two 3.0.0 release entries must describe the same boundaries"
     for statement in (
-        "rights-aware offline starter-catalog contract",
-        "Release remains intentionally blocked",
-        "Jamendo is available as an explicit transient music source",
-        "External extraction is now a standalone opt-in capability",
-        "Music sharing now fails closed around the eligible bundled window",
+        "twelve credited tracks, about 47 minutes of offline music",
+        "Other stock speech can still use online Edge voices",
+        "optional expansion",
+        "off until you enable it and acknowledge non-commercial API use",
+        "provider confirmation for this station model remains pending",
+        "Songs and breaks containing third-party music cannot be kept",
+        "Home Assistant app no longer downloads YouTube tracks or live charts",
+        "Standalone users who installed `external-media` should reinstall that extra",
+        "Old `/data/music` songs stay where they are but do not play in this mode",
     ):
         assert statement in root
-        assert statement in addon
+    assert "Release remains intentionally blocked" not in root
