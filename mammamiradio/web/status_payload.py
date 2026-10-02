@@ -542,10 +542,12 @@ def _ha_details_payload(state: StationState) -> dict | None:
         or refresh["last_result"]
         or bool(getattr(state, "ha_context_refresh_configured", False))
         or director_status
+        or state.home_compatibility_status in {"checking", "unavailable", "needs_consent", "ambient", "verified"}
     )
     if not has_ha_observability:
         return None
     payload: dict[str, object] = {
+        "compatibility_status": state.home_compatibility_status,
         "mood": state.ha_home_mood or None,
         "weather_arc": state.ha_weather_arc or None,
         "events_summary": state.ha_events_summary or None,

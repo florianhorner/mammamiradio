@@ -18,6 +18,7 @@ import random as _random
 import re as _re
 import secrets
 import shutil
+import sqlite3
 import stat as _stat
 import time
 import unicodedata
@@ -138,6 +139,8 @@ from mammamiradio.home.catalog import (
     invalidate_label_generation,
     schedule_label_generation,
 )
+from mammamiradio.home.compatibility import home_compatibility_resolved
+from mammamiradio.home.consent import save_ambient_consent
 from mammamiradio.home.context_director import HomeContextDirector
 from mammamiradio.home.context_value import (
     LOW_VALUE_AMBIENT_ENTITY_IDS,
@@ -383,9 +386,17 @@ class _HomeContextPreviewProof:
     authorization_mode: str
     policy_revision: int
     context_generation: int
+    binding_identity: str = ""
 
 
 _SETUP_ERRORS: dict[str, tuple[str, str, bool, str, int]] = {
+    "home_check_pending": (
+        "Home access is still being checked",
+        "Keep listening. Try the Home preview again in a moment.",
+        True,
+        "Try again",
+        409,
+    ),
     "ha_access_missing": (
         "Home Assistant access is missing",
         "Check the add-on's Home Assistant access, then try again.",
@@ -544,14 +555,12 @@ _SETUP_ERRORS_STANDALONE: dict[str, tuple[str, str, bool, str, int]] = {
     ),
 }
 
-# TODO: split — this god module is a postal address, not a destination.
-# See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
+# Further route and playback extraction follows docs/runbooks/refactor-cuts.md.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
-# _bust_static_cache now live in web/assets.py; admin auth (require_admin_access,
-# CSRF, trusted networks) now lives in web/auth.py — both imported above.
-#
-# Jinja2 templates for brand-engine listener page (PR-C). Admin still uses
-# string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
+# _bust_static_cache live in web/assets.py. Admin authentication, CSRF, and
+# trusted networks live in web/auth.py; both modules are imported above.
+# Jinja2 renders the listener page. Admin rendering uses _inject_ingress_prefix
+# in web/pages.py.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
@@ -3400,7 +3409,11 @@ async def _first_listen_audio_gate_open(app_state) -> bool:
     fails closed until an accepted playback has been audibly confirmed.
     """
     origin = getattr(app_state, "first_listen_install_origin", None)
-    if getattr(origin, "status", None) is FirstListenInstallOriginStatus.EXISTING:
+    state = app_state.station_state
+    needs_new_consent = state.home_ambient_consent_required and not state.home_ambient_consent_granted
+    if needs_new_consent and not bool(getattr(app_state, "home_narrow_audio_confirmed", False)):
+        return False
+    if not needs_new_consent and getattr(origin, "status", None) is FirstListenInstallOriginStatus.EXISTING:
         return True
     cached_receipt = getattr(app_state, "first_listen_receipt", None)
     try:
@@ -4565,6 +4578,38 @@ async def _persist_home_context_choice(config, enabled: bool) -> None:
         )
 
 
+async def _persist_home_ambient_consent(app_state, *, granted: bool) -> None:
+    worker = asyncio.create_task(
+        asyncio.to_thread(save_ambient_consent, app_state.config.cache_dir / "mammamiradio.db", granted=granted)
+    )
+    try:
+        await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Finish the transaction before another choice can acquire the lock.
+        await asyncio.gather(worker, return_exceptions=True)
+        raise
+
+
+async def _persist_home_context_off(app_state) -> bool:
+    persisted = True
+    try:
+        result = getattr(app_state, "home_compatibility_result", None)
+        status = result.status if result is not None else app_state.station_state.home_compatibility_status
+        if not home_compatibility_resolved(status):
+            # The retrying verifier owns unresolved evidence. An option write can
+            # keep access disabled, but cannot establish a permanent scope choice.
+            persisted = False
+        elif app_state.station_state.home_ambient_consent_required or bool(getattr(result, "requires_consent", False)):
+            await _persist_home_ambient_consent(app_state, granted=False)
+    except (OSError, sqlite3.Error, ValueError):
+        persisted = False
+    try:
+        await _persist_home_context_choice(app_state.config, False)
+    except OSError:
+        persisted = False
+    return persisted
+
+
 def _home_context_preview_proof_valid(app_state, proof: object) -> bool:
     if not isinstance(proof, _HomeContextPreviewProof):
         return False
@@ -4574,6 +4619,8 @@ def _home_context_preview_proof_valid(app_state, proof: object) -> bool:
         proof.expires_at > time.monotonic()
         and proof.config_fingerprint == _home_access_fingerprint(app_state.config)
         and proof.authorization_mode == authorization.mode.value
+        and proof.binding_identity == authorization.bindings.identity
+        and home_compatibility_resolved(state.home_compatibility_status)
         and proof.policy_revision == policy_revision(app_state.config.cache_dir)
         and proof.context_generation == getattr(state, "home_context_policy_generation", 0)
     )
@@ -4589,7 +4636,7 @@ async def _fetch_home_context_preview_singleflight(app_state, authorization: Hom
     state = app_state.station_state
     key = (
         _home_access_fingerprint(config),
-        authorization.mode.value,
+        authorization.identity,
         policy_revision(config.cache_dir),
         getattr(state, "home_context_policy_generation", 0),
     )
@@ -4709,6 +4756,10 @@ async def _disable_home_context_runtime(app_state) -> int:
     config = app_state.config
     state = app_state.station_state
     config.homeassistant.context_enabled = False
+    state.home_context_requested = False
+    state.home_ambient_consent_granted = False
+    app_state.home_consent_choice = False
+    app_state.home_narrow_audio_confirmed = False
     state.home_context_policy_generation = getattr(state, "home_context_policy_generation", 0) + 1
     # Invalidate/cancel post-air Home-derived memory tasks synchronously.  The
     # bounded drain happens below, but the epoch must advance before this
@@ -4782,6 +4833,7 @@ def _enable_home_context_runtime(app_state) -> None:
     config = app_state.config
     state = app_state.station_state
     config.homeassistant.context_enabled = True
+    state.home_context_requested = True
     state.ha_context_refresh_stage = "idle"
     coordinator = getattr(state, "ha_context_refresh_mailbox", None)
     enable = getattr(coordinator, "enable", None)
@@ -4908,7 +4960,9 @@ def _clear_global_home_context_runtime_state(state: StationState):
     state.ha_ritual_matches = []
     state.ha_ritual_recipe_audit = []
     state.ha_first_home_context_moment_fired = False
-    state.home_context_director = HomeContextDirector()
+    state.home_context_director = HomeContextDirector(
+        bindings=(state.home_authorization or HomeAuthorization.narrow()).bindings
+    )
     state.ha_context_refresh_in_flight = False
     state.ha_context_refresh_active_foreground_timed_out = False
     state.ha_context_refresh_configured = False
@@ -5010,6 +5064,14 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
         install_origin=str(origin_status),
         context_choice_explicit=bool(getattr(request.app.state, "home_context_choice_explicit", True)),
     )
+    setup["guided_setup"]["home_context"]["compatibility"] = {
+        "status": state.home_compatibility_status,
+        "fresh_sound_required": bool(
+            state.home_ambient_consent_required
+            and not state.home_ambient_consent_granted
+            and not getattr(request.app.state, "home_narrow_audio_confirmed", False)
+        ),
+    }
     setup["guided_setup"]["first_listen"]["bootstrap_ready"] = _first_listen_bootstrap_ready(request.app.state)
     setup["guided_setup"]["first_listen"]["receipt_recovery"] = _pending_receipt_recovery(request.app.state)
     return {
@@ -8083,6 +8145,7 @@ async def setup_first_listen_verify(request: Request, _: None = Depends(_require
         return _setup_error("receipt_unavailable", accepted=True, receipt_persisted=False)
     receipt = _adopt_first_listen_receipt(request.app.state, receipt)
     heard = bool(body["heard"])
+    request.app.state.home_narrow_audio_confirmed = heard
     return {
         "ok": True,
         "heard": heard,
@@ -8123,6 +8186,7 @@ async def setup_first_listen_listener_confirm(
         # The durable store is the transaction boundary.  Never let an
         # optimistic in-memory receipt unlock the next setup step.
         saved_receipt = _adopt_first_listen_receipt(app_state, saved_receipt)
+        app_state.home_narrow_audio_confirmed = True
         return {
             "ok": True,
             "heard": True,
@@ -8131,6 +8195,7 @@ async def setup_first_listen_listener_confirm(
             "attempt_id": saved_receipt.accepted_attempt_id,
         }
 
+    app_state.home_narrow_audio_confirmed = False
     # "Not yet" is observational, but completion is a durable claim. Reload the
     # receipt so missing, malformed, or unreadable state fails closed without
     # erasing a newer cache value published while this read was in flight.
@@ -8175,6 +8240,8 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
     if error is not None:
         return error
     app_state = request.app.state
+    if not home_compatibility_resolved(app_state.station_state.home_compatibility_status):
+        return _setup_error("home_check_pending")
     if not await _first_listen_audio_gate_open(app_state):
         return _setup_error("first_listen_required")
     config = app_state.config
@@ -8199,6 +8266,7 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
         expires_at=time.monotonic() + _HOME_PREVIEW_PROOF_TTL_SECONDS,
         config_fingerprint=_home_access_fingerprint(config),
         authorization_mode=authorization.mode.value,
+        binding_identity=authorization.bindings.identity,
         policy_revision=revision_before,
         context_generation=generation_before,
     )
@@ -8227,12 +8295,26 @@ async def setup_home_context_choice(request: Request, _: None = Depends(_require
         return error
     app_state = request.app.state
     enabled = bool(body["enabled"])
+    worker = asyncio.create_task(_apply_home_context_choice(app_state, enabled=enabled))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # The owned operation holds the choice lock through all option/consent
+        # writes and revocation drains, even if the browser disconnects.
+        await asyncio.gather(worker, return_exceptions=True)
+        raise
+
+
+async def _apply_home_context_choice(app_state, *, enabled: bool):
     lock = getattr(app_state, "home_context_choice_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         app_state.home_context_choice_lock = lock
 
     async with lock:
+        state = app_state.station_state
+        if enabled and not home_compatibility_resolved(state.home_compatibility_status):
+            return _setup_error("home_check_pending")
         if enabled and not await _first_listen_audio_gate_open(app_state):
             return _setup_error("first_listen_required")
         preview_proof = getattr(app_state, "home_context_preview_proof", None)
@@ -8241,66 +8323,49 @@ async def setup_home_context_choice(request: Request, _: None = Depends(_require
 
         persisted = True
         purged = 0
+        error_code = "privacy_persist_failed"
+        app_state.home_context_choice_explicit = True
         if enabled:
             try:
+                # Persist the option first. It has no power to reopen a capped
+                # installation until the independently committed consent exists.
                 await _persist_home_context_choice(app_state.config, True)
-            except OSError:
-                return _setup_error(
-                    "privacy_persist_failed",
-                    extra={"enabled": False, "persisted": False},
-                )
-            # Supported entity-policy writes share this route's lock, but an
-            # out-of-band policy/config change can still land while the add-on
-            # option is being persisted. Re-check the exact preview proof after
-            # that await. If it drifted, compensate the already-written choice
-            # and latch explicit-off so a delayed install-origin task cannot
-            # widen the runtime behind this failed enable attempt.
-            if not _home_context_preview_proof_valid(app_state, preview_proof):
-                app_state.home_context_choice_explicit = True
-                app_state.home_context_preview_proof = None
-                try:
-                    await _persist_home_context_choice(app_state.config, False)
-                except OSError:
-                    persisted = False
+                if not _home_context_preview_proof_valid(app_state, preview_proof):
+                    error_code = "preview_required"
+                    raise ValueError("preview expired")
+                if state.home_ambient_consent_required:
+                    await _persist_home_ambient_consent(app_state, granted=True)
+                if not _home_context_preview_proof_valid(app_state, preview_proof):
+                    error_code = "preview_required"
+                    raise ValueError("preview expired")
+            except (OSError, sqlite3.Error, ValueError):
                 purged = await _disable_home_context_runtime(app_state)
-                if not persisted:
-                    return _setup_error(
-                        "privacy_persist_failed",
-                        extra={
-                            "enabled": False,
-                            "persisted": False,
-                            "live_off": True,
-                            "purged_pending_segments": purged,
-                        },
-                    )
+                persisted = await _persist_home_context_off(app_state)
                 return _setup_error(
-                    "preview_required",
+                    error_code if persisted else "privacy_persist_failed",
                     extra={
                         "enabled": False,
-                        "persisted": True,
+                        "persisted": persisted,
+                        "live_off": True,
                         "purged_pending_segments": purged,
                     },
                 )
+            state.home_ambient_consent_granted = state.home_ambient_consent_required
+            app_state.home_consent_choice = True
+            if state.home_ambient_consent_required:
+                state.home_compatibility_status = "ambient"
             _enable_home_context_runtime(app_state)
         else:
-            # This in-process latch is authoritative even when the durable
-            # write later fails: a delayed install-origin migration must never
-            # reinterpret an explicit Keep off action and turn context back on.
-            app_state.home_context_choice_explicit = True
+            # The live fence, task cancellation and explicit-choice latch all
+            # precede disk I/O. Both durable writes are attempted on failure.
             purged = await _disable_home_context_runtime(app_state)
-            try:
-                await _persist_home_context_choice(app_state.config, False)
-            except OSError:
-                persisted = False
+            persisted = await _persist_home_context_off(app_state)
+            if state.home_ambient_consent_required:
+                state.home_compatibility_status = "needs_consent"
         if not persisted:
             return _setup_error(
                 "privacy_persist_failed",
-                extra={
-                    "enabled": False,
-                    "persisted": False,
-                    "live_off": True,
-                    "purged_pending_segments": purged,
-                },
+                extra={"enabled": False, "persisted": False, "live_off": True, "purged_pending_segments": purged},
             )
 
         app_state.home_context_choice_explicit = True
@@ -8502,6 +8567,7 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
         cache_dir=config.cache_dir,
         config=config,
         score_by_entity={entity.entity_id: entity.score for entity in context.scored},
+        bindings=authorization.bindings,
         force=True,
     )
     if not scheduled:

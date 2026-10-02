@@ -16,6 +16,7 @@ from mammamiradio.scheduling import boundary_glue
 from mammamiradio.scheduling.boundary_glue import MUSIC_TO_SPEECH, SPEECH_TO_MUSIC
 from mammamiradio.web.mp3_frames import mpeg1_l3_bitrate_kbps
 from mammamiradio.web.streamer import LiveStreamHub, StreamPacer, router, run_playback_loop
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -535,11 +536,11 @@ async def test_orphan_cart_is_not_repeated_and_discard_releases_home_fact(tmp_pa
     state = app.state.station_state
     app.state.config.homeassistant.context_enabled = True
     state.home_context_policy_generation = 1
-    director = HomeContextDirector()
+    director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     director.observe(
         [
             DirectorObservation(
-                entity_id="weather.example", domain="weather", state="sunny", temperature_c=24, score=9.0
+                entity_id="weather.example_example", domain="weather", state="sunny", temperature_c=24, score=9.0
             )
         ],
         policy_revision=0,

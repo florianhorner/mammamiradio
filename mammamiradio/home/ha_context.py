@@ -38,9 +38,8 @@ from mammamiradio.home.authorization import (
     HomeAuthorizationMode,
     expand_muted_with_ambient_sources,
 )
+from mammamiradio.home.bindings import EMPTY_HOME_BINDINGS, HomeBindings
 from mammamiradio.home.catalog import (
-    ENTITY_LABELS,
-    ENTITY_LABELS_EN,
     LabelResolution,
     _catalog_entry_valid,
     _fallback_label,
@@ -200,72 +199,6 @@ atexit.register(_ha_preview_executor.shutdown, wait=False, cancel_futures=True)
 _HA_PREVIEW_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 
 # Entities curated for maximum radio entertainment value
-GOLD_ENTITIES = [
-    # Coffee machine + dad jokes
-    "switch.bar_kaffeemaschine_steckdose",
-    "input_select.kaffee_dad_jokes",
-    # Robot vacuums
-    "vacuum.goldstaubsucher",
-    "vacuum.matrix10_ultra",
-    # Weather
-    "weather.forecast_home",
-    # Who's home
-    "person.florian_horner",
-    "person.sabrina",
-    "person.schnuffi",
-    # Door lock
-    "lock.lock_ultra_8d3c",
-    # Elevator fingerbot
-    "input_button.foyer_fahrstuhl_fingerbot_push_button",
-]
-
-SILVER_ENTITIES = [
-    # Room presence (select interesting rooms)
-    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar",
-    "input_select.bedroom_occupancy_state",
-    # Washing machine
-    "switch.bad_gross_waschmaschine_steckdose",
-    # TV
-    "media_player.samsung_s95ca_65",
-    # Sonos speakers
-    "media_player.wohnzimmer_sonos_arc_lautsprecher",
-    "media_player.esszimmer",
-    # Heating
-    "climate.wohnzimmer_tado_heizung",
-    "climate.schlafzimmer",
-    # Sun
-    "sun.sun",
-    # Bathroom fans (someone showering?)
-    "fan.bad_gross_lufter_shelly",
-    "fan.bad_klein_lufter",
-    # Kitchen fan (someone cooking?)
-    "fan.kuche_lufter",
-    # Room-level light groups (Magic Areas aggregates)
-    "light.magic_areas_light_groups_wohnzimmer_all_lights",
-    "light.magic_areas_light_groups_schlafzimmer_all_lights",
-    "light.magic_areas_light_groups_kuche_all_lights",
-    "light.magic_areas_light_groups_esszimmer_all_lights",
-    # Power sensors for activity detection
-    "sensor.bar_bali_boot_steckdose_power",
-    "sensor.kuche_kaffeemaschine_steckdose_power",
-    # Atmosphere
-    "light.schlafzimmer_sternenlicht_projektor_2",
-    "light.kleiderschrank_sternenlicht_projektor",
-    "light.terrasse_9_outdoor_lichtschlauch",
-    # Total household power
-    "sensor.haushalt_stromverbrauch_gesamt",
-]
-
-BRONZE_ENTITIES = [
-    # Sleep/wake times
-    "input_datetime.last_sleep_time",
-    "input_datetime.last_wake_time",
-    # Apartment door
-    "binary_sensor.buro_9_ring_intercom_klingelt",
-]
-
-ALL_ENTITIES = GOLD_ENTITIES + SILVER_ENTITIES + BRONZE_ENTITIES
-
 DEFAULT_CONTEXT_ENTITY_LIMIT = 12
 DEFAULT_CONTEXT_CHAR_LIMIT = 2000
 MAX_PRESENCE_IN_SLICE = 4
@@ -403,57 +336,6 @@ STATE_TRANSLATIONS_EN: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 # (entity_id, raw_ha_trigger_state, directive_text, cooldown_seconds)
-REACTIVE_TRIGGERS: list[tuple[str, str, str, int]] = [
-    (
-        "switch.bar_kaffeemaschine_steckdose",
-        "on",
-        "La macchina del caffè si è appena accesa! Profumo di espresso, notatelo brevemente —"
-        " naturale, non esagerato. Se l'ora mostrata sopra calza, legate l'evento al momento"
-        " ('puntuale'), solo se naturale. Mai dire con che frequenza o da quanto"
-        " succede.",
-        1800,
-    ),
-    (
-        "lock.lock_ultra_8d3c",
-        "unlocked",
-        "La serratura della porta d'ingresso si è appena sbloccata. Commentate brevemente"
-        " lo sblocco — senza dedurre che la porta si sia aperta, chi sia entrato o"
-        " salutare qualcuno come tornato.",
-        300,
-    ),
-    (
-        "vacuum.goldstaubsucher",
-        "cleaning",
-        "Il Goldstaubsucher ha iniziato ad aspirare. Lamentatevi del rumore di fondo, scherzate sul robot invadente.",
-        3600,
-    ),
-    (
-        "vacuum.matrix10_ultra",
-        "cleaning",
-        "Anche il Matrix10 Ultra sta aspirando! CAOS TOTALE — due robot in azione. Reazione esagerata ma divertente.",
-        3600,
-    ),
-    (
-        "person.florian_horner",
-        "home",
-        "Residente uno è appena tornato a casa. Un caloroso bentornato — come se sapeste esattamente chi è tornato.",
-        3600,
-    ),
-    (
-        "person.sabrina",
-        "home",
-        "Residente due è appena tornato a casa. Un caloroso bentornato — naturale e familiare.",
-        3600,
-    ),
-    (
-        "light.terrasse_9_outdoor_lichtschlauch",
-        "on",
-        "Le luci della terrazza si sono accese! Serata all'aperto — commentate il bel tempo"
-        " o la voglia di aria fresca. Breve, naturale.",
-        3600,
-    ),
-]
-
 _reactive_cooldowns: dict[str, float] = {}
 
 
@@ -476,20 +358,6 @@ class ThresholdTrigger(TypedDict):
     direction: str  # "above" or "below"
     directive: str
     cooldown: int
-
-
-THRESHOLD_TRIGGERS: list[ThresholdTrigger] = [
-    {
-        "entity_id": "sensor.kuche_kaffeemaschine_steckdose_power",
-        "threshold": 50.0,
-        "direction": "above",
-        "directive": (
-            "La caffettiera si è appena accesa! Caffè in preparazione — "
-            "commentate il momento in modo naturale. Breve e caldo."
-        ),
-        "cooldown": 3600,
-    },
-]
 
 
 @dataclass
@@ -563,6 +431,7 @@ class HomeContext:
     # translate a live hard mute of a real HA source into its synthetic narrow
     # projection; neither field is serialized to public/admin status.
     authorization_mode: str = HomeAuthorizationMode.NARROW.value
+    bindings: HomeBindings = field(default=EMPTY_HOME_BINDINGS, repr=False)
     ambient_sources: dict[str, str] = field(default_factory=dict, repr=False)
 
     @property
@@ -641,6 +510,7 @@ class _HomeContextProjectionInput:
     ritual_recipe_cooldowns: dict[str, float]
     cache_dir: Path | None
     timestamp: float
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS
 
 
 @dataclass(frozen=True)
@@ -774,7 +644,14 @@ def _filter_state(entity_id: str, state_data: dict, denylist_hits: dict[str, int
     return sanitized
 
 
-def _score_entity(entity_id: str, state_data: dict, *, event_entity_ids: set[str], now: float) -> float:
+def _score_entity(
+    entity_id: str,
+    state_data: dict,
+    *,
+    event_entity_ids: set[str],
+    now: float,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
+) -> float:
     domain = _entity_domain(entity_id)
     attrs = state_data.get("attributes", {}) or {}
     device_class = attrs.get("device_class")
@@ -783,7 +660,7 @@ def _score_entity(entity_id: str, state_data: dict, *, event_entity_ids: set[str
         score = POWER_SENSOR_WEIGHT
     if domain == "binary_sensor" and device_class in PRESENCE_SENSOR_DEVICE_CLASSES:
         score = PRESENCE_SENSOR_WEIGHT
-    if entity_id in ENTITY_LABELS:
+    if entity_id in bindings.labels_it:
         score += OVERRIDE_SCORE_BOOST
     if _area_from_attrs(attrs):
         score += AREA_SCORE_BOOST
@@ -801,14 +678,15 @@ def _resolve_label(
     *,
     cache_dir: Path | None = None,
     catalog: Mapping[str, object] | None = None,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> LabelResolution | None:
     """Resolve a label from an inert catalog copy when projection is threaded."""
     if catalog is None:
-        return resolve_label(entity_id, state_data, cache_dir=cache_dir)
-    if entity_id in ENTITY_LABELS:
+        return resolve_label(entity_id, state_data, cache_dir=cache_dir, bindings=bindings)
+    if entity_id in bindings.labels_it:
         return LabelResolution(
-            ENTITY_LABELS[entity_id],
-            ENTITY_LABELS_EN.get(entity_id, ENTITY_LABELS[entity_id]),
+            bindings.labels_it[entity_id],
+            bindings.labels_en.get(entity_id, bindings.labels_it[entity_id]),
             "curated",
         )
     entries = catalog.get("entries")
@@ -830,6 +708,7 @@ def _format_state(
     cache_dir: Path | None = None,
     catalog: Mapping[str, object] | None = None,
     resolved: LabelResolution | None = None,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> str | None:
     """Format a single entity state as a natural language line.
 
@@ -840,7 +719,9 @@ def _format_state(
     attrs = state_data.get("attributes", {})
     # A malformed payload ("attributes": null) must not raise into the poll.
     attrs = attrs if isinstance(attrs, Mapping) else {}
-    resolved = resolved or _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
+    resolved = resolved or _resolve_label(
+        entity_id, state_data, cache_dir=cache_dir, catalog=catalog, bindings=bindings
+    )
     if resolved is None:
         # Anti-illusion guard: raw entity IDs never reach the host. If no curated,
         # catalog, registry, or friendly label is available, drop the entity.
@@ -897,7 +778,7 @@ def _format_state(
         return f"{label}: {translated}"
 
     # Dad joke — just show the joke
-    if entity_id == "input_select.kaffee_dad_jokes":
+    if entity_id == bindings.entity("coffee_joke"):
         return f'{label}: "{state}"'
 
     # Room-level lights — include brightness as percentage
@@ -923,14 +804,14 @@ def _format_state(
         except (ValueError, TypeError):
             return f"{label}: —"
         # Coffee machine: qualitative activity phases
-        if entity_id == "sensor.kuche_kaffeemaschine_steckdose_power":
+        if entity_id == bindings.entity("coffee_power"):
             if watts > 100:
                 return f"{label}: in funzione"
             if watts > 5:
                 return f"{label}: riscaldamento"
             return f"{label}: fredda"
         # Total household power: qualitative load context
-        if entity_id == "sensor.haushalt_stromverbrauch_gesamt":
+        if entity_id == bindings.entity("household_power"):
             if watts < 200:
                 return f"{label}: casa tranquilla ({watts:.0f} W)"
             if watts > 2000:
@@ -957,12 +838,12 @@ def _celsius_for_prompt(value: object, unit: object, *, require_unit: bool = Fal
     return celsius if is_plausible_celsius(celsius) else None
 
 
-def _build_summary(states: dict[str, dict]) -> str:
+def _build_summary(states: dict[str, dict], *, bindings: HomeBindings = EMPTY_HOME_BINDINGS) -> str:
     """Build a natural language summary from entity states."""
     lines = []
-    for entity_id in ALL_ENTITIES:
+    for entity_id in (row.entity_id for row in bindings.entities):
         if entity_id in states:
-            line = _format_state(entity_id, states[entity_id])
+            line = _format_state(entity_id, states[entity_id], bindings=bindings)
             if line:
                 lines.append(f"- {line}")
     return "\n".join(lines) if lines else ""
@@ -977,16 +858,19 @@ def _build_scored_entities(
     char_limit: int = DEFAULT_CONTEXT_CHAR_LIMIT,
     cache_dir: Path | None = None,
     catalog: Mapping[str, object] | None = None,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> list[ScoredEntity]:
     """Score filtered HA entities and return the budgeted prompt slice."""
     ref_now = time.time() if now is None else now
     event_ids = event_entity_ids or set()
     scored: list[ScoredEntity] = []
     for entity_id, state_data in states.items():
-        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
+        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog, bindings=bindings)
         if resolved is None:
             continue
-        line = _format_state(entity_id, state_data, cache_dir=cache_dir, catalog=catalog, resolved=resolved)
+        line = _format_state(
+            entity_id, state_data, cache_dir=cache_dir, catalog=catalog, resolved=resolved, bindings=bindings
+        )
         if not line:
             continue
         scored.append(
@@ -994,7 +878,7 @@ def _build_scored_entities(
                 entity_id=entity_id,
                 area=_area_from_attrs(state_data.get("attributes", {}) or {}),
                 domain=_entity_domain(entity_id),
-                score=_score_entity(entity_id, state_data, event_entity_ids=event_ids, now=ref_now),
+                score=_score_entity(entity_id, state_data, event_entity_ids=event_ids, now=ref_now, bindings=bindings),
                 raw_state=state_data,
                 label_it=resolved.label_it,
                 label_en=resolved.label_en,
@@ -1006,7 +890,7 @@ def _build_scored_entities(
     presence_keep_ids = {
         item.entity_id
         for item in sorted(
-            (item for item in scored if _is_capped_presence_sensor(item) and item.area is not None),
+            (item for item in scored if _is_capped_presence_sensor(item, bindings=bindings) and item.area is not None),
             key=_presence_slice_rank,
             reverse=True,
         )[:MAX_PRESENCE_IN_SLICE]
@@ -1014,10 +898,12 @@ def _build_scored_entities(
     selected = []
     for item in sorted(
         scored,
-        key=lambda item: (item.score, item.entity_id in ENTITY_LABELS, item.entity_id),
+        key=lambda item: (item.score, item.entity_id in bindings.labels_it, item.entity_id),
         reverse=True,
     ):
-        if _is_capped_presence_sensor(item) and (item.area is None or item.entity_id not in presence_keep_ids):
+        if _is_capped_presence_sensor(item, bindings=bindings) and (
+            item.area is None or item.entity_id not in presence_keep_ids
+        ):
             continue
         selected.append(item)
         if len(selected) >= limit:
@@ -1037,12 +923,12 @@ def _build_scored_entities(
     return budgeted
 
 
-def _is_capped_presence_sensor(item: ScoredEntity) -> bool:
+def _is_capped_presence_sensor(item: ScoredEntity, *, bindings: HomeBindings = EMPTY_HOME_BINDINGS) -> bool:
     attrs = item.raw_state.get("attributes", {}) or {}
     return (
         item.domain == "binary_sensor"
         and attrs.get("device_class") in PRESENCE_SENSOR_DEVICE_CLASSES
-        and item.entity_id not in ENTITY_LABELS
+        and item.entity_id not in bindings.labels_it
     )
 
 
@@ -1111,7 +997,7 @@ def _apply_muted_policy_to_context(
         for synthetic_id, source_id in context.ambient_sources.items()
         if synthetic_id not in effective_muted_ids
     }
-    _, labels_en = _build_entity_label_maps(context.raw_states, cache_dir=cache_dir)
+    _, labels_en = _build_entity_label_maps(context.raw_states, cache_dir=cache_dir, bindings=context.bindings)
     context.summary = _build_budgeted_summary(context.scored)
     context.events_summary = build_events_summary(context.events, now=timestamp)
     context.events_summary_en = build_events_summary_en(context.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
@@ -1119,8 +1005,8 @@ def _apply_muted_policy_to_context(
         context.mood = ""
         context.mood_en = ""
     else:
-        context.mood = classify_home_mood(context.raw_states)
-        context.mood_en = classify_home_mood_en(context.raw_states)
+        context.mood = classify_home_mood(context.raw_states, bindings=context.bindings)
+        context.mood_en = classify_home_mood_en(context.raw_states, bindings=context.bindings)
     if weather_muted:
         context.weather_arc = ""
         context.weather_arc_en = ""
@@ -1153,7 +1039,7 @@ def _serve_filtered_home_context(
     # should not know which cached path they hit to receive prompt-safe context.
     served.events = _prune_muted_events(served.events, muted_ids, now=timestamp)
     served.events_summary = build_events_summary(served.events, now=timestamp)
-    _, labels_en = _build_entity_label_maps(served.raw_states, cache_dir=cache_dir)
+    _, labels_en = _build_entity_label_maps(served.raw_states, cache_dir=cache_dir, bindings=served.bindings)
     served.events_summary_en = build_events_summary_en(served.events, labels_en, STATE_TRANSLATIONS_EN, now=timestamp)
     served.radio_events = []
     served.ritual_recipe_matches = []
@@ -1382,9 +1268,10 @@ def _build_entity_label_maps(
     *,
     cache_dir: Path | None = None,
     catalog: Mapping[str, object] | None = None,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    labels_it = dict(ENTITY_LABELS)
-    labels_en = dict(ENTITY_LABELS_EN)
+    labels_it = dict(bindings.labels_it)
+    labels_en = dict(bindings.labels_en)
     for entity_id, state_data in states.items():
         # Mirror the anti-illusion guard in _format_state: don't manufacture a
         # label from the entity_id when the entity has no curated label and no
@@ -1393,7 +1280,7 @@ def _build_entity_label_maps(
         # events_summary, bypassing the guard.
         if entity_id in labels_it and entity_id in labels_en:
             continue
-        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
+        resolved = _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog, bindings=bindings)
         if resolved is None:
             continue
         labels_it.setdefault(entity_id, resolved.label_it)
@@ -1406,7 +1293,7 @@ def _build_entity_label_maps(
 # ---------------------------------------------------------------------------
 
 
-def classify_home_mood(states: dict[str, dict]) -> str:
+def classify_home_mood(states: dict[str, dict], *, bindings: HomeBindings = EMPTY_HOME_BINDINGS) -> str:
     """Classify aggregate HA state into a named Italian home scene.
 
     Priority order — first match wins. Returns "" when no scene matches.
@@ -1437,34 +1324,30 @@ def classify_home_mood(states: dict[str, dict]) -> str:
 
     now_hour = datetime.datetime.now().hour
 
-    if _state("vacuum.goldstaubsucher") == "cleaning" or _state("vacuum.matrix10_ultra") == "cleaning":
+    if _state(bindings.entity("vacuum_one")) == "cleaning" or _state(bindings.entity("vacuum_two")) == "cleaning":
         return "Il robot sta pulendo"
-    if _state("switch.bar_kaffeemaschine_steckdose") == "on" and 5 <= now_hour <= 10:
+    if _state(bindings.entity("coffee_switch")) == "on" and 5 <= now_hour <= 10:
         return "Stanno svegliandosi"
-    if _state("fan.kuche_lufter") == "on":
+    if _state(bindings.entity("kitchen_fan")) == "on":
         return "Qualcuno sta cucinando"
-    if _state("fan.bad_gross_lufter_shelly") == "on" or _state("fan.bad_klein_lufter") == "on":
+    if _state(bindings.entity("bathroom_fan_one")) == "on" or _state(bindings.entity("bathroom_fan_two")) == "on":
         return "Qualcuno sta facendo la doccia"
-    if _power_watts("sensor.bar_bali_boot_steckdose_power") > 10:
+    if _power_watts(bindings.entity("laundry_power")) > 10:
         return "Lavatrice in funzione"
-    if _power_watts("sensor.kuche_kaffeemaschine_steckdose_power") > 50:
+    if _power_watts(bindings.entity("coffee_power")) > 50:
         return "Caffè in preparazione"
-    if _state("media_player.samsung_s95ca_65") == "playing" and now_hour >= 18:
+    if _state(bindings.entity("television")) == "playing" and now_hour >= 18:
         return "Serata cinema"
     if (
-        _state("light.schlafzimmer_sternenlicht_projektor_2") == "on"
-        or _state("light.kleiderschrank_sternenlicht_projektor") == "on"
+        _state(bindings.entity("bedroom_stars")) == "on" or _state(bindings.entity("wardrobe_stars")) == "on"
     ) and now_hour >= 18:
         return "Serata sotto le stelle"
-    if (
-        _state("media_player.wohnzimmer_sonos_arc_lautsprecher") == "playing"
-        or _state("media_player.esszimmer") == "playing"
-    ):
+    if _state(bindings.entity("living_speaker")) == "playing" or _state(bindings.entity("dining_speaker")) == "playing":
         return "Musica in casa"
-    if _state("input_select.bedroom_occupancy_state") == "occupied" and (now_hour >= 22 or now_hour < 8):
+    if _state(bindings.entity("bedroom_presence")) == "occupied" and (now_hour >= 22 or now_hour < 8):
         return "Qualcuno sta dormendo"
     # Relaxed atmosphere: living room lights on but dimmed below 40%
-    wz_brightness = _brightness("light.magic_areas_light_groups_wohnzimmer_all_lights")
+    wz_brightness = _brightness(bindings.entity("living_lights"))
     if wz_brightness is not None and wz_brightness < 102 and now_hour >= 18:
         return "Atmosfera rilassata"
     # House waking up: multiple room lights turning on in the morning
@@ -1472,20 +1355,20 @@ def classify_home_mood(states: dict[str, dict]) -> str:
         lit_rooms = sum(
             1
             for eid in (
-                "light.magic_areas_light_groups_wohnzimmer_all_lights",
-                "light.magic_areas_light_groups_kuche_all_lights",
-                "light.magic_areas_light_groups_esszimmer_all_lights",
+                bindings.entity("living_lights"),
+                bindings.entity("kitchen_lights"),
+                bindings.entity("dining_lights"),
             )
             if _state(eid) == "on"
         )
         if lit_rooms >= 2:
             return "La casa si sta svegliando"
-    if _state("person.florian_horner") == "not_home" and _state("person.sabrina") == "not_home":
+    if _state(bindings.entity("resident_one")) == "not_home" and _state(bindings.entity("resident_two")) == "not_home":
         return "Casa vuota"
     return ""
 
 
-def classify_home_mood_en(states: dict[str, dict]) -> str:
+def classify_home_mood_en(states: dict[str, dict], *, bindings: HomeBindings = EMPTY_HOME_BINDINGS) -> str:
     """English version of classify_home_mood for admin UI display."""
 
     def _state(eid: str) -> str:
@@ -1511,48 +1394,44 @@ def classify_home_mood_en(states: dict[str, dict]) -> str:
 
     now_hour = datetime.datetime.now().hour
 
-    if _state("vacuum.goldstaubsucher") == "cleaning" or _state("vacuum.matrix10_ultra") == "cleaning":
+    if _state(bindings.entity("vacuum_one")) == "cleaning" or _state(bindings.entity("vacuum_two")) == "cleaning":
         return "Robot vacuum running"
-    if _state("switch.bar_kaffeemaschine_steckdose") == "on" and 5 <= now_hour <= 10:
+    if _state(bindings.entity("coffee_switch")) == "on" and 5 <= now_hour <= 10:
         return "Morning coffee"
-    if _state("fan.kuche_lufter") == "on":
+    if _state(bindings.entity("kitchen_fan")) == "on":
         return "Someone cooking"
-    if _state("fan.bad_gross_lufter_shelly") == "on" or _state("fan.bad_klein_lufter") == "on":
+    if _state(bindings.entity("bathroom_fan_one")) == "on" or _state(bindings.entity("bathroom_fan_two")) == "on":
         return "Someone showering"
-    if _power_watts("sensor.bar_bali_boot_steckdose_power") > 10:
+    if _power_watts(bindings.entity("laundry_power")) > 10:
         return "Washing machine running"
-    if _power_watts("sensor.kuche_kaffeemaschine_steckdose_power") > 50:
+    if _power_watts(bindings.entity("coffee_power")) > 50:
         return "Coffee brewing"
-    if _state("media_player.samsung_s95ca_65") == "playing" and now_hour >= 18:
+    if _state(bindings.entity("television")) == "playing" and now_hour >= 18:
         return "Movie night"
     if (
-        _state("light.schlafzimmer_sternenlicht_projektor_2") == "on"
-        or _state("light.kleiderschrank_sternenlicht_projektor") == "on"
+        _state(bindings.entity("bedroom_stars")) == "on" or _state(bindings.entity("wardrobe_stars")) == "on"
     ) and now_hour >= 18:
         return "Evening under the stars"
-    if (
-        _state("media_player.wohnzimmer_sonos_arc_lautsprecher") == "playing"
-        or _state("media_player.esszimmer") == "playing"
-    ):
+    if _state(bindings.entity("living_speaker")) == "playing" or _state(bindings.entity("dining_speaker")) == "playing":
         return "Music at home"
-    if _state("input_select.bedroom_occupancy_state") == "occupied" and (now_hour >= 22 or now_hour < 8):
+    if _state(bindings.entity("bedroom_presence")) == "occupied" and (now_hour >= 22 or now_hour < 8):
         return "Someone sleeping"
-    wz_brightness = _brightness("light.magic_areas_light_groups_wohnzimmer_all_lights")
+    wz_brightness = _brightness(bindings.entity("living_lights"))
     if wz_brightness is not None and wz_brightness < 102 and now_hour >= 18:
         return "Relaxed atmosphere"
     if 5 <= now_hour <= 9:
         lit_rooms = sum(
             1
             for eid in (
-                "light.magic_areas_light_groups_wohnzimmer_all_lights",
-                "light.magic_areas_light_groups_kuche_all_lights",
-                "light.magic_areas_light_groups_esszimmer_all_lights",
+                bindings.entity("living_lights"),
+                bindings.entity("kitchen_lights"),
+                bindings.entity("dining_lights"),
             )
             if _state(eid) == "on"
         )
         if lit_rooms >= 2:
             return "House waking up"
-    if _state("person.florian_horner") == "not_home" and _state("person.sabrina") == "not_home":
+    if _state(bindings.entity("resident_one")) == "not_home" and _state(bindings.entity("resident_two")) == "not_home":
         return "Empty home"
     return ""
 
@@ -1572,7 +1451,7 @@ _weather_degraded_warned: bool = False
 # A failed unit lookup costs the arc its temperature, so it retries on the next
 # poll instead of pinning a degraded narrative for the full hour.
 _WEATHER_DEGRADED_CACHE_TTL = 300.0
-_WEATHER_FORECAST_ENTITY_ID = "weather.forecast_home"
+_weather_forecast_identity: tuple[str, str, str] | None = None
 # Kept well under _HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT so the unit lookup can
 # never be the reason the whole enrichment misses its deadline.
 _WEATHER_UNIT_TIMEOUT = 2.0
@@ -1655,6 +1534,7 @@ async def _fetch_weather_temperature_unit(
     client: httpx.AsyncClient,
     ha_url: str,
     ha_token: str,
+    entity_id: str,
 ) -> object | None:
     """Read the configured unit for the forecast entity.
 
@@ -1665,7 +1545,7 @@ async def _fetch_weather_temperature_unit(
     """
     try:
         response = await client.get(
-            f"{ha_url.rstrip('/')}/api/states/{_WEATHER_FORECAST_ENTITY_ID}",
+            f"{ha_url.rstrip('/')}/api/states/{entity_id}",
             headers={
                 "Authorization": f"Bearer {ha_token}",
                 "Content-Type": "application/json",
@@ -1697,9 +1577,8 @@ def _warn_once_on_weather_degraded(degraded: bool) -> None:
     if degraded and not _weather_degraded_warned:
         logger.warning(
             "Weather arc is airing without a temperature: could not read a usable "
-            "temperature and unit for %s. Check that the entity exists, that the token "
+            "temperature and unit for the configured weather source. Check that the entity exists, that the token "
             "can read it, and that it reports a unit Home Assistant recognizes.",
-            _WEATHER_FORECAST_ENTITY_ID,
         )
     elif not degraded and _weather_degraded_warned:
         logger.info("Weather arc temperature recovered.")
@@ -1724,7 +1603,7 @@ def _forecast_unit_was_the_problem(forecast: list[dict], temperature_unit: objec
     return _celsius_for_prompt(current.get("temperature"), temperature_unit, require_unit=True) is None
 
 
-async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
+async def fetch_weather_forecast(ha_url: str, ha_token: str, *, bindings: HomeBindings = EMPTY_HOME_BINDINGS) -> str:
     """Fetch hourly weather forecast from HA and return a narrative arc string (Italian).
 
     Cached for 1 hour, or 5 minutes when Home Assistant would not tell us which
@@ -1732,7 +1611,12 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
     on error.
     """
     global _weather_forecast_cache, _weather_forecast_cache_en, _weather_forecast_fetched_at, _weather_forecast_ttl
-    if time.time() - _weather_forecast_fetched_at < _weather_forecast_ttl:
+    global _weather_forecast_identity
+    entity_id = bindings.entity("weather")
+    if not entity_id:
+        return ""
+    identity = (bindings.identity, entity_id, ha_url)
+    if _weather_forecast_identity == identity and time.time() - _weather_forecast_fetched_at < _weather_forecast_ttl:
         return _weather_forecast_cache
 
     try:
@@ -1745,10 +1629,10 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
                 "Authorization": f"Bearer {ha_token}",
                 "Content-Type": "application/json",
             },
-            json={"entity_id": _WEATHER_FORECAST_ENTITY_ID, "type": "hourly"},
+            json={"entity_id": entity_id, "type": "hourly"},
             params={"return_response": "true"},
         )
-        unit_task = _fetch_weather_temperature_unit(client, ha_url, ha_token)
+        unit_task = _fetch_weather_temperature_unit(client, ha_url, ha_token, entity_id)
         # return_exceptions keeps a failing forecast from orphaning the in-flight
         # unit request: gather waits for both, then we surface the real failure.
         resp, entity_unit = await asyncio.gather(forecast_task, unit_task, return_exceptions=True)
@@ -1782,6 +1666,7 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         # see _forecast_unit_was_the_problem.
         degraded = _forecast_unit_was_the_problem(forecast_list, forecast_unit)
         _weather_forecast_ttl = _WEATHER_DEGRADED_CACHE_TTL if degraded else _WEATHER_CACHE_TTL
+        _weather_forecast_identity = identity
         _weather_forecast_fetched_at = time.time()
         _warn_once_on_weather_degraded(degraded)
         logger.debug("Weather arc: %s", arc or "(none)")
@@ -1790,6 +1675,7 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         logger.debug("Weather forecast unavailable: %s", e)
         _weather_forecast_cache = ""
         _weather_forecast_cache_en = ""
+        _weather_forecast_identity = identity
         _weather_forecast_fetched_at = time.time()
         # A transient blip must not cost the station a full hour of weather.
         _weather_forecast_ttl = _WEATHER_DEGRADED_CACHE_TTL
@@ -1797,8 +1683,10 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         return ""
 
 
-def get_weather_arc_en() -> str:
+def get_weather_arc_en(*, bindings: HomeBindings = EMPTY_HOME_BINDINGS, ha_url: str = "") -> str:
     """Return the cached English weather arc string."""
+    if _weather_forecast_identity != (bindings.identity, bindings.entity("weather"), ha_url):
+        return ""
     return _weather_forecast_cache_en
 
 
@@ -1823,6 +1711,8 @@ def check_reactive_triggers(
     events: deque[HomeEvent],
     current_states: dict[str, dict] | None = None,
     timer_interrupts: list[TimerInterruptConfig] | None = None,
+    *,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> str | InterruptSpec | None:
     """Scan recent events and current sensor states for reactive triggers.
 
@@ -1877,7 +1767,7 @@ def check_reactive_triggers(
     for event in reversed(events):
         if event.timestamp < age_cutoff:
             break
-        for entity_id, trigger_state, directive, cooldown in REACTIVE_TRIGGERS:
+        for entity_id, trigger_state, directive, cooldown in bindings.reactive_rows:
             if event.entity_id != entity_id:
                 continue
             expected = STATE_TRANSLATIONS.get(trigger_state, trigger_state)
@@ -1890,7 +1780,7 @@ def check_reactive_triggers(
             return ReactiveDirective(directive, entity_id=entity_id)
 
     if current_states is not None:
-        for trigger in THRESHOLD_TRIGGERS:
+        for trigger in bindings.threshold_rows:
             eid = trigger["entity_id"]
             state_data = current_states.get(eid, {})
             try:
@@ -2010,7 +1900,7 @@ def _load_registry_snapshot(cache_dir: Path, *, now: float | None = None) -> Hom
     def _str_map(value: object) -> dict[str, str] | None:
         # A mapping field that is ABSENT (older/partial cache) degrades to empty.
         # But a field that is PRESENT and malformed — a non-dict (e.g. []) or one
-        # with nested junk like {"light.x": ["Kitchen"]} — marks the cache corrupt:
+        # with nested junk like {"light.example_lamp": ["Kitchen"]} — marks the cache corrupt:
         # return None so the loader treats the whole file as a miss. The caller then
         # refetches via websocket (and rewrites the cache) instead of serving an
         # empty or garbage registry for the full TTL.
@@ -2222,7 +2112,9 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
     if not isinstance(decoded, list):
         raise TypeError("Home Assistant states response must be a list")
 
-    active_authorization = HomeAuthorization(HomeAuthorizationMode(projection_input.authorization_mode))
+    active_authorization = HomeAuthorization(
+        HomeAuthorizationMode(projection_input.authorization_mode), projection_input.bindings
+    )
     muted_ids = set(projection_input.muted_ids)
     effective_cache = projection_input.effective_cache
     timestamp = projection_input.timestamp
@@ -2315,7 +2207,9 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
         if entity_id not in muted_ids
     }
     old_events = _prune_muted_events(effective_cache.events, muted_ids, now=timestamp) if effective_cache else None
-    labels_it, labels_en = _build_entity_label_maps(relevant, catalog=label_catalog)
+    labels_it, labels_en = _build_entity_label_maps(
+        relevant, catalog=label_catalog, bindings=active_authorization.bindings
+    )
     events = (
         diff_states(
             old_states,
@@ -2333,10 +2227,19 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
         event_entity_ids={event.entity_id for event in events},
         now=timestamp,
         catalog=label_catalog,
+        bindings=active_authorization.bindings,
     )
     label_stats = _label_stats(scored)
-    mood = classify_home_mood(relevant) if active_authorization.allows_derived_mood else ""
-    mood_en = classify_home_mood_en(relevant) if active_authorization.allows_derived_mood else ""
+    mood = (
+        classify_home_mood(relevant, bindings=active_authorization.bindings)
+        if active_authorization.allows_derived_mood
+        else ""
+    )
+    mood_en = (
+        classify_home_mood_en(relevant, bindings=active_authorization.bindings)
+        if active_authorization.allows_derived_mood
+        else ""
+    )
     weather_muted = _has_weather_mute(muted_ids)
     weather_arc = (
         ""
@@ -2377,6 +2280,7 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
         registry_source=projection_input.registry_snapshot.source,
         denylist_hits=denylist_hits,
         authorization_mode=active_authorization.mode.value,
+        bindings=active_authorization.bindings,
         ambient_sources=ambient_sources,
     )
     return _HomeContextProjectionCandidate(
@@ -2410,7 +2314,9 @@ async def fetch_home_context_preview(
     def failed(code: Literal["ha_auth_failed", "ha_unreachable", "preview_unavailable"]):
         return HomeContextPreviewResult(
             kind="failed",
-            context=HomeContext(authorization_mode=active_authorization.mode.value),
+            context=HomeContext(
+                authorization_mode=active_authorization.mode.value, bindings=active_authorization.bindings
+            ),
             duration_seconds=max(0.0, time.monotonic() - started),
             error_code=code,
         )
@@ -2454,6 +2360,7 @@ async def fetch_home_context_preview(
             weather_arc="",
             weather_arc_en="",
             authorization_mode=active_authorization.mode.value,
+            bindings=active_authorization.bindings,
             muted_ids=frozenset(muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()),
             effective_cache=None,
             radio_event_rules=(),
@@ -2587,7 +2494,10 @@ async def _fetch_home_context_outcome(
     # under the legacy bridge is never a valid stale fallback for a cold/narrow
     # install (and vice versa), including in process-reuse tests.
     effective_cache = _cache or _ha_cache
-    if effective_cache and effective_cache.authorization_mode != active_authorization.mode.value:
+    if effective_cache and (effective_cache.authorization_mode, effective_cache.bindings.identity) != (
+        active_authorization.mode.value,
+        active_authorization.bindings.identity,
+    ):
         effective_cache = None
     muted_ids = muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()
     if effective_cache and effective_cache.age_seconds < poll_interval:
@@ -2623,7 +2533,7 @@ async def _fetch_home_context_outcome(
         async def _optional_weather_arc() -> str:
             try:
                 return await asyncio.wait_for(
-                    fetch_weather_forecast(ha_url, ha_token),
+                    fetch_weather_forecast(ha_url, ha_token, bindings=active_authorization.bindings),
                     timeout=_HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT,
                 )
             except TimeoutError:
@@ -2649,7 +2559,7 @@ async def _fetch_home_context_outcome(
             enrichment_tasks.append(registry_task)
             # Any weather.* hard mute invalidates the shared forecast arc, so an
             # operator muting a single weather source skips the forecast fetch
-            # entirely (privacy) — not just a mute of weather.forecast_home.
+            # entirely (privacy) — not just a mute of weather.example_source.
             if not _has_weather_mute(muted_ids):
                 weather_task = asyncio.create_task(
                     _optional_weather_arc(),
@@ -2702,8 +2612,11 @@ async def _fetch_home_context_outcome(
                 source=registry_snapshot.source,
             ),
             weather_arc=str(fetched_weather_arc),
-            weather_arc_en=str(get_weather_arc_en()),
+            weather_arc_en=str(get_weather_arc_en(bindings=active_authorization.bindings, ha_url=ha_url))
+            if fetched_weather_arc
+            else "",
             authorization_mode=active_authorization.mode.value,
+            bindings=active_authorization.bindings,
             muted_ids=frozenset(muted_ids),
             effective_cache=_copy_home_context(effective_cache) if effective_cache is not None else None,
             radio_event_rules=tuple(copy.deepcopy(radio_event_rules or ())),
@@ -2763,7 +2676,10 @@ async def _fetch_home_context_outcome(
                     update_global=False,
                 ),
             )
-        return outcome("failed", HomeContext(authorization_mode=active_authorization.mode.value))
+        return outcome(
+            "failed",
+            HomeContext(authorization_mode=active_authorization.mode.value, bindings=active_authorization.bindings),
+        )
 
 
 def _publish_home_context_outcome(outcome: _HomeContextFetchOutcome) -> bool:
@@ -2837,7 +2753,10 @@ def get_cached_home_context(
     for callers that don't consume entity content.
     """
     active_authorization = authorization or HomeAuthorization.narrow()
-    if _ha_cache is None or _ha_cache.authorization_mode != active_authorization.mode.value:
+    if _ha_cache is None or (_ha_cache.authorization_mode, _ha_cache.bindings.identity) != (
+        active_authorization.mode.value,
+        active_authorization.bindings.identity,
+    ):
         return None
     if cache_dir is not None:
         return apply_entity_mute_policy(_ha_cache, cache_dir)

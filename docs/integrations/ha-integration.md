@@ -59,10 +59,12 @@ Mamma Mi Radio as a custom Integration repository:
 3. Install **Mamma Mi Radio**, then restart Home Assistant before adding or
    using the integration.
 4. **Settings → Devices & Services → Add Integration → Mamma Mi Radio.**
-   - **Host:** keep the default `local-mammamiradio` on Home Assistant OS; on a
-     plain Docker install use the add-on's container name (for example
-     `mammamiradio`).
-   - **Port:** `8000`.
+   - **Host:** keep the default `local-mammamiradio` for the add-on on Home
+     Assistant OS. For Docker, use the radio host's reachable address and its
+     published port. A container name such as `mammamiradio` resolves only when
+     both containers share a Docker network with name resolution. `localhost`
+     inside the Home Assistant container refers to that container, not the radio.
+   - **Port:** `8000` for the add-on or shared Docker network; for a published Docker port, enter the host port you mapped.
    - **Admin token (optional):** only needed for the play/stop/next controls.
      Use the same value as the add-on's `admin_token` option. Leave blank for
      now-playing display only.
@@ -197,7 +199,7 @@ Example `media_player.play_media` usage:
 ```yaml
 service: media_player.play_media
 target:
-  entity_id: media_player.your_speaker
+  entity_id: media_player.example_your_speaker
 data:
   media_content_id: media-source://mammamiradio/live
   media_content_type: music
@@ -212,19 +214,16 @@ the `media_player.mammamiradio` card are never affected.
 
 ## Play it through Music Assistant
 
-Music Assistant merged a Mamma Mi Radio provider on 11 August 2026, so you can
-add the station there directly instead of going through Media Source, once
-you're running a Music Assistant 2.10.0 pre-release build. Add it under
-**Providers**, give it the add-on's base URL, and the station appears as a
-single entry under **Radio**. Live titles, hosts, and cover art follow the
-same versioned contract described in [now-playing.md](now-playing.md).
+Music Assistant stable 2.10.0 through 2.10.4 includes the Mamma Mi Radio provider.
+Add it under **Providers**, give it the station's reachable base URL, and the
+station appears as one entry under **Radio**. Live titles, hosts, and cover art
+follow the contract in [now-playing.md](now-playing.md).
 
-**Availability:** the provider is in Music Assistant's 2.10.0 pre-release
-track (beta and release-candidate builds) and has not reached a stable
-release. On current stable (2.9.x) it is missing from the provider list,
-which is expected rather than a fault at your end. Wait for a stable Music
-Assistant that includes it, or use the Media Source route above, which works
-on every version.
+The provider remains **alpha**, as declared in the
+[2.10.4 provider manifest](https://github.com/music-assistant/server/blob/2.10.4/music_assistant/providers/mammamiradio/manifest.json).
+Availability in stable Music Assistant does not change that maturity label.
+Older 2.9.x installations do not include it; update Music Assistant or use the
+Media Source route above.
 
 Two things to expect:
 
@@ -237,6 +236,25 @@ Two things to expect:
   **Dynamic**, the audio is levelled twice and can lose some snap. Set it to
   fixed gain or disabled. See
   [troubleshooting.md](../troubleshooting.md#the-station-sounds-soft-or-flat-through-music-assistant).
+
+## Home context and local records
+
+Home sharing is separate from the HA connection and entity publishing. Fresh
+3.0.0 installations share only daylight and one weather source after a preview
+and explicit consent. Wider compatibility behavior and the next update's
+private-profile check are described in the [add-on upgrade note](../../ha-addon/mammamiradio/DOCS.md#upgrade-note-next-update-not-part-of-300).
+
+For verified broader Home access, sensitive domains and attributes are filtered
+before prompts. Optional label generation can send non-sensitive entity names
+and room assignments to Anthropic; it excludes sensor values, presence and
+location. Generated labels stay in the owner-only local label cache.
+
+The optional local provenance ledger can contain prompt inputs, generated
+scripts, aired outcomes and operator choices. The add-on writes it under
+`/data/cache/ledger/`; standalone uses the configured cache directory. Outside
+the add-on, `MAMMAMIRADIO_LEDGER_ENABLED=false` disables it. Inspect records
+locally and review their content before sharing them. See the
+[operations guide](../operations.md) for filtering and retention behavior.
 
 ## Deferred to a later version
 

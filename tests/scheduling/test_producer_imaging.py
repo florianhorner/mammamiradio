@@ -21,6 +21,7 @@ from mammamiradio.scheduling.producer import (
     run_producer,
 )
 from mammamiradio.web.mp3_frames import Mp3HandoffSplit
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -49,7 +50,7 @@ def _make_state() -> StationState:
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
 
 

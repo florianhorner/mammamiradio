@@ -30,7 +30,7 @@ Every word a listener or operator reads is product copy, not a log line. No tech
 **Default HA development target:** First Listen and other Home Assistant-facing
 branch work runs against `scripts/first-listen-lab.sh`, the disposable local HA
 Container + VLC speaker lab. Never connect branch code to the live home, reuse
-its token or backup, or attach household/cloud/MQTT devices unless Florian
+its token or backup, or attach household/cloud/MQTT devices unless the maintainer
 explicitly authorizes that live action in the current message. Lab runtime and
 credentials belong only under gitignored `tmp/first-listen-ha-lab/`, never in
 `.context/` or tracked files. See
@@ -38,7 +38,7 @@ credentials belong only under gitignored `tmp/first-listen-ha-lab/`, never in
 
 The restart happens once, planned, when the addon updates. Not during the day. Not as an experiment. Not to "test the fix live."
 
-**NEVER do any of these against the running mammamiradio addon without Florian's explicit confirmation in the current message:**
+**NEVER do any of these against the running mammamiradio addon without the maintainer's explicit confirmation in the current message:**
 
 1. **No live code patching.** `docker cp` into the addon container, `docker exec` with write operations (`sh -c "cat > ..."`, `tee`, `echo >`, `sed -i`, any redirection into a file), editing files inside a running container by any other means. These changes are wiped on the next restart and mask the real state of production.
 2. **No process signals.** `pkill`, `kill`, `killall`, `docker kill`, `docker restart` targeting any process inside the addon. s6-rc in this container does NOT auto-restart killed services reliably — killing a process kills the container, and killing the container kills the stream.
@@ -58,7 +58,7 @@ The restart happens once, planned, when the addon updates. Not during the day. N
 
 ## Docs
 
-Sacred files at the repo root (one viewport, one job each):
+Core documentation at the repo root (one viewport, one job each):
 
 - `README.md` - product pitch and operator quick start
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
@@ -147,7 +147,7 @@ For an existing environment, activate it and repeat the four `python -m pip` com
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by the HA add-on to `http://supervisor/core`; direct Core installs normally use `http://host:8123`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
-- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: explicit permission for generated host segments to refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`). On a fresh or unclassified install, omission starts **off** until First Listen audio is confirmed and the operator enables a fresh filtered preview; a proven pre-feature install may restore its legacy-on behavior after background origin migration. The HA add-on exposes the optional choice as `ha_context_enabled`. Turning it off keeps HA entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
+- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: explicit permission for generated host segments to refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`). On a fresh or unclassified install, omission starts **off** until First Listen audio is confirmed and the operator enables a fresh filtered preview; a verified private Home profile may restore broader behavior at a segment boundary. Older installs without valid evidence remain off until fresh sound confirmation and narrow consent; already-narrow installs retain their behavior. The HA add-on exposes the optional choice as `ha_context_enabled`. Turning it off keeps HA entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
 - `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`: seconds between full Home Assistant state refreshes for host prompt context (positive integer; default `300`). Maps to `[homeassistant] poll_interval` / add-on `ha_context_poll_interval`; invalid values are ignored with a warning.
 - `MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT`: foreground wall-clock wait (seconds, positive float) before a warm prompt-context refresh falls back to the last prompt-safe snapshot (default `2.0`; env > toml). It never cancels the producer-owned request: one request continues in the background for at most 30 seconds total and may be adopted only at the next `BANTER`/`AD`/`NEWS_FLASH` preparation boundary, never into audio already rendering or queued. `/api/states`, optional registry metadata, and optional weather enrichment begin together; the optional calls are individually bounded, best-effort, and cannot extend that same 30-second cap. The first cold registry/weather warm-up keeps its 20-second foreground wait (`_HA_CONTEXT_COLD_LOAD_TIMEOUT`); later segments while that request runs reuse the safe snapshot immediately. Failed attempts retry no earlier than the configured poll interval. A snapshot older than `max(2 × poll_interval, 120s)` — including a completed reply that becomes stale while waiting in the mailbox — is retained for diagnostics but withheld from prompts and delayed one-shots; the first fresh result after that gap resynchronizes ambient state without replaying delayed full-context events, directives, interrupts, ritual/radio matches, or running gags. Timer interrupts stay on their separate lightweight entity poll with `timer` provenance, so full-context stale suppression cannot erase a current timer alert. No new HA add-on option exposes the 30-second cap. A non-float or ≤0 configured foreground wait is ignored with a warning.
 - `MAMMAMIRADIO_HA_MOOD_LLM`: enable the experimental Home Assistant home-mood scene namer (`true`/`1`/`yes`; default **off**). Off means `classify_home_mood` uses the local heuristic ladder only. On means the station may ask the configured LLM for a short radio-friendly home mood from the already-budgeted HA context slice; missing keys, timeout, rejected or invalid output, disabled HA, and a tripped Anthropic circuit breaker (auth/usage failures already detected by script generation) all fall back to the heuristic ladder.
@@ -290,13 +290,12 @@ mammamiradio/
   restart_handoff.py        post-restart music continuity spool (producer writes, main.py admits at boot)
 radio.toml                  station config
 start.sh                    dev entrypoint with uvicorn and reload
-tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
+tests/                      mirrors mammamiradio/ — tests/<module>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` and
-`hosts/scriptwriter.py`. They have postal addresses now; the actual splits land
-in PRs 5 and 6 of the cathedral plan
-(`docs/archive/2026-04-28-cathedral-restructure.md`).
+`web/streamer.py` owns routes and playback; `hosts/scriptwriter.py` assembles
+host scripts. Scope any further extraction explicitly and follow
+`docs/runbooks/refactor-cuts.md`.
 
 ## Design System
 
@@ -367,106 +366,9 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   the standalone verifier remain available, but do not emit/reattest for
   ordinary PRs. Physical HA evidence is a separate, unchanged release gate.
 
-  <details>
-  <summary>Retired review-receipt machinery (historical, not instructions)</summary>
 
-  The following records the former policy and its regressions; none of its
-  receipt/ledger admission or refresh instructions apply to ordinary PRs.
 
-  Formerly, every PR was
-  opened through `/ship`, which runs the mandatory pre-ship review squad
-  (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook
-  (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`)
-  refuses a bare `gh pr create` unless a `review`/`adversarial-review` entry is
-  logged for HEAD (or a recent ancestor) within 2h **and** the committed v2
-  receipt covers HEAD's content. The ledger half proves the squad ran on this
-  machine; the receipt half is what the landing gate actually reads, so the hook
-  runs `scripts/check-preship-evidence.sh` — the same checker `land-pr.sh` uses —
-  before the PR exists rather than after CI. A logged squad whose receipt was
-  never emitted is denied here, with the emit command in the message. The hook is
-  fail-open, project-scoped, and Claude-only; Codex has no hook layer. Fail-open
-  is narrower than exit-code equality: only a rendered `landing-evidence:` verdict
-  denies, so an unusable Python or a missing checker never blocks a PR.
-
-  "Project-scoped" is now enforced rather than assumed. The hook is registered
-  for every Bash call in the session, so it also saw PRs opened against *other*
-  repositories from a worktree rooted here — and judged them with this repo's
-  ledger and this working tree's receipts, which describe different work. That
-  denied a PR whose squad had genuinely run and was logged in its own repo's
-  ledger (observed 2026-09-12 on a `florianhorner/gh-workflows` PR, where the
-  fleet-wide `permission-guard.py` R19 resolved the right ledger and passed).
-  A `--repo` or `-R` naming a repository that is not this checkout is now
-  skipped, the same reasoning R19 already applies: the question is unanswerable
-  here, and unanswerable must not mean refused. Standing aside requires *every*
-  opening command in the string to be explicitly foreign, read the way the CLI
-  reads it: last-wins on a repeated flag, from that command's own argument
-  vector, with a newline treated as the command separator it is and every
-  value-taking flag consuming its value — never from `--body` prose, never from
-  a later chained command. Both sides of the comparison reduce to `owner/repo`,
-  so the spellings the CLI accepts for one repository (`host/owner/repo`,
-  `http://`, `ssh://…​.git`, `git@host:…`, `-Rowner/repo`, `-R=owner/repo`)
-  cannot read as two. The flagless form and a `--repo` naming this repo are
-  unchanged.
-
-  This one branch fails *toward* checking rather than open, unlike the rest of
-  the guard: an `origin` that names no hosted repository (a local path or a
-  `file://` clone), a command line the tokenizer cannot parse, a target the
-  guard cannot reduce to `owner/repo`, and an opening command with no explicit
-  target all keep the guard on, because "cannot prove this is somebody else's
-  PR" has to mean "judge it" or the exemption becomes the bypass. Known gap,
-  pinned by a test rather than closed: a flagless command run after `cd`-ing
-  into another repository is still judged against this checkout, since the hook
-  sees the session cwd and no target. It refuses rather than passes, and R12
-  denies the flagless form fleet-wide.
-
-  Command *detection* was the weaker half and is now anchored on parentheses as
-  well as whitespace and `;&|`. A single `(` used to leave `gh` unanchored, so a
-  merge inside a subshell walked past the landing-contract deny below, and a
-  create inside `$( )` went unjudged. That was pre-existing and is the most
-  consequential thing the reviews on this change turned up.
-
-  Everything above is asserted by `tests/workflows/test_preship_squad_gate.sh`,
-  and every acceptance case there is mutation-verified: each one fails against
-  the behaviour it replaced. That matters more than the count, because three
-  separate rounds of review found bypasses in the *fix*, each of which read as
-  correct until a case was written for it.
-
-  The runtime-independent evidence gate is the immutable v2 receipt, and the
-  ceremony is single-pass: commit the implementation, run the review on that
-  exact content, run `scripts/emit-review-evidence.sh`, and commit the receipt
-  it writes under `proof/preship-reviews/v2/`. V2 hashes the raw recursive Git
-  tree while excluding valid v2 receipts and validated HA Green receipts, so
-  the receipt-only commit and the eventual squash preserve the reviewed content
-  identity. A clean base integration (`git merge origin/main`) does NOT
-  burn the receipt: PR verification accepts the existing receipt when git's own
-  three-way merge proves the pushed head is exactly the reviewed content merged
-  with the base and nothing else — so integrate, push, and land, with no
-  reattest and no receipt-swap commit. That witness reads the base as content,
-  so it requires the base to be landed in `origin/main`; an unmerged branch
-  named as the base is refused. Integrating is still required (branch
-  protection is strict), and do it locally rather than via
-  `gh pr update-branch` at landing, which changes the head and cancels an armed
-  `--match-head-commit`. `scripts/emit-review-evidence.sh --reattest` remains
-  available and applies the same witness — use it when you want the branch's
-  evidence to name the integrated content and retire superseded receipts.
-  Either way, a conflicted merge, a hand-edited merge commit, or any
-  post-review content change fails closed into a fresh squad run. Receipts are
-  content-addressed additions, so concurrent PRs never conflict on evidence.
-  (The legacy fixed-name `proof/preship-review.json` is retired — 43 commits
-  touched it, a guaranteed merge conflict between any two open PRs.)
-
-  `preship-evidence.yml` checks the v2 receipt using checker code from the PR's
-  trusted base. The result remains an annotation until the separately approved
-  blocking cutover. The receipt is a deterministic, diffable process record for
-  trusted repository writers, not a cryptographic attestation: CI can validate
-  its structure and content binding, but cannot retrieve the local ledger named
-  by `source_record_sha256`. Likewise, the current `pull_request` workflow
-  definition is PR-controlled even though the checker checkout is base-owned. A
-  blocking cutover must first move orchestration to a base-owned control plane
-  that reports against the exact PR head.
-  </details>
-
-- **Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls (single source of truth; the runbook links here)**: The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until Florian's explicit merge signal. On the signal, `scripts/land-pr.sh <PR#>` (1) refuses a behind or conflicted branch without mutating the PR, directing its feature workspace to integrate `origin/main`, review any changed code, and push; (2) blocks unresolved current Major/Critical/P0/P1 bot threads and fails closed if thread data cannot be read, through `scripts/land-gates.sh` shared with the report-only shadow queue, without consulting receipts or local ledgers; (3) checks release-cut admission; and (4) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12) — this is what retires hand-rolled rebase/reset base-integration, the cause of the 2026-06-11 phantom-revert near-miss. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. During a release cut, `scripts/check-advertised-version.sh` checks GHCR for the version advertised on `main`. Missing images make `dependabot-automerge.yml` disable auto-merge and add `cut-window-hold` to affected Dependabot PRs. The sweep only disarms. After publication, a fresh PR event with verified Dependabot metadata or the landing workflow can resume held PRs. Before arming, the workflow checks that the PR head matches the metadata and `main` matches the registry check. PR events can re-arm a PR you disarmed by hand. Before a cut, the release operator runs `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` to disable new runs, drain existing runs and disarm PRs. `land-pr.sh` requires verified freeze state for stable-version changes. Keep the human landing freeze through both architecture promotions, then resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`; see the add-on runbook for proof and recovery. GitHub Actions must not post Dependabot rebase or recreate commands; the batch-wide nudge was retired after its GitHub Actions actor was rejected by Dependabot, causing repeated comments and CI churn after subsequent merges. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`), which reads GitHub's effective rules for `main` rather than reimplementing ruleset pattern matching. Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and head matching does not eliminate non-conflicting staleness. The owning feature agent handles CI waits and review feedback; the landing seat reports `MERGED` only after confirming GitHub's state, never merely because arming succeeded.
+- **Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls (single source of truth; the runbook links here)**: The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until the maintainer's explicit merge signal. On the signal, `scripts/land-pr.sh <PR#>` (1) refuses a behind or conflicted branch without mutating the PR, directing its feature workspace to integrate `origin/main`, review any changed code, and push; (2) blocks unresolved current Major/Critical/P0/P1 bot threads and fails closed if thread data cannot be read, through `scripts/land-gates.sh` shared with the report-only shadow queue, without consulting receipts or local ledgers; (3) checks release-cut admission; and (4) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12); integrate the base in the owning workspace before landing. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. During a release cut, `scripts/check-advertised-version.sh` checks GHCR for the version advertised on `main`. Missing images make `dependabot-automerge.yml` disable auto-merge and add `cut-window-hold` to affected Dependabot PRs. The sweep only disarms. After publication, a fresh PR event with verified Dependabot metadata or the landing workflow can resume held PRs. Before arming, the workflow checks that the PR head matches the metadata and `main` matches the registry check. PR events can re-arm a PR you disarmed by hand. Before a cut, the release operator runs `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` to disable new runs, drain existing runs and disarm PRs. `land-pr.sh` requires verified freeze state for stable-version changes. Keep the human landing freeze through both architecture promotions, then resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`; see the add-on runbook for proof and recovery. GitHub Actions must not post Dependabot rebase or recreate commands. Handle behind branches through an authenticated maintainer. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`), which reads GitHub's effective rules for `main` rather than reimplementing ruleset pattern matching. Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and head matching does not eliminate non-conflicting staleness. The owning feature agent handles CI waits and review feedback; the landing seat reports `MERGED` only after confirming GitHub's state, never merely because arming succeeded.
 - **Shadow land queue (report-only)**: `.github/workflows/land-queue.yml` runs
   `scripts/land-queue-plan.sh` every 30 minutes and writes to the job summary
   the one thing an auto-land controller *would* do next — integrate or arm a PR,
@@ -503,7 +405,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   - Player QA: run / reused / not applicable / deferred
   - Admin QA: run / reused / not applicable / deferred
   ```
-  For stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when the PR itself is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. The pre-ship review squad is unchanged; this rule scopes only manual `/qa`.
+  For stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when the PR itself is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. The required engineering reviews still apply; this rule scopes only manual `/qa`.
 - **Coverage floors**: Coverage must stay above the committed minimums. Two layers enforce this:
   - **Aggregate floor**: `fail_under` in `pyproject.toml` — the overall minimum.
   - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
@@ -698,16 +600,11 @@ sidecar parking lot for unrelated work.
 - Mechanical fallout from renames (path-string updates, import
   fixups) within the same PR as the rename
 - Sibling caller updates when a public function signature changes (≤3 files
-  in other naves; beyond that, the change is legitimately cross-cutting and
+  in other modules; beyond that, the change is legitimately cross-cutting and
   needs its own scope statement)
 
-**Why no automated gate.** A scope-guard mechanism was designed and rejected
-on 2026-05-03 after a 10-PR audit measured creep frequency at 2/10 (boundary
-case) and found that the dominant creep pattern (planning-doc hitchhiking)
-isn't catchable by file-pattern globs. See
-`~/.gstack/projects/florianhorner-mammamiradio/florianhorner-cicd-freeze-reflection-design-20260503.md`
-for the full reasoning. If creep frequency rises (>4/10 in a future audit),
-revisit the mechanism path.
+Scope is checked during review. Keep each change tied to its declared objective
+and write-set.
 
 ## Review discipline
 
@@ -836,9 +733,9 @@ Two zones are mechanically enforced. Read `CONTRACT.md` before touching anything
 - `CONTRACT.md` and `.github/workflows/contract-drift.yml` (the rules and the gate are gated too)
 - The `/api/integrations/v1/now-playing` endpoint path, its ETag/304 semantics, or `schema_version="1"`
 
-A wire-visible change routed through any other file (e.g. `core/models.py`) is still a contract change — the contract-drift CI renders the serializer on every PR and catches payload drift; the frozen pytest contract tests (run by the quality workflow) hold the route path, ETag/304, and header behavior. Wanted changes go into the proposals queue: write `docs/contract-proposals/NNN-title.md` (format in that directory's README) and stop. Changes land only when Florian opens a contract window (the `.contract-window` marker + a review sitting) and the PR carries a `Contract-Change:` trailer or PR-body line. Never weaken a contract test to make something pass.
+A wire-visible change routed through any other file (e.g. `core/models.py`) is still a contract change — the contract-drift CI renders the serializer on every PR and catches payload drift; the frozen pytest contract tests (run by the quality workflow) hold the route path, ETag/304, and header behavior. Wanted changes go into the proposals queue: write `docs/contract-proposals/NNN-title.md` (format in that directory's README) and stop. Changes land only when the maintainer opens a contract window (the `.contract-window` marker + a review sitting) and the PR carries a `Contract-Change:` trailer or PR-body line. Never weaken a contract test to make something pass.
 
-**Z-comms — GitHub writes to non-owned repos.** Never run `gh pr comment/review/edit/merge`, `gh issue comment`, or mutating `gh api` calls against any repo not owned by `florianhorner`. This includes flagless invocations inside an upstream checkout. Draft the reply to `.context/pr-replies/*.md` instead; Florian copies and sends. Always.
+**Z-comms — GitHub writes to non-owned repos.** Never run `gh pr comment/review/edit/merge`, `gh issue comment`, or mutating `gh api` calls against any repo not owned by `florianhorner`. This includes flagless invocations inside an upstream checkout. Draft the reply to `.context/pr-replies/*.md` instead; the maintainer copies and sends. Always.
 
 <!-- BEGIN: commit-message-standards (managed by bootstrap-repo.sh — do not hand-edit) -->
 ## Commit message standards

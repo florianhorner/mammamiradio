@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # check-merge-gate.sh — assert the merge-gate repo settings have not drifted.
 #
-# The landing contract (CLAUDE.md "Quality gates") rests on three GitHub
+# The landing contract (CLAUDE.md "Quality gates") rests on four GitHub
 # settings that live OUTSIDE the repo and would fail silently if toggled:
 #
 #   1. branch protection on main: strict status checks (branch must be up to
-#      date before merging) — the setting whose absence enabled the 2026-06-11
-#      stale-base rebase footgun;
+#      date before merging), so the checked base matches the landing base;
 #   2. repo: allow_update_branch (the Update-branch affordance land-pr.sh uses);
 #   3. repo: allow_auto_merge (arming `--auto` at all);
 #   4. ruleset: required_review_thread_resolution on main (unresolved review

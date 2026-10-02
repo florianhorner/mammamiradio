@@ -38,7 +38,7 @@ from mammamiradio.core.sync import init_db
 def _valid_receipt(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": 1,
-        "selected_entity_id": "media_player.kitchen",
+        "selected_entity_id": "media_player.example_kitchen",
         "accepted_attempt_id": "opaque_attempt_token_1234",
         "accepted_at": 100.0,
         "heard_at": 110.0,
@@ -65,7 +65,7 @@ def test_receipt_load_is_bounded_strict_and_corrupt_tolerant(tmp_path):
         _valid_receipt(schema_version=True),
         _valid_receipt(schema_version=1.0),
         {**_valid_receipt(), "extra": True},
-        _valid_receipt(selected_entity_id="light.kitchen"),
+        _valid_receipt(selected_entity_id="light.example_kitchen"),
         _valid_receipt(accepted_attempt_id="short"),
         _valid_receipt(accepted_at=None),
         _valid_receipt(heard_at=99.0),
@@ -104,7 +104,7 @@ def test_receipt_load_accepts_listener_and_existing_ha_proof(tmp_path):
     ha_receipt = load_first_listen_receipt(path, 200.0)
 
     assert ha_receipt is not None
-    assert ha_receipt.selected_entity_id == "media_player.kitchen"
+    assert ha_receipt.selected_entity_id == "media_player.example_kitchen"
     assert ha_receipt.heard_at == 110.0
 
 
@@ -147,7 +147,7 @@ def test_receipt_load_keeps_empty_and_privacy_only_v1_shapes_valid(tmp_path, pri
             accepted_at=None,
         ),
         _valid_receipt(
-            selected_entity_id="media_player.kitchen",
+            selected_entity_id="media_player.example_kitchen",
             accepted_attempt_id="listener_opaque_attempt_token_1234",
         ),
         _valid_receipt(
@@ -210,7 +210,7 @@ async def test_receipt_store_rejects_invalid_public_facts(tmp_path):
     with pytest.raises(ValueError, match="event timestamp"):
         await store.record_listener_heard(heard_at=0.0)
     with pytest.raises(ValueError, match="media_player entity id"):
-        await store.record_accepted("light.kitchen", accepted_at=100.0)
+        await store.record_accepted("light.example_kitchen", accepted_at=100.0)
     with pytest.raises(ValueError, match="heard must be a boolean"):
         await store.verify("valid_attempt_token_1234", heard=cast(bool, "yes"))
     with pytest.raises(FirstListenAttemptMismatchError):
@@ -222,7 +222,7 @@ async def test_receipt_store_rejects_invalid_public_facts(tmp_path):
 @pytest.mark.asyncio
 async def test_incomplete_ha_facts_enforce_time_order_and_idempotence(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
-    accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+    accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
 
     with pytest.raises(ValueError, match="cannot precede playback acceptance"):
         await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=99.0)
@@ -240,10 +240,10 @@ async def test_incomplete_ha_facts_enforce_time_order_and_idempotence(tmp_path):
 async def test_receipt_records_facts_with_owner_only_atomic_persistence(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
     with patch("mammamiradio.core.first_listen.os.fsync", wraps=os.fsync) as fsync:
-        accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+        accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
 
     path = first_listen_receipt_path(tmp_path)
-    assert accepted.selected_entity_id == "media_player.kitchen"
+    assert accepted.selected_entity_id == "media_player.example_kitchen"
     assert accepted.accepted_attempt_id
     assert accepted.heard_at is None
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -257,7 +257,7 @@ async def test_generated_ha_attempt_namespace_round_trips_reserved_token_output(
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
 
     with patch("mammamiradio.core.first_listen.secrets.token_urlsafe", return_value="listener_reserved_collision"):
-        accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+        accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
 
     assert accepted.accepted_attempt_id == "ha_listener_reserved_collision"
     assert await FirstListenReceiptStore(tmp_path, clock=lambda: 200.0).load() == accepted
@@ -282,7 +282,7 @@ async def test_listener_heard_round_trips_and_is_idempotent(tmp_path):
 @pytest.mark.asyncio
 async def test_listener_heard_supersedes_incomplete_ha_attempt(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
-    accepted = await store.record_accepted("media_player.kitchen", accepted_at=90.0)
+    accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=90.0)
     await store.record_privacy_reviewed(reviewed_at=95.0)
 
     listener = await store.record_listener_heard(heard_at=100.0)
@@ -311,7 +311,7 @@ async def test_listener_heard_preserves_concurrent_privacy_fact(tmp_path):
 @pytest.mark.asyncio
 async def test_listener_heard_keeps_completed_ha_proof_unchanged(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
-    accepted = await store.record_accepted("media_player.kitchen", accepted_at=90.0)
+    accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=90.0)
     completed = await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=100.0)
 
     listener = await store.record_listener_heard(heard_at=120.0)
@@ -336,7 +336,7 @@ async def test_legacy_ha_acceptance_cannot_supersede_listener_proof_across_resta
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
     listener = await store.record_listener_heard(heard_at=100.0)
 
-    unchanged = await store.record_accepted("media_player.kitchen", accepted_at=120.0)
+    unchanged = await store.record_accepted("media_player.example_kitchen", accepted_at=120.0)
     restarted = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
 
     assert unchanged == listener
@@ -346,13 +346,13 @@ async def test_legacy_ha_acceptance_cannot_supersede_listener_proof_across_resta
 @pytest.mark.asyncio
 async def test_new_ha_acceptance_still_supersedes_completed_ha_proof(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
-    first = await store.record_accepted("media_player.kitchen", accepted_at=90.0)
+    first = await store.record_accepted("media_player.example_kitchen", accepted_at=90.0)
     completed = await store.verify(first.accepted_attempt_id or "", heard=True, verified_at=100.0)
 
-    second = await store.record_accepted("media_player.bedroom", accepted_at=120.0)
+    second = await store.record_accepted("media_player.example_bedroom", accepted_at=120.0)
 
     assert second.accepted_attempt_id != completed.accepted_attempt_id
-    assert second.selected_entity_id == "media_player.bedroom"
+    assert second.selected_entity_id == "media_player.example_bedroom"
     assert second.heard_at is None
     assert await FirstListenReceiptStore(tmp_path, clock=lambda: 200.0).load() == second
 
@@ -360,8 +360,8 @@ async def test_new_ha_acceptance_still_supersedes_completed_ha_proof(tmp_path):
 @pytest.mark.asyncio
 async def test_attempt_compare_and_swap_survives_restart_and_rejects_stale_tab(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
-    first = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
-    second = await store.record_accepted("media_player.bedroom", accepted_at=110.0)
+    first = await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
+    second = await store.record_accepted("media_player.example_bedroom", accepted_at=110.0)
 
     with pytest.raises(FirstListenAttemptMismatchError):
         await store.verify(first.accepted_attempt_id or "", heard=True, verified_at=120.0)
@@ -380,7 +380,7 @@ async def test_attempt_compare_and_swap_survives_restart_and_rejects_stale_tab(t
 @pytest.mark.asyncio
 async def test_concurrent_verify_and_privacy_mutations_preserve_both_fields(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
-    accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+    accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
 
     verified, reviewed = await asyncio.gather(
         store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=110.0),
@@ -416,7 +416,7 @@ async def test_receipt_write_failure_is_typed_and_leaves_attempt_incomplete(tmp_
         patch("mammamiradio.core.first_listen._atomic_write_json", side_effect=OSError("disk full")),
         pytest.raises(FirstListenReceiptUnavailableError),
     ):
-        await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+        await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
 
     assert not first_listen_receipt_path(tmp_path).exists()
     assert await store.load() is None
@@ -434,7 +434,7 @@ async def test_receipt_writes_run_off_the_event_loop(tmp_path):
         real_write(path, payload)
 
     with patch("mammamiradio.core.first_listen._atomic_write_json", side_effect=recording_write):
-        await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+        await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
 
     assert writer_threads
     assert all(thread_id != event_loop_thread for thread_id in writer_threads)
@@ -457,7 +457,7 @@ async def test_cancelled_mutation_holds_lock_until_worker_finishes(tmp_path):
         real_write(path, payload)
 
     with patch("mammamiradio.core.first_listen._atomic_write_json", side_effect=blocking_first_write):
-        accepted_task = asyncio.create_task(store.record_accepted("media_player.kitchen", accepted_at=100.0))
+        accepted_task = asyncio.create_task(store.record_accepted("media_player.example_kitchen", accepted_at=100.0))
         assert await asyncio.to_thread(started.wait, 1.0)
         accepted_task.cancel()
         privacy_task = asyncio.create_task(store.record_privacy_reviewed(reviewed_at=120.0))

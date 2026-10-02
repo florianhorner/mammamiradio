@@ -4,8 +4,8 @@
 The station's REAL home-awareness code (mammamiradio/home/ha_context.py) polls a
 Home Assistant instance over its REST API. This serves a *staged* home so the
 producer genuinely derives a home mood + summary and the hosts weave it into
-banter without a real HA. State values are staged locally; some fixture
-identifiers and labels still match the legacy runtime mappings.
+banter without a real HA. State values, identifiers and labels are synthetic. The isolated station
+launcher supplies matching demonstration bindings.
 
 It implements exactly the two calls fetch_home_context makes:
   GET  /api/states                          -> list of entity state objects
@@ -33,44 +33,42 @@ import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# Entity ids below are the ones classify_home_mood() / the summary builder key on
-# (see mammamiradio/home/ha_context.py). Some identifiers and friendly names
-# still match those legacy mappings; these fixtures are not fully anonymized.
+# Synthetic entity IDs match the isolated station launcher's fixture bindings.
 SCENARIOS: dict[str, dict[str, dict]] = {
     # Coffee brewing — the "the house knew before we did" impossible moment.
     # The staged coffee-power sensor exceeds 50 W -> "Caffè in preparazione".
     # The switch starts OFF so a capture can stage the reactive "coffee just
     # switched on" event via POST /__set (same flow as the homecoming door).
     "coffee": {
-        "switch.bar_kaffeemaschine_steckdose": {
+        "switch.example_coffee_switch": {
             "state": "off",
             "attributes": {"friendly_name": "Presa macchina del caffè"},
         },
-        "sensor.kuche_kaffeemaschine_steckdose_power": {
+        "sensor.example_coffee_power": {
             "state": "118",
             "attributes": {"friendly_name": "Macchina del caffè", "unit_of_measurement": "W"},
         },
-        "light.magic_areas_light_groups_kuche_all_lights": {
+        "light.example_kitchen_lights": {
             "state": "on",
             "attributes": {"friendly_name": "Luci della cucina", "brightness": 170},
         },
-        "light.magic_areas_light_groups_wohnzimmer_all_lights": {
+        "light.example_living_lights": {
             "state": "on",
             "attributes": {"friendly_name": "Luci del soggiorno", "brightness": 90},
         },
-        "media_player.wohnzimmer_sonos_arc_lautsprecher": {
+        "media_player.example_living_speaker": {
             "state": "playing",
             "attributes": {"friendly_name": "Sonos del soggiorno", "media_title": "Mamma Mi Radio"},
         },
-        "sensor.soggiorno_temperatura": {
+        "sensor.example_living_temperature": {
             "state": "21.5",
             "attributes": {"friendly_name": "Temperatura soggiorno", "unit_of_measurement": "°C"},
         },
-        "cover.cucina_finestra": {
+        "cover.example_kitchen_window": {
             "state": "open",
             "attributes": {"friendly_name": "Finestra della cucina"},
         },
-        "weather.forecast_home": {
+        "weather.example_weather": {
             "state": "partlycloudy",
             "attributes": {
                 "friendly_name": "Meteo",
@@ -84,31 +82,31 @@ SCENARIOS: dict[str, dict[str, dict]] = {
     # proof that a person arrived. The person fixture starts away for a separate,
     # explicitly sourced return scenario.
     "homecoming": {
-        "lock.lock_ultra_8d3c": {
+        "lock.example_entry_lock": {
             "state": "locked",
             "attributes": {"friendly_name": "Porta d'ingresso"},
         },
-        "person.florian_horner": {
+        "person.example_resident_one": {
             "state": "not_home",
-            "attributes": {"friendly_name": "Florian"},
+            "attributes": {"friendly_name": "Residente uno"},
         },
-        "light.magic_areas_light_groups_wohnzimmer_all_lights": {
+        "light.example_living_lights": {
             "state": "on",
             "attributes": {"friendly_name": "Luci del soggiorno", "brightness": 90},
         },
-        "light.magic_areas_light_groups_kuche_all_lights": {
+        "light.example_kitchen_lights": {
             "state": "off",
             "attributes": {"friendly_name": "Luci della cucina"},
         },
-        "media_player.wohnzimmer_sonos_arc_lautsprecher": {
+        "media_player.example_living_speaker": {
             "state": "playing",
             "attributes": {"friendly_name": "Sonos del soggiorno", "media_title": "Mamma Mi Radio"},
         },
-        "sensor.soggiorno_temperatura": {
+        "sensor.example_living_temperature": {
             "state": "21.8",
             "attributes": {"friendly_name": "Temperatura soggiorno", "unit_of_measurement": "°C"},
         },
-        "weather.forecast_home": {
+        "weather.example_weather": {
             "state": "clear-night",
             "attributes": {
                 "friendly_name": "Meteo",
@@ -120,7 +118,7 @@ SCENARIOS: dict[str, dict[str, dict]] = {
     },
 }
 
-# Hourly forecast returned by the weather.get_forecasts service call. Read-only
+# Hourly forecast returned by the weather forecast service call. Read-only
 # "real local forecast" the meteo flash riffs on.
 FORECASTS: dict[str, list[dict]] = {
     "coffee": [
@@ -173,7 +171,7 @@ def make_handler(scenario: str):
             length = int(self.headers.get("Content-Length", 0))
             body_raw = self.rfile.read(length) if length else b""
             if path == "/api/services/weather/get_forecasts":
-                self._send({"response": {"weather.forecast_home": {"forecast": forecast}}})
+                self._send({"response": {"weather.example_weather": {"forecast": forecast}}})
             elif path == "/__set":
                 # Capture-harness control: stage a state transition mid-run.
                 try:

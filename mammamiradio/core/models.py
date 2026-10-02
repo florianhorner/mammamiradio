@@ -1521,13 +1521,14 @@ class StationState:
     # Session-only ambient Home Assistant fact rotation. The director is owned
     # by main.py and deliberately resets when the add-on restarts.
     home_context_director: HomeContextDirector | None = None
-    # R0 install-scoped authorization. Cold installs get only normalized
-    # weather/daylight; pre-existing databases retain legacy behavior until the
-    # provenance-gated Home Profile migration lands.
+    # Private bindings are adopted only after off-path verification. These
+    # fields are deliberately absent from public serializers.
     home_authorization: HomeAuthorization | None = None
-    # R0 migration bridge callback. Receives IDs only (never raw states or
-    # labels) after a successful full HA snapshot.
-    home_entity_ids_observer: Callable[[frozenset[str]], None] | None = None
+    home_compatibility_status: str = "narrow"
+    home_ambient_consent_required: bool = False
+    home_ambient_consent_granted: bool = False
+    home_context_requested: bool = False
+    home_bindings_adopter: Callable[[], None] | None = field(default=None, repr=False)
     # Handoff from the scriptwriter to the producer's queue-admission seam.
     # It is cleared on every new banter attempt so a failed render cannot attach
     # an older fact to unrelated speech.

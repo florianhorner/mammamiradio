@@ -8,9 +8,8 @@
 # reading the store) and fails only when someone clicks Install or Update:
 # a fresh install fails and rolls back, an update fails to download.
 #
-# Between 2026-05-18 and 2026-08-02 this repo was in that state for 74 of 76
-# days, because the release model parked the *next* unreleased number on main.
-# See docs/release-process.md. This script is the guard for that invariant.
+# Keep main on an installable version outside an explicitly controlled release cut.
+# See docs/release-process.md.
 #
 # Usage:
 #   scripts/check-advertised-version.sh              # check config.yaml's version

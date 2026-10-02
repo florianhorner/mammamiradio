@@ -2,24 +2,10 @@
 # check-preship-evidence.sh — standalone verifier for historical v2 review receipts.
 # RETIRED ADMISSION: manual/legacy only; no active hook, gate, queue, or workflow invokes this.
 #
-# Shared checker for the runtime-independent half of the pre-ship squad gate: the local
-# Claude hook (require-preship-squad.sh) cannot fire in Codex (no hook layer exists
-# there), so CI verifies the content-addressed v2 receipt committed under
-# proof/preship-reviews/v2/ — written by scripts/emit-review-evidence.sh after the squad
-# runs. PR mode binds the new receipt to its reviewed commit and to the PR head's content:
-# by exact digest equality, or, after a clean base integration, by git's own three-way
-# merge proving merge(reviewed, base) is exactly the head content, so integrating main
-# does not burn a still-valid receipt. That second path reads the base as content, so it
-# also requires the base to be landed in origin/main; conflicts and post-review drift
-# fail closed. Main mode finds a surviving receipt matching the landed content by exact
-# digest only. A receipt accepted through the merge witness binds the pre-merge digest,
-# so after the squash main mode finds nothing for it; no workflow or script invokes main
-# mode today, and wiring it up needs a target-bound receipt at landing first.
-#
-# Honest scope, same words as land-pr.sh: this is a guard for tired humans and parallel
-# agents, not a security boundary. The agent that would skip the squad also writes the
-# evidence. What this changes: skipping the squad from ANY runtime now requires
-# fabricating a diffable, content-bound artifact instead of being silently invisible.
+# Verify historical content-addressed receipts. PR mode accepts an exact
+# content digest or a clean three-way merge witness with a landed base. Conflicts
+# and post-review drift fail closed. Main mode requires an exact digest match.
+# This checks evidence consistency; it is not a security boundary.
 #
 # Usage: scripts/check-preship-evidence.sh --v2 --target SHA [--base SHA] --mode pr|main
 #

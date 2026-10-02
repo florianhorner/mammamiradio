@@ -16,6 +16,7 @@ from mammamiradio.core.models import ChaosSubtype, Segment, SegmentType, Station
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.hosts.ad_creative import AdPart, AdScript, SonicWorld
 from mammamiradio.scheduling import producer
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 SCRIPTWRITER_MODULE = "mammamiradio.hosts.scriptwriter"
@@ -46,7 +47,7 @@ def _make_state() -> StationState:
     return StationState(
         playlist=[Track(title="Canzone", artist="Artista", duration_ms=180_000, spotify_id="demo")],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
 
 

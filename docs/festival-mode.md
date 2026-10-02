@@ -166,6 +166,6 @@ The prompt block explicitly forbids the terms "Eurovision", "ESC", and "EBU". Do
 
 ## Related
 
-- [Adding a new party mode theme](party-mode-extension.md) — how to implement a second theme (e.g. Hitster, World Cup)
+- [Adding a new party mode theme](party-mode-extension.md) — how to implement a second theme (e.g. music quizzes, fictional sports tournaments)
 - [Architecture → `/api/party` route](architecture.md) — route table entry for the toggle endpoint
 - [Chaos Mode](architecture.md#segment-production) — similar first-strike + idempotent toggle pattern

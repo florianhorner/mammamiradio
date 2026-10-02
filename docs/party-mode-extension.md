@@ -15,7 +15,7 @@ Rather than making each theme a one-off patch, Festival Mode landed as the first
 PartyMode = Literal["festival"]
 ```
 
-Adding `"hitster"` means widening that literal and adding a prompt block — everything else (API, UI toggle, persistence, idempotency) is already wired.
+Adding `"music_quiz"` means widening that literal and adding a prompt block — everything else (API, UI toggle, persistence, idempotency) is already wired.
 
 ## Design decisions
 
@@ -49,7 +49,7 @@ In `mammamiradio/core/models.py`:
 PartyMode = Literal["festival"]
 
 # After
-PartyMode = Literal["festival", "hitster"]
+PartyMode = Literal["festival", "music_quiz"]
 ```
 
 ### 2. Write the prompt block
@@ -57,8 +57,8 @@ PartyMode = Literal["festival", "hitster"]
 In `mammamiradio/hosts/prompt_world.py`, add a constant after `FESTIVAL_MODE_BLOCK` (mode-block prompt-fiction lives here), then import it into `scriptwriter.py` where the other `*_MODE_BLOCK`s are imported from `prompt_world`:
 
 ```python
-HITSTER_MODE_BLOCK = """\
-HITSTER MODE — MUSIC QUIZ HOST:
+MUSIC_QUIZ_MODE_BLOCK = """\
+MUSIC_QUIZ MODE — MUSIC QUIZ HOST:
 [Your instructions here...]
 Never reference any real licensed game brand.\
 """
@@ -77,7 +77,7 @@ Replace with a mapping:
 ```python
 _PARTY_BLOCKS = {
     "festival": FESTIVAL_MODE_BLOCK,
-    "hitster": HITSTER_MODE_BLOCK,
+    "music_quiz": MUSIC_QUIZ_MODE_BLOCK,
 }
 party_block = f"\n\n{_PARTY_BLOCKS[config.party_mode]}" if config.party_mode else ""
 ```
@@ -94,7 +94,7 @@ if action == "enable" and mode != "festival":
     return JSONResponse(..., status_code=422)
 
 # After
-_VALID_MODES: set[PartyMode] = {"festival", "hitster"}
+_VALID_MODES: set[PartyMode] = {"festival", "music_quiz"}
 if action == "enable" and mode not in _VALID_MODES:
     return JSONResponse(..., status_code=422)
 ```
@@ -105,27 +105,27 @@ In `ha-addon/mammamiradio/config.yaml`:
 
 ```yaml
 options:
-  hitster_mode: false
+  music_quiz_mode: false
 
 schema:
-  hitster_mode: bool?
+  music_quiz_mode: bool?
 ```
 
 In `ha-addon/mammamiradio/translations/en.yaml`:
 
 ```yaml
 configuration:
-  hitster_mode:
-    name: Hitster Mode
+  music_quiz_mode:
+    name: Music Quiz Mode
     description: "Turns your station into a music quiz host — one-shot questions, point scoring, time pressure."
 ```
 
 In `ha-addon/mammamiradio/rootfs/run.sh`, add after the festival block:
 
 ```python
-hitster = opts.get("hitster_mode", False)
-hitster_val = "true" if hitster else "false"
-print("export MAMMAMIRADIO_HITSTER_MODE=" + hitster_val)
+music_quiz = opts.get("music_quiz_mode", False)
+music_quiz_val = "true" if music_quiz else "false"
+print("export MAMMAMIRADIO_MUSIC_QUIZ_MODE=" + music_quiz_val)
 ```
 
 ### 6. Add env var loading in config.py
@@ -133,10 +133,10 @@ print("export MAMMAMIRADIO_HITSTER_MODE=" + hitster_val)
 In `mammamiradio/core/config.py`, mirror the `MAMMAMIRADIO_FESTIVAL_MODE` block:
 
 ```python
-_hitster_env = os.getenv("MAMMAMIRADIO_HITSTER_MODE", "").strip().lower()
-if _hitster_env in _TRUTHY:
-    config.party_mode = "hitster"
-elif _hitster_env in _FALSY:
+_music_quiz_env = os.getenv("MAMMAMIRADIO_MUSIC_QUIZ_MODE", "").strip().lower()
+if _music_quiz_env in _TRUTHY:
+    config.party_mode = "music_quiz"
+elif _music_quiz_env in _FALSY:
     config.party_mode = None
 ```
 
@@ -144,21 +144,21 @@ Place after the festival env block. Note: the last truthy env var wins — desig
 
 ### 7. Add admin UI toggle
 
-In `mammamiradio/web/templates/admin.html`, copy the `festivalControl` div and update IDs and labels. Mirror `loadFestivalToggle()` and `toggleFestivalMode()` with hitster equivalents. Use the same `--sun`/`--sun2` golden color theme for consistency.
+In `mammamiradio/web/templates/admin.html`, copy the `festivalControl` div and update IDs and labels. Mirror `loadFestivalToggle()` and `toggleFestivalMode()` with music_quiz equivalents. Use the same `--sun`/`--sun2` golden color theme for consistency.
 
 ### 8. Write the tests
 
 Three mandatory scenarios from the [audio delivery test coverage rule](../CLAUDE.md):
 
-1. **Normal**: enable → prompt includes hitster block, fresh runway replaces the eligible queue and the first segment is BANTER; without fresh runway the playable current head/slot is preserved; disable → mode cleared, no purge
-2. **LLM down**: mode arms (`config.party_mode = "hitster"`), but script generation falls back gracefully
-3. **Post-restart**: `MAMMAMIRADIO_HITSTER_MODE=true` in env → config loads with `party_mode = "hitster"` after cold boot
+1. **Normal**: enable → prompt includes music_quiz block, fresh runway replaces the eligible queue and the first segment is BANTER; without fresh runway the playable current head/slot is preserved; disable → mode cleared, no purge
+2. **LLM down**: mode arms (`config.party_mode = "music_quiz"`), but script generation falls back gracefully
+3. **Post-restart**: `MAMMAMIRADIO_MUSIC_QUIZ_MODE=true` in env → config loads with `party_mode = "music_quiz"` after cold boot
 
-Add idempotence, auth, and stacking (hitster + chaos simultaneously) tests. See `tests/web/test_festival_mode.py` for the full pattern.
+Add idempotence, auth, and stacking (music_quiz + chaos simultaneously) tests. See `tests/web/test_festival_mode.py` for the full pattern.
 
 ### 9. Update docs
 
-- Add the new theme to `docs/festival-mode.md` or create a dedicated `docs/hitster-mode.md`
+- Add the new theme to `docs/festival-mode.md` or create a dedicated `docs/music_quiz-mode.md`
 - Add the env var to `CLAUDE.md` Environment section
 - Add the route to `docs/architecture.md` if any new routes are added
 - Add a CHANGELOG entry

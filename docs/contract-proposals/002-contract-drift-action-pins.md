@@ -12,7 +12,7 @@ None. No wire-visible change. The proposal narrows which diffs to
 `.github/workflows/contract-drift.yml` is a frozen path, and Dependabot's
 `github-actions` ecosystem bumps action pins *inside* it. Those PRs fail
 `Frozen paths require Contract-Change` and can only merge inside a window that
-only Florian can open. Two are wedged today: #906 (`actions/checkout`
+only the maintainer can open. Two are wedged today: #906 (`actions/checkout`
 7.0.0 → 7.0.1) and #905 (`actions/setup-python` 6 → 7). This recurs every time
 an action releases.
 
@@ -60,6 +60,6 @@ freeze's value is that it is unconditional — the way to keep it unconditional 
 to stop it firing on changes it was never meant to catch.
 
 ## Decision needed
-Florian: accept or reject the narrowed scope. Implementing it edits
+Maintainer: accept or reject the narrowed scope. Implementing it edits
 `contract-drift.yml`, which is itself frozen, so it lands inside a window with a
 `Contract-Change:` trailer like any other frozen-path change.

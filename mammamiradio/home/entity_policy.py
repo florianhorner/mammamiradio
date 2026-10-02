@@ -96,7 +96,7 @@ def empty_policy() -> dict[str, Any]:
 # error (disk hiccup, a write caught mid-flight despite the atomic replace,
 # permissions) must not silently un-mute every entity — this is a privacy
 # control, so an unreadable file degrades to the last confirmed-good policy
-# instead of "nothing is muted" (codex adversarial review).
+# instead of "nothing is muted".
 _LAST_GOOD_POLICY: dict[str, dict[str, Any]] = {}
 _POLICY_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 

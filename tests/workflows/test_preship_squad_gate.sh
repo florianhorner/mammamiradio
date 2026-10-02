@@ -615,7 +615,7 @@ pass "create with repo-like title value is allowed"
 # It fails in the safe direction (a false refusal, not a false pass), and R12
 # denies the flagless form fleet-wide so it is largely unreachable. Closing it
 # needs the cwd resolution permission-guard.py R13/R19 already had to build.
-CD_OTHER_REPO='cd /Users/florianhorner/repos/gh-workflows && gh pr create --fill'
+CD_OTHER_REPO='cd /Users/example/repos/gh-workflows && gh pr create --fill'
 [ "$(verdict "$(payload "$CD_OTHER_REPO")" "$DUMMY")" = allow ] \
   || fail "known gap changed: a cd-ed flagless create is no longer judged here"
 pass "create after changing directories is allowed"

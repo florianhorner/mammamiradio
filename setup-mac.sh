@@ -38,7 +38,7 @@ on run
     end try
 
     if not isRunning then
-        -- Start the radio (start.sh handles go-librespot, FIFO, uvicorn)
+        -- Start the radio (start.sh launches uvicorn and optional local HTTPS)
         do shell script "cd " & quoted form of projectPath & " && ./start.sh > tmp/radio.log 2>&1 &"
 
         -- Wait for the server to be ready (up to 30 seconds)

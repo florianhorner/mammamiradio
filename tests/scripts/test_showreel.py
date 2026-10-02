@@ -46,29 +46,29 @@ def _states_by_id(base: str) -> dict[str, dict]:
 
 def test_homecoming_mock_stages_a_real_unlock_transition() -> None:
     with _mock_homecoming_server() as base:
-        assert _states_by_id(base)["lock.lock_ultra_8d3c"]["state"] == "locked"
+        assert _states_by_id(base)["lock.example_entry_lock"]["state"] == "locked"
 
         result = _request_json(
             base,
             "/__set",
-            json.dumps({"entity_id": "lock.lock_ultra_8d3c", "state": "unlocked"}).encode(),
+            json.dumps({"entity_id": "lock.example_entry_lock", "state": "unlocked"}).encode(),
         )
 
         assert result == {
             "ok": True,
-            "entity_id": "lock.lock_ultra_8d3c",
+            "entity_id": "lock.example_entry_lock",
             "old": "locked",
             "new": "unlocked",
         }
-        assert _states_by_id(base)["lock.lock_ultra_8d3c"]["state"] == "unlocked"
+        assert _states_by_id(base)["lock.example_entry_lock"]["state"] == "unlocked"
 
 
 @pytest.mark.parametrize(
     ("payload", "expected_status"),
     [
         (b"{", 400),
-        (json.dumps({"entity_id": "lock.unknown", "state": "unlocked"}).encode(), 404),
-        (json.dumps({"entity_id": "lock.lock_ultra_8d3c", "state": "locked"}).encode(), 409),
+        (json.dumps({"entity_id": "lock.example_unknown", "state": "unlocked"}).encode(), 404),
+        (json.dumps({"entity_id": "lock.example_entry_lock", "state": "locked"}).encode(), 409),
     ],
 )
 def test_homecoming_mock_rejects_invalid_or_noop_flips(payload: bytes, expected_status: int) -> None:
@@ -77,7 +77,7 @@ def test_homecoming_mock_rejects_invalid_or_noop_flips(payload: bytes, expected_
             _request_json(base, "/__set", payload)
 
         assert error.value.code == expected_status
-        assert _states_by_id(base)["lock.lock_ultra_8d3c"]["state"] == "locked"
+        assert _states_by_id(base)["lock.example_entry_lock"]["state"] == "locked"
 
 
 class _Process:
@@ -131,7 +131,7 @@ def _home_event_args(tmp_path: Path) -> list[str]:
         "--arc",
         "banter",
         "--home-event",
-        "lock.lock_ultra_8d3c:unlocked",
+        "lock.example_entry_lock:unlocked",
         "--raw",
         str(tmp_path / "raw.mp3"),
         "--final",
@@ -153,8 +153,8 @@ def test_home_event_recipe_sets_the_station_context_ttl() -> None:
 @pytest.mark.parametrize(
     "args",
     [
-        ["--arc", "news_flash", "--home-event", "lock.lock_ultra_8d3c:unlocked"],
-        ["--arc", "banter", "--home-event", "lock.lock_ultra_8d3c:unlocked", "--ha-poll-interval", "0"],
+        ["--arc", "news_flash", "--home-event", "lock.example_entry_lock:unlocked"],
+        ["--arc", "banter", "--home-event", "lock.example_entry_lock:unlocked", "--ha-poll-interval", "0"],
     ],
 )
 def test_home_event_cli_contract_fails_closed(args: list[str]) -> None:
@@ -196,7 +196,7 @@ def test_home_event_capture_primes_before_recording(monkeypatch, tmp_path) -> No
         "_post",
         lambda _base, path, _body: (
             events.append(("post", path))
-            or {"ok": True, "entity_id": "lock.lock_ultra_8d3c", "old": "locked", "new": "unlocked"}
+            or {"ok": True, "entity_id": "lock.example_entry_lock", "old": "locked", "new": "unlocked"}
         ),
     )
 
@@ -228,7 +228,7 @@ def test_home_event_capture_fails_closed(monkeypatch, tmp_path, failure: str) ->
         return not (failure == "final_trigger" and trigger_count == 3)
 
     monkeypatch.setattr(capture, "_trigger_queued", trigger)
-    response = {"ok": True, "entity_id": "lock.lock_ultra_8d3c", "old": "locked", "new": "unlocked"}
+    response = {"ok": True, "entity_id": "lock.example_entry_lock", "old": "locked", "new": "unlocked"}
     if failure == "flip":
         response["old"] = "unlocked"
     monkeypatch.setattr(capture, "_post", lambda *_args: response)
@@ -238,3 +238,56 @@ def test_home_event_capture_fails_closed(monkeypatch, tmp_path, failure: str) ->
     assert not run_calls
     if failure in {"lead", "preflight", "flip"}:
         assert ("popen", "record") not in events
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com:8123",
+        "http://localhost:8123",
+        "https://127.0.0.1:8123",
+        "http://127.0.0.1:8123/api",
+        "http://user:pass@127.0.0.1:8123",
+    ],
+)
+def test_station_launcher_rejects_non_loopback_origins(url):
+    from scripts.showreel.station import validate_mock_url
+
+    with pytest.raises(ValueError):
+        validate_mock_url(url)
+
+
+def test_station_launcher_isolates_inherited_credentials_and_state(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    script = """
+import os
+from pathlib import Path
+import uvicorn
+from scripts.showreel import station
+seen = []
+def run(app, **kwargs):
+    from mammamiradio import main
+    config = main.load_config()
+    assert config.homeassistant.url == "http://127.0.0.1:18123"
+    assert config.ha_token == "synthetic-showreel-token"
+    assert config.cache_dir != Path(os.environ["ORIGINAL_CACHE"])
+    assert kwargs["host"] == "127.0.0.1"
+    seen.append(config.cache_dir.parent)
+    result = main.read_home_compatibility(None, None)
+    assert result.authorization.bindings.identity == "local-showreel"
+uvicorn.run = run
+assert station.main(["--mock-ha", "http://127.0.0.1:18123"]) == 0
+assert seen and not seen[0].exists()
+"""
+    environment = dict(
+        os.environ,
+        SUPERVISOR_TOKEN="synthetic-inherited",
+        HASSIO_TOKEN="synthetic-inherited",
+        MAMMAMIRADIO_CACHE_DIR=str(tmp_path),
+        ORIGINAL_CACHE=str(tmp_path),
+    )
+    result = subprocess.run([sys.executable, "-c", script], env=environment, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

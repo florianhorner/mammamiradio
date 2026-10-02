@@ -2,7 +2,7 @@
 
 Use this disposable macOS lab for First Listen and other Home Assistant-facing
 development. It keeps branch code, test credentials, and synthetic devices away
-from the live home.
+from the production Home Assistant installation.
 
 ```text
 disposable HA Container
@@ -54,11 +54,12 @@ For another guest OS, install its packaged `socat` rather than copying a binary
 or weakening the bridge. Then rerun `scripts/first-listen-lab.sh start`.
 
 The lab deliberately starts the radio with no Anthropic, OpenAI, Azure, or
-ElevenLabs key, no Jamendo client ID, and no yt-dlp. It copies the same packaged
-27-second First Listen mini-show used by a fresh install into its isolated
-local-music folder, replacing any older synthetic transport-test track. The
-clip has station music, Mamma Mi Radio identity, and a privacy-aware opening by
-Marco and Giulia in the stock Edge voices; its reviewed transcript and SHA-256 live in
+ElevenLabs key, no Jamendo client ID, and no yt-dlp. It seeds its isolated
+local-music folder with the packaged 27-second station clip,
+`first_listen_show.mp3`, replacing any older synthetic transport-test track.
+First Listen itself plays the separate reviewed English opening,
+`first_listen_admin_show.mp3`, for about 15 seconds before joining the lab
+stream. The seed clip’s transcript and SHA-256 are recorded in
 `mammamiradio/assets/demo/spoken_assets.json`.
 
 ## One-time setup
@@ -124,7 +125,7 @@ operation fails closed instead of stopping it.
 In the **local** HA only, change both integration hosts from
 `host.lima.internal` to `172.17.0.1`; use **Reconfigure** when offered,
 otherwise remove and re-add that local config entry using `show-setup`.
-**Do not make these changes in the live home.**
+**Do not make these changes in the production Home Assistant installation.**
 
 ## Personal acceptance test
 
@@ -221,4 +222,4 @@ HA Container proves the Core/custom-integration/media-source/speaker path. It
 does not prove Supervisor APIs, ingress rewriting, add-on installation or
 update packaging, add-on options mapping, or `ha-addon/mammamiradio/rootfs/run.sh`.
 Those remain a separate disposable HAOS VM/add-on acceptance gate; they should
-not be tested by connecting branch code to the live home.
+not be tested by connecting branch code to the production Home Assistant installation.

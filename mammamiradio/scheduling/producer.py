@@ -103,8 +103,6 @@ from mammamiradio.home.entity_policy import (
     muted_entity_ids,
 )
 from mammamiradio.home.ha_context import (
-    ENTITY_LABELS,
-    GOLD_ENTITIES,
     HomeContext,
     _fetch_home_context_outcome,
     _HomeContextFetchOutcome,
@@ -5457,7 +5455,15 @@ class _HAContextRefreshCoordinator:
     def _fallback_prompt_context(self) -> HomeContext:
         """Return a safe context without consuming any one-shot handoffs."""
         self._sync_freshness()
+        authorization = self._state.home_authorization or HomeAuthorization.narrow()
         if self._context is None:
+            return HomeContext()
+        if not _uses_injected_legacy_fetch() and (
+            self._context.authorization_mode,
+            self._context.bindings.identity,
+        ) != (authorization.mode.value, authorization.bindings.identity):
+            self._context = None
+            self._suppress_stale_handoffs()
             return HomeContext()
         if self._is_stale():
             # Retain the real source timestamp for operator diagnostics, but
@@ -5513,7 +5519,6 @@ class _HAContextRefreshCoordinator:
                     cache_dir=self._config.cache_dir,
                     radio_event_rules=self._config.radio_events,
                     authorization=self._state.home_authorization,
-                    observed_entity_ids_callback=self._state.home_entity_ids_observer,
                     stage_callback=lambda stage: self._set_refresh_stage(stage, attempt_generation),
                 ),
                 name="ha-context-fetch",
@@ -5598,12 +5603,16 @@ class _HAContextRefreshCoordinator:
             self._record_terminal_result("failed", duration_seconds, used_background=used_background)
             return None
 
-        active_mode = (self._state.home_authorization or HomeAuthorization.narrow()).mode.value
+        active_authorization = self._state.home_authorization or HomeAuthorization.narrow()
+        active_mode = active_authorization.mode.value
         # The injected-legacy fetch seam (tests/embedding) normalizes a mocked
         # context through _legacy_mock_home_context and does not preserve the
         # authorization stamp; it is trusted test input and never active in
         # production, where the real fetch always stamps the requested mode.
-        if not _uses_injected_legacy_fetch() and outcome.context.authorization_mode != active_mode:
+        if not _uses_injected_legacy_fetch() and (
+            outcome.context.authorization_mode,
+            outcome.context.bindings.identity,
+        ) != (active_mode, active_authorization.bindings.identity):
             # Authorization is install-scoped: a fetch that returns a context
             # stamped for the other mode (a bug or a reused cross-mode cache)
             # must never be adopted. Fail closed to the last safe snapshot.
@@ -5621,13 +5630,6 @@ class _HAContextRefreshCoordinator:
         # introduces a re-entrant cutover.
         if not self._refresh_generation_is_active(task_generation):
             return None
-
-        observer = self._state.home_entity_ids_observer
-        if observer is not None and outcome.observed_entity_ids:
-            try:
-                observer(outcome.observed_entity_ids)
-            except Exception:
-                logger.warning("Legacy-home observation persistence failed", exc_info=True)
 
         # A request that *started* while the prior snapshot was safe keeps its
         # legitimate one-shots when it is adopted promptly, even if the prior
@@ -6189,7 +6191,7 @@ async def _run_producer_inner(
 
         # Lightweight timer interrupt poll — runs every timer_poll_interval seconds.
         # Only fetches the timer entity states, not the full 200+ entity context.
-        if config.homeassistant.timer_interrupts and home_authorization.allows_household_moments:
+        if config.homeassistant.timer_interrupts:
             _timer_entity_ids = {t.entity_id for t in config.homeassistant.timer_interrupts}
             # Pre-populate old_states for timer entities with "idle" so the first
             # active→idle transition is detected correctly (cold-start fix).
@@ -6214,7 +6216,11 @@ async def _run_producer_inner(
                             # never replayed after context is enabled again.
                             observed_policy_generation = state.home_context_policy_generation
                             _reset_timer_baseline()
-                        if state.session_stopped or not config.homeassistant.context_enabled:
+                        if (
+                            state.session_stopped
+                            or not config.homeassistant.context_enabled
+                            or not (state.home_authorization or HomeAuthorization.narrow()).allows_household_moments
+                        ):
                             continue
                         poll_generation = state.home_context_policy_generation
                         try:
@@ -6233,6 +6239,9 @@ async def _run_producer_inner(
                                 r = await client.get(f"{base}/api/states/{eid}", headers=headers)
                                 if (
                                     not config.homeassistant.context_enabled
+                                    or not (
+                                        state.home_authorization or HomeAuthorization.narrow()
+                                    ).allows_household_moments
                                     or poll_generation != state.home_context_policy_generation
                                 ):
                                     timer_states.clear()
@@ -6247,6 +6256,7 @@ async def _run_producer_inner(
                                     )
                             if (
                                 not config.homeassistant.context_enabled
+                                or not (state.home_authorization or HomeAuthorization.narrow()).allows_household_moments
                                 or poll_generation != state.home_context_policy_generation
                             ):
                                 _reset_timer_baseline()
@@ -6272,6 +6282,7 @@ async def _run_producer_inner(
                                     timer_events,
                                     timer_states,
                                     config.homeassistant.timer_interrupts,
+                                    bindings=(state.home_authorization or HomeAuthorization.narrow()).bindings,
                                 )
                                 if (
                                     isinstance(result, InterruptSpec)
@@ -6304,6 +6315,9 @@ async def _run_producer_inner(
     from mammamiradio.web.streamer import _recovery_runway_owned
 
     while True:
+        if state.home_bindings_adopter is not None:
+            state.home_bindings_adopter()
+        home_authorization = state.home_authorization or HomeAuthorization.narrow()
         boundary_audible_epoch = state.audible_playback_epoch
         # The producer idles with a full queue or no listeners, sometimes for
         # minutes. Refreshing here, not only at a pacing decision, keeps the
@@ -6794,6 +6808,7 @@ async def _run_producer_inner(
                         cache_dir=config.cache_dir,
                         config=config,
                         score_by_entity={entity.entity_id: entity.score for entity in ha_cache.scored},
+                        bindings=home_authorization.bindings,
                     )
                 except Exception:
                     logger.warning("HA label generation scheduling failed (non-fatal)", exc_info=True)
@@ -6803,13 +6818,15 @@ async def _run_producer_inner(
             # Restrict listener-visible events to the curated set: pre-Phase-A only
             # vetted entities could surface here, and Phase A's full-snapshot ingest
             # would otherwise leak any HA entity's friendly_name (e.g.
-            # binary_sensor.bedroom_motion, lock.gun_safe) to /public-status.
+            # binary_sensor.example_bedroom_motion, lock.example_gun_safe) to /public-status.
             state.ha_recent_event_count = len(ha_cache.events)
             _public_events = [
-                e for e in ha_cache.events if not e.entity_id.startswith("person.") and e.entity_id in ENTITY_LABELS
+                e
+                for e in ha_cache.events
+                if not e.entity_id.startswith("person.") and e.entity_id in home_authorization.bindings.labels_it
             ]
             if _public_events:
-                _gold_set = set(GOLD_ENTITIES)
+                _gold_set = set(home_authorization.bindings.tier("gold"))
                 best = max(
                     _public_events,
                     key=lambda e: (
@@ -6835,6 +6852,7 @@ async def _run_producer_inner(
                     ha_cache.events,
                     ha_cache.raw_states,
                     config.homeassistant.timer_interrupts or None,
+                    bindings=home_authorization.bindings,
                 )
                 if isinstance(result, InterruptSpec):
                     await _fire_interrupt(

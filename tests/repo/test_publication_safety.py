@@ -111,7 +111,27 @@ def test_release_docs_preserve_history_and_other_receipts(tmp_path: Path, body: 
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("domain", ["person", "device_tracker", "lock"])
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "person",
+        "device_tracker",
+        "lock",
+        "sensor",
+        "binary_sensor",
+        "switch",
+        "light",
+        "fan",
+        "vacuum",
+        "weather",
+        "sun",
+        "input_select",
+        "input_button",
+        "media_player",
+        "climate",
+        "cover",
+    ],
+)
 def test_public_examples_require_synthetic_identity(tmp_path: Path, domain: str) -> None:
     guide = tmp_path / "example.md"
     canary = f"{domain}.recorded_household_value"
@@ -185,11 +205,9 @@ def test_publication_checks_preserve_public_links_and_attribution(tmp_path: Path
         ("docs/runbooks/ha-addon.md", "Refresh the V2 preship receipt before recording."),
         ("docs/release-process.md", "Preship V2 comes before HA runs."),
         ("docs/music-sources.md", "Finalize the V2 preship receipt before recording."),
-        ("docs/2026-05-30-ha-context-ingestion-pipeline.md", "Use person.recorded_household_value."),
         ("scripts/showreel/README.md", "Use lock.recorded_household_value."),
         ("scripts/showreel_out/door-bentornato-fable-v2-notes.md", "Use person.recorded_household_value."),
         ("scripts/showreel_out/ma-pr-3836-notes.md", "Use device_tracker.recorded_household_value."),
-        ("proof/h4-journey-validation.md", "Use person.recorded_household_value."),
     ],
 )
 def test_default_docs_check_covers_each_publication_surface(tmp_path: Path, path: str, poison: str) -> None:
@@ -213,19 +231,20 @@ def test_default_docs_check_covers_each_publication_surface(tmp_path: Path, path
         "docs/runbooks/ha-addon.md",
         "docs/release-process.md",
         "docs/music-sources.md",
-        "docs/2026-05-30-ha-context-ingestion-pipeline.md",
         "scripts/showreel/README.md",
         "scripts/showreel_out/door-bentornato-fable-v2-notes.md",
         "scripts/showreel_out/ma-pr-3836-notes.md",
-        "proof/h4-journey-validation.md",
     ]
     for name in files:
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("# Safe\n")
-    for script in ("check-docs-safety.sh", "lint-patterns.sh", "docs_safety.py"):
+    for script in ("check-docs-safety.sh", "lint-patterns.sh", "docs_safety.py", "public_tree_safety.py"):
         shutil.copy2(ROOT / "scripts" / script, tmp_path / "scripts" / script)
+    (tmp_path / "scripts/public-evidence-retention.json").write_text("{}")
     (tmp_path / path).write_text(poison)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
     result = subprocess.run(
         ["bash", str(tmp_path / "scripts/check-docs-safety.sh")],
         cwd=tmp_path,
@@ -236,3 +255,249 @@ def test_default_docs_check_covers_each_publication_surface(tmp_path: Path, path
     assert result.returncode == 1, result.stdout + result.stderr
     assert path in result.stdout
     assert "missing" not in result.stdout
+
+
+@pytest.mark.parametrize("name", ["sample.json", "sample.svg", "Dockerfile", "sample.py"])
+def test_tracked_scanner_covers_text_surfaces_and_redacts(tmp_path: Path, name: str) -> None:
+    from scripts.public_tree_safety import scan_repository
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/public-evidence-retention.json").write_text("{}")
+    poison = "person." + "recorded_household_value"
+    (tmp_path / name).write_text(f'"{poison}"')
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    (tmp_path / "untracked.md").write_text(poison)
+    violations = scan_repository(tmp_path)
+    assert [(v.path, v.line, v.rule) for v in violations] == [(name, 1, "non-synthetic-entity")]
+    assert poison not in violations[0].diagnostic()
+
+
+def test_scanner_decodes_python_and_url_identifiers() -> None:
+    from scripts.public_tree_safety import scan_text
+
+    poison = "recorded_household_value"
+    for body in (f'x = "person.{poison}"', f'x = "person." "{poison}"', f'x = "person%2E{poison}"'):
+        assert any(v.rule == "non-synthetic-entity" for v in scan_text("example.py", body))
+    assert not scan_text("example.py", "lock." + 'acquire()\nx = "lock.example_entry"\n')
+    username = "fixture" + "owner"
+    assert scan_text("example.py", f'x = "\\x2fUsers\\x2f{username}\\x2fprivate"')
+
+
+def test_scanner_destinations_and_sample_ranges() -> None:
+    from scripts.public_tree_safety import scan_text
+
+    host = ".".join(("10", "47", "83", "19"))
+    ipv6 = "fd" + "12::123"
+    for value in (host, host + "/32", ipv6, ipv6 + "/128"):
+        result = scan_text("example.md", value)
+        assert [v.rule for v in result] == ["concrete-private-destination"]
+        assert value not in result[0].diagnostic()
+    assert not scan_text("example.md", "10.0.0.0/8 127.0.0.1 0.0.0.0 192.0.2.1 2001:db8::1 ::1 /Users/example/repo")
+    assert scan_text("scripts/first-listen-lab.sh", host)
+
+
+def test_scanner_retention_requires_bytes_and_presence(tmp_path: Path) -> None:
+    import hashlib
+    import json
+
+    from scripts.public_tree_safety import scan_repository
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "scripts").mkdir()
+    name = "proof/receipt.txt"
+    (tmp_path / "proof").mkdir()
+    raw = ("person." + "recorded_household_value").encode()
+    (tmp_path / name).write_bytes(raw)
+    (tmp_path / "scripts/public-evidence-retention.json").write_text(
+        json.dumps({name: hashlib.sha256(raw).hexdigest()})
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    assert not scan_repository(tmp_path)
+    (tmp_path / name).write_bytes(raw + b"\n")
+    assert scan_repository(tmp_path)[0].rule == "immutable-evidence-changed"
+    subprocess.run(["git", "-C", str(tmp_path), "rm", "--cached", "-f", name], check=True, capture_output=True)
+    (tmp_path / name).unlink()
+    assert scan_repository(tmp_path)[0].rule == "immutable-evidence-untracked"
+
+
+def test_scanner_git_inventory_and_symlink_targets(tmp_path: Path) -> None:
+    from scripts.public_tree_safety import scan_repository
+
+    with pytest.raises(ValueError):
+        scan_repository(tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/public-evidence-retention.json").write_text("{}")
+    target = "/Users/" + "fixtureowner/private"
+    (tmp_path / "odd\nname").symlink_to(target)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    result = scan_repository(tmp_path)
+    assert len(result) == 1
+    assert "\\n" in result[0].diagnostic()
+    assert target not in result[0].diagnostic()
+
+
+def test_install_pattern_is_portable_and_has_no_stderr() -> None:
+    patterns = subprocess.run(
+        ["bash", "-c", 'source scripts/lint-patterns.sh; printf "%s\\n" "${DOCS_RETIRED_INSTALL_PATTERNS[@]}"'],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    binaries = [Path("/usr/bin/grep"), Path("/opt/homebrew/opt/grep/libexec/gnubin/grep")]
+    for binary in binaries:
+        if not binary.exists():
+            continue
+        for pattern in patterns:
+            for sample in (
+                "Settings → Apps → App store → Repositories",
+                "Settings → Apps → Install app → ⋮ → Repositories",
+            ):
+                result = subprocess.run([str(binary), "-iE", pattern], input=sample, capture_output=True, text=True)
+                assert result.stderr == ""
+                assert result.returncode in {0, 1}
+        result = subprocess.run(
+            [str(binary), "-iE", patterns[-1]], input="Apps → App store", capture_output=True, text=True
+        )
+        assert result.returncode == 0 and result.stderr == ""
+
+
+def test_release_docs_preserve_install_and_home_promises() -> None:
+    for name in ("README.md", "ha-addon/README.md"):
+        assert "Settings → Apps → Install app → ⋮ → Repositories" in (ROOT / name).read_text()
+    docs = (ROOT / "ha-addon/mammamiradio/DOCS.md").read_text()
+    assert "twelve" in docs.lower()
+    assert "recorded" in docs.lower()
+    assert "not part of 3.0.0" in docs
+    assert "daylight" in docs and "preview" in docs and "Keep Home private" in docs
+    assert "goes silent because" not in docs
+    assert "falls back to stock copy or silence" not in docs
+    guide = (ROOT / "docs/integrations/ha-integration.md").read_text()
+    assert "2.10" in guide and "alpha" in guide and "shared Docker network" in guide
+    assert "synthetic" in (ROOT / "docs/integrations/now-playing.md").read_text().lower()
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "person",
+        "device_tracker",
+        "lock",
+        "sensor",
+        "binary_sensor",
+        "switch",
+        "light",
+        "fan",
+        "vacuum",
+        "weather",
+        "sun",
+        "input_select",
+        "input_button",
+        "media_player",
+        "climate",
+        "cover",
+    ],
+)
+@pytest.mark.parametrize(
+    "name", ["docs/example.md", "tests/ordinary.py", "example.json", "template.html", "example.svg", "Dockerfile"]
+)
+def test_every_example_surface_requires_synthetic_entity_domains(domain, name):
+    from scripts.public_tree_safety import scan_text
+
+    poison = domain + ".recorded_household_value"
+    violations = scan_text(name, repr(poison))
+    assert [v.rule for v in violations] == ["non-synthetic-entity"]
+    assert poison not in violations[0].diagnostic()
+    assert not scan_text(name, repr(domain + ".example_device"))
+    if name.endswith(".py"):
+        assert not scan_text(name, domain + ".ordinary_attribute()")
+
+
+@pytest.mark.parametrize("prefix,suffix", [(b"\0", b""), (b"", b"\0"), (b"\x89PNG\r\n\x1a\n\0", b"")])
+@pytest.mark.parametrize("name", ["README.md", "Dockerfile", "example.py", "fake.mp3"])
+def test_nul_cannot_hide_tracked_text(tmp_path, monkeypatch, prefix, suffix, name):
+    from scripts import public_tree_safety as scanner
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/public-evidence-retention.json").write_text("{}")
+    poison = "sensor." + "recorded_household_value"
+    (tmp_path / name).write_bytes(prefix + repr(poison).encode() + suffix)
+    monkeypatch.setattr(scanner, "tracked_paths", lambda root: [name])
+    violations = scanner.scan_repository(tmp_path)
+    assert {v.rule for v in violations} == {"unexpected-nul-in-text", "non-synthetic-entity"}
+    assert all(poison not in v.diagnostic() for v in violations)
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-32"])
+def test_scanner_decodes_wide_text(encoding):
+    from scripts.public_tree_safety import scan_bytes
+
+    poison = "switch." + "recorded_household_value"
+    assert [v.rule for v in scan_bytes("README.md", poison.encode(encoding))] == ["non-synthetic-entity"]
+    assert not scan_bytes("README.md", "switch.example_device".encode(encoding))
+    assert scan_bytes("README.md", b"\xff\xfe\xff")[0].rule == "invalid-text-encoding"
+
+
+@pytest.mark.parametrize(
+    "name,header",
+    [
+        ("example.png", b"\x89PNG\r\n\x1a\n"),
+        ("example.webp", b"RIFF\0\0\0\0WEBP"),
+        ("example.woff2", b"wOF2"),
+        ("example.mp3", b"ID3"),
+        ("example.mp3", b"\xff\xfb"),
+    ],
+)
+def test_binary_metadata_is_scanned_without_rejecting_media(name, header):
+    from scripts.public_tree_safety import scan_bytes
+
+    assert not scan_bytes(name, header + b"\0\x80\x81\0safe metadata\0")
+    poison = "climate." + "recorded_household_value"
+    violations = scan_bytes(name, header + b"\0\x80\x81\0" + poison.encode() + b"\0")
+    assert [v.rule for v in violations] == ["non-synthetic-entity"]
+    assert poison not in violations[0].diagnostic()
+
+
+def test_public_functional_ids_are_exact_exceptions():
+    from scripts.public_tree_safety import scan_text
+
+    assert not scan_text("docs/example.md", "media_player.mammamiradio media_player.play_media light.turn_on sun.sun")
+    assert scan_text("docs/example.md", "sensor.mammamiradio_" + "recorded_household_value")
+    assert scan_text("docs/example.md", "media_player.play_media" + "_" + "recorded_household_value")
+
+
+def test_encoded_and_nested_identifiers_keep_the_same_policy():
+    from scripts.public_tree_safety import scan_bytes, scan_text
+
+    poison = "sensor." + "recorded_household_value"
+    assert scan_text("ordinary.py", f"body = b'{poison}'")
+    assert not scan_text("ordinary.py", 'topic = "ambient.vacuum.vacuum.example_device"')
+    assert scan_text("ordinary.py", f'topic = "ambient.sensor.{poison}"')
+    for encoding in ("utf-16", "utf-32"):
+        assert scan_bytes("README.md", ("sen\0sor." + "recorded_household_value").encode(encoding))
+    for encoding in ("utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"):
+        result = scan_bytes("example.mp3", b"ID3\0\xff" + poison.encode(encoding) + b"\0")
+        assert {v.rule for v in result} == {"non-synthetic-entity"}
+
+
+def test_explicit_document_nul_failure_is_redacted(tmp_path):
+    path = tmp_path / "example.md"
+    poison = "recorded_household_value"
+    path.write_text("sen\0sor." + poison)
+    result = _docs_check(path)
+    assert result.returncode == 1
+    assert "documentation file unreadable" in result.stdout
+    assert poison not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("suffix", ["state", "attributes.unit_of_measurement"])
+@pytest.mark.parametrize("name", ["docs/example.md", "ordinary.py", "template.html"])
+def test_template_attribute_suffix_cannot_hide_entity(name, suffix):
+    from scripts.public_tree_safety import scan_text
+
+    poison = "sensor." + "recorded_household_value"
+    expression = "{{ states." + poison + "." + suffix + " }}"
+    assert {v.rule for v in scan_text(name, repr(expression))} == {"non-synthetic-entity"}
+    assert not scan_text(name, repr(expression.replace(poison, "sensor.example_device")))

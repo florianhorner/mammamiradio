@@ -40,7 +40,7 @@ def reset_scene_cache():
     reset_scene_namer_cache()
 
 
-def _entity(entity_id: str = "light.kitchen") -> ScoredEntity:
+def _entity(entity_id: str = "light.example_kitchen") -> ScoredEntity:
     return ScoredEntity(
         entity_id=entity_id,
         area="Kitchen",
@@ -93,7 +93,7 @@ async def test_resolve_returns_ladder_immediately_then_cached_generated_scene(co
 
     assert calls == [
         {
-            "entities": ["light.kitchen"],
+            "entities": ["light.example_kitchen"],
             "local_hour": calls[0]["local_hour"],
             "model": "claude-haiku-4-5-20251001",
         }
@@ -282,7 +282,7 @@ async def test_generation_failure_gates_immediate_retry(config, state, monkeypat
     [
         "not json",
         '["mood"]',
-        '{"mood_it":"light.kitchen","mood_en":"Kitchen"}',
+        '{"mood_it":"light.example_kitchen","mood_en":"Kitchen"}',
         '{"mood_it":"Serata {debug}","mood_en":"Debug night"}',
         '{"mood_it":true,"mood_en":"Kitchen"}',
         '{"mood_it":"Casa sk-ant-12345678901234567890","mood_en":"Token night"}',
@@ -415,7 +415,7 @@ async def test_scene_naming_a_resident_keeps_ladder(config, state, monkeypatch):
     from mammamiradio.home import scene_namer
 
     person = ScoredEntity(
-        entity_id="person.florian_horner",
+        entity_id="person.example_resident_one",
         area=None,
         domain="person",
         score=1.9,
@@ -499,7 +499,7 @@ async def test_scene_counting_people_keeps_ladder(config, state, monkeypatch):
     from mammamiradio.home import scene_namer
 
     person = ScoredEntity(
-        entity_id="person.florian_horner",
+        entity_id="person.example_resident_one",
         area=None,
         domain="person",
         score=1.9,
