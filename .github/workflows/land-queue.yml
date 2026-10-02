@@ -1,7 +1,7 @@
 name: land-queue
 
 # Report-only. Runs scripts/land-queue-plan.sh and writes the verdict to the
-# job summary. It does not push, comment, or merge.
+# job summary. It does not push, comment, arm or merge a PR, or move edge.
 #
 # Observe the real behaviour before this queue blocks or acts.
 #
