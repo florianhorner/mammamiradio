@@ -6,9 +6,9 @@ name: Advertised version drift
 #
 # This is NOT the primary detector. A failed `addon-release.yml` is the loud,
 # immediate signal that a cut went wrong, and the runbook's recovery step is to
-# revert the whole cut commit straight away. This job only catches the case where
-# that never happened and the drift went quiet — which is exactly what went
-# unnoticed for 74 of 76 days before 2026-08-02.
+# revert the whole cut commit straight away. This job is the backstop for when
+# that revert never happens: an advertised version that does not exist stays on
+# main, whether or not a release job failed.
 #
 # A legitimate cut window (merge -> build -> tag -> promote) is well under an
 # hour, so a daily run essentially never sees one. If it does, the cut has been

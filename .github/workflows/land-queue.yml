@@ -1,12 +1,7 @@
 name: land-queue
 
-# Shadow land queue, phase 1: REPORT-ONLY.
-#
-# Runs scripts/land-queue-plan.sh — the decision engine an auto-land controller
-# would act on — and writes its verdict to the job summary. It pushes nothing,
-# comments nowhere, arms no merge, and never touches the edge channel. The point
-# of this phase is to compare its choices against the human landing seat's
-# actual scripts/land-pr.sh choices for a week before anything is automated.
+# Report-only. Runs scripts/land-queue-plan.sh and writes the verdict to the
+# job summary. It does not push, comment, or merge.
 #
 # Observe the real behaviour before this queue blocks or acts.
 #
