@@ -23,6 +23,8 @@ source "$SCRIPT_DIR/lint-patterns.sh"
 DEFAULT_COPY_FILES=(
   README.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   docs/troubleshooting.md
 )
@@ -33,6 +35,8 @@ DEFAULT_COPY_FILES=(
 DEFAULT_INSTALL_FILES=(
   README.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   docs/troubleshooting.md
   docs/operations.md
@@ -42,6 +46,8 @@ DEFAULT_INSTALL_FILES=(
 DEFAULT_LINK_FILES=(
   README.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   CONTRIBUTING.md
   docs/REPO_MAP.md
@@ -55,11 +61,20 @@ DEFAULT_LINK_FILES=(
 DEFAULT_PERSISTENCE_FILES=(
   CLAUDE.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   docs/architecture.md
   docs/festival-mode.md
   docs/operations.md
   docs/runbooks/ha-addon.md
+)
+
+# Supervisor renders these two inside the Home Assistant frontend, which has no
+# repo-relative base — every link and image in them must be an absolute URL.
+DEFAULT_LISTING_FILES=(
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
 )
 
 DEFAULT_RELEASE_POLICY_FILES=(
@@ -68,13 +83,11 @@ DEFAULT_RELEASE_POLICY_FILES=(
   docs/music-sources.md
 )
 
-# Keep this explicit: coupled legacy runtime fixtures are a separate migration.
+# Additional editorial checks for maintained example guides.
 DEFAULT_PUBLIC_EXAMPLE_FILES=(
-  docs/2026-05-30-ha-context-ingestion-pipeline.md
   scripts/showreel/README.md
   scripts/showreel_out/door-bentornato-fable-v2-notes.md
   scripts/showreel_out/ma-pr-3836-notes.md
-  proof/h4-journey-validation.md
 )
 
 if [ "$#" -gt 0 ]; then
@@ -82,6 +95,26 @@ if [ "$#" -gt 0 ]; then
   INSTALL_FILES=("$@")
   LINK_FILES=("$@")
   PERSISTENCE_FILES=("$@")
+  # The listing rule is path-specific: only the per-app READMEs are rendered by
+  # Supervisor. An explicit file list is intersected with them rather than
+  # subjected wholesale, because every other doc may use relative links freely.
+  LISTING_FILES=()
+  REPO_ROOT_PHYS="$(cd "$REPO_ROOT" && pwd -P)"
+  for ARG in "$@"; do
+    # Compare physical paths so ./, //, or an absolute spelling of a listing
+    # file still reaches the listing rule; fall back to the literal string
+    # when the file does not exist (the missing-file report covers it).
+    ARG_PHYS=""
+    if [ -f "$ARG" ]; then
+      ARG_PHYS="$(cd "$(dirname "$ARG")" && pwd -P)/$(basename "$ARG")"
+    fi
+    for KNOWN in "${DEFAULT_LISTING_FILES[@]}"; do
+      if [ "${ARG#./}" = "$KNOWN" ] || { [ -n "$ARG_PHYS" ] && [ "$ARG_PHYS" = "$REPO_ROOT_PHYS/$KNOWN" ]; }; then
+        LISTING_FILES+=("$ARG")
+        break
+      fi
+    done
+  done
   RELEASE_POLICY_FILES=("$@")
   PUBLIC_EXAMPLE_FILES=("$@")
 else
@@ -89,6 +122,7 @@ else
   INSTALL_FILES=("${DEFAULT_INSTALL_FILES[@]}")
   LINK_FILES=("${DEFAULT_LINK_FILES[@]}")
   PERSISTENCE_FILES=("${DEFAULT_PERSISTENCE_FILES[@]}")
+  LISTING_FILES=("${DEFAULT_LISTING_FILES[@]}")
   RELEASE_POLICY_FILES=("${DEFAULT_RELEASE_POLICY_FILES[@]}")
   PUBLIC_EXAMPLE_FILES=("${DEFAULT_PUBLIC_EXAMPLE_FILES[@]}")
 fi
@@ -100,6 +134,7 @@ HITS=0
 EXISTING_COPY_FILES=()
 EXISTING_LINK_FILES=()
 EXISTING_PERSISTENCE_FILES=()
+EXISTING_LISTING_FILES=()
 EXISTING_RELEASE_POLICY_FILES=()
 EXISTING_PUBLIC_EXAMPLE_FILES=()
 MISSING_FILES=()
@@ -171,6 +206,14 @@ for FILE in "${PERSISTENCE_FILES[@]}"; do
   EXISTING_PERSISTENCE_FILES+=("$FILE")
 done
 
+for FILE in "${LISTING_FILES[@]+"${LISTING_FILES[@]}"}"; do
+  if [ ! -f "$FILE" ]; then
+    record_missing_file "$FILE"
+    continue
+  fi
+  EXISTING_LISTING_FILES+=("$FILE")
+done
+
 for FILE in "${RELEASE_POLICY_FILES[@]}"; do
   if [ ! -f "$FILE" ]; then
     record_missing_file "$FILE"
@@ -192,6 +235,7 @@ if ! STRUCTURAL_OUTPUT=$(python3 "$SCRIPT_DIR/docs_safety.py" \
   --copy "${EXISTING_COPY_FILES[@]+"${EXISTING_COPY_FILES[@]}"}" \
   --links "${EXISTING_LINK_FILES[@]+"${EXISTING_LINK_FILES[@]}"}" \
   --persistence "${EXISTING_PERSISTENCE_FILES[@]+"${EXISTING_PERSISTENCE_FILES[@]}"}" \
+  --listing "${EXISTING_LISTING_FILES[@]+"${EXISTING_LISTING_FILES[@]}"}" \
   --release-policy "${EXISTING_RELEASE_POLICY_FILES[@]+"${EXISTING_RELEASE_POLICY_FILES[@]}"}" \
   --public-examples "${EXISTING_PUBLIC_EXAMPLE_FILES[@]+"${EXISTING_PUBLIC_EXAMPLE_FILES[@]}"}" 2>&1); then
   printf '%s\n' "$STRUCTURAL_OUTPUT"
@@ -202,6 +246,21 @@ if ! STRUCTURAL_OUTPUT=$(python3 "$SCRIPT_DIR/docs_safety.py" \
   fi
   HITS=$((HITS + STRUCTURAL_HITS))
   FAIL=1
+fi
+
+# Default invocation also covers every tracked text surface. Explicit-file mode
+# remains useful for small documentation fixtures outside a repository.
+if [ "$#" -eq 0 ]; then
+  if ! TREE_OUTPUT=$(python3 "$SCRIPT_DIR/public_tree_safety.py" 2>&1); then
+    printf '%s\n' "$TREE_OUTPUT"
+    TREE_HITS=$(printf '%s\n' "$TREE_OUTPUT" | grep -c '^FAIL:' || true)
+    if [ "$TREE_HITS" -eq 0 ]; then
+      echo "FAIL: repository:1 [public-tree-checker-incomplete]"
+      TREE_HITS=1
+    fi
+    HITS=$((HITS + TREE_HITS))
+    FAIL=1
+  fi
 fi
 
 if [ "$FAIL" -ne 0 ]; then

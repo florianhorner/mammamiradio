@@ -1,21 +1,12 @@
-"""Bounded bridge provenance for the legacy developer-home configuration.
+"""Read the immutable installation witnesses and V1 compatibility provenance.
 
-This module deliberately does not detect an installation from labels, areas, or
-the presence of a database *after* startup.  The caller captures whether the
-station database existed before database initialization.  That first durable
-answer is immutable, so a database created by a cold start cannot become a
-legacy installation on a later restart.
-
-The exact entity IDs below are migration-only input.  They must never be used as
-runtime defaults for a fresh installation.  Once a pre-existing installation
-has observed every exact ID, :func:`seal_legacy_home_provenance_v1` persists only
-the manifest version and digest, the bridge release that made the observation,
-and the observation time.  No Home Assistant state or label is written.
+The original curated entity inventory is no longer shipped. Existing metadata
+retains its original digest and may authorize only a matching private profile.
+Cold installation witnesses remain immutable across restarts.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import math
@@ -23,11 +14,9 @@ import os
 import sqlite3
 import tempfile
 import threading
-import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -36,103 +25,7 @@ PROVENANCE_FILENAME = "legacy_home_provenance_v1.json"
 LEGACY_HOME_MANIFEST_VERSION = 1
 DATABASE_ORIGIN_TABLE = "_mammamiradio_home_install_origin_v1"
 
-LegacyPriority = Literal["gold", "silver", "bronze"]
-
-
-@dataclass(frozen=True)
-class LegacyHomeManifestEntryV1:
-    """One exact legacy entity and its future profile-migration intent."""
-
-    entity_id: str
-    priority: LegacyPriority
-    scopes: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class LegacyHomeManifestV1:
-    """Immutable migration-only manifest for the previously curated home."""
-
-    version: int
-    entries: tuple[LegacyHomeManifestEntryV1, ...]
-
-    def __post_init__(self) -> None:
-        entity_ids = [entry.entity_id for entry in self.entries]
-        if self.version != LEGACY_HOME_MANIFEST_VERSION:
-            raise ValueError("legacy manifest version must match the v1 bridge")
-        if len(entity_ids) != len(set(entity_ids)):
-            raise ValueError("legacy manifest entity IDs must be unique")
-
-    @property
-    def entity_ids(self) -> frozenset[str]:
-        """Return the exact identifiers required for a legacy observation."""
-        return frozenset(entry.entity_id for entry in self.entries)
-
-    @property
-    def entity_id_digest(self) -> str:
-        """Return a stable SHA-256 digest of the exact sorted ID set."""
-        canonical = json.dumps(sorted(self.entity_ids), ensure_ascii=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-_AMBIENT = ("ambient_context",)
-_PRESENCE = ("ambient_context", "presence")
-_MOMENT = ("ambient_context", "moment")
-_RESIDENT = ("ambient_context", "moment", "presence", "resident")
-_RESIDENT_CONTEXT = ("ambient_context", "presence", "resident")
-_WEATHER = ("ambient_context", "weather")
-
-
-def _entry(
-    entity_id: str,
-    priority: LegacyPriority,
-    scopes: tuple[str, ...] = _AMBIENT,
-) -> LegacyHomeManifestEntryV1:
-    return LegacyHomeManifestEntryV1(entity_id=entity_id, priority=priority, scopes=scopes)
-
-
-# The mapping intentionally duplicates the final developer-home defaults.  Keeping
-# it here lets later releases remove those IDs from live selection code without
-# destroying the one-time continuity bridge.
-LEGACY_HOME_MANIFEST_V1 = LegacyHomeManifestV1(
-    version=LEGACY_HOME_MANIFEST_VERSION,
-    entries=(
-        _entry("switch.bar_kaffeemaschine_steckdose", "gold", _MOMENT),
-        _entry("input_select.kaffee_dad_jokes", "gold"),
-        _entry("vacuum.goldstaubsucher", "gold", _MOMENT),
-        _entry("vacuum.matrix10_ultra", "gold", _MOMENT),
-        _entry("weather.forecast_home", "gold", _WEATHER),
-        _entry("person.florian_horner", "gold", _RESIDENT),
-        _entry("person.sabrina", "gold", _RESIDENT),
-        _entry("person.schnuffi", "gold", _RESIDENT_CONTEXT),
-        _entry("lock.lock_ultra_8d3c", "gold", _MOMENT),
-        _entry("input_button.foyer_fahrstuhl_fingerbot_push_button", "gold"),
-        _entry("binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar", "silver", _PRESENCE),
-        _entry("input_select.bedroom_occupancy_state", "silver", _PRESENCE),
-        _entry("switch.bad_gross_waschmaschine_steckdose", "silver"),
-        _entry("media_player.samsung_s95ca_65", "silver"),
-        _entry("media_player.wohnzimmer_sonos_arc_lautsprecher", "silver"),
-        _entry("media_player.esszimmer", "silver"),
-        _entry("climate.wohnzimmer_tado_heizung", "silver"),
-        _entry("climate.schlafzimmer", "silver"),
-        _entry("sun.sun", "silver"),
-        _entry("fan.bad_gross_lufter_shelly", "silver"),
-        _entry("fan.bad_klein_lufter", "silver"),
-        _entry("fan.kuche_lufter", "silver"),
-        _entry("light.magic_areas_light_groups_wohnzimmer_all_lights", "silver"),
-        _entry("light.magic_areas_light_groups_schlafzimmer_all_lights", "silver"),
-        _entry("light.magic_areas_light_groups_kuche_all_lights", "silver"),
-        _entry("light.magic_areas_light_groups_esszimmer_all_lights", "silver"),
-        _entry("sensor.bar_bali_boot_steckdose_power", "silver"),
-        _entry("sensor.kuche_kaffeemaschine_steckdose_power", "silver", _MOMENT),
-        _entry("light.schlafzimmer_sternenlicht_projektor_2", "silver"),
-        _entry("light.kleiderschrank_sternenlicht_projektor", "silver"),
-        _entry("light.terrasse_9_outdoor_lichtschlauch", "silver", _MOMENT),
-        _entry("sensor.haushalt_stromverbrauch_gesamt", "silver"),
-        _entry("input_datetime.last_sleep_time", "bronze"),
-        _entry("input_datetime.last_wake_time", "bronze"),
-        _entry("binary_sensor.buro_9_ring_intercom_klingelt", "bronze"),
-    ),
-)
+LEGACY_HOME_MANIFEST_DIGEST = "72201ec2e2b10ec6d9c594cae11d5cb5a5da6e11d744229f8f2a53cdf4c6613a"
 
 
 @dataclass(frozen=True)
@@ -177,12 +70,14 @@ def provenance_path(state_dir: Path) -> Path:
     return Path(state_dir) / PROVENANCE_FILENAME
 
 
-def _read_json(path: Path) -> object:
+def _read_json(path: Path, *, strict_io: bool = False) -> object:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return _MISSING
     except (OSError, json.JSONDecodeError, TypeError) as exc:
+        if strict_io and isinstance(exc, OSError):
+            raise
         logger.warning("Cannot trust legacy-home bridge state %s: %s", path, exc)
         return _INVALID
 
@@ -196,9 +91,9 @@ def _parse_preflight(data: object) -> LegacyHomePreflightV1 | None:
     return LegacyHomePreflightV1(database_preexisted=value)
 
 
-def load_legacy_home_preflight_v1(state_dir: Path) -> LegacyHomePreflightV1 | None:
+def load_legacy_home_preflight_v1(state_dir: Path, *, strict_io: bool = False) -> LegacyHomePreflightV1 | None:
     """Load the immutable first preflight fact, returning ``None`` on doubt."""
-    data = _read_json(preflight_path(state_dir))
+    data = _read_json(preflight_path(state_dir), strict_io=strict_io)
     if data is _MISSING or data is _INVALID:
         return None
     preflight = _parse_preflight(data)
@@ -207,7 +102,7 @@ def load_legacy_home_preflight_v1(state_dir: Path) -> LegacyHomePreflightV1 | No
     return preflight
 
 
-def load_legacy_home_database_preflight_v1(db_path: Path) -> LegacyHomePreflightV1 | None:
+def load_legacy_home_database_preflight_v1(db_path: Path, *, strict_io: bool = False) -> LegacyHomePreflightV1 | None:
     """Read the redundant install-origin witness without creating or migrating the DB.
 
     Older databases legitimately lack this R0 table on their first upgraded
@@ -231,9 +126,13 @@ def load_legacy_home_database_preflight_v1(db_path: Path) -> LegacyHomePreflight
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return None
+        if strict_io:
+            raise
         logger.warning("Cannot trust database Home install origin %s: %s", path, exc)
         return LegacyHomePreflightV1(database_preexisted=False, durable=False)
     except (OSError, sqlite3.DatabaseError) as exc:
+        if strict_io:
+            raise
         logger.warning("Cannot trust database Home install origin %s: %s", path, exc)
         return LegacyHomePreflightV1(database_preexisted=False, durable=False)
     finally:
@@ -248,10 +147,12 @@ def load_legacy_home_database_preflight_v1(db_path: Path) -> LegacyHomePreflight
 def load_authoritative_legacy_home_preflight_v1(
     state_dir: Path,
     db_path: Path,
+    *,
+    strict_io: bool = False,
 ) -> LegacyHomePreflightV1 | None:
     """Return a legacy-eligible preflight only when both durable witnesses agree."""
-    sidecar = load_legacy_home_preflight_v1(state_dir)
-    database = load_legacy_home_database_preflight_v1(db_path)
+    sidecar = load_legacy_home_preflight_v1(state_dir, strict_io=strict_io)
+    database = load_legacy_home_database_preflight_v1(db_path, strict_io=strict_io)
     if (
         sidecar is None
         or database is None
@@ -361,22 +262,6 @@ def rewrite_legacy_home_preflight_cold_v1(state_dir: Path) -> LegacyHomePrefligh
         return LegacyHomePreflightV1(database_preexisted=False)
 
 
-def observes_legacy_home_manifest_v1(observed: Mapping[str, object] | Iterable[str]) -> bool:
-    """Return whether every exact migration-only ID has been observed.
-
-    A full Home Assistant state mapping naturally contains unrelated entities;
-    those extras are ignored.  Names, labels, areas, and state values never
-    contribute to the decision.
-    """
-    if isinstance(observed, Mapping):
-        observed_ids = {entity_id for entity_id in observed if isinstance(entity_id, str)}
-    elif isinstance(observed, str | bytes):
-        return False
-    else:
-        observed_ids = {entity_id for entity_id in observed if isinstance(entity_id, str)}
-    return LEGACY_HOME_MANIFEST_V1.entity_ids.issubset(observed_ids)
-
-
 def _clean_bridge_app_version(value: object) -> str:
     if not isinstance(value, str):
         raise ValueError("bridge_app_version must be a string")
@@ -398,7 +283,7 @@ def _parse_provenance(data: object) -> LegacyHomeProvenanceV1 | None:
     observed_at = data.get("observed_at")
     if type(manifest_version) is not int or manifest_version != LEGACY_HOME_MANIFEST_VERSION:
         return None
-    if manifest_digest != LEGACY_HOME_MANIFEST_V1.entity_id_digest:
+    if manifest_digest != LEGACY_HOME_MANIFEST_DIGEST:
         return None
     try:
         clean_version = _clean_bridge_app_version(bridge_app_version)
@@ -422,11 +307,13 @@ def _parse_provenance(data: object) -> LegacyHomeProvenanceV1 | None:
 def load_legacy_home_provenance_v1(
     state_dir: Path,
     db_path: Path,
+    *,
+    strict_io: bool = False,
 ) -> LegacyHomeProvenanceV1 | None:
     """Load only provenance that exactly matches the current v1 manifest."""
-    if load_authoritative_legacy_home_preflight_v1(state_dir, db_path) is None:
+    if load_authoritative_legacy_home_preflight_v1(state_dir, db_path, strict_io=strict_io) is None:
         return None
-    data = _read_json(provenance_path(state_dir))
+    data = _read_json(provenance_path(state_dir), strict_io=strict_io)
     if data is _MISSING or data is _INVALID:
         return None
     provenance = _parse_provenance(data)
@@ -435,68 +322,27 @@ def load_legacy_home_provenance_v1(
     return provenance
 
 
-def seal_legacy_home_provenance_v1(
-    state_dir: Path,
-    observed: Mapping[str, object] | Iterable[str],
-    *,
-    db_path: Path,
-    bridge_app_version: str,
-    observed_at: float | None = None,
-) -> LegacyHomeProvenanceV1 | None:
-    """Seal provenance for an eligible pre-existing exact legacy home.
-
-    The first valid marker is immutable and returned on repeat calls.  Missing,
-    cold, corrupt, or incomplete evidence returns ``None`` and writes nothing.
-    """
-    clean_version = _clean_bridge_app_version(bridge_app_version)
-    timestamp = time.time() if observed_at is None else observed_at
-    if (
-        isinstance(timestamp, bool)
-        or not isinstance(timestamp, int | float)
-        or not math.isfinite(float(timestamp))
-        or float(timestamp) < 0
-    ):
-        raise ValueError("observed_at must be a finite non-negative timestamp")
-
-    path = provenance_path(state_dir)
-    with _LOCK:
-        if load_authoritative_legacy_home_preflight_v1(state_dir, db_path) is None:
-            return None
-        existing_data = _read_json(path)
-        if existing_data is _INVALID:
-            return None
-        if existing_data is not _MISSING:
-            existing = _parse_provenance(existing_data)
-            if existing is None:
-                logger.warning("Cannot trust malformed legacy-home provenance %s", path)
-            return existing
-
-        if not observes_legacy_home_manifest_v1(observed):
-            return None
-
-        provenance = LegacyHomeProvenanceV1(
-            manifest_version=LEGACY_HOME_MANIFEST_VERSION,
-            manifest_digest=LEGACY_HOME_MANIFEST_V1.entity_id_digest,
-            bridge_app_version=clean_version,
-            observed_at=float(timestamp),
-        )
-        _atomic_write_json(path, provenance.to_dict())
-        return provenance
-
-
-def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
+def _atomic_write_json(path: Path, payload: Mapping[str, object], *, replace_existing: bool = True) -> None:
     """Write one owner-only JSON object and atomically publish it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1  # The file object now owns and closes the descriptor.
+        with handle:
             json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, path)
+        if replace_existing:
+            os.replace(tmp_path, path)
+        else:
+            # Link publishes a complete owner-only inode without overwriting a
+            # profile another process may already have committed or prepared.
+            os.link(tmp_path, path)
+            tmp_path.unlink()
         os.chmod(path, 0o600)
         directory_fd = os.open(path.parent, os.O_RDONLY)
         try:
@@ -505,7 +351,8 @@ def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
             os.close(directory_fd)
     except BaseException:
         try:
-            os.close(fd)
+            if fd >= 0:
+                os.close(fd)
         except OSError:
             pass
         try:

@@ -59,13 +59,13 @@ test("the experience has multiple interactive home moments", () => {
   }
   // The data lives in scenarios.mjs and only there; app.js imports it.
   assert.match(js, /import scenarios, \{ transcriptFor \} from "\.\/scenarios\.mjs"/);
-  assert.doesNotMatch(js, /binary_sensor\.front_door/, "sensor data must not creep back into app.js");
+  assert.doesNotMatch(js, /binary_sensor\./, "sensor data must not creep back into app.js");
 });
 
 test("no scenario accent is green", () => {
   // The scenario accent drives the entire on-air chrome (live dot, waves,
   // transport, borders). Green is banned twice in docs/design/system.md:
-  // the owner is red-green colorblind. #9cab7e shipped once; never again.
+  // readers need red-green color-vision accessibility. #9cab7e shipped once; never again.
   assert.doesNotMatch(scenariosSource, /#9cab7e/i);
   assert.doesNotMatch(css, /--sage/);
 });
@@ -77,7 +77,7 @@ test("the day-one moment illustrates only daylight and weather after opt-in", ()
   const dayOneScenarios = Object.values(scenarios).filter((scenario) => scenario.reachability === "day-one");
   assert.equal(dayOneScenarios.length, 1);
   for (const [, name] of dayOneScenarios[0].sensors) {
-    assert.match(name, /^(sun\.sun|weather\.home)/, `day-one scenario uses non-ambient entity: ${name}`);
+    assert.match(name, /^(sun\.sun|weather\.example_home)/, `day-one scenario uses non-ambient entity: ${name}`);
   }
   assert.match(dayOneScenarios[0].summary, /staged recording/);
   assert.match(dayOneScenarios[0].summary, /not a literal prompt preview/);
@@ -105,7 +105,7 @@ test("the local concept makes its privacy boundary explicit", () => {
 
 test("public demo identifiers are plainly fictional", () => {
   const personIds = [...`${html}\n${scenariosSource}`.matchAll(/\bperson\.[a-z0-9_]+/g)].map((match) => match[0]);
-  assert.deepEqual([...new Set(personIds)].sort(), ["person.guest"]);
+  assert.deepEqual([...new Set(personIds)].sort(), ["person.example_guest"]);
 });
 
 test("the page offers the install and source exits without a dead live link", () => {

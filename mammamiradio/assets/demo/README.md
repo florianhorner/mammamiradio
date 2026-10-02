@@ -64,15 +64,12 @@ Its package-resource checks must also run against the built
 wheel/sdist or installed image, not only this source checkout. Final archive
 and image proof is separate from source validation and human audition.
 
-## Ad audition approval (2026-09-20)
+## Released ad masters
 
-Florian approved the following eleven exact masters after the final listening
-review. “The Discount You Never Expected” (11) and “Small, Fierce, Parkable” (10)
-are the creative headliners; playback keeps the same repetition-safe rotation.
-Spot 02, “The Car That Needs Compliments,” is parked for inconsistent Italian
-pronunciation and is excluded from the release inventory. Do not substitute an
-older take or resume retakes without a new request. All retained voices were
-rendered through ElevenLabs, with no provider fallback.
+The release inventory contains the following eleven exact masters. Playback uses
+its repetition-safe rotation. Only listed masters are included; do not substitute
+an older take. All retained voices were rendered through ElevenLabs, with no
+provider fallback.
 
 | Recording ID | Approved SHA-256 |
 | --- | --- |

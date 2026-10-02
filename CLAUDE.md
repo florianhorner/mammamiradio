@@ -30,7 +30,7 @@ Every word a listener or operator reads is product copy, not a log line. No tech
 **Default HA development target:** First Listen and other Home Assistant-facing
 branch work runs against `scripts/first-listen-lab.sh`, the disposable local HA
 Container + VLC speaker lab. Never connect branch code to the live home, reuse
-its token or backup, or attach household/cloud/MQTT devices unless Florian
+its token or backup, or attach household/cloud/MQTT devices unless the maintainer
 explicitly authorizes that live action in the current message. Lab runtime and
 credentials belong only under gitignored `tmp/first-listen-ha-lab/`, never in
 `.context/` or tracked files. See
@@ -38,7 +38,7 @@ credentials belong only under gitignored `tmp/first-listen-ha-lab/`, never in
 
 The restart happens once, planned, when the addon updates. Not during the day. Not as an experiment. Not to "test the fix live."
 
-**NEVER do any of these against the running mammamiradio addon without Florian's explicit confirmation in the current message:**
+**NEVER do any of these against the running mammamiradio addon without the maintainer's explicit confirmation in the current message:**
 
 1. **No live code patching.** `docker cp` into the addon container, `docker exec` with write operations (`sh -c "cat > ..."`, `tee`, `echo >`, `sed -i`, any redirection into a file), editing files inside a running container by any other means. These changes are wiped on the next restart and mask the real state of production.
 2. **No process signals.** `pkill`, `kill`, `killall`, `docker kill`, `docker restart` targeting any process inside the addon. s6-rc in this container does NOT auto-restart killed services reliably — killing a process kills the container, and killing the container kills the stream.
@@ -58,7 +58,7 @@ The restart happens once, planned, when the addon updates. Not during the day. N
 
 ## Docs
 
-Sacred files at the repo root (one viewport, one job each):
+Core documentation at the repo root (one viewport, one job each):
 
 - `README.md` - product pitch and operator quick start
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
@@ -92,8 +92,19 @@ private durable system for strategy or relationship context.
 
 ## Commands
 
-- Setup: `python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .`
-- Install: `pip install -e .`
+Set up the environment before running the app or tests:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
+```
+
+For an existing environment, activate it and repeat the four `python -m pip` commands to restore the runtime lock. See [Local setup](CONTRIBUTING.md#local-setup).
+
 - Run full local stack: `./start.sh`
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
 - Test: `pytest tests/` or `make test` (with coverage)
@@ -110,7 +121,7 @@ private durable system for strategy or relationship context.
 
 ## Docker / Home Assistant
 
-- `Dockerfile`: standalone container image with Python 3.11 + FFmpeg
+- `Dockerfile`: standalone container image with Python 3.14 + FFmpeg
 - `docker-compose.yml`: one-command run for non-HA users
 - `.dockerignore`: keeps builds clean
 - `ha-addon/`: Home Assistant add-on scaffold
@@ -124,7 +135,7 @@ private durable system for strategy or relationship context.
 ## Environment
 
 - `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
-- `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`, `MAMMAMIRADIO_MUSIC_DIR`: override cache, temporary-work, and operator-supplied music directories (the supplied containers keep all three under `/data`)
+- `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`, `MAMMAMIRADIO_MUSIC_DIR`: override cache, temporary-work, and operator-supplied music directories. The supplied Docker container keeps all three under `/data`. The Home Assistant app keeps cache and tmp under `/data` and sets the music directory in `run.sh`: `/media/<folder>` when `/media` is mounted (Music folder setting, default `mammamiradio`), `/data/music` when Media is not mounted or the chosen folder is a symlink, and `/tmp/mammamiradio-data/music` only when Media is not mounted and `/data` cannot be created.
 - `MAMMAMIRADIO_MAX_CACHE_MB`: maximum size of the normalization cache in MB. Standalone defaults to `500`; the HA add-on defaults to `1500` through `ADDON_MAX_CACHE_SIZE_MB` in `core/config.py`. The add-on setting is **Music cache size (MB)**, mapped from `norm_cache_mb` in `run.sh`, and takes effect after the next add-on restart. For explicit environment input, `_env_clamped_int` limits values to `200` through `8000`, uses the applicable default for malformed input, and logs either correction so config loading can complete. Supervisor normally validates `norm_cache_mb` as an integer in that range before the add-on starts. If unsupported non-positive add-on input reaches internal ingestion anyway, `run.sh` and the direct fallback both treat it as malformed and silently resolve it to the `1500` add-on default. A normalized track uses about 5 MB. The add-on default therefore holds roughly 200 tracks. **On-Air Sound** adds a second bake and roughly doubles the per-track size. At startup, `_disk_safe_cache_ceiling_mb` in `main.py` combines free space, reclaimable cache bytes, and a 512 MB reserve to choose an effective limit. It never lowers the limit below 200 MB. If the mount cannot be read, the configured value stays unchanged. A limit above available free space would not trigger eviction and could fill `/data`, so the station logs a warning when it lowers the limit.
 - `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
 - `MAMMAMIRADIO_HTTP_LOG_LEVEL`: log level applied to `httpx` and `httpcore` (default `WARNING`). Successful request logs from those libraries are suppressed at default; raise to `INFO` or `DEBUG` to inspect outbound HTTP traffic. Invalid values fall back to `WARNING`.
@@ -136,13 +147,13 @@ private durable system for strategy or relationship context.
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by the HA add-on to `http://supervisor/core`; direct Core installs normally use `http://host:8123`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
-- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: explicit permission for generated host segments to refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`). On a fresh or unclassified install, omission starts **off** until First Listen audio is confirmed and the operator enables a fresh filtered preview; a proven pre-feature install may restore its legacy-on behavior after background origin migration. The HA add-on exposes the optional choice as `ha_context_enabled`. Turning it off keeps HA entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
+- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: explicit permission for generated host segments to refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`). On a fresh or unclassified install, omission starts **off** until First Listen audio is confirmed and the operator enables a fresh filtered preview; a verified private Home profile may restore broader behavior at a segment boundary. Older installs without valid evidence remain off until fresh sound confirmation and narrow consent; already-narrow installs retain their behavior. The HA add-on exposes the optional choice as `ha_context_enabled`. Turning it off keeps HA entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
 - `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`: seconds between full Home Assistant state refreshes for host prompt context (positive integer; default `300`). Maps to `[homeassistant] poll_interval` / add-on `ha_context_poll_interval`; invalid values are ignored with a warning.
 - `MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT`: foreground wall-clock wait (seconds, positive float) before a warm prompt-context refresh falls back to the last prompt-safe snapshot (default `2.0`; env > toml). It never cancels the producer-owned request: one request continues in the background for at most 30 seconds total and may be adopted only at the next `BANTER`/`AD`/`NEWS_FLASH` preparation boundary, never into audio already rendering or queued. `/api/states`, optional registry metadata, and optional weather enrichment begin together; the optional calls are individually bounded, best-effort, and cannot extend that same 30-second cap. The first cold registry/weather warm-up keeps its 20-second foreground wait (`_HA_CONTEXT_COLD_LOAD_TIMEOUT`); later segments while that request runs reuse the safe snapshot immediately. Failed attempts retry no earlier than the configured poll interval. A snapshot older than `max(2 × poll_interval, 120s)` — including a completed reply that becomes stale while waiting in the mailbox — is retained for diagnostics but withheld from prompts and delayed one-shots; the first fresh result after that gap resynchronizes ambient state without replaying delayed full-context events, directives, interrupts, ritual/radio matches, or running gags. Timer interrupts stay on their separate lightweight entity poll with `timer` provenance, so full-context stale suppression cannot erase a current timer alert. No new HA add-on option exposes the 30-second cap. A non-float or ≤0 configured foreground wait is ignored with a warning.
 - `MAMMAMIRADIO_HA_MOOD_LLM`: enable the experimental Home Assistant home-mood scene namer (`true`/`1`/`yes`; default **off**). Off means `classify_home_mood` uses the local heuristic ladder only. On means the station may ask the configured LLM for a short radio-friendly home mood from the already-budgeted HA context slice; missing keys, timeout, rejected or invalid output, disabled HA, and a tripped Anthropic circuit breaker (auth/usage failures already detected by script generation) all fall back to the heuristic ladder.
 - `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS`: refresh cadence for the experimental HA mood LLM result, in positive seconds. Keeps repeated banter/ad/news refreshes from paying for the same home scene name every time. Past the TTL the last scene keeps airing while a refresh runs (stale-while-revalidate, capped by the built-in `STALE_SCENE_MAX_SECONDS` in `home/scene_namer.py`), so a paid scene is actually heard between minutes-apart consumer segments; beyond the cap the heuristic ladder airs. Invalid or non-positive values fall back to the built-in default.
 - `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`: whether to push the `media_player.mammamiradio` ghost entity to HA via REST (`true`/`1`/`yes` | `false`/`0`/`no`; default **on**). The HA add-on exposes it as the `ha_media_player_push` option (mapped in `run.sh`). Operators who install the HACS `custom_components/mammamiradio` integration turn it **off**: the registered `MediaPlayerEntity` then owns `media_player.mammamiradio`, and a continued REST push to the same id would clobber it (the HA state machine is last-writer-wins) and flap the card. When off, `push_state_to_ha` in `home/ha_context.py` skips only the `media_player` POST and deletes the stale ghost once (so the integration claims a free id, no `_2` suffix); the three `sensor.mammamiradio_*` / `binary_sensor.mammamiradio_on_air` pushes (no registered backing, no collision) keep flowing, with unchanged payloads deduped between bounded recovery heartbeats. See `docs/integrations/ha-integration.md`.
-- **HA add-on option durability:** Supervisor's stored app options are the sole durable authority for the admin mode controls and pacing. Each admin change is committed through Supervisor before live state changes. `/data/options.json` is a Supervisor-generated startup projection; `run.sh` and startup loaders may read it, but runtime code must never write it directly. The one sanctioned write is `run.sh`'s one-time Jamendo secret migration at startup, before the app: guarded by the `/data/.jamendo_client_id_migrated_v1` marker, it atomically rewrites the file once (temp file + rename) to drop the legacy `jamendo_client_id` key, and only after a non-empty value is durably relocated into the owner-only `/config/secrets.env`. An upgrade cannot reconstruct a pre-fix selection that existed only in process memory after Supervisor rematerializes an older stored value.
+- **HA add-on option durability:** Supervisor's stored app options are the sole durable authority for the admin mode controls and pacing. Each durable admin change is committed through Supervisor before live state changes. Transitions is session-only on the add-on and has no Supervisor option. `/data/options.json` is a Supervisor-generated startup projection; `run.sh` and startup loaders may read it, but runtime code must never write it directly. The one sanctioned write is `run.sh`'s one-time Jamendo secret migration at startup, before the app: guarded by the `/data/.jamendo_client_id_migrated_v1` marker, it atomically rewrites the file once (temp file + rename) to drop the legacy `jamendo_client_id` key, and only after a non-empty value is durably relocated into the owner-only `/config/secrets.env`. An upgrade cannot reconstruct a pre-fix selection that existed only in process memory after Supervisor rematerializes an older stored value.
 - `STATION_NAME`: override the listener-facing station identity from `radio.toml`
 - `STATION_THEME`: override the internal scriptwriter prompt from `radio.toml`
 - **Dynamic LLM routing (`model_registry.toml`)**: script generation never names a model in code. A task asks for a **role** (`creative` for banter/news/ads/direction, `fast` for transitions and post-air memory extraction); the registry catalog maps a catalog key to a model ID (the canonical place model IDs live), and a **quality profile** (`premium`|`balanced`|`economy`) selects which catalog key each role uses. Resolution chain: `task → role → active profile → catalog key → model id`. The same registry holds the OpenAI TTS model, catalog-keyed token pricing, and optional Anthropic adaptive-thinking effort (`[models.effort.<provider>]`, levels `low|medium|high|xhigh|max`). Effort is keyed by catalog key and applied only on the Anthropic creative path via `extra_body.output_config.effort`; Haiku must never carry an effort entry (it rejects the parameter). Swap a model by editing its catalog line and matching price entry — no code change. `fast` is pinned to the lowest-latency model in every profile (transitions must not risk dead air, and memory extraction must not crowd out the live show). A missing/malformed registry disables provider calls and degrades to stock scripts and Edge TTS, so the station still boots and airs. `resolve_model()` / `effort_for()` in `core/config.py` are the single resolvers; they never raise. A legacy `[models]` block in `radio.toml` is read-only compatibility input and logs a deprecation warning.
@@ -167,7 +178,8 @@ private durable system for strategy or relationship context.
 - `MAMMAMIRADIO_GUEST_HOST`: keep the rotating guest host on the roster (`true`/`1`/`yes` | `false`/`0`/`no`; default **on**). An explicit falsy value drops the guest (`GUEST_HOST_NAME` in `core/config.py`, currently "Hans Günther") from `config.hosts` at load time — so the system prompt, the prompt cache key, and voice validation are all clean with no per-call gating. `config.py` owns the canonical name; `scriptwriter.py` imports it so the roster gate and prompt logic can't drift on the spelling. The HA add-on exposes it as the **Guest host** option (mapped in `run.sh`); applied at the next (add-on) restart, not a live admin toggle.
 - `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`: pacing overrides read at config load (env > `radio.toml [pacing]`), each clamped to the same bounds as `_validate()` / `PATCH /api/pacing` (banter 2-60, ads 1-60, ad spots 1-5) so a stale value degrades to the clamp instead of failing boot (INSTANT AUDIO). These are how a live admin pacing-slider save survives a restart: `PATCH /api/pacing` persists every present key in one atomic operation — `.env` in standalone mode (`_save_dotenv`), one complete Supervisor option transaction in HA add-on mode (`_save_addon_option_batch`) — persist-first / mutate-second like the Super Italian and On-Air Sound toggles, so a failed write returns 500 and leaves both live and durable config untouched. The HA add-on exposes them as the **Songs between host breaks** / **Songs between ad breaks** / **Ads per break** options (mapped in `run.sh`), and each records an `operator_action` ledger row on change.
 - `MAMMAMIRADIO_BROADCAST_CHAIN`: enable/disable the FM on-air colouring pass (`true`/`1`/`yes` | `false`/`0`/`no`; default `false` — studio-clean; the colour is deliberately subtle and often imperceptible on good speakers, and the "what should the station sound like" strategy is being revisited). Overrides `[audio] broadcast_chain` in `radio.toml` (env > toml). The HA add-on exposes it as the **On-Air Sound** option (mapped in `run.sh`); standalone operators set it in `.env` or pass it as a container env var. Off = studio-clean output. Operator-toggleable **live** from the admin Engine Room On-Air Sound dial (`POST /api/broadcast-chain`): re-arms the egress chain on the next produced segment with no restart and no queue purge (so an operator can A/B the FM colouring against studio-clean on the live stream), and persists to `.env` in standalone mode or Supervisor's stored `broadcast_chain` option in HA add-on mode.
-- `MAMMAMIRADIO_LEDGER_ENABLED`: enable the provenance ledger / Show Memory (`true`/`1`/`yes`; default **off** in standalone, **on** in HA addon via `run.sh`). When on, a best-effort daemon thread records how each aired moment was made — the raw LLM attempts (Tier 1), the final spoken script (Tier 2), and the true aired outcome (Tier 3) — as daily-rotated JSONL under `cache_dir/ledger` (dir `0700`, files `0600`). Station-wide operator toggles (Super Italian, Chaos, Festival, AI quality, On-Air Sound) are also recorded as `operator_action` rows (`{action, old_value, new_value, source}`) via `_record_operator_action` in `web/streamer.py`, so a debrief can see what the operator changed and when — FastAPI runs with `--no-access-log`, so without this the toggle POST leaves no trace. Best-effort like every other row (a ledger failure never affects whether the toggle applied). Off by default in standalone because the rows include home + listener context written locally in plaintext. A banter Tier-2 row also carries `line_accounting` (`{authored, aired, dropped_empty, dropped_malformed, dropped_guest_host, dropped_duplicate}`) whenever individual written lines were dropped before air, so a short exchange is distinguishable from a full one without re-parsing the raw model output — `final_script` only ever carries the survivors. The field is absent when nothing was lost. Never raises into the audio path; a saturated queue drops the oldest row and surfaces a `ledger_heartbeat`. The ledger directory is always derived from `MAMMAMIRADIO_CACHE_DIR`, so when set it inherits the addon (`/data/cache`) vs standalone (`./cache`) resolution. **HA addon:** enabled in `run.sh` (operator's own system, data stays local at `/data/cache/ledger/`). Not exposed in the addon options UI — not a user-facing toggle.
+- `MAMMAMIRADIO_BOUNDARY_IMAGING`: enable/disable the short packaged station sounds between songs and talk (`true`/`1`/`yes` | `false`/`0`/`no`; default **on**). Overrides `[audio] boundary_imaging` in `radio.toml` (env > toml). An unrecognised value logs a warning and forces the dial on, even when TOML sets it off. The playback loop may broadcast one packaged file (`stingers/music_to_speech.mp3`, `stingers/speech_to_music.mp3`, `bumpers/ad_in.mp3`, or `bumpers/ad_out.mp3`) before the next programme file; a missing or unusable file is a clean cut. The two stingers cover song/talk seams, including locally produced talk; ad-in/ad-out carts apply only to packaged spots because live breaks already contain their own bumpers. Producer rendering does not bake boundary stings into programme files. The cart is not a queue item. Operator-toggleable **live** from the admin Engine Room Transitions dial (`POST /api/boundary-imaging`, recorded as an `operator_action`): the next seam follows the dial, the cart already playing finishes, and the queue is not purged. Standalone persists the value to `.env` before the runtime changes. The HA add-on does not write `.env` or a Supervisor option; the dial returns to its startup setting (on by default) after a restart.
+- `MAMMAMIRADIO_LEDGER_ENABLED`: enable the provenance ledger / Show Memory (`true`/`1`/`yes`; default **off** in standalone, **on** in HA addon via `run.sh`). When on, a best-effort daemon thread records how each aired moment was made — the raw LLM attempts (Tier 1), the final spoken script (Tier 2), and the true aired outcome (Tier 3) — as daily-rotated JSONL under `cache_dir/ledger` (dir `0700`, files `0600`). Station-wide operator toggles (Super Italian, Chaos, Festival, AI quality, On-Air Sound, Transitions) are also recorded as `operator_action` rows (`{action, old_value, new_value, source}`) via `_record_operator_action` in `web/streamer.py`, so a debrief can see what the operator changed and when — FastAPI runs with `--no-access-log`, so without this the toggle POST leaves no trace. Best-effort like every other row (a ledger failure never affects whether the toggle applied). Off by default in standalone because the rows include home + listener context written locally in plaintext. A banter Tier-2 row also carries `line_accounting` (`{authored, aired, dropped_empty, dropped_malformed, dropped_guest_host, dropped_duplicate}`) whenever individual written lines were dropped before air, so a short exchange is distinguishable from a full one without re-parsing the raw model output — `final_script` only ever carries the survivors. The field is absent when nothing was lost. Never raises into the audio path; a saturated queue drops the oldest row and surfaces a `ledger_heartbeat`. The ledger directory is always derived from `MAMMAMIRADIO_CACHE_DIR`, so when set it inherits the addon (`/data/cache`) vs standalone (`./cache`) resolution. **HA addon:** enabled in `run.sh` (operator's own system, data stays local at `/data/cache/ledger/`). Not exposed in the addon options UI — not a user-facing toggle.
 - `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`: days of provenance history to keep before a day-rollover gzips and prunes older files (positive integer; default `14`). The deque cap (`ledger_queue_max`, default `2000` rows) is config-only in `StationConfig` with no env override.
 
 ## Runtime behavior
@@ -197,7 +209,8 @@ private durable system for strategy or relationship context.
 - If Home Assistant is enabled, `HA_TOKEN` is present, and prompt-safe context has populated, banter and ads may reference only the runtime's authorized projection. Fresh installs fail closed to synthetic coarse daylight plus one unambiguous coarse weather source; household entities, mood/label derivation, event/ritual/timer lanes, running gags, and receipt projections are legacy-only until the later grant-based Home Profile releases. `home/authorization.py` owns the projection; `home/migration.py` owns the paired install-origin/provenance witnesses; cache and timeout fallbacks never cross authorization modes.
 - `audio.bitrate` is the single source of truth for encoding, ICY headers, and playback throttling.
 - `audio.lufs_target` / `audio.ad_lufs_target` set the integrated-LUFS targets for the loudness-reconciliation pass: every finished segment is measured (`measure_lufs`) and nudged with one corrective `volume` gain so music, dialogue, bedded banter, and ads all air at the same level (ads 1 LU hotter). Configured once at startup via `configure_loudness_reconcile()` in `audio/normalizer.py`; idempotent and best-effort (a failed measure/re-encode leaves the segment untouched — never dead air). Defaults `-16.0` / `-15.0`. A normalization **cache hit** skips `normalize()` and therefore its reconcile pass, so `_render_music_track` calls `reconcile_cached_music()` on hit: it reconciles the cached file to the music target on first play and records `reconciled_lufs` in the file's norm sidecar (next to `{title, artist}`), so later hits skip both the re-encode and the ebur128 measure and stay instant. The marker is written **only when `_reconcile_lufs` confirms the level** (it now returns a bool — `True` on an in-tolerance skip or a successful re-encode, `False` when the measure/re-encode failed); a transiently-failed file stays unmarked and is retried on the next hit rather than being permanently masked as fixed. The marker is content-specific: `save_track_metadata` (only ever called for a freshly (re)normalized file) **drops** any `reconciled_lufs` it finds in a leftover/orphaned sidecar — eviction unlinks the `.mp3` but leaves the `.json`, so a regenerated file must re-earn its marker rather than inherit a stale one. Sidecar reads (`_load_sidecar`, `load_track_metadata`) tolerate non-UTF8/corrupt/non-dict content by returning empty rather than raising into the audio path. This self-heals norm-cache files produced before reconciliation existed (the cause of older cached songs airing quieter) one play at a time; no-op when reconciliation is unconfigured.
-- `audio.broadcast_chain` (default `false` — studio-clean; opt-in) is the **egress pipeline's** optional final stage: when enabled, every aired segment passes through one funnel (`_enqueue_with_egress` in `scheduling/producer.py`), and `apply_broadcast_chain()` in `audio/normalizer.py` colours it like an over-the-air FM signal (gentle pre-emphasis HF shelf, ~15 kHz band-limit, flat loudness-offset trim — no stereo swirl, no dynamics) with one extra FFmpeg pass — computed once and reused for cached music (colour-baking, below). Both `configure_loudness_reconcile()` and `configure_broadcast_chain()` build their output-encoding args via the shared `_mp3_output_args()` helper so the two corrective re-encodes can never drift. Voice and music exit through the same stage, so there is no FM-music-next-to-studio-clean-voice seam. Configured at startup via `configure_broadcast_chain()`, and **operator-toggleable live** from the admin Engine Room On-Air Sound dial (`POST /api/broadcast-chain`), which re-calls `configure_broadcast_chain()` to (dis)arm the module global so the change lands on the next produced segment — no restart, no queue purge. Toggle is `[audio] broadcast_chain` in `radio.toml`, or env `MAMMAMIRADIO_BROADCAST_CHAIN` (env > toml) — the HA add-on exposes it as the **On-Air Sound** option so operators reach studio-clean without rebuilding the baked-in `radio.toml`. A separate pass with **no `loudnorm` and no `equalizer` in-graph** keeps the psymodel SIGABRT surface (3 equalizers + loudnorm on ffmpeg 8.x / Pi aarch64) closed; it holds the shared admission slot from `mammamiradio.audio.admission` (Pi 2-FFmpeg ceiling), is loudness-neutral (so it never moves a segment off the reconciled target — guarded by a real-ffmpeg neutrality test on **both** broadband noise and a voice-band signal, since the pre-emphasis shelf bites the voice band), and is best-effort (a failure airs the un-coloured audio — never dead air). Emergency / bridge / rescue fills **skip** the pass so a dead-air rescue is never delayed (#2 INSTANT AUDIO); the skip is driven by an explicit `rescue` metadata flag stamped at each bridge/rescue construction site (`_is_rescue_fill`), **not** by sniffing overloaded keys — a canned clip in normal rotation (shareware/Demo-mode banter, `canned=True`) is **not** a rescue and is still coloured. A norm-cache music hit is **colour-baked** once and reused (`_bake_cached_egress`): the coloured render is cached keyed by source identity (path + mtime/size) + `broadcast_chain_version()` — a filter/encoding change OR an in-place source rewrite (`reconcile_cached_music` re-levelling after a LUFS-target change, or an evict-then-regenerate) re-bakes instead of serving a stale colour — published atomically (encode to a staging name then `os.replace`), so a replay — including the first play after a restart, the bake persists on disk — reuses it with **no re-encode**; the per-replay FM pass that cost Pi CPU is gone. One-shot ephemeral renders (fresh voice) have no stable key and are still coloured to a per-play tmp. `fm_` bakes are evicted alongside `norm_` originals in `evict_cache_lru` (the evict-last "processed audio" group, oldest-by-atime first, so a cold/stale-version bake goes before a hot one); a bake currently queued is passed in `protected_paths` so eviction can't pull it mid-stream. They roughly double the per-track cache footprint (a `norm_` + an `fm_` file). The chaos and reactive-interference content stages slot in **before** the broadcast stage.
+- `audio.broadcast_chain` (default `false` — studio-clean; opt-in) is the **egress pipeline's** optional final stage: eligible programme segments pass through one funnel (`_enqueue_with_egress` in `scheduling/producer.py`), and `apply_broadcast_chain()` in `audio/normalizer.py` colours it like an over-the-air FM signal (gentle pre-emphasis HF shelf, ~15 kHz band-limit, flat loudness-offset trim — no stereo swirl, no dynamics) with one extra FFmpeg pass — computed once and reused for cached music (colour-baking, below). Both `configure_loudness_reconcile()` and `configure_broadcast_chain()` build their output-encoding args via the shared `_mp3_output_args()` helper so the two corrective re-encodes can never drift. Voice and music exit through the same stage, so there is no FM-music-next-to-studio-clean-voice seam. Configured at startup via `configure_broadcast_chain()`, and **operator-toggleable live** from the admin Engine Room On-Air Sound dial (`POST /api/broadcast-chain`), which re-calls `configure_broadcast_chain()` to (dis)arm the module global so the change lands on the next produced segment — no restart, no queue purge. Toggle is `[audio] broadcast_chain` in `radio.toml`, or env `MAMMAMIRADIO_BROADCAST_CHAIN` (env > toml) — the HA add-on exposes it as the **On-Air Sound** option so operators reach studio-clean without rebuilding the baked-in `radio.toml`. A separate pass with **no `loudnorm` and no `equalizer` in-graph** keeps the psymodel SIGABRT surface (3 equalizers + loudnorm on ffmpeg 8.x / Pi aarch64) closed; it holds the shared admission slot from `mammamiradio.audio.admission` (Pi 2-FFmpeg ceiling), is loudness-neutral (so it never moves a segment off the reconciled target — guarded by a real-ffmpeg neutrality test on **both** broadband noise and a voice-band signal, since the pre-emphasis shelf bites the voice band), and is best-effort (a failure airs the un-coloured audio — never dead air). Emergency / bridge / rescue fills **skip** the pass so a dead-air rescue is never delayed (#2 INSTANT AUDIO); the skip is driven by an explicit `rescue` metadata flag stamped at each bridge/rescue construction site (`_is_rescue_fill`), **not** by sniffing overloaded keys — a canned clip in normal rotation (shareware/Demo-mode banter, `canned=True`) is **not** a rescue and is still coloured. A norm-cache music hit is **colour-baked** once and reused (`_bake_cached_egress`): the coloured render is cached keyed by source identity (path + mtime/size) + `broadcast_chain_version()` — a filter/encoding change OR an in-place source rewrite (`reconcile_cached_music` re-levelling after a LUFS-target change, or an evict-then-regenerate) re-bakes instead of serving a stale colour — published atomically (encode to a staging name then `os.replace`), so a replay — including the first play after a restart, the bake persists on disk — reuses it with **no re-encode**; the per-replay FM pass that cost Pi CPU is gone. One-shot ephemeral renders (fresh voice) have no stable key and are still coloured to a per-play tmp. `fm_` bakes are evicted alongside `norm_` originals in `evict_cache_lru` (the evict-last "processed audio" group, oldest-by-atime first, so a cold/stale-version bake goes before a hot one); a bake currently queued is passed in `protected_paths` so eviction can't pull it mid-stream. They roughly double the per-track cache footprint (a `norm_` + an `fm_` file). The chaos and reactive-interference content stages slot in **before** the broadcast stage. Playback boundary carts bypass this funnel and retain their packaged bytes, so On-Air Sound does not colour them.
+- **Boundary cart loudness.** Carts are not loudness-reconciled at playback. The bundled manifest records approximately −16 LUFS (−16.07 to −15.89) against its −16 LUFS target; custom packs must be mastered to the station target before installation.
 - Source switching via `/api/playlist/load` cuts over immediately only when fresh
   protected replacement audio is admitted. If the continuity fallback preserves
   an older queue head/slot or no ready runway exists, the current segment finishes
@@ -277,13 +290,12 @@ mammamiradio/
   restart_handoff.py        post-restart music continuity spool (producer writes, main.py admits at boot)
 radio.toml                  station config
 start.sh                    dev entrypoint with uvicorn and reload
-tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
+tests/                      mirrors mammamiradio/ — tests/<module>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` and
-`hosts/scriptwriter.py`. They have postal addresses now; the actual splits land
-in PRs 5 and 6 of the cathedral plan
-(`docs/archive/2026-04-28-cathedral-restructure.md`).
+`web/streamer.py` owns routes and playback; `hosts/scriptwriter.py` assembles
+host scripts. Scope any further extraction explicitly and follow
+`docs/runbooks/refactor-cuts.md`.
 
 ## Design System
 
@@ -354,106 +366,9 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   the standalone verifier remain available, but do not emit/reattest for
   ordinary PRs. Physical HA evidence is a separate, unchanged release gate.
 
-  <details>
-  <summary>Retired review-receipt machinery (historical, not instructions)</summary>
 
-  The following records the former policy and its regressions; none of its
-  receipt/ledger admission or refresh instructions apply to ordinary PRs.
 
-  Formerly, every PR was
-  opened through `/ship`, which runs the mandatory pre-ship review squad
-  (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook
-  (`scripts/hooks/require-preship-squad.sh`, wired in `.claude/settings.json`)
-  refuses a bare `gh pr create` unless a `review`/`adversarial-review` entry is
-  logged for HEAD (or a recent ancestor) within 2h **and** the committed v2
-  receipt covers HEAD's content. The ledger half proves the squad ran on this
-  machine; the receipt half is what the landing gate actually reads, so the hook
-  runs `scripts/check-preship-evidence.sh` — the same checker `land-pr.sh` uses —
-  before the PR exists rather than after CI. A logged squad whose receipt was
-  never emitted is denied here, with the emit command in the message. The hook is
-  fail-open, project-scoped, and Claude-only; Codex has no hook layer. Fail-open
-  is narrower than exit-code equality: only a rendered `landing-evidence:` verdict
-  denies, so an unusable Python or a missing checker never blocks a PR.
-
-  "Project-scoped" is now enforced rather than assumed. The hook is registered
-  for every Bash call in the session, so it also saw PRs opened against *other*
-  repositories from a worktree rooted here — and judged them with this repo's
-  ledger and this working tree's receipts, which describe different work. That
-  denied a PR whose squad had genuinely run and was logged in its own repo's
-  ledger (observed 2026-09-12 on a `florianhorner/gh-workflows` PR, where the
-  fleet-wide `permission-guard.py` R19 resolved the right ledger and passed).
-  A `--repo` or `-R` naming a repository that is not this checkout is now
-  skipped, the same reasoning R19 already applies: the question is unanswerable
-  here, and unanswerable must not mean refused. Standing aside requires *every*
-  opening command in the string to be explicitly foreign, read the way the CLI
-  reads it: last-wins on a repeated flag, from that command's own argument
-  vector, with a newline treated as the command separator it is and every
-  value-taking flag consuming its value — never from `--body` prose, never from
-  a later chained command. Both sides of the comparison reduce to `owner/repo`,
-  so the spellings the CLI accepts for one repository (`host/owner/repo`,
-  `http://`, `ssh://…​.git`, `git@host:…`, `-Rowner/repo`, `-R=owner/repo`)
-  cannot read as two. The flagless form and a `--repo` naming this repo are
-  unchanged.
-
-  This one branch fails *toward* checking rather than open, unlike the rest of
-  the guard: an `origin` that names no hosted repository (a local path or a
-  `file://` clone), a command line the tokenizer cannot parse, a target the
-  guard cannot reduce to `owner/repo`, and an opening command with no explicit
-  target all keep the guard on, because "cannot prove this is somebody else's
-  PR" has to mean "judge it" or the exemption becomes the bypass. Known gap,
-  pinned by a test rather than closed: a flagless command run after `cd`-ing
-  into another repository is still judged against this checkout, since the hook
-  sees the session cwd and no target. It refuses rather than passes, and R12
-  denies the flagless form fleet-wide.
-
-  Command *detection* was the weaker half and is now anchored on parentheses as
-  well as whitespace and `;&|`. A single `(` used to leave `gh` unanchored, so a
-  merge inside a subshell walked past the landing-contract deny below, and a
-  create inside `$( )` went unjudged. That was pre-existing and is the most
-  consequential thing the reviews on this change turned up.
-
-  Everything above is asserted by `tests/workflows/test_preship_squad_gate.sh`,
-  and every acceptance case there is mutation-verified: each one fails against
-  the behaviour it replaced. That matters more than the count, because three
-  separate rounds of review found bypasses in the *fix*, each of which read as
-  correct until a case was written for it.
-
-  The runtime-independent evidence gate is the immutable v2 receipt, and the
-  ceremony is single-pass: commit the implementation, run the review on that
-  exact content, run `scripts/emit-review-evidence.sh`, and commit the receipt
-  it writes under `proof/preship-reviews/v2/`. V2 hashes the raw recursive Git
-  tree while excluding valid v2 receipts and validated HA Green receipts, so
-  the receipt-only commit and the eventual squash preserve the reviewed content
-  identity. A clean base integration (`git merge origin/main`) does NOT
-  burn the receipt: PR verification accepts the existing receipt when git's own
-  three-way merge proves the pushed head is exactly the reviewed content merged
-  with the base and nothing else — so integrate, push, and land, with no
-  reattest and no receipt-swap commit. That witness reads the base as content,
-  so it requires the base to be landed in `origin/main`; an unmerged branch
-  named as the base is refused. Integrating is still required (branch
-  protection is strict), and do it locally rather than via
-  `gh pr update-branch` at landing, which changes the head and cancels an armed
-  `--match-head-commit`. `scripts/emit-review-evidence.sh --reattest` remains
-  available and applies the same witness — use it when you want the branch's
-  evidence to name the integrated content and retire superseded receipts.
-  Either way, a conflicted merge, a hand-edited merge commit, or any
-  post-review content change fails closed into a fresh squad run. Receipts are
-  content-addressed additions, so concurrent PRs never conflict on evidence.
-  (The legacy fixed-name `proof/preship-review.json` is retired — 43 commits
-  touched it, a guaranteed merge conflict between any two open PRs.)
-
-  `preship-evidence.yml` checks the v2 receipt using checker code from the PR's
-  trusted base. The result remains an annotation until the separately approved
-  blocking cutover. The receipt is a deterministic, diffable process record for
-  trusted repository writers, not a cryptographic attestation: CI can validate
-  its structure and content binding, but cannot retrieve the local ledger named
-  by `source_record_sha256`. Likewise, the current `pull_request` workflow
-  definition is PR-controlled even though the checker checkout is base-owned. A
-  blocking cutover must first move orchestration to a base-owned control plane
-  that reports against the exact PR head.
-  </details>
-
-- **Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls (single source of truth; the runbook links here)**: The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until Florian's explicit merge signal. On the signal, `scripts/land-pr.sh <PR#>` (1) refuses a behind or conflicted branch without mutating the PR, directing its feature workspace to integrate `origin/main`, review any changed code, and push; (2) blocks unresolved current Major/Critical/P0/P1 bot threads and fails closed if thread data cannot be read, through `scripts/land-gates.sh` shared with the report-only shadow queue, without consulting receipts or local ledgers; (3) checks release-cut admission; and (4) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12) — this is what retires hand-rolled rebase/reset base-integration, the cause of the 2026-06-11 phantom-revert near-miss. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. During a release cut, `scripts/check-advertised-version.sh` checks GHCR for the version advertised on `main`. Missing images make `dependabot-automerge.yml` disable auto-merge and add `cut-window-hold` to affected Dependabot PRs. The sweep only disarms. After publication, a fresh PR event with verified Dependabot metadata or the landing workflow can resume held PRs. Before arming, the workflow checks that the PR head matches the metadata and `main` matches the registry check. PR events can re-arm a PR you disarmed by hand. Before a cut, the release operator runs `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` to disable new runs, drain existing runs and disarm PRs. `land-pr.sh` requires verified freeze state for stable-version changes. Keep the human landing freeze through both architecture promotions, then resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`; see the add-on runbook for proof and recovery. GitHub Actions must not post Dependabot rebase or recreate commands; the batch-wide nudge was retired after its GitHub Actions actor was rejected by Dependabot, causing repeated comments and CI churn after subsequent merges. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`), which reads GitHub's effective rules for `main` rather than reimplementing ruleset pattern matching. Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and head matching does not eliminate non-conflicting staleness. The owning feature agent handles CI waits and review feedback; the landing seat reports `MERGED` only after confirming GitHub's state, never merely because arming succeeded.
+- **Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls (single source of truth; the runbook links here)**: The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until the maintainer's explicit merge signal. On the signal, `scripts/land-pr.sh <PR#>` (1) refuses a behind or conflicted branch without mutating the PR, directing its feature workspace to integrate `origin/main`, review any changed code, and push; (2) blocks unresolved current Major/Critical/P0/P1 bot threads and fails closed if thread data cannot be read, through `scripts/land-gates.sh` shared with the report-only shadow queue, without consulting receipts or local ledgers; (3) checks release-cut admission; and (4) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12); integrate the base in the owning workspace before landing. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. During a release cut, `scripts/check-advertised-version.sh` checks GHCR for the version advertised on `main`. Missing images make `dependabot-automerge.yml` disable auto-merge and add `cut-window-hold` to affected Dependabot PRs. The sweep only disarms. After publication, a fresh PR event with verified Dependabot metadata or the landing workflow can resume held PRs. Before arming, the workflow checks that the PR head matches the metadata and `main` matches the registry check. PR events can re-arm a PR you disarmed by hand. Before a cut, the release operator runs `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` to disable new runs, drain existing runs and disarm PRs. `land-pr.sh` requires verified freeze state for stable-version changes. Keep the human landing freeze through both architecture promotions, then resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`; see the add-on runbook for proof and recovery. GitHub Actions must not post Dependabot rebase or recreate commands. Handle behind branches through an authenticated maintainer. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`), which reads GitHub's effective rules for `main` rather than reimplementing ruleset pattern matching. Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and head matching does not eliminate non-conflicting staleness. The owning feature agent handles CI waits and review feedback; the landing seat reports `MERGED` only after confirming GitHub's state, never merely because arming succeeded.
 - **Shadow land queue (report-only)**: `.github/workflows/land-queue.yml` runs
   `scripts/land-queue-plan.sh` every 30 minutes and writes to the job summary
   the one thing an auto-land controller *would* do next — integrate or arm a PR,
@@ -490,7 +405,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   - Player QA: run / reused / not applicable / deferred
   - Admin QA: run / reused / not applicable / deferred
   ```
-  For stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when the PR itself is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. The pre-ship review squad is unchanged; this rule scopes only manual `/qa`.
+  For stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when the PR itself is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. The required engineering reviews still apply; this rule scopes only manual `/qa`.
 - **Coverage floors**: Coverage must stay above the committed minimums. Two layers enforce this:
   - **Aggregate floor**: `fail_under` in `pyproject.toml` — the overall minimum.
   - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
@@ -685,16 +600,11 @@ sidecar parking lot for unrelated work.
 - Mechanical fallout from renames (path-string updates, import
   fixups) within the same PR as the rename
 - Sibling caller updates when a public function signature changes (≤3 files
-  in other naves; beyond that, the change is legitimately cross-cutting and
+  in other modules; beyond that, the change is legitimately cross-cutting and
   needs its own scope statement)
 
-**Why no automated gate.** A scope-guard mechanism was designed and rejected
-on 2026-05-03 after a 10-PR audit measured creep frequency at 2/10 (boundary
-case) and found that the dominant creep pattern (planning-doc hitchhiking)
-isn't catchable by file-pattern globs. See
-`~/.gstack/projects/florianhorner-mammamiradio/florianhorner-cicd-freeze-reflection-design-20260503.md`
-for the full reasoning. If creep frequency rises (>4/10 in a future audit),
-revisit the mechanism path.
+Scope is checked during review. Keep each change tied to its declared objective
+and write-set.
 
 ## Review discipline
 
@@ -823,9 +733,9 @@ Two zones are mechanically enforced. Read `CONTRACT.md` before touching anything
 - `CONTRACT.md` and `.github/workflows/contract-drift.yml` (the rules and the gate are gated too)
 - The `/api/integrations/v1/now-playing` endpoint path, its ETag/304 semantics, or `schema_version="1"`
 
-A wire-visible change routed through any other file (e.g. `core/models.py`) is still a contract change — the contract-drift CI renders the serializer on every PR and catches payload drift; the frozen pytest contract tests (run by the quality workflow) hold the route path, ETag/304, and header behavior. Wanted changes go into the proposals queue: write `docs/contract-proposals/NNN-title.md` (format in that directory's README) and stop. Changes land only when Florian opens a contract window (the `.contract-window` marker + a review sitting) and the PR carries a `Contract-Change:` trailer or PR-body line. Never weaken a contract test to make something pass.
+A wire-visible change routed through any other file (e.g. `core/models.py`) is still a contract change — the contract-drift CI renders the serializer on every PR and catches payload drift; the frozen pytest contract tests (run by the quality workflow) hold the route path, ETag/304, and header behavior. Wanted changes go into the proposals queue: write `docs/contract-proposals/NNN-title.md` (format in that directory's README) and stop. Changes land only when the maintainer opens a contract window (the `.contract-window` marker + a review sitting) and the PR carries a `Contract-Change:` trailer or PR-body line. Never weaken a contract test to make something pass.
 
-**Z-comms — GitHub writes to non-owned repos.** Never run `gh pr comment/review/edit/merge`, `gh issue comment`, or mutating `gh api` calls against any repo not owned by `florianhorner`. This includes flagless invocations inside an upstream checkout. Draft the reply to `.context/pr-replies/*.md` instead; Florian copies and sends. Always.
+**Z-comms — GitHub writes to non-owned repos.** Never run `gh pr comment/review/edit/merge`, `gh issue comment`, or mutating `gh api` calls against any repo not owned by `florianhorner`. This includes flagless invocations inside an upstream checkout. Draft the reply to `.context/pr-replies/*.md` instead; the maintainer copies and sends. Always.
 
 <!-- BEGIN: commit-message-standards (managed by bootstrap-repo.sh — do not hand-edit) -->
 ## Commit message standards

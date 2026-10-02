@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.core.config import StationConfig, resolve_model
+from mammamiradio.home.bindings import EMPTY_HOME_BINDINGS, HomeBindings
 
 logger = logging.getLogger(__name__)
 
@@ -50,92 +51,8 @@ _PROMPT_INJECTION_RE = re.compile(r"(ignore previous|disregard|system override|f
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
-# Italian-friendly labels for entity states
-ENTITY_LABELS = {
-    # Synthetic, privacy-safe R0 ambient projections. These IDs never identify
-    # the operator's real HA source entity.
-    "weather.ambient": "Meteo",
-    "sun.ambient": "Luce del giorno",
-    "switch.bar_kaffeemaschine_steckdose": "La macchina del caffè",
-    "input_select.kaffee_dad_jokes": "Dad joke del caffè",
-    "vacuum.goldstaubsucher": "Robot aspirapolvere Goldstaubsucher",
-    "vacuum.matrix10_ultra": "Robot aspirapolvere Matrix10 Ultra",
-    "weather.forecast_home": "Meteo di casa",
-    "person.florian_horner": "Residente uno",
-    "person.sabrina": "Residente due",
-    "person.schnuffi": "Cane di casa",
-    "lock.lock_ultra_8d3c": "Serratura porta d'ingresso",
-    "input_button.foyer_fahrstuhl_fingerbot_push_button": "Ascensore (ultimo utilizzo)",
-    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": (
-        "Presenza nel soggiorno/sala da pranzo/bar/cucina"
-    ),
-    "input_select.bedroom_occupancy_state": "Camera da letto",
-    "switch.bad_gross_waschmaschine_steckdose": "Lavatrice",
-    "media_player.samsung_s95ca_65": "Televisore Samsung",
-    "media_player.wohnzimmer_sonos_arc_lautsprecher": "Sonos Arc soggiorno",
-    "media_player.esszimmer": "Sonos sala da pranzo",
-    "climate.wohnzimmer_tado_heizung": "Riscaldamento soggiorno",
-    "climate.schlafzimmer": "Riscaldamento camera da letto",
-    "sun.sun": "Sole",
-    "fan.bad_gross_lufter_shelly": "Ventilatore bagno grande",
-    "fan.bad_klein_lufter": "Ventilatore bagno piccolo",
-    "fan.kuche_lufter": "Ventilatore cucina",
-    "input_datetime.last_sleep_time": "Ultimo orario di sonno",
-    "input_datetime.last_wake_time": "Ultimo orario di sveglia",
-    "binary_sensor.buro_9_ring_intercom_klingelt": "Citofono",
-    "light.magic_areas_light_groups_wohnzimmer_all_lights": "Luci soggiorno",
-    "light.magic_areas_light_groups_schlafzimmer_all_lights": "Luci camera da letto",
-    "light.magic_areas_light_groups_kuche_all_lights": "Luci cucina",
-    "light.magic_areas_light_groups_esszimmer_all_lights": "Luci sala da pranzo",
-    "sensor.bar_bali_boot_steckdose_power": "Lavatrice (consumo)",
-    "sensor.kuche_kaffeemaschine_steckdose_power": "Caffettiera (consumo)",
-    "light.schlafzimmer_sternenlicht_projektor_2": "Proiettore stelle camera",
-    "light.kleiderschrank_sternenlicht_projektor": "Proiettore stelle guardaroba",
-    "light.terrasse_9_outdoor_lichtschlauch": "Luci terrazza",
-    "sensor.haushalt_stromverbrauch_gesamt": "Consumo elettrico totale",
-}
-
-
-# English entity labels for admin UI display (parallel to ENTITY_LABELS)
-ENTITY_LABELS_EN: dict[str, str] = {
-    "weather.ambient": "Weather",
-    "sun.ambient": "Daylight",
-    "switch.bar_kaffeemaschine_steckdose": "Coffee machine",
-    "input_select.kaffee_dad_jokes": "Coffee dad joke",
-    "vacuum.goldstaubsucher": "Robot vacuum Goldstaubsucher",
-    "vacuum.matrix10_ultra": "Robot vacuum Matrix10 Ultra",
-    "weather.forecast_home": "Home weather",
-    "person.florian_horner": "Resident one",
-    "person.sabrina": "Resident two",
-    "person.schnuffi": "Household pet",
-    "lock.lock_ultra_8d3c": "Front door lock",
-    "input_button.foyer_fahrstuhl_fingerbot_push_button": "Elevator (last used)",
-    "binary_sensor.8_stockwerk_group_sensor_wohnzimmer_esszimmer_bar": "Living room/dining/bar presence",
-    "input_select.bedroom_occupancy_state": "Bedroom",
-    "switch.bad_gross_waschmaschine_steckdose": "Washing machine",
-    "media_player.samsung_s95ca_65": "Samsung TV",
-    "media_player.wohnzimmer_sonos_arc_lautsprecher": "Sonos Arc living room",
-    "media_player.esszimmer": "Sonos dining room",
-    "climate.wohnzimmer_tado_heizung": "Heating (living room)",
-    "climate.schlafzimmer": "Heating (bedroom)",
-    "sun.sun": "Sun",
-    "fan.bad_gross_lufter_shelly": "Large bathroom fan",
-    "fan.bad_klein_lufter": "Small bathroom fan",
-    "fan.kuche_lufter": "Kitchen fan",
-    "input_datetime.last_sleep_time": "Last sleep time",
-    "input_datetime.last_wake_time": "Last wake time",
-    "binary_sensor.buro_9_ring_intercom_klingelt": "Intercom",
-    "light.magic_areas_light_groups_wohnzimmer_all_lights": "Living room lights",
-    "light.magic_areas_light_groups_schlafzimmer_all_lights": "Bedroom lights",
-    "light.magic_areas_light_groups_kuche_all_lights": "Kitchen lights",
-    "light.magic_areas_light_groups_esszimmer_all_lights": "Dining room lights",
-    "sensor.bar_bali_boot_steckdose_power": "Washing machine (power)",
-    "sensor.kuche_kaffeemaschine_steckdose_power": "Coffee machine (power)",
-    "light.schlafzimmer_sternenlicht_projektor_2": "Star projector (bedroom)",
-    "light.kleiderschrank_sternenlicht_projektor": "Star projector (wardrobe)",
-    "light.terrasse_9_outdoor_lichtschlauch": "Terrace lights",
-    "sensor.haushalt_stromverbrauch_gesamt": "Total household power",
-}
+ENTITY_LABELS = EMPTY_HOME_BINDINGS.labels_it
+ENTITY_LABELS_EN = EMPTY_HOME_BINDINGS.labels_en
 
 
 @dataclass(frozen=True)
@@ -381,12 +298,14 @@ def save_catalog(cache_dir: Path, catalog: dict) -> bool:
     return True
 
 
-def resolve_label(entity_id: str, state_data: dict, *, cache_dir: Path | None = None) -> LabelResolution | None:
+def resolve_label(
+    entity_id: str, state_data: dict, *, cache_dir: Path | None = None, bindings: HomeBindings = EMPTY_HOME_BINDINGS
+) -> LabelResolution | None:
     """Resolve a safe Italian/English display label for an HA entity."""
-    if entity_id in ENTITY_LABELS:
+    if entity_id in bindings.labels_it:
         return LabelResolution(
-            ENTITY_LABELS[entity_id],
-            ENTITY_LABELS_EN.get(entity_id, ENTITY_LABELS[entity_id]),
+            bindings.labels_it[entity_id],
+            bindings.labels_en.get(entity_id, bindings.labels_it[entity_id]),
             "curated",
         )
 
@@ -439,6 +358,7 @@ def select_label_candidates(
     force: bool = False,
     max_entities: int = MAX_BATCH_ENTITIES,
     max_input_tokens: int = MAX_INPUT_TOKENS,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> list[LabelCandidate]:
     """Return salience-sorted generation candidates within entity/token caps."""
     scores = score_by_entity or {}
@@ -446,7 +366,7 @@ def select_label_candidates(
     entries = catalog.get("entries") or {}
     candidates: list[LabelCandidate] = []
     for entity_id, state_data in states.items():
-        if entity_id in ENTITY_LABELS:
+        if entity_id in bindings.labels_it:
             continue
         state = str(state_data.get("state", "unknown"))
         if state in {"unknown", "unavailable"}:
@@ -524,6 +444,7 @@ def schedule_label_generation(
     config: StationConfig,
     score_by_entity: dict[str, float] | None = None,
     force: bool = False,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> bool:
     """Schedule one background label refresh. Returns False when not scheduled."""
     global _generation_scheduled
@@ -531,7 +452,9 @@ def schedule_label_generation(
         return False
     if _generation_scheduled or _generation_tasks or _CATALOG_LOCK.locked():
         return False
-    candidates = select_label_candidates(states, cache_dir=cache_dir, score_by_entity=score_by_entity, force=force)
+    candidates = select_label_candidates(
+        states, cache_dir=cache_dir, score_by_entity=score_by_entity, force=force, bindings=bindings
+    )
     if not candidates:
         return False
     _generation_scheduled = True
@@ -544,6 +467,7 @@ def schedule_label_generation(
             score_by_entity=score_by_entity,
             force=force,
             policy_epoch=policy_epoch,
+            bindings=bindings,
         )
     )
     _generation_tasks.add(task)
@@ -559,6 +483,7 @@ async def _run_scheduled_generation(
     score_by_entity: dict[str, float] | None,
     force: bool,
     policy_epoch: int,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> None:
     """Run one catalog refresh and always clear the scheduled flag when done."""
     global _generation_scheduled
@@ -570,6 +495,7 @@ async def _run_scheduled_generation(
             score_by_entity=score_by_entity,
             force=force,
             _expected_policy_epoch=policy_epoch,
+            bindings=bindings,
         )
     finally:
         _generation_scheduled = False
@@ -583,6 +509,7 @@ async def generate_label_catalog(
     score_by_entity: dict[str, float] | None = None,
     force: bool = False,
     _expected_policy_epoch: int | None = None,
+    bindings: HomeBindings = EMPTY_HOME_BINDINGS,
 ) -> dict:
     """Refresh generated labels, preserving the old catalog on any LLM failure."""
     policy_epoch = _generation_policy_epoch if _expected_policy_epoch is None else _expected_policy_epoch
@@ -591,10 +518,7 @@ async def generate_label_catalog(
     async with _CATALOG_LOCK:
         catalog = load_catalog(cache_dir)
         candidates = select_label_candidates(
-            states,
-            cache_dir=cache_dir,
-            score_by_entity=score_by_entity,
-            force=force,
+            states, cache_dir=cache_dir, score_by_entity=score_by_entity, force=force, bindings=bindings
         )
         if not candidates or not config.anthropic_api_key:
             return catalog

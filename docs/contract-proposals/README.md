@@ -2,7 +2,7 @@
 
 Queue for changes to the frozen v1 integration surface (see `CONTRACT.md` at
 the repo root). Agents park proposals here instead of editing frozen paths;
-Florian reviews the queue when he opens a contract window.
+The maintainer reviews the queue when opening a contract window.
 
 ## File name
 

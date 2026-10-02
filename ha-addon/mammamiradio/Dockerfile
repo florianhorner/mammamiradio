@@ -12,7 +12,10 @@ COPY rootfs/ /
 # Install mammamiradio from local source (CI copies it into build context)
 COPY pyproject.toml ./
 COPY mammamiradio/ ./mammamiradio/
-RUN pip3 install --no-cache-dir --break-system-packages .
+COPY requirements.txt ./
+RUN pip3 install --no-cache-dir --break-system-packages --force-reinstall --require-hashes -r requirements.txt \
+    && pip3 install --no-cache-dir --break-system-packages --no-deps . \
+    && pip3 check
 
 # Stable and Edge currently share this exact image. The standalone-only
 # external-media extra must not leak into either add-on as a distribution,

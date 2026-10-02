@@ -43,8 +43,8 @@ def test_catalog_contains_priority_v1_families():
 
 
 def test_numeric_morning_launch_recipe_matches_local_transition():
-    previous = {"sensor.kitchen_coffee_power": _state("0", friendly_name="Kitchen coffee machine power")}
-    current = {"sensor.kitchen_coffee_power": _state("75", friendly_name="Kitchen coffee machine power")}
+    previous = {"sensor.example_kitchen_coffee_power": _state("0", friendly_name="Kitchen coffee machine power")}
+    current = {"sensor.example_kitchen_coffee_power": _state("75", friendly_name="Kitchen coffee machine power")}
 
     matches = match_ritual_recipes(None, previous, current, now=100.0)
 
@@ -56,14 +56,14 @@ def test_numeric_morning_launch_recipe_matches_local_transition():
 
 def test_attribute_media_recipe_matches_sonos_source_change():
     previous = {
-        "media_player.living_sonos": _state(
+        "media_player.example_living_sonos": _state(
             "playing",
             friendly_name="Living Sonos",
             source="Mamma Mi Radio",
         )
     }
     current = {
-        "media_player.living_sonos": _state(
+        "media_player.example_living_sonos": _state(
             "playing",
             friendly_name="Living Sonos",
             source="Suspicious Other Station",
@@ -78,7 +78,7 @@ def test_attribute_media_recipe_matches_sonos_source_change():
 def test_safety_signals_no_longer_produce_a_ritual_moment():
     """Safety device classes must not produce ritual moments."""
     for device_class in ("moisture", "smoke", "gas", "carbon_monoxide"):
-        entity_id = f"binary_sensor.test_garden_{device_class}"
+        entity_id = f"binary_sensor.example_test_garden_{device_class}"
         attrs = {
             "device_class": device_class,
             "friendly_name": f"Test Garden {device_class}",
@@ -93,7 +93,7 @@ def test_safety_signals_no_longer_produce_a_ritual_moment():
 
 def test_match_status_dict_carries_admin_detail():
     """Cover the admin-facing projection with a synthetic catalog match."""
-    entity_id = "binary_sensor.test_lounge_window"
+    entity_id = "binary_sensor.example_test_lounge_window"
     previous = {entity_id: _state("off", device_class="window", friendly_name="Test Lounge Window")}
     current = {entity_id: _state("on", device_class="window", friendly_name="Test Lounge Window")}
 
@@ -111,7 +111,7 @@ def test_match_status_dict_carries_admin_detail():
 
 def test_an_ordinary_door_opening_produces_no_moment():
     """An ordinary door opening must not produce a ritual match."""
-    entity_id = "binary_sensor.test_front_door"
+    entity_id = "binary_sensor.example_test_front_door"
     attrs = {"device_class": "door", "friendly_name": "Test Front Door", "area_name": "Test Hallway"}
     previous = {entity_id: {"state": "off", "attributes": dict(attrs)}}
     current = {entity_id: {"state": "on", "attributes": dict(attrs)}}
@@ -161,7 +161,7 @@ def test_pattern_below_its_recipe_floor_is_suppressed():
     import dataclasses
 
     recipe = next(r for r in DEFAULT_RITUAL_RECIPES if r.id == "windows_airing")
-    entity_id = "binary_sensor.test_lounge_window"
+    entity_id = "binary_sensor.example_test_lounge_window"
     attrs = {"device_class": "window", "friendly_name": "Test Lounge Window"}
     previous = {entity_id: {"state": "off", "attributes": dict(attrs)}}
     current = {entity_id: {"state": "on", "attributes": dict(attrs)}}
@@ -177,20 +177,20 @@ def test_pattern_below_its_recipe_floor_is_suppressed():
 
 def test_sleep_wake_ignores_incidental_bedroom_entities():
     previous = {
-        "binary_sensor.bedroom_window": _state(
+        "binary_sensor.example_bedroom_window": _state(
             "off",
             device_class="window",
             friendly_name="Bedroom window",
         ),
-        "sensor.bedroom_temperature": _state("20", friendly_name="Bedroom temperature"),
+        "sensor.example_bedroom_temperature": _state("20", friendly_name="Bedroom temperature"),
     }
     current = {
-        "binary_sensor.bedroom_window": _state(
+        "binary_sensor.example_bedroom_window": _state(
             "on",
             device_class="window",
             friendly_name="Bedroom window",
         ),
-        "sensor.bedroom_temperature": _state("21", friendly_name="Bedroom temperature"),
+        "sensor.example_bedroom_temperature": _state("21", friendly_name="Bedroom temperature"),
     }
 
     matches = match_ritual_recipes(None, previous, current, now=350.0)
@@ -200,16 +200,16 @@ def test_sleep_wake_ignores_incidental_bedroom_entities():
 
 def test_sleep_wake_still_matches_sleep_helpers_and_bed_occupancy():
     previous = {
-        "input_select.sleep_mode": _state("awake", friendly_name="Sleep mode"),
-        "binary_sensor.bed_occupancy": _state(
+        "input_select.example_sleep_mode": _state("awake", friendly_name="Sleep mode"),
+        "binary_sensor.example_bed_occupancy": _state(
             "off",
             device_class="occupancy",
             friendly_name="Bed occupancy",
         ),
     }
     current = {
-        "input_select.sleep_mode": _state("asleep", friendly_name="Sleep mode"),
-        "binary_sensor.bed_occupancy": _state(
+        "input_select.example_sleep_mode": _state("asleep", friendly_name="Sleep mode"),
+        "binary_sensor.example_bed_occupancy": _state(
             "on",
             device_class="occupancy",
             friendly_name="Bed occupancy",
@@ -223,8 +223,8 @@ def test_sleep_wake_still_matches_sleep_helpers_and_bed_occupancy():
 
 
 def test_keyword_matching_requires_word_or_phrase_boundary():
-    previous = {"binary_sensor.plant_watering": _state("off", friendly_name="Plant watering")}
-    current = {"binary_sensor.plant_watering": _state("on", friendly_name="Plant watering")}
+    previous = {"binary_sensor.example_plant_watering": _state("off", friendly_name="Plant watering")}
+    current = {"binary_sensor.example_plant_watering": _state("on", friendly_name="Plant watering")}
 
     matches = match_ritual_recipes(None, previous, current, now=370.0)
 
@@ -239,20 +239,20 @@ def test_multiword_keyword_recipes_still_match():
     phrase. The single-token "housesitter" spelling does not match.
     """
     previous = {
-        "media_player.music_assistant": _state(
+        "media_player.example_music_assistant": _state(
             "playing",
             friendly_name="Music Assistant speaker",
             source="Mamma Mi Radio",
         ),
-        "input_select.house_sitter_mode": _state("home", friendly_name="House sitter mode"),
+        "input_select.example_house_sitter_mode": _state("home", friendly_name="House sitter mode"),
     }
     current = {
-        "media_player.music_assistant": _state(
+        "media_player.example_music_assistant": _state(
             "playing",
             friendly_name="Music Assistant speaker",
             source="Suspicious Other Station",
         ),
-        "input_select.house_sitter_mode": _state("housesitter", friendly_name="House sitter mode"),
+        "input_select.example_house_sitter_mode": _state("housesitter", friendly_name="House sitter mode"),
     }
 
     matches = match_ritual_recipes(None, previous, current, now=380.0)
@@ -267,8 +267,8 @@ def test_away_mode_ignores_alarm_panel_but_matches_select_helpers():
 
     assert match_ritual_recipes(None, alarm_previous, alarm_current, now=390.0) == []
 
-    helper_previous = {"input_select.house_mode": _state("home", friendly_name="House away mode")}
-    helper_current = {"input_select.house_mode": _state("away", friendly_name="House away mode")}
+    helper_previous = {"input_select.example_house_mode": _state("home", friendly_name="House away mode")}
+    helper_current = {"input_select.example_house_mode": _state("away", friendly_name="House away mode")}
 
     matches = match_ritual_recipes(None, helper_previous, helper_current, now=391.0)
 
@@ -277,22 +277,30 @@ def test_away_mode_ignores_alarm_panel_but_matches_select_helpers():
 
 def test_noise_device_classes_do_not_become_recipe_moments():
     previous = {
-        "sensor.router_rssi": _state("-60", device_class="signal_strength", friendly_name="Kitchen RSSI"),
-        "sensor.boot_time": _state("2026-07-06T10:00:00+00:00", device_class="timestamp", friendly_name="Wake time"),
-        "sensor.phone_battery": _state("55", device_class="battery", friendly_name="Kitchen battery"),
+        "sensor.example_router_rssi": _state("-60", device_class="signal_strength", friendly_name="Kitchen RSSI"),
+        "sensor.example_boot_time": _state(
+            "2026-07-06T10:00:00+00:00", device_class="timestamp", friendly_name="Wake time"
+        ),
+        "sensor.example_phone_battery": _state("55", device_class="battery", friendly_name="Kitchen battery"),
     }
     current = {
-        "sensor.router_rssi": _state("-59", device_class="signal_strength", friendly_name="Kitchen RSSI"),
-        "sensor.boot_time": _state("2026-07-06T10:01:00+00:00", device_class="timestamp", friendly_name="Wake time"),
-        "sensor.phone_battery": _state("56", device_class="battery", friendly_name="Kitchen battery"),
+        "sensor.example_router_rssi": _state("-59", device_class="signal_strength", friendly_name="Kitchen RSSI"),
+        "sensor.example_boot_time": _state(
+            "2026-07-06T10:01:00+00:00", device_class="timestamp", friendly_name="Wake time"
+        ),
+        "sensor.example_phone_battery": _state("56", device_class="battery", friendly_name="Kitchen battery"),
     }
 
     assert match_ritual_recipes(None, previous, current, now=400.0) == []
 
 
 def test_recipe_cooldown_is_spent_only_after_commit():
-    previous = {"binary_sensor.fridge_door": _state("off", device_class="door", friendly_name="Kitchen fridge door")}
-    current = {"binary_sensor.fridge_door": _state("on", device_class="door", friendly_name="Kitchen fridge door")}
+    previous = {
+        "binary_sensor.example_fridge_door": _state("off", device_class="door", friendly_name="Kitchen fridge door")
+    }
+    current = {
+        "binary_sensor.example_fridge_door": _state("on", device_class="door", friendly_name="Kitchen fridge door")
+    }
 
     first = match_ritual_recipes(None, previous, current, now=1000.0)
     assert len(first) == 1
@@ -305,7 +313,7 @@ def test_recipe_cooldown_is_spent_only_after_commit():
 
 def test_audit_reports_instrumented_and_opportunity_recipes():
     states = {
-        "binary_sensor.mailbox": _state("off", device_class="door", friendly_name="Mailbox flap"),
+        "binary_sensor.example_mailbox": _state("off", device_class="door", friendly_name="Mailbox flap"),
     }
 
     audit = audit_ritual_recipes(states=states)
@@ -328,7 +336,7 @@ def test_recipe_audit_ignores_privacy_denied_alarm_panel_entities():
 
     helper_audit = audit_ritual_recipes(
         states={
-            "input_select.house_mode": _state("away", friendly_name="House away mode"),
+            "input_select.example_house_mode": _state("away", friendly_name="House away mode"),
         }
     )
     helper_item = next(item for item in helper_audit if item["recipe_id"] == "vacation_house_sitter")

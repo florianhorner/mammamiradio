@@ -265,6 +265,8 @@ and board previews. Pack layout, provenance, and its recovery boundary are in
 Runtime selection precedence and broadcast-chain boundaries are in
 [Architecture](architecture.md#modern-night-drive-imaging-pack).
 
+On air, the Engine Room **Transitions** dial (on by default) controls `stingers/music_to_speech.mp3` and `stingers/speech_to_music.mp3`, plus `bumpers/ad_in.mp3` and `bumpers/ad_out.mp3` around packaged ad spots. It leaves `ad_mid`, bumpers already inside live ad breaks, identity sounds, beds, and music-tail crossfades in place. Song/talk stings are added at playback, including for local-library music, so queued talk follows the current dial. Turn it off to hear the plain cut from the next break; the sound already playing finishes as it is. A Home Assistant add-on does not keep that choice: the dial returns to its startup setting (on by default) after a restart. Standalone keeps it in `.env`.
+
 ## Startup model
 
 The intended local startup path is:
@@ -430,7 +432,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 - `POST /api/credentials`, `POST /api/track-rules`
 - `GET /api/listener-requests`, `POST /api/listener-requests/dismiss`
 - `GET /api/search`, `POST /api/playlist/add`, `POST /api/playlist/remove`, `POST /api/playlist/move`, `POST /api/playlist/move_to_next`, `POST /api/playlist/load`, `POST /api/playlist/add-external`
-- `POST /api/hot-reload` — reload `language_policy.py`, `prompt_world.py`, `relationship.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results). `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction.
+- `POST /api/hot-reload` — reload `language_policy.py`, `prompt_world.py`, `relationship.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results). `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. Reload failures return HTTP 500 with `{"ok": false, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": true}`; exception details and tracebacks stay in server logs. Check those logs, correct the module, and retry.
 - `POST /api/homeassistant/labels/regenerate` — force a background refresh of generated device labels; returns `{"scheduled": true}`, `{"scheduled": false, "reason": ...}` when HA context or an Anthropic key is unavailable, or 409 if a refresh is already running.
 - `GET /api/homeassistant/context-candidates` — admin-only sanitized Home Assistant preview; includes additive `entities` rows plus legacy `sent_now`, `candidates`, and `muted` arrays.
 - `PATCH /api/homeassistant/entity-policy` — apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response returns effective consent, policy revision, and the count of queued host breaks removed by a mute or a personal-moment consent revocation.
@@ -950,7 +952,9 @@ same structured shape under `active_setup_csrf_stale`.
 docker compose up
 ```
 
-The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`. Source checkouts default to `./music`; set `MAMMAMIRADIO_MUSIC_DIR` to override either layout. The local-library scanner runs every 60 seconds and **Rotazione → Local music → Scan now** triggers an immediate rescan without restart.
+The `Dockerfile` builds a standalone image with Python 3.14 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`. Source checkouts default to `./music`; set `MAMMAMIRADIO_MUSIC_DIR` to override either layout. The local-library scanner runs every 60 seconds and **Rotazione → Local music → Scan now** triggers an immediate rescan without restart.
+
+Both container builds install hash-verified runtime dependencies from the root `requirements.txt`, then install the application without resolving dependencies again and run `pip check`. Quality CI and the add-on media-proof jobs use that same lock, installed after developer tools. Regenerate the lock when changing runtime dependencies; changing only a lower bound in `pyproject.toml` is insufficient. The lock is also part of the Edge image-content check, so a previous image cannot represent a newer dependency set. Build-system dependencies are still resolved separately in pip's isolated build environment. The standalone contract-drift workflow and Conductor bootstrap remain separate source-resolution checks; the locked Quality suite includes the frozen integration tests.
 
 The container binds to `0.0.0.0`. Set `ADMIN_TOKEN` in `.env` to pin a known
 value. If it is unset, the entrypoint generates one and writes it to
@@ -960,10 +964,12 @@ value. If it is unset, the entrypoint generates one and writes it to
 
 ## Home Assistant add-on
 
-The `ha-addon/` directory contains a complete Home Assistant app scaffold. Users add the repo URL in **Settings > Apps > App store > Repositories**, then install "Mamma Mi Radio" from the Apps catalog.
+The `ha-addon/` directory contains a complete Home Assistant app scaffold. Users add the repo URL in **Settings → Apps → Install app → ⋮ → Repositories**, then install "Mamma Mi Radio" from the Apps catalog.
 
 Supervisor's stored app options are the sole durable authority for add-on admin
-modes and pacing. Admin saves commit there before live state changes.
+modes and pacing. Durable admin saves commit there before live state changes.
+Transitions is the session-only exception: it has no Supervisor option and resets
+to the configured startup value, on by default, after a restart.
 `/data/options.json` is a Supervisor-generated, read-only startup projection:
 the add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) reads it, maps the
 Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, overlays AI/TTS provider
@@ -985,16 +991,54 @@ and trusts its own LAN for admin access (see **Admin access model**); set
 
 The dashboard is accessible via HA ingress (sidebar). First Listen shows source readiness, plays the station on the current browser device, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. Home Assistant speakers and AI-host keys are optional later enhancements.
 
-Operator local music remains under `/data/music`. Populate it through the deployment's supported storage tooling; Mamma Mi Radio scans recursively every 60 seconds and exposes **Rotazione → Local music → Scan now** for an immediate refresh.
+Operator local music in the Home Assistant app is the Media panel folder named by Music folder (default `mammamiradio`) when Media is mounted, and `/data/music` when it is not. Local Media songs are in a Home Assistant backup when that backup includes Media; a NAS library needs its own backup. `/data/music` stays in the app backup. Populate the folder the control room names; do not patch files into a running app container. The scanner runs every 60 seconds and **Rotazione → Local music → Scan now** refreshes it immediately.
 
-First Listen progress is owner-only setup metadata under `/data/cache/state` in
-add-on mode. Its receipt records factual milestones, not the live Home-context
-policy; the privacy choice remains in the normal add-on configuration path.
-Receipt and install-origin I/O runs asynchronously outside the startup audio
-path. Unreadable or disagreeing evidence leaves setup incomplete and privacy
-narrow instead of blocking the producer or widening Home access.
+First Listen progress is owner-only setup metadata under `/data/cache/state`
+in add-on mode. Its receipt records milestones. The normal configuration path
+stores the requested Home option; in the next update, affected older
+installations additionally require DB-local narrow consent before that option
+can enable Home access. Receipt and compatibility I/O stay outside audio
+startup. Unreadable or disagreeing evidence keeps Home reads off without
+blocking radio playback.
 
 When HA context is enabled, the station reads the Home Assistant state snapshot opportunistically before banter, ad, and news-flash generation (so the weather flash grounds in a freshly refreshed forecast), with a default full-state refresh interval of 300 seconds. A normal refresh gets a 2-second foreground wait (20 seconds on the first cold label/weather warm-up); when that wait expires, audio generation immediately uses the last prompt-safe snapshot while one producer-owned HA request continues for up to 30 seconds total. `/api/states`, optional registry metadata, and optional weather enrichment begin together; the optional calls are individually bounded, best-effort, and cannot extend that same total cap. A late valid reply is adopted only before a later eligible host segment, never into rendering or queued audio. At that adoption boundary its age is checked again: a completed snapshot that became older than `max(2 × poll interval, 120 seconds)` while waiting in the mailbox remains visible to the admin as stale, but its ambient prompt details and delayed one-shots stay withheld. The next fresh reply is a resynchronization and deliberately drops delayed full-context events, directives, interrupts, ritual/radio matches, and running gags. Timer interrupts use their independent lightweight entity poll and `timer` provenance, so stale full-context suppression cannot erase a current timer alert while Home context remains enabled. The add-on exposes **Host home context** (`ha_context_enabled`) separately from HA entity publishing: turning it off suspends full-state and timer polling, cancels Home-derived label/scene/memory work, removes unstarted Home-derived breaks, and clears public Casa moments while station entities can continue publishing. Audio already on air may finish to avoid dead air, but a revoked Home-derived segment cannot write post-air memory afterward. It does not send every entity to the script prompt: telemetry/config entities, unavailable states, free-text helpers (e.g. `input_text`), and sensitive domains such as trackers, cameras, and alarms are filtered first. Resident presence (`person.*`) is kept as home/away only, with GPS and identity attributes stripped, so the empty-home mood and explicitly sourced named-resident facts can work without leaking location; stream connections never authorize arrival or return copy. The admin Home context preview shows a sanitized slice of what hosts may use; Mute for future host use stores a local policy under `cache/state/ha_entity_policy.json` and removes that entity from future prompts, public Casa moments, reactive/timer triggers, label generation candidates, and running-gag inputs. It never interrupts audio already on air; when a muted entity — or one whose room-presence personal-moment permission is turned back off — supplied a selected Home Context Director fact, its matching unstarted host break is removed from the queue. The director gives casual banter one allowlisted ambient fact at most, holds its topic for 30 minutes after stream start, and can use a room-presence binary sensor only after the explicit preview permission; no extra HA polling is performed. This holds even when a HA refresh times out and the producer airs on a last-known context (`apply_entity_mute_policy` re-applies the live policy to that stale copy, since it bypasses `fetch_home_context`'s own filtering), and muting also purges any running-gag material already tallied for that entity before the mute, so a moment observed pre-mute cannot still be offered as a callback afterward. The remaining entities are scored and capped before prompt assembly. That same filtered interaction slice can also be included in the post-air memory extractor after generated banter streams cleanly, so future host memory is based on the final station script instead of queued drafts. The practical privacy/performance levers are muting specific entities, turning Host home context off when house state should not enter prompts or timer reads, increasing `ha_context_poll_interval`, or running without script-provider credentials to avoid durable AI memory extraction. When Home context, HA access, and an Anthropic key are all active, the display names and room assignments for non-sensitive, unmuted entities can also be sent to Anthropic once to generate radio-friendly labels; no sensor values, presence, or location are included, and the results are cached locally (`cache/ha_label_catalog.json`, owner-only) so each device is only looked up once. Home mood naming stays on the local heuristic ladder unless `MAMMAMIRADIO_HA_MOOD_LLM=true`; that experimental LLM path uses only the budgeted HA context slice, refreshes the generated scene name at most once per `MAMMAMIRADIO_HA_MOOD_TTL_SECONDS` (keeping the last scene on air while a refresh runs, with bounded staleness), and falls back to the ladder on disabled config, missing keys, timeout, rejection, invalid output, or while the station's Anthropic circuit breaker is tripped. The admin Engine Room shows fact-free director diagnostics and privacy filter counts; `/public-status` exposes listener-safe Casa moments only while Home context is enabled.
+
+### Private Home compatibility: next update
+
+Published 3.0.0 prepared private compatibility evidence for eligible existing
+installations. The next update consumes that evidence; it does not export new
+profiles or reconstruct missing household mappings.
+
+Verification checks `cache/state/home_profile_v1.json`, its current-owner
+permissions, installation evidence, and the matching database identity/content
+binding. It runs outside audio startup. An interrupted export can finish only
+when its existing file fully matches the database's pending intent. An old
+success log or file existence alone does not establish readiness.
+
+While verification is pending or unsuccessful, radio playback continues with
+Home cues and background Home reads off. **Motore → Setup** shows the private
+compatibility notice. Eligible installations may recover matching private
+evidence; other older installations need later Home Profile support. Installing
+3.0.0 alone does not guarantee recoverable evidence.
+
+Unreadable evidence remains unresolved and is retried in the background.
+Preview and sharing remain blocked until the read completes. Keep Home private
+disables runtime access immediately; a pending check or failed write is reported
+honestly and cannot create a permanent scope cap. A later successful read
+preserves that explicit disabled choice.
+
+After a completed check finds no usable profile, an affected installation can
+choose daylight and weather after fresh
+sound confirmation and a fresh narrow preview. This records a permanent narrow
+scope that remains after revocation and takes precedence over any later profile
+restoration. **Keep Home private** stops Home work immediately, revokes consent,
+and saves the disabled option; persistence failures remain visible. Existing
+installations already using narrow consent retain that behavior.
+
+Keep `cache/mammamiradio.db` and `cache/state/` together in private backups.
+Preserve the profile's owner-only permissions. Never transplant a profile from
+another installation, edit conflicting evidence to force acceptance, or include
+the private profile in shared diagnostics.
 
 ## Home Assistant entities
 

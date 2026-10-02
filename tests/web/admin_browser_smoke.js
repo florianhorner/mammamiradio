@@ -7,6 +7,91 @@ async (page) => {
     if (!condition) throw new Error(`admin-browser-smoke: ${message}`);
   }
 
+  async function exerciseBoundaryImaging() {
+    return page.evaluate(async () => {
+      const saved = { api, fetchAdminJson, st: _st, hostsOk: _hostsOk, toast };
+      const checkbox = document.getElementById('boundaryImagingToggle');
+      const reset = document.getElementById('boundaryImagingReset');
+      const count = document.getElementById('boundaryImagingCount');
+      const prior = { checked: checkbox.checked, hidden: reset.hidden, count: count.textContent };
+      const checks = [];
+      const messages = [];
+      let releaseStatus;
+      let heldPoll;
+      const check = (condition, message) => {
+        if (!condition) throw new Error(`Transitions: ${message}`);
+        checks.push(message);
+      };
+      try {
+        toast = (message) => messages.push(message);
+        reset.hidden = false;
+        api = async () => { throw new Error('initial load unavailable'); };
+        await loadBoundaryImagingToggle();
+        check(!reset.hidden && !checkbox.disabled, 'failed initial load preserves conditional restart notice');
+
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { carts_aired: 3 } } }, _caps);
+        updateEngineRoom({ ...saved.st, runtime_health: {} }, _caps);
+        check(count.textContent === 'Aired 3 times this session', 'missing status preserves a known count');
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { carts_aired: 0 } } }, _caps);
+        check(count.textContent === 'Aired 0 times this session', 'explicit zero replaces the previous count');
+
+        for (const resetsOnRestart of [true, false]) {
+          api = async () => ({ ok: true, resets_on_restart: resetsOnRestart });
+          checkbox.checked = resetsOnRestart;
+          await toggleBoundaryImaging(checkbox);
+          check(reset.hidden === !resetsOnRestart, `successful save refreshes restart notice: ${resetsOnRestart}`);
+        }
+
+        let finishSave;
+        api = () => new Promise((resolve) => { finishSave = resolve; });
+        checkbox.checked = true;
+        const saving = toggleBoundaryImaging(checkbox);
+        updateEngineRoom({ ...saved.st, runtime_health: { boundary_imaging: { enabled: false } } }, _caps);
+        check(checkbox.disabled && checkbox.checked, 'poll cannot overwrite a pending choice');
+        finishSave({ ok: true, resets_on_restart: false });
+        await saving;
+
+        _hostsOk = true;
+        fetchAdminJson = async (path) => path.startsWith('/status')
+          ? new Promise((resolve) => { releaseStatus = resolve; }) : [];
+        heldPoll = refreshFast();
+        check(typeof releaseStatus === 'function', 'old status request is held before saving');
+        checkbox.blur();
+        checkbox.checked = true;
+        api = async () => ({ ok: true, resets_on_restart: false });
+        await toggleBoundaryImaging(checkbox);
+        releaseStatus({ ...saved.st, runtime_health: { boundary_imaging: { enabled: false, carts_aired: 0 } } });
+        await heldPoll;
+        check(checkbox.checked, 'late status cannot contradict a completed save without focus');
+
+        api = async () => ({ ok: false });
+        checkbox.checked = false;
+        await toggleBoundaryImaging(checkbox);
+        check(checkbox.checked && !checkbox.disabled, 'declined save restores the prior choice');
+        check(messages.at(-1) === wayOut('change the transitions'), 'declined save uses shared recovery copy');
+        api = async () => { throw new Error('offline'); };
+        checkbox.checked = false;
+        await toggleBoundaryImaging(checkbox);
+        check(checkbox.checked && !checkbox.disabled, 'offline save restores the prior choice');
+        check(messages.at(-1) === offlineMsg(), 'offline save uses shared recovery copy');
+        return { checks: checks.length };
+      } finally {
+        ++_fastPollGeneration;
+        if (releaseStatus) releaseStatus(saved.st);
+        if (heldPoll) await heldPoll;
+        api = saved.api;
+        fetchAdminJson = saved.fetchAdminJson;
+        _st = saved.st;
+        _hostsOk = saved.hostsOk;
+        toast = saved.toast;
+        checkbox.checked = prior.checked;
+        checkbox.disabled = false;
+        reset.hidden = prior.hidden;
+        count.textContent = prior.count;
+      }
+    });
+  }
+
   async function exerciseMacFlow() {
     const result = await page.evaluate(async () => {
       const saved = { st: _st, ui: { ..._firstListenUi }, entry: document.body.dataset.firstListenEntry,
@@ -2146,6 +2231,7 @@ async (page) => {
   assert(escapedShell.deckVisible && escapedShell.rotationTabVisible,
     'the Station controls escape did not restore the producer desk tab bar');
 
+  const boundaryImaging = await exerciseBoundaryImaging();
   const macFlow = await exerciseMacFlow();
 
   const stoppedControls = await page.evaluate(() => {
@@ -2244,27 +2330,59 @@ async (page) => {
       roots: ['/data/music'],
     });
     const issues = {complete: false, active: 2, roots: ['/data/music']};
+    const missing = {
+      complete: false, active: 0, files_found: 0,
+      folder_missing: true, roots: ['/media/mammamiradio'],
+    };
+    const unreadable = {complete: false, active: 0, files_found: 0, roots: ['/media/crate']};
     return {
       label: document.getElementById('localSourceLabel').textContent,
       detail: document.getElementById('localSourceDetail').textContent,
+      whiteSpace: getComputedStyle(document.getElementById('localSourceDetail')).whiteSpace,
       scan: document.getElementById('localSourceScanBtn').textContent,
       uploadControls: document.querySelectorAll('#localSourceRow input[type="file"], #localSourceRow [data-action="delete"]').length,
+      scanning: localLibraryPresentation({in_progress: true, roots: ['/data/music']}),
       issues: localLibraryPresentation(issues),
       issueToast: localLibraryScanToast(issues),
+      missing: localLibraryPresentation(missing),
+      missingToast: localLibraryScanToast(missing),
+      unreadable: localLibraryPresentation(unreadable),
+      unreadableToast: localLibraryScanToast(unreadable),
     };
   });
   assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
-  assert(localLibrary.detail.includes('/data/music'),
-    'local library row did not show the configured music folder');
+  assert(localLibrary.detail.startsWith('Add files in /data/music.'),
+    `local library row did not lead with the music place: ${localLibrary.detail}`);
+  assert(localLibrary.detail.split('\n').length === 2
+      && localLibrary.detail.split('\n')[0] === 'Add files in /data/music.',
+    'local library place and state did not render on separate lines');
+  assert(localLibrary.whiteSpace === 'pre-line', 'local library detail did not preserve the place line break');
   assert(localLibrary.detail.includes('4 files found') && localLibrary.detail.includes('3 active')
       && localLibrary.detail.includes('Joins the current rotation'),
     `local library row hid scan counts: ${localLibrary.detail}`);
+  assert(localLibrary.scanning.label === 'Scanning local music'
+      && localLibrary.scanning.detail === 'Add files in /data/music.',
+    'a running scan buried the music place');
   assert(localLibrary.scan === 'Scan now' && localLibrary.uploadControls === 0,
     'local library row lost its explicit scan action; local library row rebuilt upload/delete controls');
   assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.detail.includes('Existing tracks kept')
       && localLibrary.issues.detail.includes('Scan now'), 'incomplete scan lost its recovery');
   assert(localLibrary.issueToast.includes('Existing tracks kept') && localLibrary.issueToast.includes('Scan now'),
     'incomplete scan toast lost its recovery');
+  assert(localLibrary.missing.state === 'blocked'
+      && localLibrary.missing.label === 'Local music · folder missing'
+      && localLibrary.missing.detail.startsWith('Add files in Media → mammamiradio.')
+      && localLibrary.missing.detail.includes('That folder is not there yet. Add a song, then Scan now.'),
+    'a missing music folder was described as an incomplete scan');
+  assert(localLibrary.missingToast === 'That folder is not there yet. Add a song, then Scan now.',
+    'Scan now toast did not match the missing-folder card');
+  assert(localLibrary.unreadable.state === 'degraded'
+      && !localLibrary.unreadable.detail.includes('folder is not there')
+      && !localLibrary.unreadable.detail.includes('Existing tracks kept'),
+    'an unreadable music folder was mislabeled missing');
+  assert(!localLibrary.unreadableToast.includes('folder is not there')
+      && !localLibrary.unreadableToast.includes('Existing tracks kept'),
+    'an unreadable scan toast was mislabeled missing');
 
   for (const width of [320, 375, 414, 600, 768]) {
     await page.setViewportSize({ width, height: 900 });
@@ -2623,6 +2741,7 @@ async (page) => {
   assert(pageErrors.length === 0, `uncaught page errors: ${pageErrors.join(' | ')}`);
 
   return {
+    boundary_imaging: boundaryImaging,
     mac_flow: macFlow,
     ok: true,
     checks: 87,

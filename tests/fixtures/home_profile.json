@@ -1,0 +1,457 @@
+{
+  "ambient_labels": [
+    {
+      "entity_id": "weather.ambient",
+      "label_en": "Weather",
+      "label_it": "Meteo"
+    },
+    {
+      "entity_id": "sun.ambient",
+      "label_en": "Daylight",
+      "label_it": "Luce del giorno"
+    }
+  ],
+  "director_coffee_entities": [
+    "input_select.example_coffee_joke",
+    "switch.example_coffee_switch"
+  ],
+  "empty_home_residents": [
+    "person.example_resident_one",
+    "person.example_resident_two"
+  ],
+  "entities": [
+    {
+      "entity_id": "switch.example_coffee_switch",
+      "label_en": "Coffee machine",
+      "label_it": "La macchina del caffè",
+      "priority": "gold",
+      "role": "coffee_switch",
+      "scopes": [
+        "ambient_context",
+        "moment"
+      ]
+    },
+    {
+      "entity_id": "input_select.example_coffee_joke",
+      "label_en": "Coffee dad joke",
+      "label_it": "Dad joke del caffè",
+      "priority": "gold",
+      "role": "coffee_joke",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "vacuum.example_vacuum_one",
+      "label_en": "Vacuum one",
+      "label_it": "Aspirapolvere uno",
+      "priority": "gold",
+      "role": "vacuum_one",
+      "scopes": [
+        "ambient_context",
+        "moment"
+      ]
+    },
+    {
+      "entity_id": "vacuum.example_vacuum_two",
+      "label_en": "Vacuum two",
+      "label_it": "Aspirapolvere due",
+      "priority": "gold",
+      "role": "vacuum_two",
+      "scopes": [
+        "ambient_context",
+        "moment"
+      ]
+    },
+    {
+      "entity_id": "weather.example_weather",
+      "label_en": "Home weather",
+      "label_it": "Meteo di casa",
+      "priority": "gold",
+      "role": "weather",
+      "scopes": [
+        "ambient_context",
+        "weather"
+      ]
+    },
+    {
+      "entity_id": "person.example_resident_one",
+      "label_en": "Resident one",
+      "label_it": "Residente uno",
+      "priority": "gold",
+      "role": "resident_one",
+      "scopes": [
+        "ambient_context",
+        "moment",
+        "presence",
+        "resident"
+      ]
+    },
+    {
+      "entity_id": "person.example_resident_two",
+      "label_en": "Resident two",
+      "label_it": "Residente due",
+      "priority": "gold",
+      "role": "resident_two",
+      "scopes": [
+        "ambient_context",
+        "moment",
+        "presence",
+        "resident"
+      ]
+    },
+    {
+      "entity_id": "person.example_pet",
+      "label_en": "Household pet",
+      "label_it": "Cane di casa",
+      "priority": "gold",
+      "role": "pet",
+      "scopes": [
+        "ambient_context",
+        "presence",
+        "resident"
+      ]
+    },
+    {
+      "entity_id": "lock.example_entry_lock",
+      "label_en": "Front door lock",
+      "label_it": "Serratura porta d'ingresso",
+      "priority": "gold",
+      "role": "entry_lock",
+      "scopes": [
+        "ambient_context",
+        "moment"
+      ]
+    },
+    {
+      "entity_id": "input_button.example_elevator_button",
+      "label_en": "Elevator (last used)",
+      "label_it": "Ascensore (ultimo utilizzo)",
+      "priority": "gold",
+      "role": "elevator_button",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "binary_sensor.example_living_presence",
+      "label_en": "Living room/dining/bar presence",
+      "label_it": "Presenza nel soggiorno/sala da pranzo/bar/cucina",
+      "priority": "silver",
+      "role": "living_presence",
+      "scopes": [
+        "ambient_context",
+        "presence"
+      ]
+    },
+    {
+      "entity_id": "input_select.example_bedroom_presence",
+      "label_en": "Bedroom",
+      "label_it": "Camera da letto",
+      "priority": "silver",
+      "role": "bedroom_presence",
+      "scopes": [
+        "ambient_context",
+        "presence"
+      ]
+    },
+    {
+      "entity_id": "switch.example_laundry_switch",
+      "label_en": "Washing machine",
+      "label_it": "Lavatrice",
+      "priority": "silver",
+      "role": "laundry_switch",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "media_player.example_television",
+      "label_en": "Television",
+      "label_it": "Televisore",
+      "priority": "silver",
+      "role": "television",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "media_player.example_living_speaker",
+      "label_en": "Speaker one",
+      "label_it": "Altoparlante uno",
+      "priority": "silver",
+      "role": "living_speaker",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "media_player.example_dining_speaker",
+      "label_en": "Speaker two",
+      "label_it": "Altoparlante due",
+      "priority": "silver",
+      "role": "dining_speaker",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "climate.example_living_climate",
+      "label_en": "Heating (living room)",
+      "label_it": "Riscaldamento soggiorno",
+      "priority": "silver",
+      "role": "living_climate",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "climate.example_bedroom_climate",
+      "label_en": "Heating (bedroom)",
+      "label_it": "Riscaldamento camera da letto",
+      "priority": "silver",
+      "role": "bedroom_climate",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "sun.sun",
+      "label_en": "Sun",
+      "label_it": "Sole",
+      "priority": "silver",
+      "role": "sun",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "fan.example_bathroom_fan_one",
+      "label_en": "Large bathroom fan",
+      "label_it": "Ventilatore bagno grande",
+      "priority": "silver",
+      "role": "bathroom_fan_one",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "fan.example_bathroom_fan_two",
+      "label_en": "Small bathroom fan",
+      "label_it": "Ventilatore bagno piccolo",
+      "priority": "silver",
+      "role": "bathroom_fan_two",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "fan.example_kitchen_fan",
+      "label_en": "Kitchen fan",
+      "label_it": "Ventilatore cucina",
+      "priority": "silver",
+      "role": "kitchen_fan",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "light.example_living_lights",
+      "label_en": "Living room lights",
+      "label_it": "Luci soggiorno",
+      "priority": "silver",
+      "role": "living_lights",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "light.example_bedroom_lights",
+      "label_en": "Bedroom lights",
+      "label_it": "Luci camera da letto",
+      "priority": "silver",
+      "role": "bedroom_lights",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "light.example_kitchen_lights",
+      "label_en": "Kitchen lights",
+      "label_it": "Luci cucina",
+      "priority": "silver",
+      "role": "kitchen_lights",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "light.example_dining_lights",
+      "label_en": "Dining room lights",
+      "label_it": "Luci sala da pranzo",
+      "priority": "silver",
+      "role": "dining_lights",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "sensor.example_laundry_power",
+      "label_en": "Washing machine (power)",
+      "label_it": "Lavatrice (consumo)",
+      "priority": "silver",
+      "role": "laundry_power",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "sensor.example_coffee_power",
+      "label_en": "Coffee machine (power)",
+      "label_it": "Caffettiera (consumo)",
+      "priority": "silver",
+      "role": "coffee_power",
+      "scopes": [
+        "ambient_context",
+        "moment"
+      ]
+    },
+    {
+      "entity_id": "light.example_bedroom_stars",
+      "label_en": "Star projector (bedroom)",
+      "label_it": "Proiettore stelle camera",
+      "priority": "silver",
+      "role": "bedroom_stars",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "light.example_wardrobe_stars",
+      "label_en": "Star projector (wardrobe)",
+      "label_it": "Proiettore stelle guardaroba",
+      "priority": "silver",
+      "role": "wardrobe_stars",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "light.example_terrace_lights",
+      "label_en": "Terrace lights",
+      "label_it": "Luci terrazza",
+      "priority": "silver",
+      "role": "terrace_lights",
+      "scopes": [
+        "ambient_context",
+        "moment"
+      ]
+    },
+    {
+      "entity_id": "sensor.example_household_power",
+      "label_en": "Total household power",
+      "label_it": "Consumo elettrico totale",
+      "priority": "silver",
+      "role": "household_power",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "input_datetime.example_sleep_time",
+      "label_en": "Last sleep time",
+      "label_it": "Ultimo orario di sonno",
+      "priority": "bronze",
+      "role": "sleep_time",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "input_datetime.example_wake_time",
+      "label_en": "Last wake time",
+      "label_it": "Ultimo orario di sveglia",
+      "priority": "bronze",
+      "role": "wake_time",
+      "scopes": [
+        "ambient_context"
+      ]
+    },
+    {
+      "entity_id": "binary_sensor.example_doorbell",
+      "label_en": "Intercom",
+      "label_it": "Citofono",
+      "priority": "bronze",
+      "role": "doorbell",
+      "scopes": [
+        "ambient_context"
+      ]
+    }
+  ],
+  "manifest_digest": "72201ec2e2b10ec6d9c594cae11d5cb5a5da6e11d744229f8f2a53cdf4c6613a",
+  "profile_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reactive_triggers": [
+    {
+      "cooldown": 1800,
+      "directive": "La macchina del caffè si è appena accesa! Profumo di espresso, notatelo brevemente — naturale, non esagerato. Se l'ora mostrata sopra calza, legate l'evento al momento ('puntuale'), solo se naturale. Mai dire con che frequenza o da quanto succede.",
+      "entity_id": "switch.example_coffee_switch",
+      "state": "on"
+    },
+    {
+      "cooldown": 300,
+      "directive": "La serratura della porta d'ingresso si è appena sbloccata. Commentate brevemente lo sblocco — senza dedurre che la porta si sia aperta, chi sia entrato o salutare qualcuno come tornato.",
+      "entity_id": "lock.example_entry_lock",
+      "state": "unlocked"
+    },
+    {
+      "cooldown": 3600,
+      "directive": "L'aspirapolvere uno ha iniziato a pulire. Commentate brevemente la pulizia con ironia.",
+      "entity_id": "vacuum.example_vacuum_one",
+      "state": "cleaning"
+    },
+    {
+      "cooldown": 3600,
+      "directive": "L'aspirapolvere due ha iniziato a pulire. Fate una breve battuta sulla pulizia.",
+      "entity_id": "vacuum.example_vacuum_two",
+      "state": "cleaning"
+    },
+    {
+      "cooldown": 3600,
+      "directive": "Residente uno è appena tornato a casa. Un caloroso bentornato — come se sapeste esattamente chi è tornato.",
+      "entity_id": "person.example_resident_one",
+      "state": "home"
+    },
+    {
+      "cooldown": 3600,
+      "directive": "Residente due è appena tornato a casa. Un caloroso bentornato — naturale e familiare.",
+      "entity_id": "person.example_resident_two",
+      "state": "home"
+    },
+    {
+      "cooldown": 3600,
+      "directive": "Le luci della terrazza si sono accese! Serata all'aperto — commentate il bel tempo o la voglia di aria fresca. Breve, naturale.",
+      "entity_id": "light.example_terrace_lights",
+      "state": "on"
+    }
+  ],
+  "resident_returns": [
+    {
+      "alias": "Residente uno",
+      "entity_id": "person.example_resident_one"
+    },
+    {
+      "alias": "Residente due",
+      "entity_id": "person.example_resident_two"
+    }
+  ],
+  "schema_version": 1,
+  "threshold_triggers": [
+    {
+      "cooldown": 3600,
+      "direction": "above",
+      "directive": "La caffettiera si è appena accesa! Caffè in preparazione — commentate il momento in modo naturale. Breve e caldo.",
+      "entity_id": "sensor.example_coffee_power",
+      "threshold": 50.0
+    }
+  ]
+}

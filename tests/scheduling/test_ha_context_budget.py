@@ -30,6 +30,7 @@ from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import _HAContextRefreshCoordinator
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -65,6 +66,8 @@ def _outcome(
 
 
 def _snapshot(summary: str, *, age: float = 0.0, **kwargs) -> HomeContext:
+    if kwargs.get("authorization_mode") == HomeAuthorizationMode.LEGACY.value:
+        kwargs.setdefault("bindings", SYNTHETIC_BINDINGS)
     return HomeContext(summary=summary, timestamp=time.time() - age, **kwargs)
 
 
@@ -85,14 +88,12 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
     import mammamiradio.home.ha_context as ha_context
 
     config = _config(tmp_path, timeout=0.005, poll_interval=0.01)
-    state = StationState(home_authorization=HomeAuthorization.legacy())
-    observer = MagicMock()
-    state.home_entity_ids_observer = observer
+    state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
     prior = _snapshot("old ambient", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
     response = _states_response(
         [
             {
-                "entity_id": "switch.bar_kaffeemaschine_steckdose",
+                "entity_id": "switch.example_coffee_switch",
                 "state": "on",
                 "attributes": {},
             }
@@ -167,13 +168,11 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
             await asyncio.wait_for(asyncio.shield(retained), timeout=0.5)
             assert state.ha_context_refresh_stage == "idle"
             publish.assert_not_called()
-            observer.assert_not_called()
 
             adopted, fresh = await coordinator.prepare_for_segment()
             assert fresh
-            assert "switch.bar_kaffeemaschine_steckdose" in adopted.raw_states
+            assert "switch.example_coffee_switch" in adopted.raw_states
             publish.assert_called_once()
-            observer.assert_called_once_with(frozenset({"switch.bar_kaffeemaschine_steckdose"}))
         finally:
             release_worker.set()
             await coordinator.close()
@@ -185,11 +184,11 @@ async def test_close_while_projection_worker_runs_ignores_late_candidate_and_cle
     import mammamiradio.home.ha_context as ha_context
 
     config = _config(tmp_path, timeout=0.004, poll_interval=0.01)
-    state = StationState(home_authorization=HomeAuthorization.legacy())
+    state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
     prior = _snapshot("safe", age=0.02, authorization_mode=HomeAuthorizationMode.LEGACY.value)
     client = AsyncMock()
     client.get.return_value = _states_response(
-        [{"entity_id": "switch.bar_kaffeemaschine_steckdose", "state": "on", "attributes": {}}]
+        [{"entity_id": "switch.example_coffee_switch", "state": "on", "attributes": {}}]
     )
     worker_started = threading.Event()
     release_worker = threading.Event()
@@ -410,7 +409,7 @@ async def test_late_success_started_before_the_stale_threshold_keeps_its_one_sho
     state = StationState()
     clock = [1_000.0]
     prior = HomeContext(summary="almost stale", timestamp=clock[0] - 119.99)
-    event = HomeEvent("switch.lamp", "Lamp", "off", "on", clock[0])
+    event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", clock[0])
     match = RadioEventMatch("lamp", "directive", "say it once", event, 60, clock[0])
 
     async def _late_fetch(**_kwargs):
@@ -449,8 +448,8 @@ async def test_completed_mailbox_aged_past_threshold_is_withheld_at_adoption(tmp
     )
     clock = [1_010.0]
     prior = HomeContext(summary="safe prior", timestamp=1_000.0)
-    event = HomeEvent("switch.lamp", "Lamp", "off", "on", 1_010.0)
-    radio_baseline = {"switch.lamp": {"state": "on"}}
+    event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", 1_010.0)
+    radio_baseline = {"switch.example_lamp": {"state": "on"}}
     ritual_baseline = {"ritual.lamp": {"state": "on"}}
     published: list[_HomeContextFetchOutcome] = []
     completed = asyncio.Event()
@@ -526,8 +525,8 @@ async def test_normal_late_success_hands_unmuted_one_shots_to_exactly_one_bounda
     config = _config(tmp_path, poll_interval=1.0)
     state = StationState()
     prior = _snapshot("old", age=1.1)
-    muted_id = "switch.muted"
-    live_id = "switch.live"
+    muted_id = "switch.example_muted"
+    live_id = "switch.example_live"
     now = time.time()
     muted_event = HomeEvent(muted_id, "Muted", "off", "on", now)
     live_event = HomeEvent(live_id, "Live", "off", "on", now)
@@ -587,7 +586,7 @@ async def test_stale_gap_resynchronizes_ambient_context_without_delayed_events(t
     state = StationState()
     prior = _snapshot("too old", age=121.0)
     now = time.time()
-    delayed_event = HomeEvent("switch.lamp", "Lamp", "off", "on", now)
+    delayed_event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", now)
     delayed_match = RadioEventMatch("lamp", "directive", "late directive", delayed_event, 60, now)
 
     async def _fresh_after_gap(**_kwargs):
@@ -628,7 +627,7 @@ async def test_stale_gap_resynchronizes_ambient_context_without_delayed_events(t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("directive_source", ["ha", "ha:person.florian_horner"])
+@pytest.mark.parametrize("directive_source", ["ha", "ha:person.example_resident_one"])
 async def test_stale_fallback_withholds_pending_ha_directives_and_running_gags(tmp_path, directive_source):
     config = _config(tmp_path)
     state = StationState(
@@ -818,8 +817,7 @@ async def test_revoke_cancels_inflight_fetch_clears_handoffs_and_requires_explic
 async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_path):
     config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
     prior = _snapshot("private prior", age=0.02)
-    observer = MagicMock()
-    state = StationState(home_entity_ids_observer=observer)
+    state = StationState()
     candidate = _snapshot("private completed candidate")
     outcome = _HomeContextFetchOutcome(
         kind="fresh",
@@ -828,7 +826,7 @@ async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_p
         attempt_started_at=candidate.timestamp,
         attempt_finished_at=candidate.timestamp,
         duration_seconds=0.001,
-        observed_entity_ids=frozenset({"sensor.private_room"}),
+        observed_entity_ids=frozenset({"sensor.example_private_room"}),
     )
 
     async def _completed_fetch(**_kwargs):
@@ -845,7 +843,6 @@ async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_p
         assert task is not None
         await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
         assert task.done()
-        observer.assert_not_called()
         publish.assert_not_called()
 
         config.homeassistant.context_enabled = False
@@ -857,13 +854,12 @@ async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_p
         assert await coordinator._drain_completed_result() is None
 
         assert coordinator.current_context is None
-        observer.assert_not_called()
         publish.assert_not_called()
         await coordinator.close()
 
 
 @pytest.mark.asyncio
-async def test_normal_completion_rechecks_generation_after_observer_before_publish(tmp_path):
+async def test_normal_completion_rechecks_generation_after_mute_revalidation_before_publish(tmp_path, monkeypatch):
     config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
     prior = _snapshot("private prior", age=0.02)
     state = StationState()
@@ -875,7 +871,7 @@ async def test_normal_completion_rechecks_generation_after_observer_before_publi
         attempt_started_at=candidate.timestamp,
         attempt_finished_at=candidate.timestamp,
         duration_seconds=0.001,
-        observed_entity_ids=frozenset({"sensor.private_room"}),
+        observed_entity_ids=frozenset({"sensor.example_private_room"}),
     )
 
     async def _completed_fetch(**_kwargs):
@@ -887,8 +883,13 @@ async def test_normal_completion_rechecks_generation_after_observer_before_publi
         patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
-        observer = MagicMock(side_effect=lambda _entity_ids: coordinator.suspend())
-        state.home_entity_ids_observer = observer
+
+        def revoke_during_revalidation(outcome, _cache_dir):
+            coordinator.suspend()
+            return outcome
+
+        revalidate = MagicMock(side_effect=revoke_during_revalidation)
+        monkeypatch.setattr(producer, "revalidate_home_context_outcome_mutes", revalidate)
         coordinator._start_attempt()
         task = coordinator.in_flight_task
         assert task is not None
@@ -896,7 +897,7 @@ async def test_normal_completion_rechecks_generation_after_observer_before_publi
 
         assert await coordinator._drain_completed_result() is None
 
-        observer.assert_called_once_with(frozenset({"sensor.private_room"}))
+        revalidate.assert_called_once()
         publish.assert_not_called()
         assert coordinator.current_context is None
         await coordinator.close()
@@ -907,7 +908,7 @@ async def test_normal_completion_rechecks_generation_after_observer_before_publi
     ("source", "preserved"),
     [
         ("ha", False),
-        ("ha:sensor.private_room", False),
+        ("ha:sensor.example_private_room", False),
         ("", False),
         ("legacy_home", False),
         ("operator", True),
@@ -1057,9 +1058,9 @@ async def test_inflight_mute_then_unmute_discards_the_pre_mute_candidate(tmp_pat
     import mammamiradio.home.ha_context as ha_context
 
     config = _config(tmp_path, poll_interval=1.0)
-    state = StationState(home_authorization=HomeAuthorization.legacy())
-    private_id = "switch.private"
-    live_id = "switch.live"
+    state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
+    private_id = "switch.example_private"
+    live_id = "switch.example_live"
     prior = _snapshot(
         "safe prior",
         raw_states={private_id: {"state": "off", "attributes": {}}},

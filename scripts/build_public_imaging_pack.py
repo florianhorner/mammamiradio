@@ -2,10 +2,9 @@
 """Render historical motif and core-cadence audition boards.
 
 Use ``complete_audio_pack_gate.py`` and ``promote_complete_audio_pack.py`` to
-build and install Modern Night Drive. This module keeps the rejected Recorded
-Night Drive definitions as archived lineage. Its old source verifier and builder
-stop before reading or writing assets. The approved identity combines the Neon
-Relay signature with Velvet Horizon's atmosphere.
+build and install Modern Night Drive. This module retains historical motif
+definitions for auditioning. Its retired source verifier and builder stop before
+reading or writing assets.
 
 Usage:
     python scripts/build_public_imaging_pack.py --prototype-motifs --source-dir /path/to/hq-derivatives

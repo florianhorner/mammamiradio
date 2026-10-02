@@ -12,7 +12,7 @@ import pytest
 
 from mammamiradio.home.migration import (
     DATABASE_ORIGIN_TABLE,
-    LEGACY_HOME_MANIFEST_V1,
+    LEGACY_HOME_MANIFEST_DIGEST,
     PREFLIGHT_FILENAME,
     PROVENANCE_FILENAME,
     LegacyHomePreflightV1,
@@ -20,23 +20,11 @@ from mammamiradio.home.migration import (
     load_legacy_home_database_preflight_v1,
     load_legacy_home_preflight_v1,
     load_legacy_home_provenance_v1,
-    observes_legacy_home_manifest_v1,
     persist_legacy_home_database_preflight_v1,
     preflight_path,
     provenance_path,
     rewrite_legacy_home_preflight_cold_v1,
-    seal_legacy_home_provenance_v1,
 )
-
-
-def _exact_states() -> dict[str, dict[str, object]]:
-    return {
-        entity_id: {
-            "state": f"PRIVATE RAW VALUE FOR {entity_id}",
-            "attributes": {"friendly_name": f"PRIVATE LABEL FOR {entity_id}"},
-        }
-        for entity_id in LEGACY_HOME_MANIFEST_V1.entity_ids
-    }
 
 
 def _persist_database_witness(state_dir: Path) -> Path:
@@ -45,24 +33,6 @@ def _persist_database_witness(state_dir: Path) -> Path:
     db_path = state_dir / "mammamiradio.db"
     persist_legacy_home_database_preflight_v1(db_path, preflight)
     return db_path
-
-
-def test_manifest_is_stable_exact_and_carries_future_profile_intent():
-    from mammamiradio.home.ha_context import ALL_ENTITIES
-
-    assert LEGACY_HOME_MANIFEST_V1.version == 1
-    assert len(LEGACY_HOME_MANIFEST_V1.entries) == 35
-    assert len(LEGACY_HOME_MANIFEST_V1.entity_ids) == 35
-    assert LEGACY_HOME_MANIFEST_V1.entity_ids == frozenset(ALL_ENTITIES)
-    assert (
-        LEGACY_HOME_MANIFEST_V1.entity_id_digest == "72201ec2e2b10ec6d9c594cae11d5cb5a5da6e11d744229f8f2a53cdf4c6613a"
-    )
-
-    by_id = {entry.entity_id: entry for entry in LEGACY_HOME_MANIFEST_V1.entries}
-    assert by_id["weather.forecast_home"].scopes == ("ambient_context", "weather")
-    assert all("resident" in by_id[entity_id].scopes for entity_id in by_id if entity_id.startswith("person."))
-    assert "moment" in by_id["switch.bar_kaffeemaschine_steckdose"].scopes
-    assert by_id["binary_sensor.buro_9_ring_intercom_klingelt"].priority == "bronze"
 
 
 def test_capture_preflight_is_owner_only_and_idempotently_keeps_first_fact(tmp_path):
@@ -88,13 +58,7 @@ def test_cold_preflight_remains_ineligible_after_database_exists_on_restart(tmp_
     db_path = _persist_database_witness(tmp_path)
 
     restarted = capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
-    sealed = seal_legacy_home_provenance_v1(
-        tmp_path,
-        _exact_states(),
-        db_path=db_path,
-        bridge_app_version="1.2.3",
-        observed_at=100.0,
-    )
+    sealed = load_legacy_home_provenance_v1(tmp_path, db_path)
 
     assert restarted.database_preexisted is False
     assert sealed is None
@@ -151,15 +115,7 @@ def test_corrupt_preflight_fails_closed_and_is_not_repaired(tmp_path):
     assert result.durable is False
     assert load_legacy_home_preflight_v1(tmp_path) is None
     assert path.read_text(encoding="utf-8") == '{"database_preexisted":"yes"}'
-    assert (
-        seal_legacy_home_provenance_v1(
-            tmp_path,
-            _exact_states(),
-            db_path=tmp_path / "mammamiradio.db",
-            bridge_app_version="1.2.3",
-        )
-        is None
-    )
+    assert load_legacy_home_provenance_v1(tmp_path, tmp_path / "test.db") is None
 
 
 def test_capture_write_failure_cleans_temp_and_does_not_claim_durability(tmp_path):
@@ -176,92 +132,6 @@ def test_capture_write_failure_cleans_temp_and_does_not_claim_durability(tmp_pat
     assert list(tmp_path.glob(f".{PREFLIGHT_FILENAME}.*.tmp")) == []
 
 
-def test_observation_requires_every_exact_id_but_ignores_unrelated_entities():
-    exact = _exact_states()
-    missing = dict(exact)
-    missing.pop("weather.forecast_home")
-
-    assert observes_legacy_home_manifest_v1(missing) is False
-    assert observes_legacy_home_manifest_v1(exact | {"light.some_other_home": {}}) is True
-    assert observes_legacy_home_manifest_v1(LEGACY_HOME_MANIFEST_V1.entity_ids) is True
-    assert observes_legacy_home_manifest_v1("weather.forecast_home") is False
-
-
-def test_preexisting_exact_home_seals_metadata_only_provenance(tmp_path):
-    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
-    db_path = _persist_database_witness(tmp_path)
-
-    provenance = seal_legacy_home_provenance_v1(
-        tmp_path,
-        _exact_states(),
-        db_path=db_path,
-        bridge_app_version=" 1.2.3 ",
-        observed_at=1234.5,
-    )
-
-    assert provenance is not None
-    assert provenance.bridge_app_version == "1.2.3"
-    assert provenance.observed_at == 1234.5
-    assert load_legacy_home_provenance_v1(tmp_path, db_path) == provenance
-    persisted = json.loads(provenance_path(tmp_path).read_text(encoding="utf-8"))
-    assert set(persisted) == {
-        "manifest_version",
-        "manifest_digest",
-        "bridge_app_version",
-        "observed_at",
-    }
-    assert persisted == provenance.to_dict()
-    serialized = provenance_path(tmp_path).read_text(encoding="utf-8")
-    assert "PRIVATE RAW VALUE" not in serialized
-    assert "PRIVATE LABEL" not in serialized
-    assert "entity_id" not in serialized
-    assert "prior_app_version" not in serialized
-    assert provenance_path(tmp_path).stat().st_mode & 0o777 == 0o600
-
-
-def test_incomplete_observation_writes_nothing(tmp_path):
-    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
-    db_path = _persist_database_witness(tmp_path)
-    states = _exact_states()
-    states.pop(next(iter(LEGACY_HOME_MANIFEST_V1.entity_ids)))
-
-    assert (
-        seal_legacy_home_provenance_v1(
-            tmp_path,
-            states,
-            db_path=db_path,
-            bridge_app_version="1.2.3",
-            observed_at=123.0,
-        )
-        is None
-    )
-    assert not provenance_path(tmp_path).exists()
-
-
-def test_seal_is_idempotent_and_preserves_first_bridge_observation(tmp_path):
-    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
-    db_path = _persist_database_witness(tmp_path)
-    first = seal_legacy_home_provenance_v1(
-        tmp_path,
-        _exact_states(),
-        db_path=db_path,
-        bridge_app_version="1.2.3",
-        observed_at=100.0,
-    )
-    second = seal_legacy_home_provenance_v1(
-        tmp_path,
-        {},
-        db_path=db_path,
-        bridge_app_version="9.9.9",
-        observed_at=999.0,
-    )
-
-    assert second == first
-    assert second is not None
-    assert second.bridge_app_version == "1.2.3"
-    assert second.observed_at == 100.0
-
-
 @pytest.mark.parametrize(
     "payload",
     [
@@ -275,7 +145,7 @@ def test_seal_is_idempotent_and_preserves_first_bridge_observation(tmp_path):
         },
         {
             "manifest_version": 1,
-            "manifest_digest": LEGACY_HOME_MANIFEST_V1.entity_id_digest,
+            "manifest_digest": LEGACY_HOME_MANIFEST_DIGEST,
             "bridge_app_version": "1.2.3",
             "observed_at": 10.0,
             "raw_states": {},
@@ -297,12 +167,7 @@ def test_corrupt_existing_provenance_is_not_overwritten(tmp_path):
     path = provenance_path(tmp_path)
     path.write_text("{broken", encoding="utf-8")
 
-    result = seal_legacy_home_provenance_v1(
-        tmp_path,
-        _exact_states(),
-        db_path=db_path,
-        bridge_app_version="1.2.3",
-    )
+    result = load_legacy_home_provenance_v1(tmp_path, db_path)
 
     assert result is None
     assert path.read_text(encoding="utf-8") == "{broken"
@@ -313,13 +178,17 @@ def test_transplanted_sidecar_and_valid_provenance_are_rejected_by_cold_database
     cold_dir = tmp_path / "cold"
     capture_legacy_home_preflight_v1(legacy_dir, database_preexisted=True)
     legacy_db = _persist_database_witness(legacy_dir)
-    original = seal_legacy_home_provenance_v1(
-        legacy_dir,
-        _exact_states(),
-        db_path=legacy_db,
-        bridge_app_version="1.2.3",
-        observed_at=100.0,
+    provenance_path(legacy_dir).write_text(
+        json.dumps(
+            {
+                "manifest_version": 1,
+                "manifest_digest": LEGACY_HOME_MANIFEST_DIGEST,
+                "bridge_app_version": "3.0.0",
+                "observed_at": 1.0,
+            }
+        )
     )
+    original = load_legacy_home_provenance_v1(legacy_dir, legacy_db)
     assert original is not None
 
     capture_legacy_home_preflight_v1(cold_dir, database_preexisted=False)
@@ -329,51 +198,8 @@ def test_transplanted_sidecar_and_valid_provenance_are_rejected_by_cold_database
     transplanted.write_bytes(provenance_path(legacy_dir).read_bytes())
 
     assert load_legacy_home_provenance_v1(cold_dir, cold_db) is None
-    assert (
-        seal_legacy_home_provenance_v1(
-            cold_dir,
-            _exact_states(),
-            db_path=cold_db,
-            bridge_app_version="9.9.9",
-        )
-        is None
-    )
+    assert load_legacy_home_provenance_v1(cold_dir, cold_db) is None
     assert transplanted.read_bytes() == provenance_path(legacy_dir).read_bytes()
-
-
-def test_provenance_replace_failure_cleans_unique_temp_file(tmp_path):
-    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
-    db_path = _persist_database_witness(tmp_path)
-
-    with (
-        patch("mammamiradio.home.migration.os.replace", side_effect=OSError("disk full")),
-        pytest.raises(
-            OSError,
-            match="disk full",
-        ),
-    ):
-        seal_legacy_home_provenance_v1(
-            tmp_path,
-            _exact_states(),
-            db_path=db_path,
-            bridge_app_version="1.2.3",
-        )
-
-    assert not provenance_path(tmp_path).exists()
-    assert list(tmp_path.glob(f".{PROVENANCE_FILENAME}.*.tmp")) == []
-
-
-@pytest.mark.parametrize("bad_value", [1, None, "", "\n1.2.3", "x" * 81])
-def test_bridge_app_version_must_be_explicit_and_bounded(tmp_path, bad_value):
-    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
-    db_path = _persist_database_witness(tmp_path)
-    with pytest.raises(ValueError, match="bridge_app_version"):
-        seal_legacy_home_provenance_v1(
-            tmp_path,
-            _exact_states(),
-            db_path=db_path,
-            bridge_app_version=bad_value,  # type: ignore[arg-type]
-        )
 
 
 def test_paths_are_directly_below_caller_provided_state_dir(tmp_path):
@@ -426,3 +252,73 @@ def test_database_witness_reads_back_through_uri_special_char_path(tmp_path):
     assert witness is not None
     assert witness.durable is True
     assert witness.database_preexisted is True
+
+
+@pytest.mark.parametrize("replace_existing", (True, False))
+def test_atomic_write_failure_does_not_close_recycled_fd(tmp_path, monkeypatch, replace_existing):
+    from mammamiradio.home import migration
+
+    temp_path = tmp_path / "temp"
+    fd = os.open(temp_path, os.O_CREAT | os.O_RDWR, 0o600)
+    monkeypatch.setattr(migration.tempfile, "mkstemp", lambda **_: (fd, str(temp_path)))
+    with (tmp_path / "other").open("wb") as other:
+
+        def fail_publish(*_):
+            os.dup2(other.fileno(), fd)
+            raise FileExistsError("competing publication")
+
+        monkeypatch.setattr(os, "replace" if replace_existing else "link", fail_publish)
+        try:
+            with pytest.raises(FileExistsError):
+                migration._atomic_write_json(tmp_path / "profile", {}, replace_existing=replace_existing)
+            assert os.fstat(fd) == os.fstat(other.fileno())
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def test_compatibility_hashes_remain_pinned_without_compiled_household_map():
+    from mammamiradio.home import migration, profile
+
+    assert migration.LEGACY_HOME_MANIFEST_DIGEST == "72201ec2e2b10ec6d9c594cae11d5cb5a5da6e11d744229f8f2a53cdf4c6613a"
+    assert profile.COMPATIBILITY_SNAPSHOT_SHA256 == "c49225bb57f04945c790c2c4883c6d6ee5edec5181761e3bce8f44f16577ecf3"
+    assert not hasattr(migration, "LEGACY_HOME_MANIFEST_V1")
+    assert not hasattr(profile, "export_legacy_home_profile_v1")
+
+
+def test_missing_provenance_is_never_created(tmp_path):
+    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
+    db_path = _persist_database_witness(tmp_path)
+    assert load_legacy_home_provenance_v1(tmp_path, db_path) is None
+    assert not provenance_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("observed_at", -1),
+        ("observed_at", True),
+        ("observed_at", float("inf")),
+        ("bridge_app_version", ""),
+        ("bridge_app_version", "a" * 81),
+        ("bridge_app_version", "a\nb"),
+        ("manifest_version", True),
+    ],
+)
+def test_invalid_historical_metadata_is_rejected(tmp_path, field, value):
+    capture_legacy_home_preflight_v1(tmp_path, database_preexisted=True)
+    db_path = _persist_database_witness(tmp_path)
+    document = {
+        "manifest_version": 1,
+        "manifest_digest": LEGACY_HOME_MANIFEST_DIGEST,
+        "bridge_app_version": "3.0.0",
+        "observed_at": 1.0,
+    }
+    document[field] = value
+    path = provenance_path(tmp_path)
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    assert load_legacy_home_provenance_v1(tmp_path, db_path) is None
+    assert path.read_bytes() == before

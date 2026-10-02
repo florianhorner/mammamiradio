@@ -20,6 +20,10 @@ if (now_playing?.segment_class === 'music') showTrackCard(now_playing.title, now
 
 ## Response shape
 
+The examples below are synthetic v1 contract examples. Their host names,
+frequency, and station values are frozen illustrations, not current station
+defaults. The payloads remain unchanged for integrators.
+
 Successful contract responses return `200 OK` with a stable payload.
 Domain-level degradations (stopped session, empty queue, unknown segment)
 are expressed in the payload's `session_state` and `segment_class` fields,
@@ -262,10 +266,9 @@ poll_interval_s: 5
 
 ## Sample payloads
 
-Real example responses for every segment class and degradation state live
-under [`sample-payloads/`](./sample-payloads/). Each file is also a
-fixture in mammamiradio's contract test suite — the docs cannot drift
-from the live behavior.
+Synthetic examples for each segment class and degradation state live under
+[`sample-payloads/`](./sample-payloads/). Contract tests check these fixtures
+against the serializer's response shape; they are not captures of a running station.
 
 ## Migration from `/public-status`
 

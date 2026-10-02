@@ -32,6 +32,12 @@ from mammamiradio.core.models import SegmentType
 
 logger = logging.getLogger(__name__)
 
+
+def default_imaging_assets_dir() -> Path:
+    """Return the bundled station imaging pack."""
+    return Path(__file__).resolve().parent.parent / "assets" / "imaging"
+
+
 _CACHE_UNSET = object()
 _CORE_BREAK_ASSET_PATHS = frozenset(
     {
@@ -169,7 +175,7 @@ class ImagingLibrary:
         self.motif_notes = motif_notes
         self.tmp_dir = tmp_dir
         self.bed_volume_db = bed_volume_db
-        self.assets_dir = assets_dir or Path(__file__).resolve().parent.parent / "assets" / "imaging"
+        self.assets_dir = assets_dir or default_imaging_assets_dir()
         self.cache_dir = cache_dir
         self._recipe_manifest_signature: object = _CACHE_UNSET
         self._recipe_manifest: _RecipeManifest | None = None
@@ -239,7 +245,7 @@ class ImagingLibrary:
         targets = {
             target
             for relative_path in _CORE_BREAK_ASSET_PATHS
-            if (target := self._safe_pack_asset_path(relative_path)) is not None
+            if (target := self._safe_pack_asset_path(relative_path, assets_dir=self.assets_dir)) is not None
         }
         reserved: list[str] = []
         for asset in manifest.assets.values():
@@ -334,7 +340,7 @@ class ImagingLibrary:
         if source_ids is None:
             return None
         foreground_source_ids = self._foreground_source_ids(raw_asset, kind, source_ids)
-        asset_path = self._safe_pack_asset_path(relative_path)
+        asset_path = self._safe_pack_asset_path(relative_path, assets_dir=self.assets_dir)
         if asset_path is None:
             return None
         return _RecipeAsset(
@@ -389,13 +395,14 @@ class ImagingLibrary:
             return None
         return tuple(item for item in values if item is not None)
 
-    def _safe_pack_asset_path(self, relative_path: str) -> Path | None:
+    @staticmethod
+    def _safe_pack_asset_path(relative_path: str, *, assets_dir: Path) -> Path | None:
         """Return a safe in-pack asset path, whether or not its file exists yet."""
         candidate = Path(relative_path)
         if candidate.is_absolute():
             return None
         try:
-            pack_root = self.assets_dir.resolve(strict=False)
+            pack_root = assets_dir.resolve(strict=False)
             resolved = (pack_root / candidate).resolve(strict=False)
             resolved.relative_to(pack_root)
         except (OSError, RuntimeError, ValueError):
@@ -435,6 +442,23 @@ class ImagingLibrary:
                 logger.info("Using packaged imaging asset: %s", asset.name)
                 return True
         return False
+
+    @classmethod
+    def packaged_boundary_asset(cls, relative: str, *, assets_dir: Path | None = None) -> Path | None:
+        """Return one packaged boundary file without copying or synthesizing it.
+
+        Missing, unsafe, or unreadable paths return None so playback can cut
+        clean. This method never calls ffmpeg.
+        """
+        if not isinstance(relative, str) or not relative:
+            return None
+        asset = cls._safe_pack_asset_path(relative, assets_dir=assets_dir or default_imaging_assets_dir())
+        if asset is None:
+            return None
+        try:
+            return asset if asset.is_file() else None
+        except OSError:
+            return None
 
     def ad_sfx_dir(self, configured_dir: Path | None = None) -> Path | None:
         """Return a real custom SFX directory, otherwise the bundled identity pack."""

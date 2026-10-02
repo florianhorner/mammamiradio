@@ -36,6 +36,7 @@ _TOGGLE_ENV_KEYS = (
     "MAMMAMIRADIO_FESTIVAL_MODE",
     "MAMMAMIRADIO_QUALITY",
     "MAMMAMIRADIO_BROADCAST_CHAIN",
+    "MAMMAMIRADIO_BOUNDARY_IMAGING",
 )
 
 
@@ -112,6 +113,7 @@ TOGGLES = [
     ("festival_mode", "/api/party", {"action": "enable", "mode": "festival"}),
     ("quality_profile", "/api/quality", {"quality_profile": "premium"}),
     ("broadcast_chain", "/api/broadcast-chain", {"broadcast_chain": True}),
+    ("boundary_imaging", "/api/boundary-imaging", {"boundary_imaging": False}),
 ]
 
 

@@ -86,16 +86,21 @@ expect_default_install_guard() {
   mkdir -p \
     "$fixture_root/scripts" \
     "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
     "$fixture_root/docs/runbooks"
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
   cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
 
   for file in \
     CLAUDE.md \
     README.md \
     CONTRIBUTING.md \
     ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
     ha-addon/mammamiradio/DOCS.md \
     docs/REPO_MAP.md \
     docs/agents.md \
@@ -109,11 +114,9 @@ expect_default_install_guard() {
     docs/runbooks/ha-addon.md \
     docs/release-process.md \
     docs/music-sources.md \
-    docs/2026-05-30-ha-context-ingestion-pipeline.md \
     scripts/showreel/README.md \
     scripts/showreel_out/door-bentornato-fable-v2-notes.md \
-    scripts/showreel_out/ma-pr-3836-notes.md \
-    proof/h4-journey-validation.md; do
+    scripts/showreel_out/ma-pr-3836-notes.md; do
     mkdir -p "$(dirname "$fixture_root/$file")"
     printf '# Safe\n' > "$fixture_root/$file"
   done
@@ -125,6 +128,8 @@ expect_default_install_guard() {
   printf '# Canonical guide\n\n`sed -i old/new repository-file`\n\nSettings > Add-ons > Add-on Store.\n' \
     > "$fixture_root/$guarded_file"
 
+  git -C "$fixture_root" init -q
+  git -C "$fixture_root" add .
   if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
     echo "FAIL: default install scope omitted $guarded_file"
     exit 1
@@ -141,6 +146,165 @@ expect_default_install_guard() {
   fi
 }
 
+# The per-app listing READMEs sit in BOTH the install and copy scopes. Unlike the
+# maintainer runbooks above they are listener-facing product copy, so being swept
+# by the live-surgery scanner is correct rather than a false positive — hence a
+# fixture with no maintainer command in it, and no carve-out assertion.
+#
+# expect_default_listing_guard <label> <file> <printf-content> <expected-message>
+# The content/message pair selects which default scope is being proven, so one
+# helper covers install-scope and copy-scope membership instead of two.
+expect_default_listing_guard() {
+  local label=$1
+  local guarded_file=$2
+  local content=$3
+  local expected=$4
+  local fixture_root="$TMP/default-listing-$label"
+  local output
+
+  mkdir -p \
+    "$fixture_root/scripts" \
+    "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
+    "$fixture_root/docs/runbooks"
+  cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
+  cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
+  cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
+
+  for file in \
+    CLAUDE.md \
+    README.md \
+    CONTRIBUTING.md \
+    ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
+    ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
+    docs/architecture.md \
+    docs/conductor.md \
+    docs/festival-mode.md \
+    docs/listener-qs-train.md \
+    docs/troubleshooting.md \
+    docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
+    docs/runbooks/ha-addon.md; do
+    printf '# Safe\n' > "$fixture_root/$file"
+  done
+
+  # shellcheck disable=SC2059  # caller supplies the printf format deliberately
+  printf "$content" > "$fixture_root/$guarded_file"
+
+  git -C "$fixture_root" init -q
+  git -C "$fixture_root" add .
+  if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
+    echo "FAIL: default listing scope omitted $guarded_file ($label)"
+    exit 1
+  fi
+  if ! grep -Fq "$guarded_file" <<< "$output" || ! grep -Fq "$expected" <<< "$output"; then
+    echo "FAIL: default listing scope returned the wrong failure for $guarded_file ($label)"
+    echo "$output"
+    exit 1
+  fi
+}
+
+# Explicit-argument mode intersects the arguments with the listing set instead
+# of applying the rule to every file handed in, so the two branches of that
+# loop need their own proof: a listing README named on the command line is
+# still held to absolute URLs, and any other doc named the same way keeps its
+# relative links. The default-scope cases above never enter that loop.
+#
+# _listing_arg_fixture <label> <file> <printf-content>
+# Builds the same safe tree as the default-scope helpers, writes the content
+# into <file>, runs the check with <file> as the only argument, and leaves the
+# exit status in LISTING_ARG_STATUS and the output in LISTING_ARG_OUTPUT.
+_listing_arg_fixture() {
+  local label=$1
+  local guarded_file=$2
+  local content=$3
+  local fixture_root="$TMP/listing-arg-$label"
+
+  mkdir -p \
+    "$fixture_root/scripts" \
+    "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
+    "$fixture_root/docs/runbooks"
+  cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
+  cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
+  cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
+
+  for file in \
+    CLAUDE.md \
+    README.md \
+    CONTRIBUTING.md \
+    ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
+    ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
+    docs/architecture.md \
+    docs/conductor.md \
+    docs/festival-mode.md \
+    docs/listener-qs-train.md \
+    docs/troubleshooting.md \
+    docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
+    docs/runbooks/ha-addon.md; do
+    printf '# Safe\n' > "$fixture_root/$file"
+  done
+
+  # shellcheck disable=SC2059  # caller supplies the printf format deliberately
+  printf "$content" > "$fixture_root/$guarded_file"
+
+  LISTING_ARG_STATUS=0
+  LISTING_ARG_OUTPUT=$(bash "$fixture_root/scripts/check-docs-safety.sh" "$guarded_file" 2>&1) \
+    || LISTING_ARG_STATUS=$?
+}
+
+# expect_listing_arg_rejects <label> <file> <printf-content> <expected-message>
+expect_listing_arg_rejects() {
+  local label=$1
+  local guarded_file=$2
+  local content=$3
+  local expected=$4
+
+  _listing_arg_fixture "$label" "$guarded_file" "$content"
+  if [ "$LISTING_ARG_STATUS" -eq 0 ]; then
+    echo "FAIL: explicit-argument listing check let $guarded_file through ($label)"
+    exit 1
+  fi
+  # The checker reports the path as it resolves it, without a ./ prefix.
+  if ! grep -Fq "${guarded_file#./}" <<< "$LISTING_ARG_OUTPUT" || ! grep -Fq "$expected" <<< "$LISTING_ARG_OUTPUT"; then
+    echo "FAIL: explicit-argument listing check returned the wrong failure for $guarded_file ($label)"
+    echo "$LISTING_ARG_OUTPUT"
+    exit 1
+  fi
+}
+
+# expect_listing_arg_accepts <label> <file> <printf-content>
+expect_listing_arg_accepts() {
+  local label=$1
+  local guarded_file=$2
+  local content=$3
+
+  _listing_arg_fixture "$label" "$guarded_file" "$content"
+  if [ "$LISTING_ARG_STATUS" -ne 0 ]; then
+    echo "FAIL: explicit-argument check unexpectedly rejected $guarded_file ($label)"
+    echo "$LISTING_ARG_OUTPUT"
+    exit 1
+  fi
+  if grep -Fq "relative link in a store listing" <<< "$LISTING_ARG_OUTPUT"; then
+    echo "FAIL: listing rule leaked into $guarded_file ($label)"
+    echo "$LISTING_ARG_OUTPUT"
+    exit 1
+  fi
+}
+
 expect_default_persistence_guard() {
   local label=$1
   local guarded_file=$2
@@ -150,16 +314,21 @@ expect_default_persistence_guard() {
   mkdir -p \
     "$fixture_root/scripts" \
     "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
     "$fixture_root/docs/runbooks"
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
   cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+  cp "$ROOT/scripts/public_tree_safety.py" "$fixture_root/scripts/public_tree_safety.py"
+  printf '{}\n' > "$fixture_root/scripts/public-evidence-retention.json"
 
   for file in \
     CLAUDE.md \
     README.md \
     CONTRIBUTING.md \
     ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
     ha-addon/mammamiradio/DOCS.md \
     docs/REPO_MAP.md \
     docs/agents.md \
@@ -173,11 +342,9 @@ expect_default_persistence_guard() {
     docs/runbooks/ha-addon.md \
     docs/release-process.md \
     docs/music-sources.md \
-    docs/2026-05-30-ha-context-ingestion-pipeline.md \
     scripts/showreel/README.md \
     scripts/showreel_out/door-bentornato-fable-v2-notes.md \
-    scripts/showreel_out/ma-pr-3836-notes.md \
-    proof/h4-journey-validation.md; do
+    scripts/showreel_out/ma-pr-3836-notes.md; do
     mkdir -p "$(dirname "$fixture_root/$file")"
     printf '# Safe\n' > "$fixture_root/$file"
   done
@@ -186,6 +353,8 @@ expect_default_persistence_guard() {
   printf '# Unsafe durability\n\nAdmin controls persist to `/data/options.json` across restarts.\n' \
     > "$fixture_root/$guarded_file"
 
+  git -C "$fixture_root" init -q
+  git -C "$fixture_root" add .
   if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
     echo "FAIL: default persistence scope omitted $guarded_file"
     exit 1
@@ -335,9 +504,105 @@ expect_failure "stale Edge release promise" "incorrect Edge release wording" "$T
 
 expect_default_install_guard "operations" "docs/operations.md"
 expect_default_install_guard "addon-runbook" "docs/runbooks/ha-addon.md"
+# Retired navigation is especially wrong in a store listing: the reader is
+# already on the install page when Supervisor renders it.
+expect_default_listing_guard "install-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\nSettings > Add-ons > Add-on Store.\n' \
+  "retired Home Assistant install wording"
+expect_default_listing_guard "install-edge" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\nSettings > Add-ons > Add-on Store.\n' \
+  "retired Home Assistant install wording"
+
+# Copy scope is a separate list: dropping either README from DEFAULT_COPY_FILES
+# would leave the install cases above green while un-gating the Edge release
+# promise and the live-surgery scanner.
+expect_default_listing_guard "copy-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\nUpdates on every change merged to main.\n' \
+  "incorrect Edge release wording"
+expect_default_listing_guard "copy-edge" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\nUpdates on every change merged to main.\n' \
+  "incorrect Edge release wording"
+
+# Listing scope: Supervisor renders these inside the HA frontend, so a relative
+# target resolves to nothing. Absolute URLs are the only ones that survive.
+expect_default_listing_guard "relative-link-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Guide](../../docs/architecture.md)\n' \
+  "relative link in a store listing"
+expect_default_listing_guard "relative-link-edge" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n![Shot](../../docs/screenshots/listener.png)\n' \
+  "relative link in a store listing"
+
+# The same rule when the listing README is named on the command line, which is
+# how a pre-commit run or a test hands files in: the explicit-argument branch
+# intersects the arguments with the listing set instead of skipping the check.
+expect_listing_arg_rejects "explicit-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Guide](../../docs/architecture.md)\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "explicit-edge-image" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n![Shot](../../docs/screenshots/listener.png)\n' \
+  "relative link in a store listing"
+# ...and the other half of that intersection: a doc that is not a listing keeps
+# its relative links even when it is the only argument.
+expect_listing_arg_accepts "explicit-non-listing" "docs/troubleshooting.md" \
+  '# Guide\n\n[Operations](operations.md)\n'
+# A bare fragment needs no base to resolve, and an absolute URL is what the rule
+# asks for, so neither may be reported.
+expect_listing_arg_accepts "fragment-and-absolute" "ha-addon/mammamiradio/README.md" \
+  '# Top\n\n[Back](#top)\n\n[Docs](https://example.invalid/docs.md)\n\n![Shot](https://example.invalid/shot.png)\n'
+# A site-absolute path is not an absolute URL: Home Assistant would serve it
+# from its own host. Same for a protocol-relative one.
+expect_listing_arg_rejects "root-absolute" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n![Shot](/docs/screenshots/listener.png)\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "protocol-relative" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n[Docs](//github.com/florianhorner/mammamiradio)\n' \
+  "relative link in a store listing"
+# The frontend keeps raw HTML, so href/src attributes are held to the same rule.
+expect_listing_arg_rejects "html-img-src" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n<img src="../../docs/screenshots/listener.png" alt="Shot">\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "html-a-href" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n<a href="../mammamiradio/DOCS.md">Docs</a>\n' \
+  "relative link in a store listing"
+expect_listing_arg_accepts "html-absolute" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n<a href="https://example.invalid/docs.md">Docs</a> <img src="https://example.invalid/shot.png">\n'
+# A ./-prefixed argument names the same listing file.
+expect_listing_arg_rejects "dot-slash-argument" "./ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Guide](../../docs/architecture.md)\n' \
+  "relative link in a store listing"
+# Prose wraps. A link whose text breaks across lines, or a reference
+# definition whose destination sits on the next line, must still be seen.
+expect_listing_arg_rejects "wrapped-link" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\nRead [the add-on\ndocumentation](../../docs/x.md) first.\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "reference-next-line" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\nSee [the docs][ref].\n\n[ref]:\n../../docs/x.md\n' \
+  "relative link in a store listing"
+# A footer of stacked definitions: every entry counts, not only the first.
+expect_listing_arg_rejects "stacked-reference-definitions" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\nSee [a][a] and [b][b].\n\n[a]: https://example.invalid/a.md\n[b]: ../../docs/b.md\n' \
+  "relative link in a store listing"
+# Attribute-shaped prose inside a code span is not markup.
+# shellcheck disable=SC2016  # the backticks are literal code-span markers
+expect_listing_arg_accepts "inline-code-attribute" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\nSet `data = 5` and `src=../x.png` in the example, or write `[a link](../mammamiradio/DOCS.md)`.\n'
+expect_listing_arg_rejects "html-unquoted-srcset" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n<img src=https://example.invalid/a.png srcset="https://example.invalid/a.png 1x, ../b.png 2x">\n' \
+  "relative link in a store listing"
+expect_listing_arg_rejects "scheme-without-host" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Docs](http:../../docs/x.md)\n' \
+  "relative link in a store listing"
+# Example markup inside a code fence is documentation, not a link.
+# shellcheck disable=SC2016  # the backticks are literal fence markers
+expect_listing_arg_accepts "fenced-example" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n```html\n<img src="../local.png">\n```\n\nSee [docs](https://example.invalid/docs.md).\n'
 
 expect_default_persistence_guard "claude" "CLAUDE.md"
 expect_default_persistence_guard "addon-readme" "ha-addon/README.md"
+# The per-app READMEs are what Supervisor renders as each listing's long
+# description, so they carry the same copy guarantees as the rest of the surface.
+expect_default_persistence_guard "stable-listing-readme" "ha-addon/mammamiradio/README.md"
+expect_default_persistence_guard "edge-listing-readme" "ha-addon/mammamiradio-edge/README.md"
 expect_default_persistence_guard "addon-docs" "ha-addon/mammamiradio/DOCS.md"
 expect_default_persistence_guard "architecture" "docs/architecture.md"
 expect_default_persistence_guard "festival-mode" "docs/festival-mode.md"

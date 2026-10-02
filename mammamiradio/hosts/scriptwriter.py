@@ -1,9 +1,7 @@
 """Prompt assembly and LLM calls for banter and ad copy generation.
 
-TODO: split — this module is a postal address, not a destination. See
-docs/archive/2026-04-28-cathedral-restructure.md (PR 6) for the planned split into
-hosts/prompts.py, hosts/llm_client.py, hosts/banter.py, hosts/ads.py. The data leaves
-(prompt_world.py, transitions.py, fallbacks.py) are already extracted.
+See docs/runbooks/refactor-cuts.md for module extraction constraints. Prompt
+data, transitions and fallback copy already live in separate modules.
 """
 
 from __future__ import annotations
@@ -46,6 +44,7 @@ from mammamiradio.core.models import (
     listener_request_force_revision,
     listener_request_pin_revision,
 )
+from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.hosts.ad_creative import (
     _FORMAT_ROLES,
     AD_FORMAT_DISCLAIMER_SUFFIX,
@@ -2886,6 +2885,7 @@ specific person has arrived, returned, tuned in, or is being identified.
     return_authority = home_return_authority_for_directive(
         raw_pending_directive_source,
         raw_pending_directive,
+        bindings=(state.home_authorization or HomeAuthorization.narrow()).bindings,
     )
     pending_directive = _sanitize_prompt_data(raw_pending_directive, max_len=300)
     consumed_pending_directive = False

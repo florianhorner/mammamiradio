@@ -359,6 +359,30 @@ no `:sha` image and pre-flight will reject the tag.
 
 `ha-addon/mammamiradio/config.yaml` declares `stage: stable` for the release channel. The Edge channel stays `stage: experimental` in `ha-addon/mammamiradio-edge/config.yaml` so testers still see the orange Experimental badge on main-branch builds.
 
+## Store listing: which file paints which pixel
+
+The Apps page is drawn from files in the app folder, not from the repo root and not from HACS. Each channel needs its own copy — nothing is inherited from the sibling folder. Edge is metadata-only and ships everything below **except `DOCS.md`**, so its Documentation tab is empty; stable is the complete set.
+
+| What the operator sees | Source file |
+|---|---|
+| Title, version, the one-line blurb under it, "Visit … for more details" | `config.yaml` — `name`, `version`, `description`, `url` |
+| The longer intro body on the app's page | `README.md` **in the app folder** |
+| Documentation tab | `DOCS.md` |
+| Changelog link | `CHANGELOG.md` |
+| Square catalog icon / header logo | `icon.png` (1:1, shipped at 256px) / `logo.png` (shipped at 512px); nothing checks the dimensions |
+| Experimental badge | `stage:` |
+| Sidebar entry and its icon | `ingress` + `panel_title` / `panel_icon` (defaults to `mdi:puzzle`; we set `mdi:radio`) |
+
+Three things that are easy to get wrong:
+
+- **The per-app `README.md` is not `ha-addon/README.md`.** Supervisor reads `README.md` from inside the app folder and returns it as the listing's long description; when the file is absent the field is simply null and the page shows nothing. `ha-addon/README.md` is the *repository* landing page and is never read for this. Both per-app READMEs, stable and Edge, are required by `scripts/validate-addon.sh`.
+- **Links and images in those READMEs must be absolute URLs.** They render inside the Home Assistant frontend, which has no repo-relative base, so `../../docs/...` resolves to nothing. Use `https://raw.githubusercontent.com/...` for images and full `https://github.com/...` links.
+- **Nothing copies anything between channels.** `cut-edge-release.sh` only rewrites `version:`. `validate-addon.sh` therefore compares `icon.png` and `logo.png` byte-for-byte, and compares the two `README.md` files from the `<!-- shared-listing-body -->` marker to end of file. The listings read the same; only the Edge warning, which sits *above* that marker, may differ. Edit the shared text in both files or the check fails.
+
+`description` copy is additionally pinned by `tests/addon/test_addon_metadata_contract.py`, which asserts the stable blurb still names the music sources that actually ship. Changing which sources are advertised is a product decision, not a copy edit — update the test in the same commit and say why.
+
+Listing copy is **not** part of a release cut. It ships on its own, independent of `chore(release): cut X.Y.Z`.
+
 ## Config options: the contract
 
 When you add an option to the HA addon configuration UI, you must update THREE files in the same commit:
@@ -393,6 +417,7 @@ Current config options:
 | `songs_between_ads` | `int(1,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS` |
 | `ad_spots_per_break` | `int(1,5)?` | `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK` |
 | `norm_cache_mb` | `int(200,8000)?` | `MAMMAMIRADIO_MAX_CACHE_MB` (Music cache size; add-on default 1500, standalone 500. Startup computes an effective limit from available disk space. See `docs/operations.md`, "Music cache sizing".) |
+| `music_folder` | `str?` | `MAMMAMIRADIO_MUSIC_FOLDER` (validated relative folder inside mounted Media; `run.sh` exports the selected `MAMMAMIRADIO_MUSIC_DIR`) |
 
 Jamendo is not a Supervisor option. The authenticated **Motore → Setup → Music
 sources** flow persists the client ID, enabled intent, current non-commercial
@@ -402,8 +427,11 @@ Supervisor client ID when possible, but keeps the source disabled until the
 operator reviews and acknowledges the current boundary. Additional candidate
 tuning can be set in `radio.toml` or container env without exposing Supervisor
 UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
-Add-on local music lives at `/data/music`; `run.sh` exports that path as
-`MAMMAMIRADIO_MUSIC_DIR`.
+Add-on local music is the Music folder option (default `mammamiradio`) under
+Home Assistant Media when `/media` is mounted. `run.sh` exports that path as
+`MAMMAMIRADIO_MUSIC_DIR`. When Media is not mounted, or the chosen folder is a
+symlink, the export is `/data/music`. A name that leaves Media is ignored and
+the default folder is used. The control room names the path actually in use.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -607,13 +635,13 @@ validator before its first registry write.
 | `version:` | hand-bumped `X.Y.Z` on deliberate releases | the short SHA of the newest `main` commit with a built image (may trail HEAD), cut with `make edge-release` |
 | Updates when | you push a matching `v*` tag after merging the version-bump commit | you cut an edge release (the version string changes, so HA shows an Update) |
 | Image tag pulled | `:X.Y.Z` (published by `addon-release.yml`) | `:<short-sha>` (published by `addon-build.yml` on every `main` build) |
-| Audience | everyone | the maintainer's soak Pi |
+| Audience | everyone | the Edge test installation |
 
-Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
+Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-addon-{arch}`) — they just resolve to different tags. The edge folder holds only metadata (`config.yaml`, `README.md`, `translations/`, `CHANGELOG.md`, icons); it has no `Dockerfile` because HA pulls the prebuilt image.
 
-**Cutting an edge release.** Edge releases are **manual and deliberate** — there is no CI bot. The HA Supervisor pulls `{image}:{version}` (the `version:` field *is* the Docker tag) and decides "update available" by a version-string compare, so advancing the edge `version:` to a new value surfaces an in-place Update on the soak Pi. To cut one:
+**Cutting an edge release.** Edge releases are **manual and deliberate** — there is no CI bot. The HA Supervisor pulls `{image}:{version}` (the `version:` field *is* the Docker tag) and decides "update available" by a version-string compare, so advancing the edge `version:` to a new value surfaces an in-place Update on the Edge test installation. To cut one:
 
-1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
+1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA (quoted, because an all-digit SHA would otherwise parse as a YAML integer), and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
 
 The pin **may trail `origin/main` HEAD**. Commits outside the push build trigger paths do not automatically get an image tag, so the script selects the newest main commit with a successful `Build HA Addon` run. It refuses to open a PR when that proof cannot be read or newer image content differs.
 
@@ -641,7 +669,7 @@ measurement. A cold start must open on approved packaged recovery speech; the
 technical emergency tone is a last-resort continuity rung and does not count as
 a healthy cold open.
 
-**Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same Apps catalog entry, re-enter API keys. Reverse it to go back.
+**Switching the Edge test installation to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same Apps catalog entry, re-enter API keys. Reverse it to go back.
 
 **Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. The edge `version:` line is the only field that changes to cut a release, and `make edge-release` does that for you.
 
@@ -665,7 +693,12 @@ Generated downloads, normalization outputs, renders, and clips warm again after
 restore.
 
 `/data/music` stays in the add-on backup. The scanner reads it in place and
-never moves or deletes operator files.
+never moves or deletes operator files. Songs in the Media panel are outside this
+app backup. A Home Assistant backup includes local Media songs when that backup
+includes Media; back up a NAS library separately. The station does not copy
+them into `/data/music`.
+If Media is not mounted and `/data` cannot be written, the fallback
+`/tmp/mammamiradio-data/music` is not persisted in either backup.
 
 This is a live, file-level copy, **not a copy taken from one single exact
 moment** of the retained state. SQLite may commit while Supervisor is
@@ -744,7 +777,7 @@ Landing is mechanized — see the **Landing contract** in `CLAUDE.md` "Quality
 gates" (single source of truth). The short version:
 
 - `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
-  review time) until Florian gives the merge signal.
+  review time) until the maintainer gives the merge signal.
 - On the signal, run `scripts/land-pr.sh <PR#>`. No review receipt or local review ledger is required. It blocks
   unresolved current Major/Critical/P0/P1 bot threads and fails closed when
   thread data cannot be read. A behind branch is not changed from the landing
@@ -784,6 +817,8 @@ Before merging ANY change that touches addon files:
       output, and the 20-run Home Assistant Green cold-listen receipt when the
       opt-in gate is armed (`MMR_REQUIRE_HA_RECEIPTS=1`)
 - [ ] If new config option: added to config.yaml + run.sh + translations
+- [ ] If store listing touched (`description`, `README.md`, `icon.png`, `logo.png`,
+      `url`, `panel_*`): see "Store listing" above — both channels, absolute URLs
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
 - [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —

@@ -26,7 +26,7 @@ def _elected(store: MomentStore, *, lane: str = "directive", now: float = NOW) -
         lane=lane,
         family="morning_launch",
         public_label="Morning launch",
-        entity_id="switch.coffee_machine",
+        entity_id="switch.example_coffee_machine",
         confidence=0.8,
         now=now,
     )
@@ -359,7 +359,7 @@ def test_ritual_family_threads_home_event_to_bucket_and_persists(tmp_path):
 
     ledger = EveningLedger()
     event = HomeEvent(
-        entity_id="binary_sensor.fridge_door",
+        entity_id="binary_sensor.example_fridge_door",
         label="Kitchen ritual",
         old_state="chiuso",
         new_state="aperto",
@@ -385,7 +385,7 @@ def test_ritual_family_upgrades_plain_bucket_never_downgrades():
 
     ledger = EveningLedger()
     plain = HomeEvent(
-        entity_id="switch.fan",
+        entity_id="switch.example_fan",
         label="Ventilatore",
         old_state="spento",
         new_state="acceso",
@@ -397,7 +397,7 @@ def test_ritual_family_upgrades_plain_bucket_never_downgrades():
     (bucket,) = ledger.buckets.values()
     assert bucket.ritual_family == ""
     ritual = HomeEvent(
-        entity_id="switch.fan",
+        entity_id="switch.example_fan",
         label="Bathroom ritual",
         old_state="spento",
         new_state="acceso",
@@ -408,7 +408,7 @@ def test_ritual_family_upgrades_plain_bucket_never_downgrades():
         ritual_family="shower_bathroom",
     )
     plain_later = HomeEvent(
-        entity_id="switch.fan",
+        entity_id="switch.example_fan",
         label="Ventilatore",
         old_state="spento",
         new_state="acceso",

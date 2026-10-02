@@ -8,7 +8,10 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 cp .env.example .env
 ./start.sh                # or: docker compose up
 pytest tests/core/test_config.py -q  # fast loop while editing
@@ -37,11 +40,23 @@ add-ons. See [Music sources and rights boundaries](docs/music-sources.md).
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 cp .env.example .env
 ```
 
-That one install command includes the application plus the repo's pinned developer tools: pytest, Ruff, mypy, coverage, and the test watcher.
+Install developer tools first, then the hash-locked runtime dependencies. Installing the application with `--no-deps` preserves those versions; `pip check` verifies its declared requirements. Quality CI and both container builds use the same runtime lock. The dependency tests also verify the requested runtime extras against installed package metadata.
+
+For a targeted runtime update, activate a Python 3.11 environment and install the pinned lock-generation tool first. Replace `PACKAGE==VERSION` with the dependency and version you intend to update:
+
+```bash
+python -m pip install pip-tools==7.6.1
+python -m piptools compile --generate-hashes --output-file=requirements.txt --strip-extras --upgrade-package PACKAGE==VERSION pyproject.toml
+```
+
+Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
 
 If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 
@@ -294,16 +309,14 @@ existing receipt. `--overwrite-selection-receipt` deliberately replaces that
 chosen receipt; use it only to correct the same review, never to start a new
 audit history.
 
-Two proof/ conventions coexist, on purpose. Append-only receipts are never
-overwritten: that includes dated human-review receipts like the one above and
-content-addressed pre-ship receipts under `proof/preship-reviews/v2/` (never
-edited in place; `--reattest` retires only a branch's own pre-integration
-receipts before they land — a landed receipt is never removed). Fixed-name
-current-state files (`proof/checks.txt`, `proof/review-findings.json`) use Git
-history as their audit trail. The legacy fixed-name `proof/preship-review.json`
-is retired — pre-ship evidence is v2 receipts only, precisely because a
-fixed-name evidence file made every pair of concurrent PRs conflict. New proof
-artifacts should say which convention they follow.
+Accepted media and human-review receipts remain immutable. Historical
+content-addressed receipts under `proof/preship-reviews/v2/` remain readable
+with the standalone verifier; they are no longer required for PR or landing
+admission and must not be refreshed for ordinary work.
+
+Keep current implementation checks and review handoffs in the workspace's
+gitignored artifacts. Do not recreate retired fixed-name proof files.
+Review, required checks, and normal landing gates still apply.
 
 Content-addressing makes a v2 receipt deterministic and binds it to the reviewed
 tree; it does not authenticate who created it. `source_record_sha256` identifies
@@ -375,6 +388,9 @@ branch code, test credentials, or synthetic state to the live home.
 When behavior changes, update the matching docs in the same change:
 
 - `README.md` for user-facing setup and route changes
+- `ha-addon/README.md` and `ha-addon/mammamiradio/DOCS.md` for Home Assistant
+  install steps and First Listen labels
+- `docs/integrations/` for integration setup and playback routes
 - `docs/architecture.md` for runtime flow and system design changes
 - `CLAUDE.md` for the codebase map used by coding agents
 - `docs/troubleshooting.md` for failure modes users will actually hit

@@ -20,6 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+if __package__:
+    from .public_tree_safety import entity_violations
+else:
+    from public_tree_safety import entity_violations
+
 _PROTECTED_PATH = r"/(?:config|data|addon_configs)(?:/[^\s,;:)]*)?"
 _IMPERATIVE_WRITE = (
     r"(?:edit|write|create|overwrite|truncate|delete|remove|clear|modify|export|copy|"
@@ -153,7 +158,6 @@ _HISTORICAL_REQUIREMENT = re.compile(
     r"^(?:The\s+)?(?:old|former|previous)\s+(?:release|policy|process)\s+(?:required|used to)\b",
     re.IGNORECASE,
 )
-_HOUSEHOLD_IDENTIFIER = re.compile(r"\b(?:person|device_tracker|lock)\.([a-z0-9_]+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -188,7 +192,10 @@ class ProseUnit:
 
 
 def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    if "\0" in text:
+        raise UnicodeError("unexpected NUL in documentation")
+    return text
 
 
 def _blocks(text: str) -> list[Block]:
@@ -543,13 +550,11 @@ def _is_emit_command(line: str) -> bool:
 
 
 def public_example_identity_issues(path: Path, text: str) -> list[Issue]:
-    """Selected public examples use synthetic IDs, including inside code fences."""
-    issues: list[Issue] = []
-    for line_number, line in enumerate(text.splitlines(), 1):
-        if any(not match.group(1).lower().startswith("example_") for match in _HOUSEHOLD_IDENTIFIER.finditer(line)):
-            # Never reproduce the identifying value in a public CI log.
-            issues.append(Issue(path, line_number, "non-synthetic household identifier", "use an example_ object ID"))
-    return issues
+    """Public examples share the tracked-tree policy, including code fences."""
+    return [
+        Issue(path, line, "non-synthetic household identifier", "use an example_ object ID")
+        for line, _ in sorted(entity_violations(path.as_posix(), text))
+    ]
 
 
 def _find_closing(text: str, start: int, opener: str, closer: str) -> int | None:
@@ -757,11 +762,145 @@ def relative_link_issues(path: Path, text: str) -> list[Issue]:
     return issues
 
 
+_LISTING_SCHEMES = frozenset({"http", "https", "mailto"})
+_HTML_TARGET_RE = re.compile(
+    r"""\b(?:href|src|srcset|poster|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""",
+    re.IGNORECASE,
+)
+
+
+def _listing_target_ok(target: str) -> bool:
+    """Only a fully qualified URL resolves inside the Home Assistant frontend.
+
+    A bare ``#fragment`` needs no base. Everything else, including a
+    site-absolute ``/docs/x.png`` (which Home Assistant would serve from its own
+    host), a protocol-relative ``//host/x`` and a host-less ``http:x``, is
+    reported.
+    """
+    if not target or target.startswith("#"):
+        return True
+    parsed = urlsplit(target)
+    if parsed.scheme == "mailto":
+        return True
+    return parsed.scheme in _LISTING_SCHEMES and bool(parsed.netloc)
+
+
+def _listing_paragraphs(text: str) -> list[tuple[int, str]]:
+    """Join each paragraph outside a code fence into one line.
+
+    The Markdown scanners in this module work line by line, so a link whose
+    text wraps onto the next line, or a reference definition whose destination
+    sits on the line after the label, is invisible to them. A store listing is
+    short prose where wrapping is routine, so the listing rule reads it one
+    paragraph at a time instead. Each entry is ``(first line number, text)``.
+    """
+    paragraphs: list[tuple[int, str]] = []
+    current: list[str] = []
+    current_start = 0
+    in_fence = False
+    fence_marker = ""
+    fence_length = 0
+
+    def flush() -> None:
+        if current:
+            paragraphs.append((current_start, " ".join(part.strip() for part in current)))
+            current.clear()
+
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line_number = index + 1
+        line = lines[index]
+        index += 1
+        stripped = line.lstrip()
+        fence = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence:
+            marker = fence.group(1)[0]
+            length = len(fence.group(1))
+            if not in_fence:
+                flush()
+                in_fence = True
+                fence_marker = marker
+                fence_length = length
+            elif marker == fence_marker and length >= fence_length:
+                in_fence = False
+            continue
+        if in_fence:
+            continue
+        if not stripped:
+            flush()
+            continue
+        definition = _REFERENCE_DEFINITION.match(line)
+        if definition:
+            # A reference definition is a line-anchored construct, so each one
+            # is its own paragraph; only an empty destination pulls in the next
+            # line, which CommonMark allows.
+            flush()
+            if not definition.group(2).strip() and index < len(lines) and lines[index].strip():
+                paragraphs.append((line_number, f"{line.strip()} {lines[index].strip()}"))
+                index += 1
+            else:
+                paragraphs.append((line_number, line))
+            continue
+        if not current:
+            current_start = line_number
+        current.append(line)
+    flush()
+    return paragraphs
+
+
+_CODE_SPAN_RE = re.compile(r"`+[^`]*`+")
+
+
+def _listing_targets(paragraph: str) -> list[str]:
+    targets: list[str] = []
+    # `[x](../y)` or `data = 5` inside a code span is prose about markup, not markup.
+    prose = _CODE_SPAN_RE.sub(" ", paragraph)
+    links, _ = markdown_links(prose)
+    targets.extend(link.target for link in links)
+    for match in _HTML_TARGET_RE.finditer(prose):
+        value = next(group for group in match.groups() if group is not None)
+        # srcset lists "url descriptor, url descriptor"; every URL counts.
+        for candidate in value.split(","):
+            first = candidate.strip().split()
+            if first:
+                targets.append(first[0])
+    return targets
+
+
+def listing_link_issues(path: Path, text: str) -> list[Issue]:
+    """Flag links and images in an app's store listing that are not full URLs.
+
+    Supervisor renders the per-app README inside the Home Assistant frontend,
+    which has no repo-relative base, so ``../../docs/x.md`` resolves to nothing
+    and an image silently shows as broken. Only absolute URLs survive the trip.
+    Raw HTML ``href``/``src``-style attributes are held to the same rule,
+    because the frontend keeps ``<img>`` tags. Paragraphs are joined first so a
+    wrapped link cannot hide from the check.
+    """
+    issues: list[Issue] = []
+    for line_number, paragraph in _listing_paragraphs(text):
+        for raw_target in _listing_targets(paragraph):
+            target = html.unescape(raw_target.strip())
+            if _listing_target_ok(target):
+                continue
+            issues.append(
+                Issue(
+                    path,
+                    line_number,
+                    "relative link in a store listing",
+                    f"Home Assistant cannot resolve this, use an absolute URL: {target}",
+                )
+            )
+    return issues
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--copy", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--links", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--persistence", nargs="*", default=[], metavar="FILE")
+    parser.add_argument("--listing", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--release-policy", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--public-examples", nargs="*", default=[], metavar="FILE")
     return parser.parse_args()
@@ -773,7 +912,7 @@ def main() -> int:
     cache: dict[Path, str] = {}
 
     for raw_path in dict.fromkeys(
-        [*args.copy, *args.links, *args.persistence, *args.release_policy, *args.public_examples]
+        [*args.copy, *args.links, *args.persistence, *args.listing, *args.release_policy, *args.public_examples]
     ):
         path = Path(raw_path)
         try:
@@ -793,6 +932,10 @@ def main() -> int:
         path = Path(raw_path)
         if path in cache:
             issues.extend(options_json_durability_issues(path, cache[path]))
+    for raw_path in args.listing:
+        path = Path(raw_path)
+        if path in cache:
+            issues.extend(listing_link_issues(path, cache[path]))
     for raw_path in args.release_policy:
         path = Path(raw_path)
         if path in cache:

@@ -61,6 +61,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Demo MP3s / SFX / studio bleeds / logo             | `mammamiradio/assets/`                       |
 | HACS/Home Assistant integration                    | `custom_components/mammamiradio/`            |
 | Home Assistant add-on packaging                    | `ha-addon/mammamiradio/` + `ha-addon/mammamiradio-edge/` |
+| Apps store listing (blurb, intro, icon, logo)      | each app folder's `config.yaml` + `README.md` + `icon.png` / `logo.png` |
 | Disposable local HA + VLC speaker lab              | `scripts/first-listen-lab.sh`                |
 
 ## Tests
@@ -94,68 +95,28 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Deploy / production reality      | `docs/operations.md`             |
 | Common failures + recovery       | `docs/troubleshooting.md`        |
 | HA addon release process         | `docs/runbooks/ha-addon.md`      |
+| Which file paints which store pixel | `docs/runbooks/ha-addon.md` (Store listing) |
 | Disposable First Listen HA lab   | `docs/runbooks/first-listen-local-ha.md` |
 | HACS/Home Assistant integration  | `docs/integrations/ha-integration.md` |
-| HA privacy + upstream proposals  | `docs/integrations/ha-privacy-and-upstream-proposals.md` |
 | Festival Mode (operator guide)   | `docs/festival-mode.md`          |
 | Adding a new party mode theme    | `docs/party-mode-extension.md`   |
 | Design system (colors, fonts)    | `docs/design/system.md`          |
 | Admin panel layout standards     | `docs/design/admin-panel.md`     |
-| Admitted-audio queue refactor    | `docs/2026-07-27-admitted-audio-queue-refactor.md` |
-| Radio appliance architecture ADR | `docs/2026-08-20-open-source-radio-landscape-assessment.md` |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
 | Parallel workspaces + landing    | `docs/runbooks/parallel-workspaces.md` |
 | Listener QS integration train    | `docs/listener-qs-train.md`      |
-| Cathedral restructure plan       | `docs/archive/2026-04-28-cathedral-restructure.md` |
 
-## God modules pending split
+## Runtime ownership
 
-Two modules carry a `# TODO: split` marker referencing the cathedral plan
-(`docs/archive/2026-04-28-cathedral-restructure.md`, PRs 5 & 6, deferred after "the
-cathedral has walls"):
+- `web/streamer.py` owns the live stream, playback loop and HTTP routes.
+- `web/status_payload.py` owns shared status serialization and diagnostics;
+  `web/auth.py` owns admin authentication and request protection.
+- `hosts/scriptwriter.py` assembles scripts from the prompt, relationship,
+  transition, fallback and station-name modules.
+- `home/profile.py` verifies private compatibility files and SQLite bindings.
+  `home/bindings.py` provides immutable rules; `home/compatibility.py` resolves
+  startup authority and `home/consent.py` stores the permanent narrow scope.
 
-- `mammamiradio/web/streamer.py` (after the status-payload leaf extraction)
-- `mammamiradio/hosts/scriptwriter.py`
-
-**Status — first cost-probe cut extracted, remaining train still tripwire-gated.** This
-is real debt, but no full multi-cut program is committed. No cadence or floor; remaining
-cuts defer behind a named tripwire (a feature demonstrably harder because of a god module,
-a token-burn event, or a positive degradation probe).
-
-1. **Degradation probe** — does an agent edit a **core-touching** `scriptwriter` task
-   (the Anthropic→OpenAI fallback chain, `_cached_system_prompt`, or the `max_tokens`/
-   GPT-5 path) measurably better against a split than the monolith? A leaf-only task is
-   not valid: host behavior already lives in the extracted leaves and never opens the
-   core. Positive → `scriptwriter` jumps the queue as product work.
-2. **Cost probe** — ship the narrowed first cut (below) and measure what it actually costs.
-
-**The cut menu (parked; the probes size it):**
-
-`streamer.py` → 4 cuts, in order:
-1. `status_payload.py` — **extracted** pure serialize/payload leaf:
-   `mammamiradio/web/status_payload.py` owns `_serialize_*`, `_paginated_tracks`,
-   `_status_now_playback`, `_page_bounds`, `_golden_path_status` (+TTL),
-   `_cached_cache_size_mb`, and `_ha_details_payload` behind a `streamer.py` facade.
-   **Still not moved:** `_public_status_payload`, the `_*_snapshot` family, or the
-   live-clock cluster (`_runtime_monotonic`/`_queue_empty_elapsed`/
-   `_silence_with_listeners`) — the playback loop and `/healthz`+`/readyz` call them, so
-   moving them risks an unplanned addon restart. They wait for a later
-   `runtime_health.py` leaf.
-2. `playback_loop.py` — `LiveStreamHub`, `run_playback_loop`, `_purge_queue_and_shadow`,
-   the live-clock cluster, norm-cache rescue (also fix the hardcoded paths in
-   `scripts/check-release-invariants.sh` in the same cut).
-3. `routes_listener.py` — the 12 listener routes (own `APIRouter`, combined in the facade).
-4. `routes_admin.py` — the ~45 admin routes; `streamer.py` becomes a thin facade.
-
-`scriptwriter.py` → 5 cuts, leaf-first: `script_shared.py` → `prompts.py` → `llm_client.py`
-→ `ads.py` → `banter.py` (facade last). Each cut updates the `hot_reload_modules` reload
-chain leaves-first in lockstep. Data leaves `prompt_world.py`, `relationship.py`,
-`transitions.py`, `fallbacks.py`, `station_name_guard.py` are already extracted.
-
-Every cut is behavior-preserving and byte-faithful: facade re-export + identity-guard
-test, whole-repo patch-string grep, per-module coverage floor, edge-soak on the Pi
-(`/public-status`, `/status`, `/healthz`, `/readyz`, first `/stream` byte). Full per-cut
-discipline: `docs/runbooks/refactor-cuts.md`.
-
-Until a remaining cut is explicitly scoped, these modules are postal addresses, not
-destinations. Ride the structure that exists today; do not pre-split.
+Keep extraction work behavior-preserving. Follow the
+[refactor checklist](runbooks/refactor-cuts.md) and explicitly scope changes to
+runtime ownership before moving code.

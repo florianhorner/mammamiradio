@@ -31,14 +31,15 @@ from mammamiradio.home.evening_memory import (
 )
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.playlist.downloader import _CACHE_PROTECTED
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 BASE = 1_780_000_000.0  # fixed epoch — deterministic ages
 
-COFFEE = "switch.bar_kaffeemaschine_steckdose"  # switch domain (GOLD tier) — candidate
-WASHER = "switch.bad_gross_waschmaschine_steckdose"  # switch domain (SILVER tier) — candidate
-POWER = "sensor.haushalt_stromverbrauch_gesamt"  # sensor domain, numeric — never a gag
-PERSON = "person.florian_horner"  # person.* always excluded
-LIGHT = "light.magic_areas_light_groups_wohnzimmer_all_lights"  # light domain — excluded by default
+COFFEE = "switch.example_coffee_switch"  # switch domain (GOLD tier) — candidate
+WASHER = "switch.example_laundry_switch"  # switch domain (SILVER tier) — candidate
+POWER = "sensor.example_household_power"  # sensor domain, numeric — never a gag
+PERSON = "person.example_resident_one"  # person.* always excluded
+LIGHT = "light.example_living_lights"  # light domain — excluded by default
 
 
 def ev(
@@ -124,16 +125,16 @@ def test_non_allowlisted_and_person_excluded():
 def test_salience_gold_beats_silver_same_count():
     gold = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=3, last_ts=BASE)
     silver = GagBucket(WASHER, "Lavatrice", "spento", "acceso", count=3, last_ts=BASE)
-    assert gold.salience(now=BASE) > silver.salience(now=BASE)
+    assert gold.salience(now=BASE, bindings=SYNTHETIC_BINDINGS) > silver.salience(now=BASE, bindings=SYNTHETIC_BINDINGS)
 
 
 def test_salience_rises_with_count_and_decays_with_age():
     low = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=2, last_ts=BASE)
     high = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=8, last_ts=BASE)
-    assert high.salience(now=BASE) > low.salience(now=BASE)
+    assert high.salience(now=BASE, bindings=SYNTHETIC_BINDINGS) > low.salience(now=BASE, bindings=SYNTHETIC_BINDINGS)
     fresh = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=3, last_ts=BASE)
     stale = GagBucket(COFFEE, "Caffè", "spento", "acceso", count=3, last_ts=BASE - 7200)
-    assert fresh.salience(now=BASE) > stale.salience(now=BASE)
+    assert fresh.salience(now=BASE, bindings=SYNTHETIC_BINDINGS) > stale.salience(now=BASE, bindings=SYNTHETIC_BINDINGS)
 
 
 # --- session lifecycle -------------------------------------------------------
@@ -390,7 +391,7 @@ def test_ledger_is_cache_protected():
 
 # --- operator-portable candidacy (Phase 1) -----------------------------------
 
-OTHER_COFFEE = "switch.kitchen_nespresso_plug"  # different home, same domain
+OTHER_COFFEE = "switch.example_kitchen_nespresso_plug"  # different home, same domain
 
 
 def test_domain_candidacy_fires_for_any_operators_switch():
@@ -403,44 +404,56 @@ def test_domain_candidacy_fires_for_any_operators_switch():
 
 def test_default_domains_are_candidates():
     led = EveningLedger()
-    for eid in ("switch.x", "fan.y", "lock.z", "vacuum.q", "binary_sensor.doorbell"):
+    for eid in (
+        "switch.example_x",
+        "fan.example_y",
+        "lock.example_z",
+        "vacuum.example_q",
+        "binary_sensor.example_doorbell",
+    ):
         assert led._is_gag_candidate(ev(eid, "off", "on", BASE + 1)), eid
 
 
 def test_noisy_domains_excluded_by_default():
     led = EveningLedger()
-    for eid in ("light.lamp", "sensor.temp", "climate.living", "media_player.tv", "weather.home"):
+    for eid in (
+        "light.example_lamp",
+        "sensor.example_temp",
+        "climate.example_living",
+        "media_player.example_tv",
+        "weather.example_home",
+    ):
         assert not led._is_gag_candidate(ev(eid, "idle", "active", BASE + 1)), eid
 
 
 def test_entity_denylist_silences_within_allowed_domain():
-    led = EveningLedger(entity_denylist=frozenset({"switch.noisy"}))
-    assert not led._is_gag_candidate(ev("switch.noisy", "off", "on", BASE + 1))
-    assert led._is_gag_candidate(ev("switch.other", "off", "on", BASE + 1))
+    led = EveningLedger(entity_denylist=frozenset({"switch.example_noisy"}))
+    assert not led._is_gag_candidate(ev("switch.example_noisy", "off", "on", BASE + 1))
+    assert led._is_gag_candidate(ev("switch.example_other", "off", "on", BASE + 1))
 
 
 def test_entity_allowlist_restricts_to_listed_entities():
-    led = EveningLedger(entity_allowlist=frozenset({"switch.only"}))
-    assert led._is_gag_candidate(ev("switch.only", "off", "on", BASE + 1))
+    led = EveningLedger(entity_allowlist=frozenset({"switch.example_only"}))
+    assert led._is_gag_candidate(ev("switch.example_only", "off", "on", BASE + 1))
     # Same domain, but not listed → excluded when an explicit allowlist is set.
-    assert not led._is_gag_candidate(ev("switch.other", "off", "on", BASE + 1))
+    assert not led._is_gag_candidate(ev("switch.example_other", "off", "on", BASE + 1))
 
 
 def test_domain_allowlist_override_replaces_default_set():
     led = EveningLedger(domain_allowlist=frozenset({"light"}))
-    assert led._is_gag_candidate(ev("light.lamp", "off", "on", BASE + 1))
-    assert not led._is_gag_candidate(ev("switch.coffee", "off", "on", BASE + 1))
+    assert led._is_gag_candidate(ev("light.example_lamp", "off", "on", BASE + 1))
+    assert not led._is_gag_candidate(ev("switch.example_coffee", "off", "on", BASE + 1))
 
 
 def test_numeric_excluded_even_under_override():
     led = EveningLedger(domain_allowlist=frozenset({"light"}))
-    assert not led._is_gag_candidate(ev("light.lamp", "10", "80", BASE + 1))
+    assert not led._is_gag_candidate(ev("light.example_lamp", "10", "80", BASE + 1))
 
 
 def test_forced_radio_event_bypasses_domain_and_numeric_rejection():
     led = EveningLedger()
     event = ev(
-        "sensor.custom_threshold",
+        "sensor.example_custom_threshold",
         "10",
         "80",
         BASE + 1,
@@ -455,12 +468,12 @@ def test_forced_radio_event_bypasses_domain_and_numeric_rejection():
 
 
 def test_forced_radio_event_still_honors_denylist_and_sentinels():
-    led = EveningLedger(entity_denylist=frozenset({"sensor.noisy"}))
-    assert not led._is_gag_candidate(ev("sensor.noisy", "10", "80", BASE + 1, force_gag_candidate=True))
+    led = EveningLedger(entity_denylist=frozenset({"sensor.example_noisy"}))
+    assert not led._is_gag_candidate(ev("sensor.example_noisy", "10", "80", BASE + 1, force_gag_candidate=True))
     assert not led._is_gag_candidate(
-        ev("sensor.custom_threshold", "unavailable", "80", BASE + 1, force_gag_candidate=True)
+        ev("sensor.example_custom_threshold", "unavailable", "80", BASE + 1, force_gag_candidate=True)
     )
-    assert not led._is_gag_candidate(ev("person.someone", "away", "home", BASE + 1, force_gag_candidate=True))
+    assert not led._is_gag_candidate(ev("person.example_someone", "away", "home", BASE + 1, force_gag_candidate=True))
 
 
 def test_forced_radio_event_cooldown_spent_only_after_mark_spoken(monkeypatch):
@@ -472,7 +485,7 @@ def test_forced_radio_event_cooldown_spent_only_after_mark_spoken(monkeypatch):
     led.observe(
         [
             ev(
-                "sensor.custom_threshold",
+                "sensor.example_custom_threshold",
                 "10",
                 "80",
                 BASE + 1,
@@ -480,7 +493,7 @@ def test_forced_radio_event_cooldown_spent_only_after_mark_spoken(monkeypatch):
                 gag_cooldown_seconds=120,
             ),
             ev(
-                "sensor.custom_threshold",
+                "sensor.example_custom_threshold",
                 "10",
                 "80",
                 BASE + 2,
@@ -502,9 +515,9 @@ def test_forced_radio_event_cooldown_spent_only_after_mark_spoken(monkeypatch):
 
 
 def test_load_applies_policy_overrides(tmp_path):
-    led = EveningLedger.load(tmp_path, domain_allowlist=["light"], entity_denylist=["light.x"])
+    led = EveningLedger.load(tmp_path, domain_allowlist=["light"], entity_denylist=["light.example_x"])
     assert led.domain_allowlist == frozenset({"light"})
-    assert led.entity_denylist == frozenset({"light.x"})
+    assert led.entity_denylist == frozenset({"light.example_x"})
     assert led.entity_allowlist == frozenset()  # None arg → stays default-empty
 
 
@@ -547,8 +560,8 @@ def test_rolled_quiet_session_does_not_reroll_every_poll():
 
 
 def test_render_gag_golden_snapshot():
-    light = GagBucket("switch.x", "Caffè", "spento", "acceso", count=2)
-    heavy = GagBucket("switch.x", "Caffè", "spento", "acceso", count=5)
+    light = GagBucket("switch.example_x", "Caffè", "spento", "acceso", count=2)
+    heavy = GagBucket("switch.example_x", "Caffè", "spento", "acceso", count=5)
     assert _render_gag(light) == "Caffè: acceso, di nuovo stasera."
     assert _render_gag(heavy) == "Caffè: acceso, praticamente non si ferma stasera."
 
@@ -556,44 +569,44 @@ def test_render_gag_golden_snapshot():
 def test_denylist_beats_explicit_allowlist():
     """A contradictory config (entity in both lists) excludes it — denylist wins."""
     led = EveningLedger(
-        entity_allowlist=frozenset({"switch.x"}),
-        entity_denylist=frozenset({"switch.x"}),
+        entity_allowlist=frozenset({"switch.example_x"}),
+        entity_denylist=frozenset({"switch.example_x"}),
     )
-    assert not led._is_gag_candidate(ev("switch.x", "off", "on", BASE + 1))
+    assert not led._is_gag_candidate(ev("switch.example_x", "off", "on", BASE + 1))
 
 
 def test_sentinel_transitions_excluded():
     """HA availability flaps (unavailable/unknown) on restart never form a gag."""
     led = EveningLedger()
     for old, new in (("unavailable", "on"), ("on", "unavailable"), ("unknown", "off")):
-        assert not led._is_gag_candidate(ev("binary_sensor.doorbell", old, new, BASE + 1)), (old, new)
+        assert not led._is_gag_candidate(ev("binary_sensor.example_doorbell", old, new, BASE + 1)), (old, new)
 
 
 def test_sentinel_transition_is_not_home_activity():
     """A device reconnecting on restart must not keep a quiet evening alive."""
     led = EveningLedger()
-    led.observe([ev("switch.coffee", "off", "on", BASE + 1)], now=BASE + 1)
+    led.observe([ev("switch.example_coffee", "off", "on", BASE + 1)], now=BASE + 1)
     # binary_sensor coming back online after a restart — not human activity.
-    led.observe([ev("binary_sensor.doorbell", "unavailable", "on", BASE + 100)], now=BASE + 100)
+    led.observe([ev("binary_sensor.example_doorbell", "unavailable", "on", BASE + 100)], now=BASE + 100)
     assert led.last_active == BASE + 1
 
 
 def test_passive_domains_do_not_advance_last_active():
     """weather/sun change on their own — they must not keep a quiet evening alive."""
     led = EveningLedger()
-    led.observe([ev("switch.coffee", "off", "on", BASE + 1)], now=BASE + 1)
-    led.observe([ev("weather.forecast_home", "cloudy", "sunny", BASE + 100)], now=BASE + 100)
+    led.observe([ev("switch.example_coffee", "off", "on", BASE + 1)], now=BASE + 1)
+    led.observe([ev("weather.example_weather", "cloudy", "sunny", BASE + 100)], now=BASE + 100)
     led.observe([ev("sun.sun", "above_horizon", "below_horizon", BASE + 200)], now=BASE + 200)
     assert led.last_active == BASE + 1
 
 
 def test_quiet_home_with_only_passive_changes_rolls_over():
     led = EveningLedger()
-    led.observe([ev("switch.coffee", "off", "on", BASE + 1)], now=BASE + 1)
+    led.observe([ev("switch.example_coffee", "off", "on", BASE + 1)], now=BASE + 1)
     # Only weather changes for the whole gap window — nobody's home.
-    led.observe([ev("weather.forecast_home", "sunny", "rainy", BASE + 7200)], now=BASE + 7200)
+    led.observe([ev("weather.example_weather", "sunny", "rainy", BASE + 7200)], now=BASE + 7200)
     later = BASE + 1 + EVENING_GAP_SECONDS + 60
-    led.observe([ev("switch.coffee", "off", "on", later)], now=later)
+    led.observe([ev("switch.example_coffee", "off", "on", later)], now=later)
     assert led.session_id == 2
 
 

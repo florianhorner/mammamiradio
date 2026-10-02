@@ -85,6 +85,7 @@ def _state_snapshot(app: FastAPI) -> dict[str, Any]:
         "chaos_cutover_epoch": state.chaos_cutover_epoch,
         "super_italian_mode": config.super_italian_mode,
         "broadcast_chain": config.audio.broadcast_chain,
+        "boundary_imaging": config.audio.boundary_imaging,
         "quality_profile": config.models.active_profile,
         "party_mode": config.party_mode,
         "host_personalities": tuple(
@@ -96,6 +97,7 @@ def _state_snapshot(app: FastAPI) -> dict[str, Any]:
                 "MAMMAMIRADIO_CHAOS_MODE",
                 "MAMMAMIRADIO_SUPER_ITALIAN",
                 "MAMMAMIRADIO_BROADCAST_CHAIN",
+                "MAMMAMIRADIO_BOUNDARY_IMAGING",
                 "MAMMAMIRADIO_QUALITY",
                 "MAMMAMIRADIO_FESTIVAL_MODE",
             )
@@ -162,6 +164,7 @@ JSON_BODY_WRITE_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/api/chaos"),
     ("POST", "/api/super-italian"),
     ("POST", "/api/broadcast-chain"),
+    ("POST", "/api/boundary-imaging"),
     ("POST", "/api/quality"),
     ("POST", "/api/party"),
     ("POST", "/api/credentials"),

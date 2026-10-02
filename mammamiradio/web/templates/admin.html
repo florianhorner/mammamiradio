@@ -463,6 +463,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .music-source-copy { min-width: 0; }
 .music-source-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; font-weight: 800; color: var(--cream); }
 .music-source-detail { margin-top: 3px; font-size: 11px; line-height: 1.45; color: rgba(245,237,216,0.65); }
+#localSourceDetail { white-space: pre-line; }
 .music-source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .music-source-actions .btn { min-width: 44px; min-height: 44px; }
 .music-source-note { margin: 0 2px; font-size: 11px; line-height: 1.45; color: rgba(245,237,216,0.58); }
@@ -2553,6 +2554,22 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               few tracks as the buffered queue cycles through, so give it a moment before you judge the change.
             </div>
           </div>
+
+          <div class="card-label">Transitions</div>
+          <div style="margin-bottom:14px">
+            <label class="super-italian-toggle">
+              <input type="checkbox" id="boundaryImagingToggle" class="super-italian-checkbox" onchange="toggleBoundaryImaging(this)" disabled>
+              <span><strong>Transitions</strong></span>
+            </label>
+            <div style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+              Short station sounds between songs and talk. Turn off to hear the plain cut.
+              The next break changes. The one already playing finishes as it is.
+            </div>
+            <div id="boundaryImagingReset" style="margin-top:6px;font-size:12px;line-height:1.8;color:var(--cream-dk)">
+              On Home Assistant, returns to the startup setting after a restart.
+            </div>
+            <div id="boundaryImagingCount" style="margin-top:6px;font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk)">Aired — times this session</div>
+          </div>
         </div>
 
         <!-- Group 3: Setup (collapsible — auto-collapses when all-ready) -->
@@ -2748,6 +2765,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   </div>
                   <div id="firstListenHomeChoice" hidden>
                   <div class="setup-home-preview-section" id="homeContextPreviewSection">
+                    <p class="setup-note" id="homeCompatibilityNotice" role="status" hidden></p>
                     <div class="semantic-visual permission-primer">
                       <div class="home-inspiration" aria-hidden="true"><span>☀<small>Daylight</small></span><span>☁<small>Weather</small></span><span>♫<small>Their next conversation</small></span></div>
                       <p class="privacy-promise" id="firstListenHomePromise">Preview the details. You decide what goes on air.</p>
@@ -3006,6 +3024,7 @@ const FIRST_LISTEN_STREAM='/stream?first_listen=1';
 const FIRST_LISTEN_LIVE_STREAM='/stream?first_listen=live';
 const FIRST_LISTEN_ARRIVAL_COPY=document.getElementById('firstListenShowCopy')?.innerHTML||'';
 const FIRST_LISTEN_ERRORS={
+  home_check_pending:{title:'Home access is still being checked',message:'The station keeps playing.',action:'Try the Home preview again in a moment.'},
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then try again.'},
   ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
   ha_unreachable:{title:'We can’t reach Home Assistant',message:'The station could not connect in time.',action:'Check that Home Assistant is online, then try again.'},
@@ -4700,7 +4719,7 @@ async function removeQueueItem(id,el){
 
 function statusDot(state,label,title=''){
   // Title serves as tooltip (desktop) AND aria-label (screen readers + mobile).
-  // Florian flagged on 2026-04-21: color + shape alone don't convey meaning,
+  // Pair color and shape with text so status remains understandable,
   // and tooltips don't work on mobile. The label itself must carry semantic
   // weight; the title repeats it in a full sentence for a11y.
   const safeTitle=title||label;
@@ -5230,23 +5249,35 @@ function mediaSourceStatusChip(state){
   chip.textContent=word;
   return chip;
 }
+function localMusicPlace(status){
+  const s=status&&typeof status==='object'?status:{};
+  if(typeof s.place==='string'&&s.place.trim())return s.place.trim();
+  const roots=Array.isArray(s.roots)?s.roots.filter(Boolean):[];
+  const root=String(roots[0]||'');
+  if(root.startsWith('/media/')&&root.length>'/media/'.length)return 'Media → '+root.slice('/media/'.length);
+  return root||'the configured music folder';
+}
 function localLibraryPresentation(status){
   const s=status&&typeof status==='object'?status:{};
   const active=Math.max(0,Number(s.active||0)||0),files=Math.max(0,Number(s.files_found||0)||0);
-  const summary=`${files} file${files===1?'':'s'} found · ${active} active`;
-  const roots=Array.isArray(s.roots)?s.roots.filter(Boolean):[];
-  const manage=`Manage files in ${roots[0]||'the configured music folder'}.`;
-  if(s.in_progress)return{state:'working',label:'Scanning local music',detail:manage};
-  if(s.error||s.complete===false)return{state:'degraded',label:`Local music · ${active} active`,detail:`Scan incomplete. Existing tracks kept. ${manage} Check the folders, then Scan now.`};
-  if(active)return{state:'ready',label:`Local music · ${active} track${active===1?'':'s'}`,detail:`${summary}. Joins the current rotation. ${manage}`};
-  return{state:'idle',label:'Local music · empty',detail:`${summary}. ${manage} Add a supported audio file, then Scan now.`};
+  const placeLine='Add files in '+localMusicPlace(s)+'.';
+  const withPlace=second=>placeLine+'\n'+second;
+  const summary=files+' file'+(files===1?'':'s')+' found · '+active+' active';
+  const missing=!s.in_progress&&s.folder_missing===true&&!s.error&&s.complete===false&&files===0&&active===0;
+  if(s.in_progress)return{state:'working',label:'Scanning local music',detail:placeLine};
+  if(missing)return{state:'blocked',label:'Local music · folder missing',detail:withPlace('That folder is not there yet. Add a song, then Scan now.')};
+  if(s.error||s.complete===false)return{state:'degraded',label:'Local music · '+active+' active',detail:withPlace('Scan incomplete. '+(active?'Existing tracks kept. ':'')+'Check the folders, then Scan now.')};
+  if(active)return{state:'ready',label:'Local music · '+active+' track'+(active===1?'':'s'),detail:withPlace(summary+'. Joins the current rotation.')};
+  return{state:'idle',label:'Local music · empty',detail:withPlace(summary+'. Add a supported audio file, then Scan now.')};
 }
 function localLibraryScanToast(status){
   const s=status&&typeof status==='object'?status:{};
+  const active=Math.max(0,Number(s.active||0)||0),files=Math.max(0,Number(s.files_found||0)||0);
   if(s.already_in_progress)return 'A scan is already running.';
+  if(s.folder_missing===true&&!s.error&&s.complete===false&&files===0&&active===0)return 'That folder is not there yet. Add a song, then Scan now.';
   if(s.error||s.ok===false)return 'Scan failed. Check the watched folders and try again.';
-  if(s.complete===false)return 'Scan incomplete. Existing tracks kept. Check the folders, then Scan now.';
-  if(Number(s.added||0)||Number(s.removed||0))return `Local music updated: ${Number(s.added||0)} added, ${Number(s.removed||0)} removed.`;
+  if(s.complete===false)return 'Scan incomplete. '+(active?'Existing tracks kept. ':'')+'Check the folders, then Scan now.';
+  if(Number(s.added||0)||Number(s.removed||0))return 'Local music updated: '+Number(s.added||0)+' added, '+Number(s.removed||0)+' removed.';
   return 'No changes. Add or remove files, then Scan now.';
 }
 function renderLocalLibraryStatus(status){
@@ -5949,6 +5980,7 @@ function updateFirstListenSuccess(){
   renderFirstListenCueProgress();
   if(!show){success.classList.remove('is-celebrating');return}
   const projection=firstListenProjection();
+  renderHomeCompatibilityNotice(projection);
   const sourceState=firstListenSourceState(projection);
   const speaker=_firstListenUi.selectedName||'this device';
   const privacy=projection.privacyEnabled?'Home context is on':'Home stays private';
@@ -6117,7 +6149,8 @@ function firstListenProjection(){
     (!pendingReceiptProjected&&serverProofMatches&&(first.accepted_attempt_id||first.accepted_at||verification.attempt_id))||
     _firstListenUi.attemptId||_firstListenUi.dispatch==='accepted'||_firstListenUi.dispatch==='receipt_failed'
   );
-  const heard=Boolean(
+  const freshSoundRequired=guided.home_context?.compatibility?.fresh_sound_required===true;
+  const heard=!freshSoundRequired&&Boolean(
     (!localProofPending&&!pendingReceiptProjected&&serverProofMatches&&(first.audio_complete||first.heard_at||verification.heard===true||verification.status==='heard'))||
     localHeard
   );
@@ -6130,9 +6163,9 @@ function firstListenProjection(){
     : Boolean(privacy.enabled||privacy.status==='enabled');
   const haAccess=(privacy||{}).homeassistant_access!==false;
   const showAi=legacy||first.show_ai===true||heard||privacyReviewed;
-  const existingAccess=!replay&&(legacy||first.install_origin==='existing');
+  const existingAccess=!freshSoundRequired&&!replay&&(legacy||first.install_origin==='existing');
   const privacyUnlocked=heard||(existingAccess&&!_firstListenUi.selectionDirty&&!proofPending);
-  return{guided,first,verification,privacy,legacy,accepted,heard,privacyReviewed,privacyEnabled,privacyUnlocked,showAi,haAccess,proofPending};
+  return{guided,first,verification,privacy,legacy,accepted,heard,privacyReviewed,privacyEnabled,privacyUnlocked,showAi,haAccess,proofPending,freshSoundRequired};
 }
 const FIRST_LISTEN_SOURCE_ROWS=[
   {kind:'live_charts',aliases:['live_charts','charts','youtube'],label:'Live charts'},
@@ -6357,8 +6390,24 @@ function firstListenPendingPrivacyChoice(projection,localChoice=_firstListenUi.p
   }
   return null;
 }
+function renderHomeCompatibilityNotice(projection){
+  const compatibility=projection.guided.home_context?.compatibility||{};
+  const homeNotice=document.getElementById('homeCompatibilityNotice');
+  if(homeNotice){
+    const notices={
+      checking:'Checking saved Home access. The station keeps playing; Home stays private during the check.',
+      unavailable:'Saved Home access could not be checked. Home stays private while the station retries. The radio keeps playing.',
+      needs_consent:'Home stays private. Confirm the sound, then preview daylight and weather to share just those details. Eligible installations can recover matching private evidence; other older installations need later Home Profile support for broader Home moments.',
+      ambient:'This installation shares only daylight and weather. Keeping Home private revokes access; the narrow scope stays in place.'
+    };
+    const message=notices[compatibility.status]||'';
+    if(homeNotice.textContent!==message)homeNotice.textContent=message;
+    homeNotice.hidden=!homeNotice.textContent;
+  }
+ }
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
+  renderHomeCompatibilityNotice(projection);
   const sourceState=firstListenSourceState(projection);
   const source=sourceState.source;
   const sourceRows=Array.isArray(source.rows)?source.rows:[];
@@ -6367,7 +6416,7 @@ function renderFirstListenProgress(){
   const {healthy,recoveryOnAir,recoveryAvailable,continuityAvailable}=sourceState;
   renderFirstListenSources(source);
 
-  const priorInstall=!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
+  const priorInstall=!projection.freshSoundRequired&&!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
   document.getElementById('firstListenRestartBtn').disabled=firstListenRestartBusy();
   const restartNote=document.getElementById('firstListenRestartNote');
   restartNote.hidden=!_firstListenUi.restarting;
@@ -7057,6 +7106,8 @@ async function verifyFirstListen(heard,el){
       return;
     }
     _firstListenUi.verification=requestedHeard?'heard':'not_yet';
+    const compatibility=_firstListenUi.projection?.guided_setup?.home_context?.compatibility;
+    if(compatibility?.status==='needs_consent')compatibility.fresh_sound_required=!requestedHeard;
     _firstListenUi.repairOpen=!requestedHeard;
     if(requestedHeard){
       _firstListenUi.attemptId=String(resp?.attempt_id||resp?.accepted_attempt_id||_firstListenUi.attemptId||'');
@@ -7138,7 +7189,7 @@ async function chooseFirstListenPrivacy(enabled,el){
   const requestedEnabled=Boolean(enabled);
   const projection=firstListenProjection();
   if(!projection.privacyUnlocked||_firstListenUi.privacySaving||(requestedEnabled&&!_firstListenUi.privacyPreviewValid))return;
-  const priorInstall=!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
+  const priorInstall=!projection.freshSoundRequired&&!_firstListenUi.restarting&&(projection.legacy||projection.first.install_origin==='existing');
   const reviewingPrivacy=_firstListenUi.reviewStep==='privacy';
   const reviewTrigger=_firstListenUi.reviewTrigger;
   const continuityAvailable=firstListenSourceState(projection).continuityAvailable;
@@ -7291,7 +7342,7 @@ function renderFirstListen(setup,modeLabel,stationLabel){
   const meta=document.getElementById('setupMeta');
   const next=document.getElementById('setupNext');
   const badge=document.getElementById('setupReadyBadge');
-  const priorInstall=projection.legacy||projection.first.install_origin==='existing';
+  const priorInstall=!projection.freshSoundRequired&&(projection.legacy||projection.first.install_origin==='existing');
   if(meta)meta.textContent='Listening works without an AI key. Home permission is a separate choice.';
   if(priorInstall&&!projection.privacyReviewed){
     if(headline)headline.textContent='Your existing station stays as it is.';
@@ -7617,7 +7668,7 @@ function _typeRecentSegments(segments,gen){
 // Cap the typewriter to lines an operator would actually wait out — a long
 // ad-block recap typed at ~55ms/char could otherwise leave this diagnostic
 // panel blank for many seconds during exactly the moment an operator wants
-// to read it (adversarial review finding). Longer lines render instantly,
+// to read it. Longer lines render instantly,
 // same as the reduced-motion path.
 const TT_TYPE_MAX_CHARS=200;
 function _recentLineEl(host,text,reduced,segments,tagHost){
@@ -8935,6 +8986,48 @@ async function loadBroadcastChainToggle(){
     if(cb&&r&&typeof r.broadcast_chain==='boolean')cb.checked=r.broadcast_chain;
   }catch(e){/* ignore — toggle re-syncs from the server on next load */}
 }
+function boundaryAiredLabel(n){
+  return n===1?'Aired 1 time this session':'Aired '+n+' times this session';
+}
+function updateBoundaryImagingReset(r){
+  const reset=document.getElementById('boundaryImagingReset');
+  if(reset&&r&&typeof r.resets_on_restart==='boolean')reset.hidden=!r.resets_on_restart;
+}
+async function loadBoundaryImagingToggle(){
+  const cb=document.getElementById('boundaryImagingToggle');
+  if(cb)cb.disabled=true;
+  try{
+    const r=await api('GET','/api/boundary-imaging');
+    if(cb&&r&&typeof r.boundary_imaging==='boolean')cb.checked=r.boundary_imaging;
+    updateBoundaryImagingReset(r);
+    const count=document.getElementById('boundaryImagingCount');
+    if(count&&r&&typeof r.carts_aired==='number')count.textContent=boundaryAiredLabel(r.carts_aired);
+  }catch(e){/* ignore — toggle re-syncs from the server on next load */}
+  finally{if(cb)cb.disabled=false;}
+}
+async function toggleBoundaryImaging(el){
+  const value=!!el.checked;
+  el.disabled=true;
+  try{
+    const r=await api('POST','/api/boundary-imaging',{boundary_imaging:value});
+    if(r&&r.ok){
+      el.checked=value;
+      updateBoundaryImagingReset(r);
+      toast(value?'Transitions on from the next break':'Transitions off from the next break');
+    }else{
+      el.checked=!value;
+      toast(wayOut('change the transitions'));
+    }
+  }catch(_){
+    el.checked=!value;
+    toast(offlineMsg());
+  }finally{
+    // A status response requested before this save must not undo the choice.
+    ++_fastPollGeneration;
+    el.disabled=false;
+  }
+}
+
 async function toggleBroadcastChain(el){
   const value=!!el.checked;
   el.disabled=true;
@@ -9046,6 +9139,13 @@ function renderCostSplit(con){
   target.innerHTML=(rows.join('')||'')+(notes.length?'<div class="cost-split-note">'+notes.map(esc).join(' ')+'</div>':'');
 }
 function updateEngineRoom(st,caps){
+  const bi=st&&st.runtime_health&&st.runtime_health.boundary_imaging;
+  const biCount=document.getElementById('boundaryImagingCount');
+  if(biCount&&bi&&typeof bi.carts_aired==='number'){
+    biCount.textContent=boundaryAiredLabel(bi.carts_aired);
+  }
+  const biToggle=document.getElementById('boundaryImagingToggle');
+  if(biToggle&&!biToggle.disabled&&bi&&typeof bi.enabled==='boolean'&&document.activeElement!==biToggle)biToggle.checked=bi.enabled;
   const rt=document.getElementById('engineRuntime');
   if(!rt)return;
   const uptime=(st.uptime_sec||st.uptime_s)?Math.round((st.uptime_sec||st.uptime_s)/60)+'m':'—';
@@ -9448,6 +9548,7 @@ refresh();
 });
 loadSuperItalianToggle();
 loadBroadcastChainToggle();
+loadBoundaryImagingToggle();
 loadQuality();
 loadChaosToggle();
 loadFestivalToggle();

@@ -47,3 +47,6 @@ configuration:
   norm_cache_mb:
     name: Music cache size (MB)
     description: "Disk space reserved for ready-to-play songs. Each song uses about 5 MB, so 1500 MB holds roughly 300 songs. Cached songs start almost instantly; uncached songs take about a minute to prepare. If a few songs repeat while others rarely play, increase this value. Reduce it when the add-on data disk is low on space. On-Air Sound roughly doubles the space used by each song. The setting takes effect after the add-on restarts."
+  music_folder:
+    name: Music folder
+    description: "Folder in the Home Assistant Media panel the station scans for your songs. Default mammamiradio. Another name plays that folder in place when it stays inside Media. A name that leaves Media is ignored. Takes effect after the app restarts."

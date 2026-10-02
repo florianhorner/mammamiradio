@@ -185,25 +185,410 @@ def test_parser_exits_zero_on_valid_options():
     assert rc == 0
 
 
-def test_addon_runtime_exports_one_music_directory_for_persistent_and_fallback_data():
-    body = RUN_SH.read_text(encoding="utf-8")
+_MUSIC_CLEARED_ENV = (
+    "MAMMAMIRADIO_MUSIC_FOLDER",
+    "MAMMAMIRADIO_MUSIC_DIR",
+    "MAMMAMIRADIO_PROC_MOUNTS",
+    "MAMMAMIRADIO_MEDIA_ROOT",
+    "MAMMAMIRADIO_DATA_DIR",
+    "MAMMAMIRADIO_FALLBACK_BASE",
+    "MAMMAMIRADIO_CACHE_DIR",
+    "MAMMAMIRADIO_TMP_DIR",
+)
 
-    # The persistent export is the unconditional default...
-    fallback_branch_match = re.search(
-        r"(?ms)^if ! mkdir -p /data/cache /data/music /data/tmp\b.*?^fi$",
-        body,
+MUSIC_FOLDER_DESCRIPTION = (
+    "Folder in the Home Assistant Media panel the station scans for your songs. "
+    "Default mammamiradio. Another name plays that folder in place when it stays inside Media. "
+    "A name that leaves Media is ignored. Takes effect after the app restarts."
+)
+
+
+def _extract_music_block() -> str:
+    src = RUN_SH.read_text(encoding="utf-8")
+    start = src.index("# BEGIN music path\n")
+    end = src.index("# END music path\n")
+    return src[start:end]
+
+
+def _run_music_block(
+    tmp_path: Path,
+    *,
+    mounted: bool,
+    folder: str | None = None,
+    prepare=None,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str], Path, Path, Path]:
+    """Run the real music-path shell block against temp mount and data roots."""
+    media = tmp_path / "media"
+    data = tmp_path / "data"
+    fallback = tmp_path / "fallback"
+    if prepare is not None:
+        prepare(media, data)
+    mounts = tmp_path / "mounts"
+    if mounted:
+        mounts.write_text(f"tmpfs {media} tmpfs rw 0 0\n", encoding="utf-8")
+    else:
+        mounts.write_text("tmpfs /not-media tmpfs rw 0 0\n", encoding="utf-8")
+    script = "\n".join(
+        [
+            "set -e",
+            _extract_music_block(),
+            'printf "MUSIC=%s\\n" "$MAMMAMIRADIO_MUSIC_DIR"',
+            'printf "CACHE=%s\\n" "$MAMMAMIRADIO_CACHE_DIR"',
+            'printf "TMP=%s\\n" "$MAMMAMIRADIO_TMP_DIR"',
+        ]
     )
-    assert fallback_branch_match, "run.sh lost its /data-not-writable fallback branch"
-    fallback_branch = fallback_branch_match.group(0)
-    before_branch = body[: fallback_branch_match.start()]
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="/data/music"' in before_branch
-    # ... and the fallback export must stay INSIDE the failure branch. An
-    # unconditional fallback would silently move every install off the
-    # persistent /data/music library.
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' in fallback_branch
-    assert 'mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"' in fallback_branch
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in before_branch
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in body[fallback_branch_match.end() :]
+    env = os.environ.copy()
+    for key in _MUSIC_CLEARED_ENV:
+        env.pop(key, None)
+    env["MAMMAMIRADIO_PROC_MOUNTS"] = str(mounts)
+    env["MAMMAMIRADIO_MEDIA_ROOT"] = str(media)
+    env["MAMMAMIRADIO_DATA_DIR"] = str(data)
+    env["MAMMAMIRADIO_FALLBACK_BASE"] = str(fallback)
+    if folder is not None:
+        env["MAMMAMIRADIO_MUSIC_FOLDER"] = folder
+    result = subprocess.run(
+        ["/bin/sh", "-c", script],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if line.startswith(("MUSIC=", "CACHE=", "TMP=")):
+            key, _, value = line.partition("=")
+            values[key] = value
+    return result, values, media, data, fallback
+
+
+def test_music_path_fallback_export_stays_inside_the_unmounted_failure_branch():
+    body = RUN_SH.read_text(encoding="utf-8")
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="/data/music"' not in body
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$music_dir"' in body
+    assert 'mkdir -p "$MEDIA_ROOT"' not in body
+    assert body.count('export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"') == 1
+    unmounted = body.index("Media is not mounted.")
+    fallback = body.index('export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"')
+    assert unmounted < fallback
+    failure = body[unmounted:fallback]
+    assert 'mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$DATA_MUSIC" "$MAMMAMIRADIO_TMP_DIR"' in failure
+
+
+def test_mounted_media_creates_the_default_folder_and_leaves_data_music_alone(tmp_path):
+    result, values, media, data, _fallback = _run_music_block(
+        tmp_path, mounted=True, prepare=lambda media, data: media.mkdir()
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert (media / "mammamiradio").is_dir()
+    assert not (data / "music").exists()
+    assert (data / "cache").is_dir()
+
+
+def test_missing_media_mount_uses_data_music_and_does_not_create_media(tmp_path):
+    result, values, media, data, _fallback = _run_music_block(tmp_path, mounted=False)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(data / "music")
+    assert (data / "music").is_dir()
+    assert not media.exists()
+    assert "Media is not mounted." in result.stdout
+
+
+def test_linked_media_root_never_receives_the_default_folder(tmp_path):
+    outside = tmp_path / "outside"
+
+    def prepare(media, data):
+        outside.mkdir()
+        media.symlink_to(outside)
+
+    result, values, _media, data, _fallback = _run_music_block(tmp_path, mounted=True, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(data / "music")
+    assert not (outside / "mammamiradio").exists()
+
+
+@pytest.mark.parametrize("folder", [".", "..", "/tmp/outside", "foo/../../etc", "mammamiradio/", "bad\x01name"])
+def test_invalid_music_folder_falls_back_to_the_default_media_folder(tmp_path, folder):
+    result, values, media, _data, _fallback = _run_music_block(
+        tmp_path,
+        mounted=True,
+        folder=folder,
+        prepare=lambda media, data: media.mkdir(),
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert (media / "mammamiradio").is_dir()
+    assert "not a folder inside Media" in result.stdout
+
+
+def test_missing_custom_folder_is_exported_and_not_created(tmp_path):
+    result, values, media, _data, _fallback = _run_music_block(
+        tmp_path,
+        mounted=True,
+        folder="crate",
+        prepare=lambda media, data: media.mkdir(),
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "crate")
+    assert not (media / "crate").exists()
+    assert not (media / "mammamiradio").exists()
+
+
+def test_existing_default_folder_is_left_in_place(tmp_path):
+    def prepare(media, data):
+        target = media / "mammamiradio"
+        target.mkdir(parents=True)
+        (target / "keep.txt").write_text("stay", encoding="utf-8")
+
+    result, values, media, _data, _fallback = _run_music_block(tmp_path, mounted=True, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert (media / "mammamiradio" / "keep.txt").read_text(encoding="utf-8") == "stay"
+    assert "could not create" not in result.stdout
+
+
+def test_music_folder_metacharacters_stay_one_literal_path(tmp_path):
+    name = "DJ's $HOME"
+
+    def prepare(media, data):
+        media.mkdir()
+        (media / name).mkdir()
+
+    result, values, media, _data, _fallback = _run_music_block(tmp_path, mounted=True, folder=name, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / name)
+
+
+def test_symlink_music_folder_uses_data_music_and_is_not_followed(tmp_path):
+    outside = tmp_path / "outside"
+
+    def prepare(media, data):
+        media.mkdir()
+        outside.mkdir()
+        (media / "crate").symlink_to(outside)
+
+    result, values, _media, data, _fallback = _run_music_block(tmp_path, mounted=True, folder="crate", prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(data / "music")
+    assert (data / "music").is_dir()
+    assert list(outside.iterdir()) == []
+    assert "not following the link" in result.stdout
+
+
+def test_real_custom_folder_is_used_when_the_default_folder_is_a_symlink(tmp_path):
+    outside = tmp_path / "outside"
+
+    def prepare(media, data):
+        media.mkdir()
+        outside.mkdir()
+        (media / "mammamiradio").symlink_to(outside)
+        (media / "crate").mkdir()
+
+    result, values, media, _data, _fallback = _run_music_block(tmp_path, mounted=True, folder="crate", prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "crate")
+    assert list(outside.iterdir()) == []
+
+
+def test_existing_folder_whose_real_path_leaves_media_is_rejected(tmp_path):
+    outside = tmp_path / "outside"
+
+    def prepare(media, data):
+        media.mkdir()
+        (outside / "songs").mkdir(parents=True)
+        (media / "jump").symlink_to(outside)
+
+    result, values, media, _data, _fallback = _run_music_block(
+        tmp_path, mounted=True, folder="jump/songs", prepare=prepare
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert (media / "mammamiradio").is_dir()
+    assert list((outside / "songs").iterdir()) == []
+
+
+def test_missing_folder_behind_a_symlinked_parent_is_rejected(tmp_path):
+    outside = tmp_path / "outside"
+
+    def prepare(media, data):
+        media.mkdir()
+        outside.mkdir()
+        (media / "jump").symlink_to(outside)
+
+    result, values, media, _data, _fallback = _run_music_block(
+        tmp_path, mounted=True, folder="jump/songs", prepare=prepare
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert not (outside / "songs").exists()
+    assert "not a folder inside Media" in result.stdout
+
+
+def test_default_media_mkdir_failure_still_exports_the_media_path(tmp_path):
+    def prepare(media, data):
+        media.write_text("not a directory", encoding="utf-8")
+        data.mkdir()
+
+    result, values, media, _data, _fallback = _run_music_block(tmp_path, mounted=True, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert media.is_file()
+    assert "could not create" in result.stdout
+    assert "still read that folder" in result.stdout
+
+
+def test_unwritable_data_does_not_replace_a_mounted_media_path(tmp_path):
+    def prepare(media, data):
+        media.mkdir()
+        data.write_text("not a directory", encoding="utf-8")
+
+    result, values, media, _data, fallback = _run_music_block(tmp_path, mounted=True, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert (media / "mammamiradio").is_dir()
+    assert values["CACHE"] == str(fallback / "cache")
+    assert (fallback / "cache").is_dir()
+    assert not (fallback / "music").exists()
+
+
+def test_unwritable_data_does_not_replace_a_symlink_fallback_with_tmp_music(tmp_path):
+    outside = tmp_path / "outside"
+
+    def prepare(media, data):
+        media.mkdir()
+        outside.mkdir()
+        (media / "crate").symlink_to(outside)
+        data.write_text("not a directory", encoding="utf-8")
+
+    result, values, _media, data, fallback = _run_music_block(tmp_path, mounted=True, folder="crate", prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(data / "music")
+    assert values["CACHE"] == str(fallback / "cache")
+    assert not (fallback / "music").exists()
+
+
+def test_tmp_music_is_used_only_when_media_is_absent_and_data_is_unwritable(tmp_path):
+    def prepare(media, data):
+        data.write_text("not a directory", encoding="utf-8")
+
+    result, values, media, _data, fallback = _run_music_block(tmp_path, mounted=False, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(fallback / "music")
+    assert (fallback / "music").is_dir()
+    assert not media.exists()
+
+
+def test_leftover_audio_is_named_when_a_media_path_is_exported(tmp_path):
+    song = tmp_path / "data" / "music" / "nested" / "song.mp3"
+
+    def prepare(media, data):
+        media.mkdir()
+        song.parent.mkdir(parents=True)
+        song.write_bytes(b"abc")
+
+    result, values, media, _data, _fallback = _run_music_block(tmp_path, mounted=True, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "mammamiradio")
+    assert "still has audio" in result.stdout
+    assert str(media / "mammamiradio") in result.stdout
+    assert song.read_bytes() == b"abc"
+
+
+def test_empty_or_unsupported_leftover_files_stay_quiet(tmp_path):
+    def prepare(media, data):
+        media.mkdir()
+        library = data / "music"
+        library.mkdir(parents=True)
+        (library / "empty.mp3").write_bytes(b"")
+        (library / "notes.txt").write_bytes(b"hello")
+
+    result, _values, _media, _data, _fallback = _run_music_block(tmp_path, mounted=True, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "still has audio" not in result.stdout
+
+
+def test_leftover_audio_stays_quiet_when_data_music_is_the_export(tmp_path):
+    def prepare(media, data):
+        song = data / "music" / "song.mp3"
+        song.parent.mkdir(parents=True)
+        song.write_bytes(b"abc")
+
+    result, values, _media, data, _fallback = _run_music_block(tmp_path, mounted=False, prepare=prepare)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(data / "music")
+    assert "still has audio" not in result.stdout
+
+
+def test_music_folder_with_a_space_stays_one_path(tmp_path):
+    def prepare(media, data):
+        media.mkdir()
+        (media / "My Music").mkdir()
+
+    result, values, media, _data, _fallback = _run_music_block(
+        tmp_path, mounted=True, folder="My Music", prepare=prepare
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert values["MUSIC"] == str(media / "My Music")
+
+
+def test_parser_exports_music_folder_as_a_quoted_raw_value():
+    rc, stdout, _stderr = _run_parser({"music_folder": "DJ's $HOME"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["MAMMAMIRADIO_MUSIC_FOLDER"] == "DJ's $HOME"
+    assert "MAMMAMIRADIO_MUSIC_DIR" not in exports
+
+
+def test_parser_omits_an_empty_music_folder():
+    rc, stdout, _stderr = _run_parser({"music_folder": "  "})
+    assert rc == 0
+    assert "MAMMAMIRADIO_MUSIC_FOLDER" not in _parse_exports(stdout)
+
+
+def test_music_folder_option_copy_matches_on_both_channels():
+    # Release versions are deliberately not asserted here: every Edge cut and
+    # stable release changes them, and validate-addon.sh checks their format.
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
+        text = config.read_text(encoding="utf-8")
+        assert "\n  - media:rw\n" in text
+        assert "\n  music_folder: mammamiradio\n" in text
+        assert "\n  music_folder: str?\n" in text
+    description = f'description: "{MUSIC_FOLDER_DESCRIPTION}"'
+    for relative in (
+        "ha-addon/mammamiradio/translations/en.yaml",
+        "ha-addon/mammamiradio-edge/translations/en.yaml",
+    ):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert f"\n  music_folder:\n    name: Music folder\n    {description}\n" in text
+
+
+def test_no_test_hardcodes_the_live_edge_version():
+    # An Edge cut changes only the Edge version line. A test that pins the
+    # current value fails every cut, so no Python or shell test may contain it.
+    match = re.search(r"^version: (\S+)$", EDGE_CONFIG.read_text(encoding="utf-8"), re.MULTILINE)
+    assert match is not None
+    pinned = match.group(1).strip("'\"")
+    # Whole tokens only: an all-digit short SHA must not match inside a longer number.
+    literal = re.compile(rf"(?<![0-9A-Za-z]){re.escape(pinned)}(?![0-9A-Za-z])")
+    offenders = [
+        str(path.relative_to(REPO_ROOT))
+        for suffix in ("*.py", "*.sh")
+        for path in sorted((REPO_ROOT / "tests").rglob(suffix))
+        if literal.search(path.read_text(encoding="utf-8", errors="ignore"))
+    ]
+    assert offenders == [], f"tests hardcode the live Edge version {pinned}: {offenders}"
+
+
+def test_addon_versions_parse_as_yaml_strings():
+    # Supervisor reads the add-on version as a string. An unquoted all-digit
+    # short SHA parses as an integer, and a leading zero turns it into octal.
+    # PyYAML comes from requirements.txt; importing it here keeps the other
+    # tests in this module collectable when a local venv lacks it.
+    yaml = pytest.importorskip("yaml")
+    for config in (STABLE_CONFIG, EDGE_CONFIG):
+        version = yaml.safe_load(config.read_text(encoding="utf-8"))["version"]
+        assert isinstance(version, str), f"{config.relative_to(REPO_ROOT)}: quote the version value"
 
 
 def test_parser_exports_anthropic_api_key():

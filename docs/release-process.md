@@ -20,7 +20,7 @@ fix is one shared model, stated below.
    the store offers and what the pull requests. Home Assistant documents the rule for
    a prebuilt `image:`: *"this needs to match the tag of the image that will be used."*
 2. **Edge is the continuous soak.** Every push to `main` builds a `:sha` image, and the
-   edge add-on points the soak Pi at a built `main` commit (`make edge-release`). That
+   edge add-on points the Edge test installation at a built `main` commit (`make edge-release`). That
    image is the release artifact, running on real hardware before anything is published.
 3. **A release is one cut commit.** `chore(release): cut X.Y.Z` bumps the three version
    files and folds `## [Unreleased]` into `## [X.Y.Z]` in both changelogs. Its `:sha`
@@ -51,14 +51,11 @@ v2.17.0   published, and main advertises 2.17.0
 v2.18.0   published, and main advertises 2.18.0
 ```
 
-**Why this replaced the rolling-RC model (2026-08-02).** `main` used to carry the next
-number. Since version tags are only created by `addon-release.yml` on a `v*` tag push,
-`main` named a nonexistent image for the whole span between opening an RC and pushing
-its tag: 74.2 of the 76 days between 2026-05-18 and 2026-08-02, including one unbroken
-24.7-day stretch. In that state a fresh install fails and rolls back, and an update
-fails to download. Nobody sees it until someone clicks, because the Supervisor never
-contacts the registry while reading the store. `scripts/check-advertised-version.sh`
-and `.github/workflows/advertised-version.yml` are the guard.
+The advertised stable version must have published images for both supported
+architectures. Supervisor can display an entry before contacting the registry,
+so a missing image may only become visible when an operator installs or updates.
+`scripts/check-advertised-version.sh` and the advertised-version workflow check
+that invariant.
 
 ## Themes are not versions
 

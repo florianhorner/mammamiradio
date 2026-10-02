@@ -18,8 +18,10 @@ Cathedral standard:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -27,7 +29,31 @@ import pytest
 from mammamiradio.core import config as config_module
 from mammamiradio.core.config import JAMENDO_ACK_REVISION
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentLogEntry, SegmentType
+from mammamiradio.web import status_payload
 from tests.web.test_streamer_routes import _make_test_app
+
+
+@pytest.mark.asyncio
+async def test_music_folder_path_stays_on_operator_status_surfaces(monkeypatch):
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.delenv("MAMMAMIRADIO_ALLOW_YTDLP", raising=False)
+    app = _make_test_app()
+    app.state.config.music_dir = Path("/media/private-crate")
+    app.state.station_state.switch_playlist([], None)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            public = (await client.get("/public-status")).json()
+            admin = (await client.get("/status")).json()
+            capabilities = (await client.get("/api/capabilities")).json()
+
+    assert public["golden_path"]["stage"] == "needs_music_source"
+    assert public["golden_path"]["steps"][1] == "Add files in the configured music folder."
+    assert admin["golden_path"] == public["golden_path"]
+    assert "/media/private-crate" not in json.dumps(public)
+    assert admin["local_library"]["place"] == "Media → private-crate"
+    assert capabilities["golden_path"]["steps"][1] == "Add files in Media → private-crate."
 
 
 @pytest.mark.asyncio
@@ -304,7 +330,9 @@ async def test_public_status_exposes_only_coarse_ritual_family_labels():
     app = _make_test_app()
     state = app.state.station_state
     state.ha_ritual_public_families = ["Kitchen ritual"]
-    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.kitchen_fridge_door"}]
+    state.ha_ritual_matches = [
+        {"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.example_kitchen_fridge_door"}
+    ]
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -318,8 +346,8 @@ async def test_public_status_exposes_only_coarse_ritual_family_labels():
         "ritual_families": ["Kitchen ritual"],
     }
     assert "ha_details" not in public
-    assert "binary_sensor.kitchen_fridge_door" not in str(public["ha_moments"])
-    assert admin["ha_details"]["rituals"]["matches"][0]["entity_id"] == "binary_sensor.kitchen_fridge_door"
+    assert "binary_sensor.example_kitchen_fridge_door" not in str(public["ha_moments"])
+    assert admin["ha_details"]["rituals"]["matches"][0]["entity_id"] == "binary_sensor.example_kitchen_fridge_door"
 
 
 @pytest.mark.asyncio

@@ -238,6 +238,53 @@ def _cached_cache_size_mb(cache_dir: Path) -> float:
     return _cache_size_mb_val
 
 
+def local_music_place(music_dir: object) -> str:
+    """Human place for the music directory the station is using.
+
+    A path strictly under ``/media`` reads as ``Media → <folder>``. Every other
+    path is shown as itself, including the ``/data`` and ``/tmp`` homes.
+    """
+    if isinstance(music_dir, Path):
+        text = music_dir.as_posix()
+    elif isinstance(music_dir, str):
+        text = music_dir.strip()
+    else:
+        return "the configured music folder"
+    absolute = text.startswith("/")
+    parts: list[str] = []
+    for part in text.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    text = ("/" if absolute else "") + "/".join(parts)
+    prefix = "/media/"
+    if text.startswith(prefix) and text[len(prefix) :]:
+        return "Media → " + text[len(prefix) :]
+    if not text:
+        return "the configured music folder"
+    return text
+
+
+def local_library_admin_status(status: dict | None, music_dir: object) -> dict:
+    """Copy the scanner status and add the place the control room should name."""
+    library = dict(status if isinstance(status, dict) else {"in_progress": False, "roots": []})
+    root = None
+    roots = library.get("roots")
+    if isinstance(roots, list):
+        for item in roots:
+            if item:
+                root = item
+                break
+    if root is None:
+        root = music_dir
+    library["place"] = local_music_place(root)
+    return library
+
+
 def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     """Compatibility view derived from canonical, event-driven source truth."""
     global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
@@ -337,7 +384,7 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         ),
         "steps": [
             "Enable live charts or configure Jamendo, or",
-            "Add supported audio files to the local music library.",
+            "Add files in the configured music folder.",
         ],
         **shared,
     }
@@ -495,10 +542,12 @@ def _ha_details_payload(state: StationState) -> dict | None:
         or refresh["last_result"]
         or bool(getattr(state, "ha_context_refresh_configured", False))
         or director_status
+        or state.home_compatibility_status in {"checking", "unavailable", "needs_consent", "ambient", "verified"}
     )
     if not has_ha_observability:
         return None
     payload: dict[str, object] = {
+        "compatibility_status": state.home_compatibility_status,
         "mood": state.ha_home_mood or None,
         "weather_arc": state.ha_weather_arc or None,
         "events_summary": state.ha_events_summary or None,

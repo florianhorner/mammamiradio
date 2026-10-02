@@ -24,6 +24,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from mammamiradio.home.bindings import EMPTY_HOME_BINDINGS, HomeBindings
 from mammamiradio.home.temperature import (
     format_celsius,
     normalize_temperature,
@@ -38,14 +39,6 @@ TEMPERATURE_REOPEN_DELTA_C = 2.0
 # it can never turn a genuinely-below-threshold change into a reopen.
 _TEMPERATURE_DELTA_TOLERANCE_C = 1e-9
 
-# This is intentionally a small, explicit allowlist.  A source being present
-# in HomeContext.scored does not make it appropriate routine on-air material.
-CURATED_COFFEE_ENTITY_IDS = frozenset(
-    {
-        "switch.bar_kaffeemaschine_steckdose",
-        "input_select.kaffee_dad_jokes",
-    }
-)
 PRESENCE_DEVICE_CLASSES = frozenset({"occupancy", "presence", "motion"})
 
 _WEATHER_STATES = {
@@ -273,9 +266,11 @@ class HomeContextDirector:
     def __init__(
         self,
         *,
+        bindings: HomeBindings = EMPTY_HOME_BINDINGS,
         clock: Callable[[], float] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
+        self._bindings = bindings
         self._clock = clock or time.time
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
         self._policy_revision = 0
@@ -337,7 +332,9 @@ class HomeContextDirector:
                 continue
             if _is_personal_moment_eligible(observation):
                 eligible_presence_ids.add(observation.entity_id)
-            candidate = _candidate_for(observation, allow_presence=observation.entity_id in opt_ins)
+            candidate = _candidate_for(
+                observation, allow_presence=observation.entity_id in opt_ins, bindings=self._bindings
+            )
             if candidate is None:
                 continue
             current = by_topic.get(candidate.topic_key)
@@ -688,7 +685,9 @@ class HomeContextDirector:
         return float(now)
 
 
-def _candidate_for(observation: DirectorObservation, *, allow_presence: bool) -> _Candidate | None:
+def _candidate_for(
+    observation: DirectorObservation, *, allow_presence: bool, bindings: HomeBindings = EMPTY_HOME_BINDINGS
+) -> _Candidate | None:
     """Return a deny-by-default candidate with controlled Italian prompt copy."""
 
     if not _valid_observation(observation):
@@ -780,7 +779,7 @@ def _candidate_for(observation: DirectorObservation, *, allow_presence: bool) ->
                 "Non citare fonti tecniche e non aggiungere dettagli non forniti."
             ),
         )
-    if observation.entity_id == "switch.bar_kaffeemaschine_steckdose" and observation.state == "on":
+    if observation.entity_id == bindings.entity("coffee_switch") and observation.state == "on":
         return _candidate(
             observation,
             topic_key="ambient.coffee.machine",
@@ -793,7 +792,7 @@ def _candidate_for(observation: DirectorObservation, *, allow_presence: bool) ->
                 "Non citare fonti tecniche e non aggiungere dettagli non forniti."
             ),
         )
-    if observation.entity_id == "input_select.kaffee_dad_jokes":
+    if observation.entity_id == bindings.entity("coffee_joke"):
         # The entity's arbitrary selected joke is deliberately not retained or
         # rendered.  The safe projection only carries the fact that a curated
         # coffee-joke source is available.

@@ -8,7 +8,7 @@ This app requires **Home Assistant OS**. Home Assistant Container does not inclu
 
 ### 1. Add the repository
 
-In Home Assistant: **Settings → Apps → App store → ⋮ → Repositories**.
+In Home Assistant: **Settings → Apps → Install app → ⋮ → Repositories**.
 Paste `https://github.com/florianhorner/mammamiradio`, select **Add**, open **Mamma Mi Radio** in the store, and select **Install**.
 
 ### 2. Start the add-on
@@ -20,10 +20,13 @@ Click Start. Watch the log for:
 
 The add-on starts from its attributed 12-track starter catalog: no music
 provider key, download, or outbound network is required. Without an AI key, the
-hosts use stock copy and fallback voices. Operator-supplied audio in
-`/data/music` is discovered without a restart. Packaged recovery audio can
-prove transport without reporting a damaged source healthy. A successful start
-logs `Producer started`; `/readyz` stays `503 starting` until a listener connects.
+hosts use stock copy and fallback voices. Operator-supplied audio is
+discovered without a restart. When Home Assistant mounts Media, the station
+reads the Music folder setting (default `mammamiradio`, shown as Media →
+mammamiradio). When Media is not mounted, it reads `/data/music`. Packaged
+recovery audio can prove transport without reporting a damaged source healthy.
+A successful start logs `Producer started`; `/readyz` stays `503 starting`
+until a listener connects.
 
 ### 3. Install the HACS integration
 
@@ -44,15 +47,16 @@ install opens directly on **First Listen** before the control room. Follow its
 vertical path; completed and existing installs keep their normal control-room
 landing, with review and repair under **Motore → Setup**:
 
-1. The opening card leads with a 27-second authored mini-show: an original music
-   bed, a privacy-aware Marco/Giulia welcome, then a handoff to the live stream.
-   No AI key or Home context is used. Source truth for live charts, Jamendo,
-   local music, bundled demo music, and recovery cover says whether primary
-   music, recovery cover, or a music repair follows the opening. Recovery audio
-   can keep the stream audible, but it is not a music rotation; bundled demo
-   music is not a promised song library.
-2. Select **Start sound check**. Confirm **Yes, I hear it** only after you hear
-   the opening, or **Not yet** for
+1. The opening card plays a reviewed English welcome from Marco and Giulia of
+   about 15 seconds, then hands off to the live stream. No AI key or Home
+   context is used. **Music details** says whether the starter collection,
+   local music, optional Jamendo, or recovery cover follows the opening, or
+   whether music needs a repair. Recovery audio can keep the stream audible,
+   but it is not a music rotation. The twelve credited starter tracks are the
+   normal offline rotation; recorded breaks and finished fictional ads keep
+   the keyless programme going. Recovery cover does not mean a music source is healthy.
+2. Select **Start my station**. Select **I can hear it** only after you hear
+   the opening, or **I can't hear you** for
    [this-device repair](../../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
    Home Assistant speakers remain an
    [optional later route](../../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
@@ -63,8 +67,14 @@ See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen
 
 On a fresh install, **Host home context** is omitted from saved add-on options
 and remains off. After you confirm you heard the station on this device,
-select **Keep Home private** without reading Home state, or select **See what
-the hosts would receive** before **Let Marco and Giulia use these details**.
+**Make it yours** starts with a recorded evening scene that uses no details
+from your home. Select **Keep Home private** without reading Home state, or
+**Set up AI and Home** after the scene (**Skip this example** goes straight
+there). In AI setup, add a writing key and select **Choose my Home details**,
+or select **Skip AI, choose Home details**; then select **Preview my Home**
+before **Share these details**. On a fresh 3.0.0 install, sharing is limited to
+daylight and one unambiguous weather source, with temperatures rounded to five
+degrees Celsius. Laundry and arrival sharing need later Home Profile support.
 The preview is a fresh, detached Home
 Assistant read: it is not published into host scripts and is not sent to an AI
 provider. A preview containing only generic daylight is disclosed as
@@ -75,11 +85,11 @@ any entity locally if needed. Enabling requires that fresh preview.
 If that live privacy choice applies but the setup review cannot be saved, the
 choice is not rolled back. The private path offers **Save private choice again**
 without reading Home state. An enabled choice remains active but requires a
-fresh filtered preview before **Save shared choice again**. AI-host setup remains
-locked until the review receipt is saved.
+fresh filtered preview before **Save shared choice again**.
 
-Under **Optional enhancement**, select **Set up new conversations** to save
-either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
+**Set up AI and Home** during First Listen, or **Add new host conversations**
+under **Motore → Setup** later, saves either `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
 admin writes the key to `/config/secrets.env`, applies it live, and checks the
 provider without interrupting audio. First audio never needs it.
 
@@ -197,15 +207,22 @@ HA Supervisor
   |           +-- playback task (streams segments to listeners)
   |           +-- packaged starter catalog (read-only, attributed music)
   |
+  +-- /media/ (Home Assistant Media storage; outside the app backup)
+  |     +-- <Music folder>/ (operator songs; default mammamiradio)
+  |
   +-- /data/ (persistent app data across restarts)
         +-- cache/   (eligible local/generated audio — survives restarts)
         |     +-- keepsakes/ (moments kept with "Keep this" — never expire)
-        +-- music/   (operator-supplied local songs; scanned in place)
+        +-- music/   (fallback local songs when Media is not mounted; scanned in place)
         +-- tmp/     (rendered segments — ephemeral)
 ```
 
 Jamendo's one prepared artifact is transient and is excluded from both
 persistent paths above.
+
+When Home Assistant mounts Media, operator songs live in `/media/<folder>`
+(the Music folder setting, default `mammamiradio`). The app does not own that
+folder's upload, disk, or backup.
 
 Supervisor's stored app options are the sole durable authority for Super
 Italian, Chaos, Festival, AI Quality, On-Air Sound, and pacing. Control-room
@@ -227,8 +244,15 @@ playing.
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.
 
-The station scans `/data/music` every minute; use **Rotazione → Local music →
+The station scans its music folder every minute; use **Rotazione → Local music →
 Scan now** to refresh immediately. Files are read in place and never moved.
+Songs in the Home Assistant Media panel are outside this app's backup. A Home
+Assistant backup includes local Media songs when that backup includes Media;
+back up a NAS library separately. `/data/music` stays in the app backup for the
+fallback path and for any songs already stored there. The station does not move
+files between the two.
+When Media is not mounted and `/data` cannot be written, the
+`/tmp/mammamiradio-data/music` fallback is not persisted in either backup.
 
 A hot backup copies retained files while the station is active, so it is not a
 copy taken from one single exact moment. After a restore, confirm
@@ -247,8 +271,9 @@ its files by hand.
    enablement settings are ignored.
 4. `mammamiradio/main.py` loads `radio.toml`, validates the packaged starter
    manifest, and makes its direct pre-normalized files available.
-5. The local-library worker scans `/data/music` at startup and every minute. A
-   manual scan refreshes it without restarting audio.
+5. The local-library worker scans the music directory chosen at startup — the
+   Media folder when `/media` is mounted, otherwise `/data/music` — at startup
+   and every minute. A manual scan refreshes it without restarting audio.
 6. Producer and playback tasks start from starter/local music. All twelve
    starter tracks complete before any starter track repeats.
 7. If Jamendo was explicitly enabled and acknowledged, its bounded preparation
@@ -317,11 +342,15 @@ Please leave the running add-on intact: do not SSH in to edit container or runti
 
 ### TTS banter not generating
 
-**Symptom**: Log shows `TTS synthesis failed` or `edge-tts connection error`. Banter falls back to stock copy or silence.
+**Symptom**: Logs show `TTS synthesis failed` or an online voice connection error.
+Generated speech uses packaged recorded breaks when available, then the
+continuity recovery ladder. It does not deliberately air a silent segment.
 
-**Cause**: `edge-tts` requires outbound websocket to Microsoft's TTS API. If your HA instance blocks outbound websockets, TTS fails silently and the producer falls back to stock copy or silence.
-
-**Fix**: This is a network policy issue. The station still plays music. If you need live AI banter, ensure outbound websocket traffic is allowed.
+**Check**: Keyless Edge TTS needs outbound access to Microsoft's speech service.
+Other voice services need working credentials and network access. In
+**Motore → Setup**, check provider status and the configured voice service.
+The packaged starter rotation and recorded programming remain available while
+you repair generated speech.
 
 ### Ingress 404s (all API calls return 404)
 
@@ -341,22 +370,57 @@ Please leave the running add-on intact: do not SSH in to edit container or runti
 
 ### HA context never appears in banter
 
-**Symptom**: Hosts never reference home state even though HA is enabled.
+**Symptom**: Hosts never reference Home details even though the HA integration is on.
 
 **Check**:
-1. Log should show `Home Assistant API access configured via Supervisor`
-2. Look for `Fetched HA context: N entities` — if N=0, no entities matched the filter
-3. Look for `Failed to fetch HA context` — network or auth error
 
-**Note**: `HA_URL` is set to `http://supervisor/core` by run.sh. The app appends `/api/states` itself. Do not override this.
+1. Integration access and Home sharing are separate. On a fresh 3.0.0 install,
+   Home stays off until you confirm sound, select **Preview my Home**, and
+   explicitly choose **Share these details**.
+2. Fresh sharing covers daylight and one weather source. The preview may be
+   empty or contain only daylight; it does not unlock laundry or arrival cues.
+3. A working Anthropic or OpenAI writing key is needed for new conversations.
+   Without one, Home context is not sent to a writer.
+4. Inspect provider status in **Motore → Setup** and check for HA authentication
+   or connection errors. The next update's private-profile notice is explained
+   in the upgrade note below.
 
-### Producer stuck after first banter cycle
+`HA_URL` is set to `http://supervisor/core` by `run.sh`; the app appends
+`/api/states` itself. Keep that default for the add-on.
 
-**Symptom**: Music plays, first banter completes, then silence.
+### New conversations stop after the opening
 
-**Cause**: API key is invalid or quota exceeded. The producer falls back to demo clips but they may be exhausted.
+A missing, rejected, or quota-limited writing key stops fresh AI copy. It does
+not exhaust the station: packaged recorded breaks and the twelve-track starter
+rotation continue. Use **Add new host conversations** in **Motore → Setup** to
+save or check an Anthropic or OpenAI key. Look for authentication or rate-limit
+errors without sharing credentials. If the stream itself becomes inaudible,
+follow the audio-recovery checks above; an exhausted demo allowance is not the
+expected explanation.
 
-**Fix**: Verify your `ANTHROPIC_API_KEY` in `/config/secrets.env` is valid. Legacy add-on installs may still use `anthropic_api_key` in options. Check the log for `AuthenticationError` or `RateLimitError`.
+## Upgrade note: next update, not part of 3.0.0
+
+The next update reads a verified private Home profile instead of an embedded
+household map. Eligible installations can recover a matching profile together
+with its original installation evidence and database binding. Installing 3.0.0
+alone does not guarantee recovery for every older installation. Missing or
+conflicting evidence is never reconstructed; broader sharing for other older
+installations needs later Home Profile support.
+
+When a profile cannot be verified, radio keeps playing with Home cues and
+background Home reads off. An old saved enabled option does not restore access.
+If saved evidence is temporarily unreadable, the station retries in the
+background. Preview and sharing stay unavailable until that check completes;
+a read failure does not change the saved scope. Keep Home private remains
+available and reports whether the disabled choice was fully saved.
+
+After a completed check finds no usable profile, confirm sound again and review
+a fresh narrow preview before sharing daylight
+and weather. That explicit choice records a permanent narrow scope, even if a
+profile appears later. **Keep Home private** revokes access immediately and
+saves the disabled option; the panel reports any persistence failure. The narrow
+scope remains after revocation. Existing installations already using narrow
+consent retain that behavior.
 
 ### Accessing the station directly
 
@@ -417,7 +481,11 @@ Inputs to run.sh
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
   |
   +-- run.sh sets add-on containment and runtime defaults
-  |     MAMMAMIRADIO_MUSIC_DIR=/data/music
+  |     MAMMAMIRADIO_MUSIC_DIR is chosen at startup: `/media/<Music folder>` when
+  |     `/media` is a mount (default folder `mammamiradio`), `/data/music` when
+  |     Media is not mounted or the chosen folder is a symlink, or
+  |     `/tmp/mammamiradio-data/music` when Media is not mounted and `/data`
+  |     cannot be created
   |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
   |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
   |     MAMMAMIRADIO_ALLOW_YTDLP=false
@@ -455,13 +523,13 @@ Browser: http://ha:8123/api/hassio_ingress/<token>/
 ## Renaming the station
 
 The station name is the operator-facing identity people see and hear. If you
-call it "Radio Florian", the listener page, stream metadata, admin setup preview,
+call it "Radio Esempio", the listener page, stream metadata, admin setup preview,
 Home Assistant friendly labels, and the default generated station IDs and
-sweepers use "Radio Florian" naturally, the way a real station would.
+sweepers use "Radio Esempio" naturally, the way a real station would.
 
 **To rename:**
 
-1. In the add-on Configuration tab, set `station_name` to your chosen name (e.g. `Radio Florian`).
+1. In the add-on Configuration tab, set `station_name` to your chosen name (e.g. `Radio Esempio`).
 2. Click Save, then restart the add-on.
 3. Reopen the add-on. The admin setup panel shows an **Identity** preview for
    what listeners hear, what listeners see, and what Home Assistant shows.
@@ -479,7 +547,7 @@ flags that custom copy may still mention the old name. Blank or default copy is
 regenerated from the new station name.
 
 You can also set the name via environment variable:
-`STATION_NAME=Radio Florian`.
+`STATION_NAME=Radio Esempio`.
 
 ## Home Assistant entities
 
@@ -535,4 +603,4 @@ The dashboard shows one of three tiers based on your configuration:
 |------|--------------|---------------|
 | Demo Radio | Stock host copy and fallback voices over the offline attributed starter catalog | No key or network required for music |
 | Full AI Radio | Live AI banter and ads over starter/local music, with optional transient Jamendo tracks | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env`; Jamendo remains optional |
-| Connected Home | Above + home-aware banter | AI host key + prompt-safe Home Assistant context available |
+| Connected Home | Above + home-aware banter | Working AI writing key + explicitly shared Home context; fresh installs share only daylight and weather |

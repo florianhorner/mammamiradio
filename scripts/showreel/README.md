@@ -11,12 +11,11 @@ a new section, a new mode.
 
 ## Pieces
 
-- **`mock_ha.py`** — a tiny mock Home Assistant REST API. Serves a *staged* home scene so
-  the producer genuinely derives a home mood and the hosts weave it into banter, without a
-  real HA. Values are staged; some identifiers and labels still match legacy
-  runtime mappings, so these fixtures are not fully anonymized. Scenarios are chosen so the
-  real `classify_home_mood()` returns the intended mood (default `coffee` →
-  "Caffè in preparazione"; `homecoming` stages the front door for the unlock moment).
+- **`mock_ha.py`** serves invented states, labels, and entity IDs.
+- **`station.py`** starts an isolated local station with matching synthetic Home
+  bindings from the test fixture. Its injection exists only in that launcher
+  process; production validation rejects the fixture. `coffee` stages coffee
+  preparation; `homecoming` stages a door-unlock observation.
   Add scenarios by editing `SCENARIOS` / `FORECASTS`. States are **mutable at runtime**
   via `POST /__set {"entity_id": ..., "state": ...}` — the station derives events by
   diffing consecutive polls, so a reactive trigger needs the *transition*, not just
@@ -53,22 +52,27 @@ mkdir -p music && cp "scripts/showreel_assets/...mp3" "music/Artist - Title.mp3"
 # 2. Stage a home scene
 python scripts/showreel/mock_ha.py --port 8123 --scenario coffee &
 
-# 3. Start the REAL station against the mock HA (local, CC music, ledger on)
+# 3. Start the isolated station against loopback mock HA
 MAMMAMIRADIO_BIND_HOST=127.0.0.1 MAMMAMIRADIO_PORT=8077 \
 MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL=15 \
 HA_ENABLED=true HA_URL=http://127.0.0.1:8123 HA_TOKEN=dummy-token \
 MAMMAMIRADIO_LEDGER_ENABLED=true MAMMAMIRADIO_ALLOW_YTDLP=false JAMENDO_CLIENT_ID= \
 STATION_NAME="Mamma Mi Radio" \
-.venv/bin/python -m uvicorn mammamiradio.main:app --host 127.0.0.1 --port 8077 &
+.venv/bin/python -m scripts.showreel.station --port 8077 --mock-ha http://127.0.0.1:8123 &
 
 # 4. Capture → final continuous clip
 python scripts/showreel/capture.py --base http://127.0.0.1:8077 \
   --lead-track "Night in Venice" --final scripts/showreel_out/ma-pr-3836.mp3
 ```
 
+The launcher creates temporary cache and state, supplies synthetic bindings only
+in its own process, and accepts only a loopback mock HA URL. Production profile
+validation never accepts these fixtures. Save a capture before stopping the
+launcher; its private temporary state is removed on exit.
+
 ## Staged home-event capture (reactive-trigger moments)
 
-For moments driven by a `REACTIVE_TRIGGERS` directive (coffee machine
+For moments driven by a trigger in the synthetic Home bindings (coffee machine
 switching on, a person arriving) the entity has to *change state between two polls* —
 serving the end state from boot produces no event. The example below stages only
 a lock observation. Set `LOCK_ENTITY_ID` to the lock ID returned by the local
@@ -98,21 +102,13 @@ the first captured host break. The first arc wait is bounded by `--first-wait` (
 `--ha-poll-interval` must match `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`. It defaults to
 `15`, matching this recipe. Use a larger value for a station started with a larger TTL.
 
-## Running the creative role on a specific model
+## Capture checks
 
-`CLAUDE_CREATIVE_MODEL=claude-fable-5` (env override, documented in the root `CLAUDE.md`)
-swaps the creative model for the run without touching profiles. **Probe first**: force one
-banter and confirm the ledger row (`cache/ledger/`) names that model as the generator — a
-gated model silently falls back to OpenAI (English-code-switched output), which is how the
-first showreel ended up on Opus 4.8. Run that probe in a short, separate local station
-session. A probe deliberately leaves a forced banter queued; stop the probe pair after the
-ledger check, then start a fresh mock/station pair for the lead-track capture.
+Use the configured writing provider and inspect the local ledger to confirm
+which provider actually generated a take. Model availability can cause fallback;
+a configured assignment alone is not proof. Keep any probe in a separate local
+station session and start a fresh mock/station pair for the capture.
 
-## Notes / gotchas (learned the hard way)
-
-- **Model:** the creative role runs on the account's best *available* model. On the first
-  run `claude-fable-5` was gated (404 → "use Opus 4.8"), so it used **Opus 4.8**. See the
-  probe-first section above before trusting any model override.
 - **Track length is load-bearing.** Local tracks are declared 210s but a forced segment only
   airs after the *current* track ends. Use short tracks (~47s) for fast airing, plus one long
   lead track for the gapless-ordering trick. A <35s track is rejected by the audio quality

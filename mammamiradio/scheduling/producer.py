@@ -103,8 +103,6 @@ from mammamiradio.home.entity_policy import (
     muted_entity_ids,
 )
 from mammamiradio.home.ha_context import (
-    ENTITY_LABELS,
-    GOLD_ENTITIES,
     HomeContext,
     _fetch_home_context_outcome,
     _HomeContextFetchOutcome,
@@ -2239,14 +2237,6 @@ def _drop_segment_moment_receipts(state: StationState, segment: Segment, reason:
 _last_music_file: Path | None = None
 
 _MUSIC_TYPES = {SegmentType.MUSIC}
-_SPEECH_TYPES = {
-    SegmentType.BANTER,
-    SegmentType.NEWS_FLASH,
-    SegmentType.AD,
-    SegmentType.STATION_ID,
-    SegmentType.SWEEPER,
-    SegmentType.TIME_CHECK,
-}
 
 
 def _set_last_music_file(path: Path) -> None:
@@ -2637,12 +2627,6 @@ def _make_imaging_lib(config: StationConfig) -> ImagingLibrary:
         bed_volume_db=config.imaging.bed_volume_db,
         assets_dir=Path(config.imaging.assets_dir) if config.imaging.assets_dir else None,
         cache_dir=config.cache_dir,
-    )
-
-
-def _crosses_music_speech_boundary(prev_type: SegmentType, next_type: SegmentType) -> bool:
-    return (prev_type in _MUSIC_TYPES and next_type in _SPEECH_TYPES) or (
-        prev_type in _SPEECH_TYPES and next_type in _MUSIC_TYPES
     )
 
 
@@ -3891,68 +3875,6 @@ async def _try_crossfade(
         if isinstance(music_tail, PreparedMusicHandoff):
             _discard_prepared_handoff(music_tail)
         return voice_path
-
-
-async def _maybe_add_transition_sting(
-    segment: Segment,
-    previous_type: SegmentType | None,
-    config: StationConfig,
-    state: StationState,
-    *,
-    suppress_for_handoff: bool = False,
-) -> Segment:
-    """Apply the normal synthetic sting unless a committed-candidate tail owns it."""
-
-    actual_type = _adjacency_type_for(segment)
-    if (
-        previous_type is None
-        or actual_type is None
-        or not _crosses_music_speech_boundary(previous_type, actual_type)
-        or suppress_for_handoff
-        or segment.metadata.get("has_music_tail")
-        or segment.metadata.get("rescue")
-    ):
-        return segment
-    sting_path = config.tmp_dir / f"transition_{uuid4().hex[:8]}.mp3"
-    merged_path = config.tmp_dir / f"segment_with_sting_{uuid4().hex[:8]}.mp3"
-    pre_sting_path = segment.path
-    pre_sting_ephemeral = segment.ephemeral
-    imaging_lib = _make_imaging_lib(config)
-    try:
-        with _timed_render_stage(state, "mix"):
-            await _run_owned_thread(
-                imaging_lib.pick_stinger,
-                previous_type,
-                actual_type,
-                sting_path,
-            )
-            await _run_owned_thread(
-                concat_files,
-                [sting_path, segment.path],
-                merged_path,
-                0,
-                False,
-            )
-    except asyncio.CancelledError:
-        # Both scratch workers have settled before cleanup, so neither can
-        # republish after cancellation returns to the attempt owner.
-        _unlink_path_best_effort(sting_path)
-        _unlink_path_best_effort(merged_path)
-        raise
-    except Exception as exc:
-        _unlink_path_best_effort(sting_path)
-        _unlink_path_best_effort(merged_path)
-        logger.warning("Transition sting generation failed, using clean cut: %s", exc)
-        return segment
-    except BaseException:
-        _unlink_path_best_effort(sting_path)
-        _unlink_path_best_effort(merged_path)
-        raise
-
-    _unlink_path_best_effort(sting_path)
-    if pre_sting_ephemeral and not _is_packaged_asset(pre_sting_path):
-        _unlink_path_best_effort(pre_sting_path)
-    return replace(segment, path=merged_path, ephemeral=True)
 
 
 async def _synthesize_impossible_moment(
@@ -5542,7 +5464,15 @@ class _HAContextRefreshCoordinator:
     def _fallback_prompt_context(self) -> HomeContext:
         """Return a safe context without consuming any one-shot handoffs."""
         self._sync_freshness()
+        authorization = self._state.home_authorization or HomeAuthorization.narrow()
         if self._context is None:
+            return HomeContext()
+        if not _uses_injected_legacy_fetch() and (
+            self._context.authorization_mode,
+            self._context.bindings.identity,
+        ) != (authorization.mode.value, authorization.bindings.identity):
+            self._context = None
+            self._suppress_stale_handoffs()
             return HomeContext()
         if self._is_stale():
             # Retain the real source timestamp for operator diagnostics, but
@@ -5598,7 +5528,6 @@ class _HAContextRefreshCoordinator:
                     cache_dir=self._config.cache_dir,
                     radio_event_rules=self._config.radio_events,
                     authorization=self._state.home_authorization,
-                    observed_entity_ids_callback=self._state.home_entity_ids_observer,
                     stage_callback=lambda stage: self._set_refresh_stage(stage, attempt_generation),
                 ),
                 name="ha-context-fetch",
@@ -5683,12 +5612,16 @@ class _HAContextRefreshCoordinator:
             self._record_terminal_result("failed", duration_seconds, used_background=used_background)
             return None
 
-        active_mode = (self._state.home_authorization or HomeAuthorization.narrow()).mode.value
+        active_authorization = self._state.home_authorization or HomeAuthorization.narrow()
+        active_mode = active_authorization.mode.value
         # The injected-legacy fetch seam (tests/embedding) normalizes a mocked
         # context through _legacy_mock_home_context and does not preserve the
         # authorization stamp; it is trusted test input and never active in
         # production, where the real fetch always stamps the requested mode.
-        if not _uses_injected_legacy_fetch() and outcome.context.authorization_mode != active_mode:
+        if not _uses_injected_legacy_fetch() and (
+            outcome.context.authorization_mode,
+            outcome.context.bindings.identity,
+        ) != (active_mode, active_authorization.bindings.identity):
             # Authorization is install-scoped: a fetch that returns a context
             # stamped for the other mode (a bug or a reused cross-mode cache)
             # must never be adopted. Fail closed to the last safe snapshot.
@@ -5706,13 +5639,6 @@ class _HAContextRefreshCoordinator:
         # introduces a re-entrant cutover.
         if not self._refresh_generation_is_active(task_generation):
             return None
-
-        observer = self._state.home_entity_ids_observer
-        if observer is not None and outcome.observed_entity_ids:
-            try:
-                observer(outcome.observed_entity_ids)
-            except Exception:
-                logger.warning("Legacy-home observation persistence failed", exc_info=True)
 
         # A request that *started* while the prior snapshot was safe keeps its
         # legitimate one-shots when it is adopted promptly, even if the prior
@@ -6274,7 +6200,7 @@ async def _run_producer_inner(
 
         # Lightweight timer interrupt poll — runs every timer_poll_interval seconds.
         # Only fetches the timer entity states, not the full 200+ entity context.
-        if config.homeassistant.timer_interrupts and home_authorization.allows_household_moments:
+        if config.homeassistant.timer_interrupts:
             _timer_entity_ids = {t.entity_id for t in config.homeassistant.timer_interrupts}
             # Pre-populate old_states for timer entities with "idle" so the first
             # active→idle transition is detected correctly (cold-start fix).
@@ -6299,7 +6225,11 @@ async def _run_producer_inner(
                             # never replayed after context is enabled again.
                             observed_policy_generation = state.home_context_policy_generation
                             _reset_timer_baseline()
-                        if state.session_stopped or not config.homeassistant.context_enabled:
+                        if (
+                            state.session_stopped
+                            or not config.homeassistant.context_enabled
+                            or not (state.home_authorization or HomeAuthorization.narrow()).allows_household_moments
+                        ):
                             continue
                         poll_generation = state.home_context_policy_generation
                         try:
@@ -6318,6 +6248,9 @@ async def _run_producer_inner(
                                 r = await client.get(f"{base}/api/states/{eid}", headers=headers)
                                 if (
                                     not config.homeassistant.context_enabled
+                                    or not (
+                                        state.home_authorization or HomeAuthorization.narrow()
+                                    ).allows_household_moments
                                     or poll_generation != state.home_context_policy_generation
                                 ):
                                     timer_states.clear()
@@ -6332,6 +6265,7 @@ async def _run_producer_inner(
                                     )
                             if (
                                 not config.homeassistant.context_enabled
+                                or not (state.home_authorization or HomeAuthorization.narrow()).allows_household_moments
                                 or poll_generation != state.home_context_policy_generation
                             ):
                                 _reset_timer_baseline()
@@ -6357,6 +6291,7 @@ async def _run_producer_inner(
                                     timer_events,
                                     timer_states,
                                     config.homeassistant.timer_interrupts,
+                                    bindings=(state.home_authorization or HomeAuthorization.narrow()).bindings,
                                 )
                                 if (
                                     isinstance(result, InterruptSpec)
@@ -6389,6 +6324,9 @@ async def _run_producer_inner(
     from mammamiradio.web.streamer import _recovery_runway_owned
 
     while True:
+        if state.home_bindings_adopter is not None:
+            state.home_bindings_adopter()
+        home_authorization = state.home_authorization or HomeAuthorization.narrow()
         boundary_audible_epoch = state.audible_playback_epoch
         # The producer idles with a full queue or no listeners, sometimes for
         # minutes. Refreshing here, not only at a pacing decision, keeps the
@@ -6879,6 +6817,7 @@ async def _run_producer_inner(
                         cache_dir=config.cache_dir,
                         config=config,
                         score_by_entity={entity.entity_id: entity.score for entity in ha_cache.scored},
+                        bindings=home_authorization.bindings,
                     )
                 except Exception:
                     logger.warning("HA label generation scheduling failed (non-fatal)", exc_info=True)
@@ -6888,13 +6827,15 @@ async def _run_producer_inner(
             # Restrict listener-visible events to the curated set: pre-Phase-A only
             # vetted entities could surface here, and Phase A's full-snapshot ingest
             # would otherwise leak any HA entity's friendly_name (e.g.
-            # binary_sensor.bedroom_motion, lock.gun_safe) to /public-status.
+            # binary_sensor.example_bedroom_motion, lock.example_gun_safe) to /public-status.
             state.ha_recent_event_count = len(ha_cache.events)
             _public_events = [
-                e for e in ha_cache.events if not e.entity_id.startswith("person.") and e.entity_id in ENTITY_LABELS
+                e
+                for e in ha_cache.events
+                if not e.entity_id.startswith("person.") and e.entity_id in home_authorization.bindings.labels_it
             ]
             if _public_events:
-                _gold_set = set(GOLD_ENTITIES)
+                _gold_set = set(home_authorization.bindings.tier("gold"))
                 best = max(
                     _public_events,
                     key=lambda e: (
@@ -6920,6 +6861,7 @@ async def _run_producer_inner(
                     ha_cache.events,
                     ha_cache.raw_states,
                     config.homeassistant.timer_interrupts or None,
+                    bindings=home_authorization.bindings,
                 )
                 if isinstance(result, InterruptSpec):
                     await _fire_interrupt(
@@ -9242,14 +9184,8 @@ async def _run_producer_inner(
             _attach_runtime_provider_observations(segment, state, generation_provider_token)
             attempt_owner.own_segment(segment)
             if not _is_direct_attributed_music(segment) and not _is_packaged_ad_segment(segment):
-                segment = await _maybe_add_transition_sting(
-                    segment,
-                    prev_seg_type,
-                    config,
-                    state,
-                    suppress_for_handoff=rendered_handoff_tail and prepared_handoff is not None,
-                )
-                attempt_owner.own_segment(segment)
+                # Boundary stings belong to playback so the live dial also
+                # applies to audio already waiting in the queue.
                 segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             elif segment.duration_sec <= 0:
                 raise RuntimeError("direct attributed music is missing a validated duration")
@@ -9504,12 +9440,11 @@ async def _run_producer_inner(
                         _segment_admission_callback(segment)
                 else:
                     # The song remained whole; queue the pre-rendered dry path
-                    # with the ordinary sting rather than emitting a stale tail.
+                    # for playback rather than emitting a stale tail.
                     segment = fallback_segment
                     fallback_segment = None
                     prepared_handoff = None
                     rendered_handoff_tail = False
-                    segment = await _maybe_add_transition_sting(segment, prev_seg_type, config, state)
                     attempt_owner.own_segment(segment)
                     segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
                     shadow_entry = _queue_shadow_entry(segment)
@@ -9537,7 +9472,6 @@ async def _run_producer_inner(
                         _unlink_if_tmp_render(segment, config.tmp_dir)
                         segment = fallback_segment
                         fallback_segment = None
-                        segment = await _maybe_add_transition_sting(segment, prev_seg_type, config, state)
                         attempt_owner.own_segment(segment)
                         segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
                         shadow_entry = _queue_shadow_entry(segment)

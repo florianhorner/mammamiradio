@@ -8402,7 +8402,7 @@ async def test_admin_status_ha_details_present_with_full_context():
     state.ha_last_event_label = "Lavatrice (consumo)"
     state.ha_scored_entities = [
         {
-            "entity_id": "switch.bar_kaffeemaschine_steckdose",
+            "entity_id": "switch.example_coffee_switch",
             "label": "Coffee machine",
             "score": 1.4,
             "state": "on",

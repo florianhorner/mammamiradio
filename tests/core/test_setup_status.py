@@ -855,7 +855,7 @@ def test_fresh_completed_milestones_stay_active_without_continuity():
     config.homeassistant.context_enabled = False
     config.ha_token = "supervisor-token"
     receipt = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="accepted-attempt-1234",
         accepted_at=100.0,
         heard_at=101.0,
@@ -989,7 +989,7 @@ def test_unknown_install_origin_keeps_compatibility_layout_after_onboarding_comp
     config.homeassistant.context_enabled = False
     config.ha_token = "ha-token"
     receipt = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="abcdefghijklmnop",
         accepted_at=100.0,
         heard_at=101.0,
@@ -1057,7 +1057,7 @@ def test_fresh_jamendo_readiness_is_human_visible_but_ai_stays_later():
         "source_readiness": _first_listen_source_projection(jamendo_status="playable"),
     }
     receipt = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="accepted-attempt-1234",
         accepted_at=100.0,
         heard_at=101.0,
@@ -1189,7 +1189,7 @@ def test_fresh_recovery_strip_advances_through_audio_and_privacy_before_repair()
         "source_readiness": _first_listen_source_projection(),
     }
     accepted = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="accepted-attempt-1234",
         accepted_at=100.0,
     )

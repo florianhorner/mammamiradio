@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from mammamiradio.home.bindings import EMPTY_HOME_BINDINGS, HomeBindings
 from mammamiradio.home.temperature import normalize_temperature, temperature_unit_of
 
 NARROW_WEATHER_ENTITY_ID = "weather.ambient"
@@ -66,7 +67,7 @@ def expand_muted_with_ambient_sources(muted_ids: set[str], ambient_sources: Mapp
 
     In narrow mode a downstream break is tagged with the synthetic ambient id
     (``weather.ambient`` / ``sun.ambient``) whose real HA source (e.g.
-    ``weather.forecast_home``) an operator may mute directly.  The fetch layer
+    ``weather.example_source``) an operator may mute directly.  The fetch layer
     already honors a real-source mute via ``ambient_sources``; this lets every
     other consumer of the muted set (director observation, queue purge, segment
     admission) do the same without holding the projection itself.  Returns a new
@@ -86,10 +87,17 @@ class HomeAuthorization:
     """Coarse R0 authorization selected from immutable install provenance."""
 
     mode: HomeAuthorizationMode
+    bindings: HomeBindings = field(default=EMPTY_HOME_BINDINGS, repr=False)
 
     @classmethod
-    def legacy(cls) -> HomeAuthorization:
-        return cls(HomeAuthorizationMode.LEGACY)
+    def legacy(cls, bindings: HomeBindings) -> HomeAuthorization:
+        if not bindings.identity or not bindings.entities:
+            raise ValueError("legacy authorization requires verified private bindings")
+        return cls(HomeAuthorizationMode.LEGACY, bindings)
+
+    @property
+    def identity(self) -> str:
+        return f"{self.mode.value}:{self.bindings.identity}"
 
     @classmethod
     def narrow(cls) -> HomeAuthorization:
@@ -97,19 +105,19 @@ class HomeAuthorization:
 
     @property
     def allows_household_moments(self) -> bool:
-        return self.mode is HomeAuthorizationMode.LEGACY
+        return self.mode is HomeAuthorizationMode.LEGACY and bool(self.bindings.identity)
 
     @property
     def allows_derived_mood(self) -> bool:
-        return self.mode is HomeAuthorizationMode.LEGACY
+        return self.mode is HomeAuthorizationMode.LEGACY and bool(self.bindings.identity)
 
     @property
     def allows_label_generation(self) -> bool:
-        return self.mode is HomeAuthorizationMode.LEGACY
+        return self.mode is HomeAuthorizationMode.LEGACY and bool(self.bindings.identity)
 
     def project(self, states: Mapping[str, dict]) -> AuthorizedHomeProjection:
         """Return the only state map downstream home consumers may inspect."""
-        if self.mode is HomeAuthorizationMode.LEGACY:
+        if self.mode is HomeAuthorizationMode.LEGACY and bool(self.bindings.identity):
             return AuthorizedHomeProjection(states=dict(states), ambient_sources={})
 
         projected: dict[str, dict] = {}

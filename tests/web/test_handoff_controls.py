@@ -317,9 +317,9 @@ def test_ban_removes_orphaned_successor_when_its_music_head_is_dropped(tmp_path:
 
 def test_home_fact_queue_removal_restores_unstarted_music_and_removes_tail_successor(tmp_path: Path) -> None:
     queue, state, music, successor, original, head = _pair(tmp_path)
-    successor.metadata["home_fact_entity_id"] = "sensor.kitchen"
+    successor.metadata["home_fact_entity_id"] = "sensor.example_kitchen"
 
-    assert _purge_home_fact_banter_from_queue(queue, state, {"sensor.kitchen"}) == 1
+    assert _purge_home_fact_banter_from_queue(queue, state, {"sensor.example_kitchen"}) == 1
 
     assert _queue_items(queue) == [music]
     assert music.path == original

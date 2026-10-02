@@ -111,7 +111,11 @@ def test_lab_is_local_isolated_and_never_changes_global_docker_context() -> None
     assert ".context" not in body
     assert "homeassistant.local" not in body
     assert "ha-green" not in body
-    assert "100.98.177.107" not in body
+    from scripts.public_tree_safety import scan_text
+
+    assert not [
+        hit for hit in scan_text("scripts/first-listen-lab.sh", body) if hit.rule == "concrete-private-destination"
+    ]
     assert "scp " not in body
     assert "rsync" not in body
 
@@ -452,7 +456,7 @@ def test_runbook_documents_private_bridge_dependency_and_truthful_migration() ->
     assert "Debian or Ubuntu guest only" in docs
     assert "Existing lab migration" in docs
     assert "host.lima.internal" in docs
-    assert "Do not make these changes in the live home" in docs
+    assert "Do not make these changes in the production Home Assistant installation" in docs
 
 
 def test_ha_container_is_owned_loopback_only_and_never_auto_restarted() -> None:

@@ -289,7 +289,7 @@ def test_public_segment_metadata_redacts_private_ritual_internals():
     metadata = {
         "source": "banter",
         "ritual_families": ["Kitchen ritual"],
-        "ritual_recipe_matches": [{"entity_id": "binary_sensor.kitchen_fridge_door"}],
+        "ritual_recipe_matches": [{"entity_id": "binary_sensor.example_kitchen_fridge_door"}],
         "ritual_directive": "Mention the exact fridge door.",
     }
 
@@ -354,9 +354,9 @@ def test_ha_details_payload_serializes_present_observability():
     state.ha_recent_event_count = 3
     state.ha_last_event_label = "Kitchen"
     state.ha_scored_entities = [{"entity_id": f"sensor.{i}"} for i in range(20)]
-    state.ha_denylist_hits = {"sensor.hidden": 2}
+    state.ha_denylist_hits = {"sensor.example_hidden": 2}
     state.ha_ritual_public_families = ["Kitchen ritual"]
-    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.fridge"}]
+    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.example_fridge"}]
     state.ha_ritual_recipe_audit = [{"recipe_id": "chores_reminders", "status": "opportunity"}]
 
     payload = status_payload._ha_details_payload(state)
@@ -369,7 +369,7 @@ def test_ha_details_payload_serializes_present_observability():
     assert payload["recent_event_count"] == 3
     assert payload["last_event_label"] == "Kitchen"
     assert len(payload["scored_entities"]) == 12
-    assert payload["denylist_hits"] == {"sensor.hidden": 2}
+    assert payload["denylist_hits"] == {"sensor.example_hidden": 2}
     assert payload["rituals"]["public_families"] == ["Kitchen ritual"]
     assert payload["rituals"]["matches"][0]["recipe_id"] == "fridge_freezer_raid"
     assert payload["rituals"]["audit"][0]["status"] == "opportunity"
@@ -416,6 +416,66 @@ def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeyp
     assert "yt-dlp downloads" not in payload["fallback_sources"]
     assert payload["source_readiness"]["sources"]["charts"]["configured"] is True
     assert payload["source_readiness"]["sources"]["charts"]["status"] == "configured_unchecked"
+    assert payload["steps"][1] == "Add files in the configured music folder."
+
+
+def test_shared_golden_path_does_not_name_the_media_folder(monkeypatch):
+    class Config:
+        anthropic_api_key = ""
+        openai_api_key = ""
+        allow_ytdlp = False
+        music_dir = Path("/media/mammamiradio")
+        playlist = SimpleNamespace(jamendo_client_id="", jamendo_enabled=False)
+
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
+    payload = status_payload._golden_path_status(Config(), StationState())
+
+    assert payload["steps"][1] == "Add files in the configured music folder."
+
+
+def test_shared_golden_path_does_not_name_the_fallback_music_path(monkeypatch):
+    class Config:
+        anthropic_api_key = ""
+        openai_api_key = ""
+        allow_ytdlp = False
+        music_dir = Path("/tmp/mammamiradio-data/music")
+        playlist = SimpleNamespace(jamendo_client_id="", jamendo_enabled=False)
+
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
+    payload = status_payload._golden_path_status(Config(), StationState())
+
+    assert payload["steps"][1] == "Add files in the configured music folder."
+
+
+def test_local_library_admin_status_names_the_scan_root():
+    status = {"roots": ["/media/crate"], "complete": False, "files_found": 0, "active": 0}
+    payload = status_payload.local_library_admin_status(status, Path("/data/music"))
+    assert payload["place"] == "Media → crate"
+    assert payload["roots"] == ["/media/crate"]
+
+
+def test_local_library_admin_status_uses_the_configured_dir_without_a_scan_root():
+    payload = status_payload.local_library_admin_status({"roots": []}, Path("/data/music"))
+    assert payload["place"] == "/data/music"
+
+
+def test_local_music_place_preserves_a_literal_backslash_in_the_folder_name():
+    assert status_payload.local_music_place(Path("/media/DJ\\Crate")) == "Media → DJ\\Crate"
+
+
+def test_local_music_place_handles_missing_values_and_parent_segments():
+    assert status_payload.local_music_place(None) == "the configured music folder"
+    assert status_payload.local_music_place("") == "the configured music folder"
+    assert status_payload.local_music_place("/media/crate/../songs") == "Media → songs"
+
+
+def test_local_library_admin_status_skips_empty_roots_and_ignores_non_lists():
+    payload = status_payload.local_library_admin_status({"roots": ["", "/media/crate"]}, "/data/music")
+    assert payload["place"] == "Media → crate"
+    payload = status_payload.local_library_admin_status({"roots": "not a list"}, "/data/music")
+    assert payload["place"] == "/data/music"
 
 
 def _source_config(*, allow_ytdlp: bool = False, jamendo_client_id: str = "", jamendo_enabled: bool = False):
@@ -751,3 +811,8 @@ def test_unknown_recovery_evidence_is_not_reported_missing():
     assert "No verified backup audio" in project()["detail"]
     state.source_readiness.configure("recovery", True, bundled=True)
     assert project()["status"] == "cover_only"
+
+
+def test_unavailable_home_evidence_is_visible_without_other_ha_details():
+    state = StationState(home_compatibility_status="unavailable")
+    assert status_payload._ha_details_payload(state)["compatibility_status"] == "unavailable"

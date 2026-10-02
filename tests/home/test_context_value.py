@@ -12,5 +12,5 @@ def test_context_value_distinguishes_empty_from_daylight_only() -> None:
 
 def test_context_value_treats_weather_or_household_facts_as_useful() -> None:
     assert has_useful_home_context_entity_ids(["sun.ambient", "weather.ambient"]) is True
-    assert has_useful_home_context_entity_ids(["switch.coffee_machine"]) is True
+    assert has_useful_home_context_entity_ids(["switch.example_coffee_machine"]) is True
     assert has_useful_home_context_entity_ids(["sun.ambient"]) is False

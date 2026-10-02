@@ -12,7 +12,7 @@ if [ -f tmp/fifo-drain.pid ]; then
 fi
 
 echo ""
-echo "Mamma Mi Radio stopped. go-librespot left running (reusable on next start)."
+echo "Mamma Mi Radio stopped."
 echo ""
 echo "Press any key to close."
 read -n 1

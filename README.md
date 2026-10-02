@@ -69,9 +69,8 @@ asks that media player to play the stream. There is no Mamma Mi Radio account,
 subscription, or project-operated analytics upload. You add provider keys only
 when you want freshly written dialogue or premium voices.
 
-**Status:** single maintainer, running daily in one household. Stable 2.18.0 is
-available; v3 is not released yet. The First Listen steps and screenshots below
-describe the current v3 development candidate.
+**Status:** single maintainer, running daily in one household. Stable 3.0.0 is
+available. The First Listen steps and screenshots below describe this release.
 
 ## First listen
 
@@ -81,8 +80,7 @@ alternative](#docker-alternative).
 
 [![Add repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio)
 
-You can also add the repository by hand. Open **Settings > Apps > App store >
-three-dot menu > Repositories**, paste
+You can also add the repository by hand. Open **Settings → Apps → Install app → ⋮ → Repositories**, paste
 `https://github.com/florianhorner/mammamiradio`, and select **Add**. Install and
 start **Mamma Mi Radio**, then open its Web UI.
 
@@ -90,17 +88,21 @@ No AI key is required for your first listen. Fresh installs open **First Listen*
 at the producer desk (`/admin`). Returning installs open the control room;
 you can find First Listen under **Motore -> Setup**.
 
-1. Select **Play my station**. A reviewed English opening plays
+1. Select **Start my station**. A reviewed English opening plays
    `/stream?first_listen=1` on the current device for about 15 seconds, then
    hands off to the live stream.
    Use its speakers, headphones, Bluetooth, or AirPlay. You need no AI key or
    Home context. No HACS integration is required.
-2. Select **I hear you** only after you hear Mamma Mi Radio. Select **No sound yet**
-   for [repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
-3. Select **Finish with Home private**, or choose **Add live host writing**.
-   With default settings, Home context stays off unless you open **See what the
-   hosts would receive** and then select **Let Marco and Giulia use these details**.
-   You can choose **Keep Home private** from that review instead. If the preview
+2. Select **I can hear it** only after you hear Mamma Mi Radio. Select **I can't
+   hear you** for [repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
+3. **Make it yours** starts with a recorded evening scene that uses no details
+   from your home. Select **Keep Home private** to finish without setting
+   anything up. Otherwise select **Hear the evening**, then **Set up AI and
+   Home**; **Skip this example** goes straight to that setup. There, add a
+   writing key and select **Choose my Home details**, or select **Skip AI,
+   choose Home details**. With default settings, Home context stays off unless
+   you select **Preview my Home** and then **Share these details**. You can
+   choose **Keep Home private** from that preview instead. If the preview
    contains only generic daylight and no usable weather, the app labels it
    ambient-only. The button becomes **Let the hosts use daylight only**, with a
    warning that this would not make the show more personal yet.
@@ -134,8 +136,11 @@ when you want generated host conversations.
 
 The stock Docker setup leaves external extraction off. Standalone installs can
 add the `external-media` extra, but technical access does not grant media
-rights. The Home Assistant app and supplied Docker container use `/data/music`;
-source checkouts use `./music`. Set `MAMMAMIRADIO_MUSIC_DIR` to override either.
+rights. The supplied Docker container uses `/data/music`. The Home Assistant app
+reads a folder in the Media panel when that storage is mounted (the Music folder
+setting, default `mammamiradio`) and `/data/music` when it is not. Source
+checkouts use `./music`. Set `MAMMAMIRADIO_MUSIC_DIR` to override a standalone
+install.
 macOS users can run `./setup-mac.sh`; venv installs can run `./start.sh`.
 
 </details>
@@ -159,9 +164,9 @@ ElevenLabs change only the voices.
 
 With the default Home-context setting, a fresh install starts off. The **Host
 home context** choice is omitted and remains off until you hear the station,
-inspect the filtered preview, and explicitly choose **Let Marco and Giulia use
-these details**. An explicit `MAMMAMIRADIO_HA_CONTEXT_ENABLED=true` operator
-setting overrides that guided default. The station does not poll Home state for
+inspect the filtered preview, and explicitly choose **Share these details**. An
+explicit `MAMMAMIRADIO_HA_CONTEXT_ENABLED=true` operator setting overrides that
+guided default. The station does not poll Home state for
 host material while context is off. You can keep Home private without fetching
 a preview. If you want household details on air, mute any entity the hosts
 should ignore. Previewing does not publish the snapshot into host scripts or
@@ -193,9 +198,11 @@ follows each provider's terms.
 Normal rotation starts with the offline, attributed twelve-track starter
 collection, so no provider account or network music source is required. The
 listener shows the source, license, and modification notice for each track.
-The Home Assistant app scans audio under `/data/music`; use **Rotazione >
-Local music > Scan now** to refresh without a restart. Standalone installs can
-set `MAMMAMIRADIO_MUSIC_DIR`.
+The Home Assistant app scans the Media folder named in its Music folder setting
+when Media is mounted, and `/data/music` when Media is not. The control room
+names that place. Use **Rotazione > Local music > Scan now** to refresh without
+a restart. The supplied Docker container keeps songs in `/data/music`. Other
+standalone installs can set `MAMMAMIRADIO_MUSIC_DIR`.
 
 Jamendo is off by default. To enable it, acknowledge that your Jamendo API use
 is non-commercial.

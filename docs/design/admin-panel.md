@@ -17,7 +17,8 @@ These have regressed in past refactors. Verify each protected element survives e
 
 ## Colorblind safety
 
-Florian is red-green colorblind. This is non-negotiable.
+Status must remain distinguishable for readers with red-green color-vision
+differences. Use blue for success and connected states, with a shape or text label.
 
 - **Never use green** for success, connected, or positive states
 - Use **blue (`#2563EB` / `var(--ok)`)** for success/connected
@@ -135,7 +136,7 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    one.
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
    context), `Costs` (token cost counter + cost split + segment counts — always visible),
-   `Configuration` (AI Quality and On-Air Sound controls), and `Setup` (a
+   `Configuration` (AI Quality, On-Air Sound, and Transitions controls), and `Setup` (a
    collapsible `<details>` that auto-collapses when every readiness item is
    ready; shows an `All ready ✓` blue badge when collapsed).
 

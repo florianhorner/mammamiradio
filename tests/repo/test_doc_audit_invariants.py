@@ -1,23 +1,4 @@
-"""Structural invariants pinned during the 2026-04-16 documentation audit.
-
-Two findings from `docs/2026-04-16-documentation-structure-audit.md` are locked here
-because they are easy to regress during refactors and the docs alone will not catch it:
-
-  * Finding #6 — root route (`/`) ownership.
-    `/` MUST serve the public listener UI for anonymous visitors and MUST serve the
-    admin control-room UI when the request arrives through HA addon ingress. This
-    dual-mode behavior is intentional: operators on HA land on their cockpit without
-    typing `/admin`, while public listeners see the player.
-    Implementation: `mammamiradio/web/streamer.py:787-796`.
-
-  * Finding #13 — `repository.yaml` duplication.
-    Only the repo-root `repository.yaml` is wired into HA addon discovery; all install
-    docs tell users to add the repo root URL, and `scripts/validate-addon.sh`
-    only checks the root file. The nested
-    `ha-addon/repository.yaml` previously shipped with identical contents but had no
-    consumer — it was removed to eliminate the silent sync boundary. This test
-    guarantees the duplicate does not come back.
-"""
+"""Regression coverage for documented route and authentication invariants."""
 
 from __future__ import annotations
 

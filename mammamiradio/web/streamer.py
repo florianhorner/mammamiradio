@@ -18,6 +18,7 @@ import random as _random
 import re as _re
 import secrets
 import shutil
+import sqlite3
 import stat as _stat
 import time
 import unicodedata
@@ -32,6 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from mammamiradio.audio.imaging import default_imaging_assets_dir
 from mammamiradio.audio.norm_cache import (
     is_listener_reserved_cache_file as _is_listener_reserved_cache_file,
 )
@@ -137,6 +139,8 @@ from mammamiradio.home.catalog import (
     invalidate_label_generation,
     schedule_label_generation,
 )
+from mammamiradio.home.compatibility import home_compatibility_resolved
+from mammamiradio.home.consent import save_ambient_consent
 from mammamiradio.home.context_director import HomeContextDirector
 from mammamiradio.home.context_value import (
     LOW_VALUE_AMBIENT_ENTITY_IDS,
@@ -200,6 +204,16 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
+from mammamiradio.scheduling.boundary_glue import (
+    SKIP_ASSET_MISSING,
+    SKIP_GENERATION,
+    SKIP_SWITCH_OFF,
+    AiredBoundary,
+    _packaged_file,
+    seam_choice,
+    validated_playable_bytes,
+    warn_unusable,
+)
 from mammamiradio.scheduling.clip import KEEPSAKE_SEGMENT_TYPES
 from mammamiradio.scheduling.handoff import (
     cancel_active_music_handoff,
@@ -305,6 +319,8 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
     _serialize_stream_log_entry,
     _serialize_track,
     _status_now_playback,
+    local_library_admin_status,
+    local_music_place,
     normalize_public_status_json,
     public_status_etag,
     public_status_not_modified,
@@ -371,9 +387,17 @@ class _HomeContextPreviewProof:
     authorization_mode: str
     policy_revision: int
     context_generation: int
+    binding_identity: str = ""
 
 
 _SETUP_ERRORS: dict[str, tuple[str, str, bool, str, int]] = {
+    "home_check_pending": (
+        "Home access is still being checked",
+        "Keep listening. Try the Home preview again in a moment.",
+        True,
+        "Try again",
+        409,
+    ),
     "ha_access_missing": (
         "Home Assistant access is missing",
         "Check the add-on's Home Assistant access, then try again.",
@@ -532,14 +556,12 @@ _SETUP_ERRORS_STANDALONE: dict[str, tuple[str, str, bool, str, int]] = {
     ),
 }
 
-# TODO: split — this god module is a postal address, not a destination.
-# See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
+# Further route and playback extraction follows docs/runbooks/refactor-cuts.md.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
-# _bust_static_cache now live in web/assets.py; admin auth (require_admin_access,
-# CSRF, trusted networks) now lives in web/auth.py — both imported above.
-#
-# Jinja2 templates for brand-engine listener page (PR-C). Admin still uses
-# string-replace via _inject_ingress_prefix (web/pages.py); only listener migrates to Jinja for now.
+# _bust_static_cache live in web/assets.py. Admin authentication, CSRF, and
+# trusted networks live in web/auth.py; both modules are imported above.
+# Jinja2 renders the listener page. Admin rendering uses _inject_ingress_prefix
+# in web/pages.py.
 _TEMPLATES = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
@@ -3388,7 +3410,11 @@ async def _first_listen_audio_gate_open(app_state) -> bool:
     fails closed until an accepted playback has been audibly confirmed.
     """
     origin = getattr(app_state, "first_listen_install_origin", None)
-    if getattr(origin, "status", None) is FirstListenInstallOriginStatus.EXISTING:
+    state = app_state.station_state
+    needs_new_consent = state.home_ambient_consent_required and not state.home_ambient_consent_granted
+    if needs_new_consent and not bool(getattr(app_state, "home_narrow_audio_confirmed", False)):
+        return False
+    if not needs_new_consent and getattr(origin, "status", None) is FirstListenInstallOriginStatus.EXISTING:
         return True
     cached_receipt = getattr(app_state, "first_listen_receipt", None)
     try:
@@ -3493,6 +3519,7 @@ def _sync_runtime_state(request: Request) -> None:
 
 def _runtime_health_snapshot(request: Request) -> dict:
     state = request.app.state.station_state
+    config = getattr(request.app.state, "config", None)
     queue = getattr(request.app.state, "queue", None)
     queue_depth = queue.qsize() if queue else -1
     queue_capacity = queue.maxsize if queue else -1
@@ -3533,6 +3560,11 @@ def _runtime_health_snapshot(request: Request) -> dict:
         "audio_source": audio_source or "unknown",
         "failover_active": fallback_active,
         "shadow_queue_corrections": state.shadow_queue_corrections,
+        "boundary_imaging": {
+            "enabled": bool(getattr(getattr(config, "audio", None), "boundary_imaging", True)),
+            "carts_aired": state.boundary_carts_aired,
+            "skips": dict(state.boundary_imaging_skips),
+        },
     }
 
 
@@ -4547,6 +4579,38 @@ async def _persist_home_context_choice(config, enabled: bool) -> None:
         )
 
 
+async def _persist_home_ambient_consent(app_state, *, granted: bool) -> None:
+    worker = asyncio.create_task(
+        asyncio.to_thread(save_ambient_consent, app_state.config.cache_dir / "mammamiradio.db", granted=granted)
+    )
+    try:
+        await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Finish the transaction before another choice can acquire the lock.
+        await asyncio.gather(worker, return_exceptions=True)
+        raise
+
+
+async def _persist_home_context_off(app_state) -> bool:
+    persisted = True
+    try:
+        result = getattr(app_state, "home_compatibility_result", None)
+        status = result.status if result is not None else app_state.station_state.home_compatibility_status
+        if not home_compatibility_resolved(status):
+            # The retrying verifier owns unresolved evidence. An option write can
+            # keep access disabled, but cannot establish a permanent scope choice.
+            persisted = False
+        elif app_state.station_state.home_ambient_consent_required or bool(getattr(result, "requires_consent", False)):
+            await _persist_home_ambient_consent(app_state, granted=False)
+    except (OSError, sqlite3.Error, ValueError):
+        persisted = False
+    try:
+        await _persist_home_context_choice(app_state.config, False)
+    except OSError:
+        persisted = False
+    return persisted
+
+
 def _home_context_preview_proof_valid(app_state, proof: object) -> bool:
     if not isinstance(proof, _HomeContextPreviewProof):
         return False
@@ -4556,6 +4620,8 @@ def _home_context_preview_proof_valid(app_state, proof: object) -> bool:
         proof.expires_at > time.monotonic()
         and proof.config_fingerprint == _home_access_fingerprint(app_state.config)
         and proof.authorization_mode == authorization.mode.value
+        and proof.binding_identity == authorization.bindings.identity
+        and home_compatibility_resolved(state.home_compatibility_status)
         and proof.policy_revision == policy_revision(app_state.config.cache_dir)
         and proof.context_generation == getattr(state, "home_context_policy_generation", 0)
     )
@@ -4571,7 +4637,7 @@ async def _fetch_home_context_preview_singleflight(app_state, authorization: Hom
     state = app_state.station_state
     key = (
         _home_access_fingerprint(config),
-        authorization.mode.value,
+        authorization.identity,
         policy_revision(config.cache_dir),
         getattr(state, "home_context_policy_generation", 0),
     )
@@ -4691,6 +4757,10 @@ async def _disable_home_context_runtime(app_state) -> int:
     config = app_state.config
     state = app_state.station_state
     config.homeassistant.context_enabled = False
+    state.home_context_requested = False
+    state.home_ambient_consent_granted = False
+    app_state.home_consent_choice = False
+    app_state.home_narrow_audio_confirmed = False
     state.home_context_policy_generation = getattr(state, "home_context_policy_generation", 0) + 1
     # Invalidate/cancel post-air Home-derived memory tasks synchronously.  The
     # bounded drain happens below, but the epoch must advance before this
@@ -4764,6 +4834,7 @@ def _enable_home_context_runtime(app_state) -> None:
     config = app_state.config
     state = app_state.station_state
     config.homeassistant.context_enabled = True
+    state.home_context_requested = True
     state.ha_context_refresh_stage = "idle"
     coordinator = getattr(state, "ha_context_refresh_mailbox", None)
     enable = getattr(coordinator, "enable", None)
@@ -4890,7 +4961,9 @@ def _clear_global_home_context_runtime_state(state: StationState):
     state.ha_ritual_matches = []
     state.ha_ritual_recipe_audit = []
     state.ha_first_home_context_moment_fired = False
-    state.home_context_director = HomeContextDirector()
+    state.home_context_director = HomeContextDirector(
+        bindings=(state.home_authorization or HomeAuthorization.narrow()).bindings
+    )
     state.ha_context_refresh_in_flight = False
     state.ha_context_refresh_active_foreground_timed_out = False
     state.ha_context_refresh_configured = False
@@ -4972,6 +5045,13 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
     config = request.app.state.config
     state = request.app.state.station_state
     golden_path = _golden_path_status(config, state, force_refresh=force_refresh)
+    if golden_path["stage"] == "needs_music_source":
+        # The shared status also reaches /public-status. Keep the exact path in
+        # this operator-only setup projection, never in the listener payload.
+        golden_path = {
+            **golden_path,
+            "steps": [golden_path["steps"][0], f"Add files in {local_music_place(config.music_dir)}."],
+        }
     provider_health = _provider_health_snapshot(config, state)
     provider_health["probe_in_flight"] = _provider_probe_in_flight(request.app.state)
     origin = getattr(request.app.state, "first_listen_install_origin", None)
@@ -4985,6 +5065,14 @@ def _setup_projection(request: Request, *, force_refresh: bool = False) -> dict[
         install_origin=str(origin_status),
         context_choice_explicit=bool(getattr(request.app.state, "home_context_choice_explicit", True)),
     )
+    setup["guided_setup"]["home_context"]["compatibility"] = {
+        "status": state.home_compatibility_status,
+        "fresh_sound_required": bool(
+            state.home_ambient_consent_required
+            and not state.home_ambient_consent_granted
+            and not getattr(request.app.state, "home_narrow_audio_confirmed", False)
+        ),
+    }
     setup["guided_setup"]["first_listen"]["bootstrap_ready"] = _first_listen_bootstrap_ready(request.app.state)
     setup["guided_setup"]["first_listen"]["receipt_recovery"] = _pending_receipt_recovery(request.app.state)
     return {
@@ -5779,6 +5867,7 @@ def _finalize_selected_playback(
     terminal_reason: str,
     all_chunks_audience_delivered: bool,
     cancel_reason: str = GenerationWasteReason.OPERATOR_PURGE,
+    emit_stream_result: bool = True,
 ) -> None:
     """Settle every selected Segment exactly once, including setup failures.
 
@@ -5813,16 +5902,17 @@ def _finalize_selected_playback(
             )
         finally:
             try:
-                _emit_stream_result(
-                    state,
-                    segment,
-                    bytes_sent,
-                    was_skipped,
-                    start_listeners,
-                    terminal_reason=terminal_reason,
-                    all_chunks_audience_delivered=all_chunks_audience_delivered,
-                    accepted_listener_count=accepted_listener_count,
-                )
+                if emit_stream_result:
+                    _emit_stream_result(
+                        state,
+                        segment,
+                        bytes_sent,
+                        was_skipped,
+                        start_listeners,
+                        terminal_reason=terminal_reason,
+                        all_chunks_audience_delivered=all_chunks_audience_delivered,
+                        accepted_listener_count=accepted_listener_count,
+                    )
             finally:
                 # Best-effort unlink: a raw unlink here can raise a non-missing
                 # OSError and escape the finally, killing the playback loop after
@@ -5834,6 +5924,153 @@ def _finalize_selected_playback(
                 finally:
                     if state.active_playback_segment is segment:
                         state.active_playback_segment = None
+
+
+def _boundary_assets_dir(config) -> Path:
+    """Resolve the imaging pack the cart is allowed to read."""
+    configured = getattr(getattr(config, "imaging", None), "assets_dir", "") or ""
+    if isinstance(configured, str) and configured:
+        return Path(configured)
+    return default_imaging_assets_dir()
+
+
+def _note_boundary_skip(state: StationState, reason: str, previous: AiredBoundary | None, segment: Segment) -> None:
+    state.boundary_imaging_skips[reason] = state.boundary_imaging_skips.get(reason, 0) + 1
+    logger.debug(
+        "boundary cart skip %s: %s → %s",
+        reason,
+        previous.kind.value if previous is not None else "none",
+        segment.type.value,
+    )
+
+
+def _boundary_abort_reason(
+    state: StationState, skip_event: asyncio.Event, epoch: int, stop_revision: int
+) -> str | None:
+    """Stop, Skip, or a continuity epoch change owns the seam before programme audio."""
+    if state.session_stopped:
+        return GenerationWasteReason.SESSION_STOPPED
+    if state.continuity_epoch != epoch or state.session_stop_revision != stop_revision:
+        return GenerationWasteReason.STALE_CONTINUITY
+    return "skip" if skip_event.is_set() else None
+
+
+@dataclass
+class _BoundaryPrelude:
+    """Caller-owned accounting survives interruption before programme audio."""
+
+    bytes_sent: int = 0
+    generation: int = 0
+    continuity_epoch: int = 0
+    abort_reason: str | None = None
+
+
+async def _broadcast_boundary_prelude(
+    *,
+    hub,
+    pacer,
+    state: StationState,
+    config,
+    segment: Segment,
+    last_aired: AiredBoundary | None,
+    chunk_size: int,
+    skip_event: asyncio.Event,
+    prelude: _BoundaryPrelude,
+) -> None:
+    """Send a packaged boundary cart before the programme file.
+
+    Records an abort reason when Stop, Skip, or a continuity change means the
+    programme file must not air. Prelude bytes are not accounted as the segment: the
+    caller keeps ``bytes_sent``, listener acceptance, and the share ring for
+    the programme file alone. The send stays here, not in a helper shared with
+    the file loop, so programme accounting cannot slip behind the pacing sleep.
+    """
+    choice = seam_choice(last_aired, segment)
+    generation_stale = last_aired is not None and last_aired.generation != hub.delivery_generation
+    # A policy exclusion owns its reason even when the room also changed.
+    # The immediate return keeps each skipped seam to one counter entry.
+    if choice.relative is None:
+        if choice.skip_reason:
+            _note_boundary_skip(state, choice.skip_reason, last_aired, segment)
+        return
+    if not config.audio.boundary_imaging:
+        _note_boundary_skip(state, SKIP_SWITCH_OFF, last_aired, segment)
+        return
+    if generation_stale:
+        _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
+        return
+
+    asset = Path(choice.relative)
+    try:
+        assets_dir = _boundary_assets_dir(config)
+        asset = assets_dir / choice.relative
+        path = _packaged_file(choice.relative, assets_dir=assets_dir)
+        if path is None:
+            warn_unusable(asset, "missing or unreadable")
+        playable = (
+            validated_playable_bytes(
+                path,
+                sample_rate=int(config.audio.sample_rate),
+                bitrate=int(config.audio.bitrate),
+                channels=int(config.audio.channels),
+            )
+            if path is not None
+            else None
+        )
+    except Exception:
+        warn_unusable(asset, "could not load")
+        playable = None
+    if not playable:
+        _note_boundary_skip(state, SKIP_ASSET_MISSING, last_aired, segment)
+        return
+
+    captured_epoch = state.continuity_epoch
+    captured_stop_revision = state.session_stop_revision
+    captured_generation = hub.delivery_generation
+    prelude.generation = captured_generation
+    prelude.continuity_epoch = captured_epoch
+
+    offset = 0
+    while offset < len(playable):
+        prelude.abort_reason = _boundary_abort_reason(state, skip_event, captured_epoch, captured_stop_revision)
+        if prelude.abort_reason is not None:
+            _note_boundary_skip(state, prelude.abort_reason, last_aired, segment)
+            return
+        if hub.delivery_generation != captured_generation:
+            _note_boundary_skip(state, SKIP_GENERATION, last_aired, segment)
+            return
+        piece = playable[offset : offset + chunk_size]
+        offset += len(piece)
+        await hub.broadcast(piece)
+        prelude.bytes_sent += len(piece)
+        if offset == len(playable):
+            # Completion is the last emitted cart byte, even when an operator
+            # aborts the following programme during the final pacing sleep.
+            state.boundary_carts_aired += 1
+            logger.info(
+                "boundary cart %s: %s → %s",
+                choice.relative,
+                last_aired.kind.value if last_aired is not None else "none",
+                segment.type.value,
+            )
+        pacing = pacer.after_send(len(piece))
+        if pacing.kind is not None:
+            state.record_stream_pacing_event(
+                pacing.kind,
+                lateness_ms=pacing.lateness_seconds * 1000,
+                remaining_lead_ms=pacing.remaining_lead_seconds * 1000,
+                deficit_ms=pacing.deficit_seconds * 1000,
+                segment_type=segment.type.value,
+            )
+        if pacing.warn_underrun:
+            logger.warning(
+                "Stream delivery cushion exhausted by %.1f ms during boundary cart",
+                pacing.deficit_seconds * 1000,
+            )
+        if pacing.sleep_seconds > 0.005:
+            await asyncio.sleep(pacing.sleep_seconds)
+
+    prelude.abort_reason = _boundary_abort_reason(state, skip_event, captured_epoch, captured_stop_revision)
 
 
 async def run_playback_loop(app) -> None:
@@ -5864,9 +6101,13 @@ async def run_playback_loop(app) -> None:
     _persist_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
     _ha_push_tasks: set[asyncio.Task] = set()  # prevent GC of HA push tasks
     gap_clips_served = 0
+    # Last programme segment that sent audio. None after start, Stop, or an
+    # empty room, so the first bytes a listener hears are programme, not a cart.
+    last_aired: AiredBoundary | None = None
 
     while True:
         if state.session_stopped:
+            last_aired = None
             pacer.reset_timeline("playback_stop_resume")
             state.queue_empty_since = None
             gap_clips_served = 0
@@ -5880,6 +6121,7 @@ async def run_playback_loop(app) -> None:
         # Pause when nobody is listening — don't burn API tokens or disk on an empty room.
         # The queue stays full; the moment a listener connects, playback resumes instantly.
         if not hub._listeners:
+            last_aired = None
             pacer.reset_timeline("no_listeners")
             state.queue_empty_since = None
             gap_clips_served = 0
@@ -6102,6 +6344,7 @@ async def run_playback_loop(app) -> None:
                     ):
                         pass
                     elif elapsed >= 60.0:
+                        last_aired = None
                         # Request forced banter once per silence episode to avoid producer thrash.
                         # queue_empty_since is intentionally NOT reset — the silence gate on
                         # /healthz and /readyz must stay active until real audio resumes.
@@ -6115,6 +6358,7 @@ async def run_playback_loop(app) -> None:
                         continue
                     else:
                         logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+                        last_aired = None
                         pacer.reset_timeline("queue_gap_fallback")
                         continue
 
@@ -6277,15 +6521,17 @@ async def run_playback_loop(app) -> None:
             logger.info("Discarding exact-track packaged banter after its predecessor changed")
             continue
 
-        if not segment.mark_playback_started():
+        if segment.released:
             # Settle like every other pre-air drop site. Without this the
             # segment vanishes with its listener-request reservation still held,
             # so the promised recording stays excluded from ordinary rotation
             # for the rest of the session with no retry and no waste trail.
-            # Its own reason, too: the usual cause is the segment's provider
-            # withdrawing it (an expired or released transient lease), which is
+            # Its own reason, too: the cause is the segment's provider
+            # withdrawing it (a released transient lease), which is
             # not an operator action. `operator_purge` renders to the operator as
             # "queue cleared" and would name them for something they did not do.
+            # The one-shot admission callback waits until after any boundary
+            # cart, immediately before the programme's first byte.
             state.record_discard(
                 segment,
                 reason=GenerationWasteReason.PLAYBACK_ADMISSION_DENIED,
@@ -6373,6 +6619,9 @@ async def run_playback_loop(app) -> None:
 
         try:
             bytes_sent = 0
+            prelude = _BoundaryPrelude()
+            pre_air_discard_reason: str | None = None
+            aired_generation = hub.delivery_generation
             accepted_listener_count = 0
             was_skipped = False
             send_completed_cleanly = False
@@ -6405,7 +6654,89 @@ async def run_playback_loop(app) -> None:
             try:
                 with open(segment.path, "rb") as f:
                     _skip_id3_and_xing_header(f)
-                    while chunk := f.read(chunk_size):
+                    # Read the programme's first chunk before any cart. An empty
+                    # or header-only file takes today's EOF path and never airs
+                    # an orphan sting. The cart itself is not part of this read.
+                    retained_chunk = f.read(chunk_size)
+                    send_programme = True
+                    if retained_chunk:
+                        await _broadcast_boundary_prelude(
+                            hub=hub,
+                            pacer=pacer,
+                            state=state,
+                            config=config,
+                            segment=segment,
+                            last_aired=last_aired,
+                            chunk_size=chunk_size,
+                            skip_event=skip_event,
+                            prelude=prelude,
+                        )
+                    if prelude.abort_reason == "skip":
+                        was_skipped = True
+                        terminal_reason = "skip"
+                        if skip_event.is_set():
+                            skip_event.clear()
+                        logger.info("Skipping current segment")
+                        send_programme = False
+                    elif prelude.abort_reason is not None:
+                        pre_air_discard_reason = prelude.abort_reason
+                    elif retained_chunk and not _home_context_generation_is_current(state, config, segment):
+                        pre_air_discard_reason = GenerationWasteReason.OPERATOR_PURGE
+                    elif retained_chunk and not _packaged_banter_predecessor_is_current(state, segment):
+                        pre_air_discard_reason = GenerationWasteReason.STALE_PLAYED_TRACK_REF
+                    elif (
+                        retained_chunk
+                        and segment.type is SegmentType.MUSIC
+                        and song_identity_key_is_blocklisted(_segment_blocklist_key(segment), state.blocklist)
+                    ):
+                        pre_air_discard_reason = GenerationWasteReason.OPERATOR_BAN
+                    elif retained_chunk and _segment_is_listener_reserved(state, segment):
+                        pre_air_discard_reason = GenerationWasteReason.LISTENER_REQUEST_RESERVED
+                    elif retained_chunk and not segment.mark_playback_started():
+                        # A provider can revoke its still-queued lease during
+                        # the cart. Consuming admission before that await would
+                        # falsely mark an unheard file as already playing.
+                        pre_air_discard_reason = GenerationWasteReason.PLAYBACK_ADMISSION_DENIED
+                    if pre_air_discard_reason is not None:
+                        state.record_discard(
+                            segment,
+                            reason=pre_air_discard_reason,
+                            already_counted_in_produced=pulled_from_queue,
+                        )
+                        _drop_segment_moment_receipts(state, segment, pre_air_discard_reason)
+                        listener_request_reservation_released = True
+                        companionship_discard_recorded = True
+                        terminal_reason = pre_air_discard_reason
+                        if pre_air_discard_reason == GenerationWasteReason.STALE_CONTINUITY:
+                            logger.warning(
+                                "Discarding playback selection after continuity epoch changed "
+                                "captured_epoch=%d current_epoch=%d type=%s",
+                                prelude.continuity_epoch,
+                                state.continuity_epoch,
+                                segment.type.value,
+                                extra={
+                                    "event": "playback_selection_stale_continuity",
+                                    "captured_continuity_epoch": prelude.continuity_epoch,
+                                    "continuity_epoch": state.continuity_epoch,
+                                    "segment_type": segment.type.value,
+                                },
+                            )
+                        elif pre_air_discard_reason == GenerationWasteReason.OPERATOR_PURGE:
+                            logger.info("Discarding stale Home-context segment before playback")
+                        else:
+                            logger.info("Discarding playback selection before first byte (%s)", pre_air_discard_reason)
+                        send_programme = False
+                    pending_chunk: bytes | None = retained_chunk if send_programme else None
+                    while send_programme:
+                        if pending_chunk is not None:
+                            chunk = pending_chunk
+                            pending_chunk = None
+                        else:
+                            chunk = f.read(chunk_size)
+                        if not chunk:
+                            send_completed_cleanly = True
+                            terminal_reason = "eof"
+                            break
                         if skip_event.is_set():
                             logger.info("Skipping current segment")
                             was_skipped = True
@@ -6564,9 +6895,6 @@ async def run_playback_loop(app) -> None:
                             )
                         if pacing.sleep_seconds > 0.005:
                             await asyncio.sleep(pacing.sleep_seconds)
-                    else:
-                        send_completed_cleanly = True
-                        terminal_reason = "eof"
             except asyncio.CancelledError:
                 terminal_reason = "cancelled"
                 raise
@@ -6661,6 +6989,19 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            if bytes_sent > 0:
+                _aired_meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+                last_aired = AiredBoundary(
+                    kind=segment.type,
+                    rescue=bool(_aired_meta.get("rescue")),
+                    generation=aired_generation,
+                    packaged=bool(_aired_meta.get("packaged")),
+                    interrupt=bool(_aired_meta.get("interrupt")),
+                )
+            elif prelude.bytes_sent > 0:
+                # An orphaned cart already occupied this seam. Do not stack a
+                # second cart before the next programme gets its first byte.
+                last_aired = AiredBoundary(SegmentType.SWEEPER, False, prelude.generation)
             if not listener_request_reservation_released:
                 # File-error/empty-file restoration already popped this token
                 # into an active or backlogged retry. Other pre-byte exits (an
@@ -6697,7 +7038,16 @@ async def run_playback_loop(app) -> None:
                 accepted_listener_count=accepted_listener_count,
                 terminal_reason=terminal_reason,
                 all_chunks_audience_delivered=all_chunks_audience_delivered,
+                emit_stream_result=pre_air_discard_reason is None,
+                cancel_reason=pre_air_discard_reason or GenerationWasteReason.OPERATOR_PURGE,
             )
+            if pulled_from_queue and pre_air_discard_reason in {
+                GenerationWasteReason.OPERATOR_BAN,
+                GenerationWasteReason.LISTENER_REQUEST_RESERVED,
+            }:
+                remaining = list(getattr(segment_queue, "_queue", ()))
+                prior_tail = remaining[-1] if remaining else segment
+                _reconcile_queue_tail_adjacency(segment_queue, state, prior_tail=prior_tail)
 
 
 def _schedule_banter_memory_extraction_after_send(
@@ -7376,30 +7726,31 @@ async def service_worker():
 
 
 def _resolve_static_file(filename: str) -> Path | None:
-    """Resolve a user-requested static asset path safely.
+    """Select a contained static file without constructing a path from input.
 
-    Rejects absolute paths and ``..`` components before filesystem lookup, then
-    confirms the resolved target stays under the static directory and is a file.
+    Match the walked name before resolving it so safe file aliases still work.
+    Directory symlinks are not traversed by rglob.
     """
-    if filename.startswith("/") or ".." in Path(filename).parts:
+    if filename.startswith("/") or "\x00" in filename or ".." in filename.split("/"):
         return None
 
     try:
-        # Both resolutions sit inside the guard. Leaving the root outside it
-        # meant a broken install answered 500 to every static request.
-        # RuntimeError is a symlink cycle on Python 3.12 and earlier;
-        # ValueError is an embedded null byte, which a request path can carry.
-        # Uncaught, either left this unauthenticated route raising instead of
-        # answering the 404 it already returns for any name it cannot resolve.
         static_root = _STATIC_DIR.resolve()
-        candidate = (static_root / filename).resolve()
+        for entry in static_root.rglob("*"):
+            if filename != entry.relative_to(static_root).as_posix():
+                continue
+            try:
+                candidate = entry.resolve()
+                if candidate.is_relative_to(static_root) and candidate.is_file():
+                    return candidate
+            except (OSError, RuntimeError, ValueError):
+                continue
     except (OSError, RuntimeError, ValueError):
+        # Guard root resolution and lazy iteration too: an unreadable install
+        # or symlink cycle must answer 404 instead of raising on a public route.
         return None
 
-    if not candidate.is_relative_to(static_root) or not candidate.is_file():
-        return None
-
-    return candidate
+    return None
 
 
 @router.get("/static/{filename:path}")
@@ -7795,6 +8146,7 @@ async def setup_first_listen_verify(request: Request, _: None = Depends(_require
         return _setup_error("receipt_unavailable", accepted=True, receipt_persisted=False)
     receipt = _adopt_first_listen_receipt(request.app.state, receipt)
     heard = bool(body["heard"])
+    request.app.state.home_narrow_audio_confirmed = heard
     return {
         "ok": True,
         "heard": heard,
@@ -7835,6 +8187,7 @@ async def setup_first_listen_listener_confirm(
         # The durable store is the transaction boundary.  Never let an
         # optimistic in-memory receipt unlock the next setup step.
         saved_receipt = _adopt_first_listen_receipt(app_state, saved_receipt)
+        app_state.home_narrow_audio_confirmed = True
         return {
             "ok": True,
             "heard": True,
@@ -7843,6 +8196,7 @@ async def setup_first_listen_listener_confirm(
             "attempt_id": saved_receipt.accepted_attempt_id,
         }
 
+    app_state.home_narrow_audio_confirmed = False
     # "Not yet" is observational, but completion is a durable claim. Reload the
     # receipt so missing, malformed, or unreadable state fails closed without
     # erasing a newer cache value published while this read was in flight.
@@ -7887,6 +8241,8 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
     if error is not None:
         return error
     app_state = request.app.state
+    if not home_compatibility_resolved(app_state.station_state.home_compatibility_status):
+        return _setup_error("home_check_pending")
     if not await _first_listen_audio_gate_open(app_state):
         return _setup_error("first_listen_required")
     config = app_state.config
@@ -7911,6 +8267,7 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
         expires_at=time.monotonic() + _HOME_PREVIEW_PROOF_TTL_SECONDS,
         config_fingerprint=_home_access_fingerprint(config),
         authorization_mode=authorization.mode.value,
+        binding_identity=authorization.bindings.identity,
         policy_revision=revision_before,
         context_generation=generation_before,
     )
@@ -7939,12 +8296,26 @@ async def setup_home_context_choice(request: Request, _: None = Depends(_require
         return error
     app_state = request.app.state
     enabled = bool(body["enabled"])
+    worker = asyncio.create_task(_apply_home_context_choice(app_state, enabled=enabled))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # The owned operation holds the choice lock through all option/consent
+        # writes and revocation drains, even if the browser disconnects.
+        await asyncio.gather(worker, return_exceptions=True)
+        raise
+
+
+async def _apply_home_context_choice(app_state, *, enabled: bool):
     lock = getattr(app_state, "home_context_choice_lock", None)
     if lock is None:
         lock = asyncio.Lock()
         app_state.home_context_choice_lock = lock
 
     async with lock:
+        state = app_state.station_state
+        if enabled and not home_compatibility_resolved(state.home_compatibility_status):
+            return _setup_error("home_check_pending")
         if enabled and not await _first_listen_audio_gate_open(app_state):
             return _setup_error("first_listen_required")
         preview_proof = getattr(app_state, "home_context_preview_proof", None)
@@ -7953,66 +8324,49 @@ async def setup_home_context_choice(request: Request, _: None = Depends(_require
 
         persisted = True
         purged = 0
+        error_code = "privacy_persist_failed"
+        app_state.home_context_choice_explicit = True
         if enabled:
             try:
+                # Persist the option first. It has no power to reopen a capped
+                # installation until the independently committed consent exists.
                 await _persist_home_context_choice(app_state.config, True)
-            except OSError:
-                return _setup_error(
-                    "privacy_persist_failed",
-                    extra={"enabled": False, "persisted": False},
-                )
-            # Supported entity-policy writes share this route's lock, but an
-            # out-of-band policy/config change can still land while the add-on
-            # option is being persisted. Re-check the exact preview proof after
-            # that await. If it drifted, compensate the already-written choice
-            # and latch explicit-off so a delayed install-origin task cannot
-            # widen the runtime behind this failed enable attempt.
-            if not _home_context_preview_proof_valid(app_state, preview_proof):
-                app_state.home_context_choice_explicit = True
-                app_state.home_context_preview_proof = None
-                try:
-                    await _persist_home_context_choice(app_state.config, False)
-                except OSError:
-                    persisted = False
+                if not _home_context_preview_proof_valid(app_state, preview_proof):
+                    error_code = "preview_required"
+                    raise ValueError("preview expired")
+                if state.home_ambient_consent_required:
+                    await _persist_home_ambient_consent(app_state, granted=True)
+                if not _home_context_preview_proof_valid(app_state, preview_proof):
+                    error_code = "preview_required"
+                    raise ValueError("preview expired")
+            except (OSError, sqlite3.Error, ValueError):
                 purged = await _disable_home_context_runtime(app_state)
-                if not persisted:
-                    return _setup_error(
-                        "privacy_persist_failed",
-                        extra={
-                            "enabled": False,
-                            "persisted": False,
-                            "live_off": True,
-                            "purged_pending_segments": purged,
-                        },
-                    )
+                persisted = await _persist_home_context_off(app_state)
                 return _setup_error(
-                    "preview_required",
+                    error_code if persisted else "privacy_persist_failed",
                     extra={
                         "enabled": False,
-                        "persisted": True,
+                        "persisted": persisted,
+                        "live_off": True,
                         "purged_pending_segments": purged,
                     },
                 )
+            state.home_ambient_consent_granted = state.home_ambient_consent_required
+            app_state.home_consent_choice = True
+            if state.home_ambient_consent_required:
+                state.home_compatibility_status = "ambient"
             _enable_home_context_runtime(app_state)
         else:
-            # This in-process latch is authoritative even when the durable
-            # write later fails: a delayed install-origin migration must never
-            # reinterpret an explicit Keep off action and turn context back on.
-            app_state.home_context_choice_explicit = True
+            # The live fence, task cancellation and explicit-choice latch all
+            # precede disk I/O. Both durable writes are attempted on failure.
             purged = await _disable_home_context_runtime(app_state)
-            try:
-                await _persist_home_context_choice(app_state.config, False)
-            except OSError:
-                persisted = False
+            persisted = await _persist_home_context_off(app_state)
+            if state.home_ambient_consent_required:
+                state.home_compatibility_status = "needs_consent"
         if not persisted:
             return _setup_error(
                 "privacy_persist_failed",
-                extra={
-                    "enabled": False,
-                    "persisted": False,
-                    "live_off": True,
-                    "purged_pending_segments": purged,
-                },
+                extra={"enabled": False, "persisted": False, "live_off": True, "purged_pending_segments": purged},
             )
 
         app_state.home_context_choice_explicit = True
@@ -8214,6 +8568,7 @@ async def regenerate_homeassistant_labels(request: Request, _: None = Depends(re
         cache_dir=config.cache_dir,
         config=config,
         score_by_entity={entity.entity_id: entity.score for entity in context.scored},
+        bindings=authorization.bindings,
         force=True,
     )
     if not scheduled:
@@ -9300,14 +9655,13 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
             "effective_on": "next_banter_generation",
             "stream_status": "unaffected",
         }
-    except Exception as exc:
-        logger.error("hot-reload: importlib.reload failed: %s", exc)
+    except Exception:
+        logger.exception("hot-reload: importlib.reload failed")
         return JSONResponse(
             status_code=500,
             content={
                 "ok": False,
                 "error_code": "reload_failed",
-                "exception": str(exc),
                 "stream_status": "unaffected",
                 "retryable": True,
             },
@@ -9620,6 +9974,60 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
     logger.info("On-Air Sound (broadcast chain) %s by admin", "enabled" if value else "disabled")
     _record_operator_action(request, "broadcast_chain", old_value, value)
     return {"ok": True, "broadcast_chain": value}
+
+
+_boundary_imaging_lock = asyncio.Lock()
+
+
+@router.get("/api/boundary-imaging")
+async def get_boundary_imaging(request: Request, _: None = Depends(require_admin_access)):
+    """Return the Transitions dial and whether a restart resets its live choice."""
+    config = request.app.state.config
+    state = request.app.state.station_state
+    return {
+        "boundary_imaging": bool(config.audio.boundary_imaging),
+        "resets_on_restart": bool(config.is_addon),
+        "carts_aired": state.boundary_carts_aired,
+    }
+
+
+@router.post("/api/boundary-imaging")
+async def set_boundary_imaging(request: Request, _: None = Depends(require_admin_access)):
+    """Toggle packaged boundary sounds live, at the next seam.
+
+    No queue purge. Standalone writes ``MAMMAMIRADIO_BOUNDARY_IMAGING`` to
+    ``.env`` before the runtime changes. The add-on has no Supervisor option
+    for this dial, so the change lasts until the container restarts with its
+    configured startup value (on by default).
+    """
+    config = request.app.state.config
+    body, error = await read_json_object(request)
+    if error is not None:
+        return error
+    if "boundary_imaging" not in body:
+        return {"ok": False, "error": "expected JSON object with boundary_imaging"}
+    raw_value = body["boundary_imaging"]
+    if not isinstance(raw_value, bool):
+        return {"ok": False, "error": "boundary_imaging must be a JSON boolean (true/false)"}
+    value = raw_value
+    env_value = "true" if value else "false"
+    loop = asyncio.get_running_loop()
+    async with _boundary_imaging_lock:
+        if not config.is_addon:
+            try:
+                await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_BOUNDARY_IMAGING": env_value})
+            except Exception:
+                logger.error("Failed to persist Transitions toggle", exc_info=True)
+                return JSONResponse(
+                    status_code=500,
+                    content={"ok": False, "error": "failed to persist transitions setting"},
+                )
+        old_value = bool(config.audio.boundary_imaging)
+        config.audio.boundary_imaging = value
+        os.environ["MAMMAMIRADIO_BOUNDARY_IMAGING"] = env_value
+    logger.info("Transitions (boundary imaging) %s by admin", "enabled" if value else "disabled")
+    _record_operator_action(request, "boundary_imaging", old_value, value)
+    return {"ok": True, "boundary_imaging": value, "resets_on_restart": bool(config.is_addon)}
 
 
 _quality_lock = asyncio.Lock()
@@ -12639,8 +13047,9 @@ async def status(
             "playlist_source": _serialize_source(state.playlist_source),
             # Local paths and scan diagnostics are operator-only. The public
             # payload intentionally carries only source-readiness summaries.
-            "local_library": dict(
-                getattr(request.app.state, "local_library_status", {"in_progress": False, "roots": []})
+            "local_library": local_library_admin_status(
+                getattr(request.app.state, "local_library_status", None),
+                getattr(config, "music_dir", None),
             ),
             "jamendo": safe_jamendo_status(config, getattr(request.app.state, "jamendo_provider", None)),
             "external_extractors": _external_extractors_status(config),

@@ -243,7 +243,8 @@ else
   echo "NOTICE: the edge cut proceeds report-only; scripts/pre-release-check.sh still fails hard on this proof on the release path."
 fi
 python3 scripts/validate-release-beat.py --channel edge --target-sha "$SHA"
-sed -i.bak "s/^version: .*/version: $SHA/" "$EDGE_CONFIG"
+# Quoted: an all-digit short SHA would otherwise be a YAML integer, not a version string.
+sed -i.bak "s/^version: .*/version: \"$SHA\"/" "$EDGE_CONFIG"
 rm -f "$EDGE_CONFIG.bak"
 git add "$EDGE_CONFIG"
 git commit -q -m "chore(edge): cut edge release $SHA"

@@ -44,6 +44,7 @@ from mammamiradio.scheduling.producer import (
     _queue_drain_recovery_bridge,
     _set_last_music_file,
 )
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 SCRIPTWRITER_MODULE = "mammamiradio.hosts.scriptwriter"
@@ -746,7 +747,7 @@ async def test_banter_home_fact_reservation_rejected_is_discarded_before_air(tmp
 
     state = _make_run_state()
     state.force_next = SegmentType.BANTER
-    state.home_context_director = HomeContextDirector()  # empty: this fact was never issued
+    state.home_context_director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)  # empty: this fact was never issued
     config = _make_run_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
@@ -759,7 +760,7 @@ async def test_banter_home_fact_reservation_rejected_is_discarded_before_air(tmp
 
     # policy_revision 0 + an unmuted entity so the policy gate passes and the
     # discard is driven purely by the rejected reservation.
-    fact = PromptFact("orphan-fact-1", "weather.forecast_home", "ambient.temperature", "fp", "Sole e 24 gradi.", 0)
+    fact = PromptFact("orphan-fact-1", "weather.example_weather", "ambient.temperature", "fp", "Sole e 24 gradi.", 0)
     calls = 0
 
     async def _banter(state_arg, config_arg, **_kwargs):
@@ -810,9 +811,9 @@ async def test_no_llm_banter_does_not_advance_home_fact_rotation(tmp_path):
     state = _make_run_state()
     state.force_next = SegmentType.BANTER
     state.canned_clips_streamed = producer.SHAREWARE_CANNED_LIMIT  # shareware exhausted -> generated closer
-    director = HomeContextDirector()
+    director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     director.observe(
-        [DirectorObservation("weather.forecast_home", "weather", "sunny", score=9.0, temperature_c=22.0)],
+        [DirectorObservation("weather.example_weather", "weather", "sunny", score=9.0, temperature_c=22.0)],
         policy_revision=0,
     )
     state.home_context_director = director
@@ -852,7 +853,7 @@ async def test_pending_directive_keeps_legacy_home_context_in_prompt(tmp_path):
 
     state = _make_run_state()
     state.force_next = SegmentType.BANTER
-    state.home_context_director = HomeContextDirector()
+    state.home_context_director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     state.ha_context = "- Coffee machine: on"
     state.ha_pending_directive = "FIRST CONNECTED HOME MOMENT: use one or two concrete home details."
     config = _make_run_config()

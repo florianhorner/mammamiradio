@@ -6,25 +6,24 @@ import asyncio
 import importlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from itertools import islice
 from pathlib import Path
-from types import FunctionType, ModuleType
-from typing import Literal
+from types import ModuleType
+from typing import Any, Literal
 
 from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.core.models import Track
 from mammamiradio.core.path_safety import safe_path_within
-from mammamiradio.playlist.music_admission import (
-    DEFAULT_SONGS_BETWEEN_BANTER,
-    build_music_admission_envelope,
-)
+from mammamiradio.playlist.music_admission import REFERENCE_SINGLE_TRACK_SEC
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +47,17 @@ _EXTERNAL_MEDIA_SOURCES = frozenset({"youtube", "classic"})
 # `throttledratelimit`: yt-dlp then re-extracts in an uncapped loop whenever a
 # download is slow.
 _YTDLP_SOCKET_TIMEOUT_SEC = 30
-# One retry, not yt-dlp's CLI default of 10. Through the Python API an unset
-# value is already 0. Each attempt can block for the socket timeout above, and
-# a download still has no overall deadline, so this stays at one.
-_YTDLP_FRAGMENT_RETRIES = 1
-# A completed premiere (was_live) is an ordinary video and is judged by duration.
-_UNPLAYABLE_LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
+
+# yt-dlp `live_status` values that are not a finished recording: live now,
+# scheduled, or just ended and not yet processed into a normal video. None of
+# them downloads as a song; a live one can run until the station restarts.
+_LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
+
+# An extract more than this many times the track's own length is plainly not
+# the song the track describes (an hour-long compilation, a mix). Generous on
+# purpose: for YouTube picks the admission envelope after download still
+# judges normal lengths.
+_EXTRACT_DURATION_MAX_MULTIPLE = 4
 
 # Canonical YouTube video-id shape (11 chars, base64url alphabet). Single source
 # of truth for both the search-result filter (below) and the add-external payload
@@ -394,66 +398,60 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
     return None
 
 
-def _class_implements(obj: object, name: str) -> bool:
-    """True when ``name`` is a real method, not a test double's auto-attribute."""
-    return isinstance(getattr(type(obj), name, None), FunctionType)
+class ExternalMediaRefusedError(RuntimeError):
+    """The extract was live or far longer than its track; no audio was downloaded."""
 
 
-def _default_longform_threshold_sec() -> float:
-    """Admission envelope for a caller that did not pass the station's rotation."""
+def _refuse_live_or_overlong(
+    track: Track,
+    refusals: list[str],
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Callable[..., str | None]:
+    """Build the yt-dlp ``match_filter`` that turns down a live or wildly longer extract.
 
-    class _DefaultPacing:
-        songs_between_banter = DEFAULT_SONGS_BETWEEN_BANTER
+    yt-dlp runs it on the extracted info before format selection, so a refusal
+    transfers no audio. Each reason is also appended to ``refusals`` for the caller.
+    A station window, when the caller has one, can only tighten the 4x cap.
+    """
+    reference_sec = max(_claimed_track_sec(track), REFERENCE_SINGLE_TRACK_SEC)
+    limit_sec = reference_sec * _EXTRACT_DURATION_MAX_MULTIPLE
+    if longform_threshold_sec is not None and longform_threshold_sec > 0:
+        limit_sec = min(limit_sec, longform_threshold_sec)
 
-    return build_music_admission_envelope((), _DefaultPacing()).longform_threshold_sec
+    # yt-dlp also passes ``incomplete=``; the verdict does not depend on it.
+    def match_filter(info: dict[str, Any], **_: Any) -> str | None:
+        if info.get("is_live") or info.get("live_status") in _LIVE_STATUSES:
+            reason = "refused a live stream before download"
+        else:
+            duration = info.get("duration")
+            if isinstance(duration, float) and not math.isfinite(duration):
+                return None
+            if not isinstance(duration, int | float) or duration <= limit_sec:
+                return None
+            reason = f"refused a result running {_clock(duration)} before download (limit {_clock(limit_sec)})"
+        refusals.append(reason)
+        return reason
+
+    return match_filter
 
 
-def _positive_duration_sec(raw: object) -> float | None:
-    if isinstance(raw, bool) or raw in (None, ""):
-        return None
-    if isinstance(raw, int | float):
-        duration = float(raw)
-    elif isinstance(raw, str):
-        try:
-            duration = float(raw)
-        except ValueError:
-            return None
-    else:
-        return None
-    if duration <= 0 or duration != duration or duration == float("inf"):
-        return None
-    return duration
+def _claimed_track_sec(track: Track) -> float:
+    """The track's recorded length in seconds, or 0 when missing or malformed.
 
-
-def _primary_extract(info: object) -> dict | None:
-    """Return the video dict, including the first entry of a search playlist."""
-    if not isinstance(info, dict):
-        return None
-    entries = info.get("entries")
-    if entries is None:
-        return info
+    ``/api/playlist/add`` stores the posted ``duration_ms`` unchecked, so a
+    string, NaN, huge, or negative value must not break the refusal limit.
+    """
     try:
-        iterator = iter(entries)
-    except TypeError:
-        return info
-    for entry in iterator:
-        if isinstance(entry, dict):
-            return entry
-    return None
+        seconds = float(track.duration_ms) / 1000
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return seconds if math.isfinite(seconds) and seconds > 0 else 0.0
 
 
-def _extract_refusal_reason(info: object, threshold_sec: float) -> str | None:
-    """Refuse a live or over-envelope extract before any media bytes."""
-    entry = _primary_extract(info)
-    if entry is None:
-        return None
-    live_status = entry.get("live_status")
-    if entry.get("is_live") is True or (isinstance(live_status, str) and live_status in _UNPLAYABLE_LIVE_STATUSES):
-        return "live_stream"
-    duration = _positive_duration_sec(entry.get("duration"))
-    if duration is not None and duration > threshold_sec:
-        return f"longform_duration ({duration:.0f}s > {threshold_sec:.0f}s)"
-    return None
+def _clock(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole // 60}:{whole % 60:02d}"
 
 
 def _download_ytdlp(
@@ -463,10 +461,11 @@ def _download_ytdlp(
     longform_threshold_sec: float | None = None,
 ) -> Path:
     """Download the best-effort public audio match for a track via yt-dlp."""
-    threshold = longform_threshold_sec if longform_threshold_sec is not None else _default_longform_threshold_sec()
-    known_duration = _positive_duration_sec(track.duration_ms / 1000.0 if track.duration_ms else None)
-    if known_duration is not None and known_duration > threshold:
-        raise RuntimeError(f"external extract refused: longform_duration ({known_duration:.0f}s > {threshold:.0f}s)")
+    claimed_sec = _claimed_track_sec(track)
+    if longform_threshold_sec is not None and claimed_sec > longform_threshold_sec:
+        raise ExternalMediaRefusedError(
+            f"refused a result running {_clock(claimed_sec)} before download (limit {_clock(longform_threshold_sec)})"
+        )
 
     yt_dlp = _load_external_media_module()
 
@@ -476,11 +475,15 @@ def _download_ytdlp(
         query = f"https://www.youtube.com/watch?v={track.youtube_id}"
     else:
         query = f"ytsearch1:{track.artist} {track.title} official audio"
+    refusals: list[str] = []
+    match_filter = _refuse_live_or_overlong(track, refusals, longform_threshold_sec=longform_threshold_sec)
     ytdlp_tmp = cache_dir / ".ytdlp_tmp" / track.cache_key
     ytdlp_tmp.mkdir(parents=True, exist_ok=True)
     opts = {
         "format": "bestaudio/best",
-        "outtmpl": str(cache_dir / f"{track.cache_key}.%(ext)s"),
+        # Relative to `paths`: an absolute template makes yt-dlp ignore both
+        # paths, and a failed download then strands `.part` files in the cache.
+        "outtmpl": f"{track.cache_key}.%(ext)s",
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -491,44 +494,43 @@ def _download_ytdlp(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        # yt-dlp never reads abort_on_unavailable_fragments. The CLI flag
-        # --abort-on-unavailable-fragments stores this key as false, which
-        # makes a missing HLS/DASH fragment fail the download.
+        # Fail on a missing HLS/DASH fragment instead of skipping it: a skipped
+        # fragment still passes the duration and silence checks and airs as a
+        # jump, while a failed download only makes the producer pick another
+        # track. `abort_on_unavailable_fragments` is only a CLI flag name;
+        # yt-dlp never reads it as an option key. The fragment retry only covers
+        # a 4xx answer; a 5xx, a dropped connection, or a cut-off response fails
+        # at once, because `retries` is unset.
         "skip_unavailable_fragments": False,
-        "fragment_retries": _YTDLP_FRAGMENT_RETRIES,
+        "fragment_retries": 1,
         "socket_timeout": _YTDLP_SOCKET_TIMEOUT_SEC,  # fail a stalled socket, never hang
         # Test only the format being downloaded. True test-downloads every
         # format (175 for one video).
         "check_formats": "selected",
         "concurrent_fragment_downloads": 2,  # parallel fragment downloads
-        "paths": {"temp": str(ytdlp_tmp)},  # atomic: fragments in temp, move on completion
+        # Atomic: work files stay in temp (removed below), and only the
+        # finished file moves into the cache. yt-dlp joins a relative temp
+        # path onto home, so temp is given relative to it; that also holds when
+        # the cache directory itself is relative (the standalone default).
+        "paths": {"home": str(cache_dir), "temp": str(Path(".ytdlp_tmp") / track.cache_key)},
+        # One video per query: a multi-camera video would otherwise expand into
+        # sibling feeds that all write the same cache file.
+        "noplaylist": True,
+        "match_filter": match_filter,
     }
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            if _class_implements(ydl, "extract_info"):
-                # Metadata only. A refusal raises before any media request.
-                info = ydl.extract_info(query, download=False)
-                refusal = _extract_refusal_reason(info, threshold)
-                if refusal:
-                    raise RuntimeError(f"external extract refused: {refusal}")
-                entry = _primary_extract(info)
-                # process_info transfers the extract we already have. download()
-                # would extract again. Test doubles that only implement
-                # download() take that path.
-                if entry is not None and _class_implements(ydl, "process_info"):
-                    ydl.process_info(entry)
-                else:
-                    ydl.download([query])
-            else:
-                ydl.download([query])
+            ydl.download([query])
     finally:
         shutil.rmtree(ytdlp_tmp, ignore_errors=True)
 
     out_path = cache_dir / f"{track.cache_key}.mp3"
-    if not out_path.exists():
-        raise FileNotFoundError(f"Download failed for {track.display}")
-    return out_path
+    if out_path.exists():
+        return out_path
+    if refusals:
+        raise ExternalMediaRefusedError(refusals[0])
+    raise FileNotFoundError(f"Download failed for {track.display}")
 
 
 def _load_external_media_module() -> ModuleType:

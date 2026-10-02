@@ -10,12 +10,15 @@ Start with the way you run Mamma Mi Radio. Home Assistant app operators and loca
 
 ## Local source or Docker
 
-For a source checkout, use the project environment and install both the app and developer tools:
+For a source checkout, use the project environment and install developer tools before the locked runtime and app:
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 ./start.sh
 ```
 
@@ -26,7 +29,7 @@ docker compose ps
 docker compose logs --tail=200
 ```
 
-If a source run or test reports a missing module such as `dotenv`, activate `.venv` and repeat the install command above. If Docker is unhealthy, keep the first error from `docker compose logs` and use the same symptom guide below.
+If a source run or test reports a missing module such as `dotenv` or a runtime-lock version mismatch, activate `.venv` and repeat the four `python -m pip` commands above. See [Local setup](../CONTRIBUTING.md#local-setup) for the full setup guide. If Docker is unhealthy, keep the first error from `docker compose logs` and use the same symptom guide below.
 
 ## Shared readiness checks
 
@@ -89,12 +92,15 @@ Jamendo cannot repair a broken starter package: it is optional, default-off,
 asynchronous enrichment. A Jamendo failure must leave starter/local playback
 unchanged. See [Music sources and rights boundaries](music-sources.md).
 
-For the supplied Docker image or Home Assistant app, local audio belongs in the
-deployment's persistent `/data/music` directory. The scanner finds changes
-within one minute; use **Rotazione → Local music → Scan now** to refresh
-immediately. Populate that data area through the deployment's supported storage
-tooling; do not patch files into a running Home Assistant app container. A
-source checkout uses `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
+For the Home Assistant app, put songs in the Media panel folder named by the
+app's Music folder setting (default `mammamiradio`). When that Media storage is
+not mounted, the app uses `/data/music`. The supplied Docker image uses
+`/data/music`. The scanner finds changes within one minute; use **Rotazione →
+Local music → Scan now** to refresh immediately. The control room names the
+folder in use. Populate it through Home Assistant's Media panel or the
+deployment's supported storage tooling; do not patch files into a running Home
+Assistant app container. A source checkout uses `music/`, or the path set by
+`MAMMAMIRADIO_MUSIC_DIR`.
 
 **"Clear pool" does not delete local music files, and the songs come back.**
 This is by design and is not a bug in the button. `POST /api/playlist/purge`
@@ -264,6 +270,24 @@ INFO Chart ingest: filtered 3 non-music entries
 
 If a legitimate song is being rejected, check `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`. The list is deliberately narrow (podcast, bbc comedy, audiobook, news briefing, asmr, …) so real titles almost never trip it. If a real Italian song title legitimately contains one of these markers, remove the marker from the list rather than loosening the check.
 
+## An external download was refused or stopped partway
+
+This applies only to a standalone installation with the `external-media`
+extra. Before any audio is transferred, the station refuses a live, scheduled,
+or just-ended stream, and a result more than four times as long as the track it
+stands for. That limit is never below 14 minutes. When yt-dlp cannot fetch part
+of the audio stream, the download fails instead of airing with a jump.
+
+For a rotation track the log names the reason, the track stays unavailable
+until the next restart, and the station plays other music:
+
+```text
+WARNING yt-dlp failed for Some Artist – Some Title: refused a live stream before download — marking track unavailable
+```
+
+An admin add, a Direction pick, or a listener song request gets the same notice
+as any other failed download.
+
 ## The station keeps rejecting the same track
 
 If a track fails `validate_download` (too short, corrupt, missing duration), the cached copy at `cache_dir/{cache_key}.mp3` used to stay put. The next selection of the same track returned it as a cache hit and the gate rejected it again. Endless loop.
@@ -287,6 +311,19 @@ The denylist is process-local — it clears on restart so a track that was trans
 A listener song request was pinned to the "play next" slot from two places: once by the background download (`_commit_external_download`) when the file finished, and again by the dedication banter (`_plan_listener_request_block`) the next time a host break was produced — because the request lingers in `state.pending_requests` until that banter's deferred commit applies. Each pin is consumed by `select_next_track` *before* the repeat-cooldown filter runs, so the song aired a second time a few minutes later (the 2026-06-19 "double Linkin Park").
 
 The current ownership chain marks the initial claim with `song_pinned`, reserves every pending matched recording at producer admission and playback, then transfers the exact promised source into a one-shot `ListenerRequestHandoff` after the dedication queues. Queue admission marks that segment and releases the handoff, so later equivalent requests still cannot steal it or make it play anonymously. If you see a repeat, trace the complete reservation → dedication commit → handoff admission chain described in `docs/architecture.md`, including the producer and playback reservation gates; the pin marker alone is no longer the full invariant.
+
+## No station sounds between songs and talk
+
+The short stings between a song and talk, plus bumpers around packaged ad spots, come from the Engine Room **Transitions** dial. Live ad breaks contain their own bumpers and are not changed by this dial. It is on unless someone turned it off.
+
+If the cut is plain:
+
+- In Engine Room, check that Transitions is on. On a Home Assistant add-on the dial returns to its startup setting (on by default) after a restart; a standalone station keeps the choice in `.env` (`MAMMAMIRADIO_BOUNDARY_IMAGING`).
+- Confirm the imaging pack is installed at the configured `assets_dir` (the four files are `stingers/music_to_speech.mp3`, `stingers/speech_to_music.mp3`, `bumpers/ad_in.mp3`, and `bumpers/ad_out.mp3`).
+- Custom carts must match the stream sample rate, bitrate, and channel count, use constant bitrate, and stay within 1.5 seconds and 1 MiB.
+- In the station log, look for `Boundary imaging asset unusable (missing or unreadable)` or the same warning with a format/load reason. A missing or unusable file is a clean cut, not a failed stream. Restoring or replacing the file takes effect at the next eligible seam without restarting.
+- In `/status`, inspect `runtime_health.boundary_imaging.skips`. `asset_missing` counts unusable carts. `switch_off` means the dial is off; `prev_none` and `generation_changed` mean playback has no preceding programme for this listener room. `prev_imaging`, `prev_rescue`, `next_rescue`, `next_error`, `next_music_tail`, `interrupt`, and `live_ad` keep imaging from stacking or delaying recovery and urgent audio. `skip`, `session_stopped`, and `stale_continuity` count carts interrupted before their final byte by a listener control or a changed programme timeline.
+- **Aired** counts fully completed playback carts this session. It can stay at 0 while hearing producer-rendered live-ad bumpers or music-tail crossfades. Local-library song/talk stings use the same playback counter as other song/talk seams.
 
 ## The stream works but banter or ads are bland
 

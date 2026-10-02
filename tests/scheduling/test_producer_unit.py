@@ -64,6 +64,7 @@ from mammamiradio.scheduling.producer import (
     run_producer,
 )
 from mammamiradio.web.mp3_frames import Mp3HandoffSplit
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -106,7 +107,7 @@ def _make_state() -> StationState:
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
         listeners_active=1,  # simulate a live listener so the producer gate passes
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
 
 
@@ -118,7 +119,7 @@ def _make_starter_state() -> StationState:
         playlist=tracks,
         playlist_source=starter_source(len(tracks)),
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
 
 
@@ -468,7 +469,7 @@ async def test_listener_handoff_music_does_not_inherit_displaced_air_next(tmp_pa
         playlist=[requested],
         pending_requests=[later_request],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
     assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, requested)
     state.pinned_track = requested
@@ -516,7 +517,7 @@ async def test_operator_music_air_next_keeps_promised_song_behind_its_dedication
     state = StationState(
         playlist=[requested],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
     dedication_queue_id = "listener-dedication"
     assert state.arm_listener_request_handoff(
@@ -2031,7 +2032,7 @@ async def test_on_air_listener_promise_retries_after_source_switch(tmp_path, fre
     state = StationState(
         playlist=[seed, requested],
         listeners_active=1,
-        home_authorization=HomeAuthorization.legacy(),
+        home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS),
     )
     config = _make_config()
     config.tmp_dir = tmp_path
@@ -3757,7 +3758,7 @@ def test_radio_event_directive_does_not_override_existing_directive():
 def test_radio_event_gag_feeds_ledger_event_path():
     state = _make_state()
     event = HomeEvent(
-        "binary_sensor.phone_charging",
+        "binary_sensor.example_phone_charging",
         "A household device started charging",
         "off",
         "on",
@@ -3787,8 +3788,8 @@ def test_ritual_recipe_directive_uses_next_break_path():
     state = _make_state()
     matches = match_ritual_recipes(
         None,
-        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
-        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
         now=100.0,
     )
 
@@ -3807,8 +3808,8 @@ def test_ritual_recipe_directive_does_not_override_existing_directive():
     state.ha_pending_directive = "legacy directive"
     matches = match_ritual_recipes(
         None,
-        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
-        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
         now=100.0,
     )
 
@@ -3826,8 +3827,16 @@ def test_ritual_recipe_gag_feeds_ledger_event_path_without_spending_recipe_coold
     state = _make_state()
     matches = match_ritual_recipes(
         None,
-        {"binary_sensor.fridge_door": _ha_state("off", device_class="door", friendly_name="Kitchen fridge door")},
-        {"binary_sensor.fridge_door": _ha_state("on", device_class="door", friendly_name="Kitchen fridge door")},
+        {
+            "binary_sensor.example_fridge_door": _ha_state(
+                "off", device_class="door", friendly_name="Kitchen fridge door"
+            )
+        },
+        {
+            "binary_sensor.example_fridge_door": _ha_state(
+                "on", device_class="door", friendly_name="Kitchen fridge door"
+            )
+        },
         now=200.0,
     )
 
@@ -3976,12 +3985,12 @@ def _interrupt_lane_matches(now: float):
     return match_ritual_recipes(
         [_INTERRUPT_LANE_TEST_RECIPE],
         {
-            "binary_sensor.test_interrupt_source": _ha_state(
+            "binary_sensor.example_test_interrupt_source": _ha_state(
                 "off", device_class="occupancy", friendly_name="Test Interrupt Source"
             )
         },
         {
-            "binary_sensor.test_interrupt_source": _ha_state(
+            "binary_sensor.example_test_interrupt_source": _ha_state(
                 "on", device_class="occupancy", friendly_name="Test Interrupt Source"
             )
         },
@@ -3997,7 +4006,7 @@ def test_a_door_opening_has_no_audio_consequence():
     """
     clear_ritual_recipe_cooldowns()
     state = _make_state()
-    entity_id = "binary_sensor.test_front_door"
+    entity_id = "binary_sensor.example_test_front_door"
     attrs = {"device_class": "door", "friendly_name": "Test Front Door", "area_name": "Test Hallway"}
     matches = match_ritual_recipes(
         None,
@@ -4020,8 +4029,8 @@ def test_a_door_opening_has_no_audio_consequence():
 def _coffee_directive_matches(now: float):
     return match_ritual_recipes(
         None,
-        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
-        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
         now=now,
     )
 
@@ -4040,7 +4049,7 @@ def test_ritual_directive_records_elected_moment_and_threads_id():
     assert row.lane == "directive"
     assert row.family == "morning_launch"
     assert row.public_label == "Morning launch"
-    assert row.entity_id == "sensor.kitchen_coffee_power"
+    assert row.entity_id == "sensor.example_kitchen_coffee_power"
     # The receipt id travels with the directive toward the consuming banter.
     assert state.ha_pending_directive_moment_id == row.id
 
@@ -4299,8 +4308,8 @@ async def test_producer_records_gag_moment_for_ritual_sourced_bucket_only():
     state = _make_state()
     state.moment_store = _moment_store()
     ledger = EveningLedger()
-    ledger.buckets["binary_sensor.fridge_door|off->on"] = GagBucket(
-        entity_id="binary_sensor.fridge_door",
+    ledger.buckets["binary_sensor.example_fridge_door|off->on"] = GagBucket(
+        entity_id="binary_sensor.example_fridge_door",
         label="Kitchen ritual",
         old_state="chiuso",
         new_state="aperto",
@@ -4326,7 +4335,7 @@ async def test_producer_records_gag_moment_for_ritual_sourced_bucket_only():
         patch.object(
             ledger,
             "offer_gag",
-            return_value=("binary_sensor.fridge_door|off->on", "Il frigo, di nuovo stasera."),
+            return_value=("binary_sensor.example_fridge_door|off->on", "Il frigo, di nuovo stasera."),
         ),
     ):
         await _run_until_queued(queue, state, config)
@@ -4351,9 +4360,9 @@ async def test_generated_running_gag_carries_receipt_until_stream_marks_airing(t
     state = _make_state()
     state.moment_store = _moment_store()
     ledger = EveningLedger()
-    key = "binary_sensor.fridge_door|off->on"
+    key = "binary_sensor.example_fridge_door|off->on"
     ledger.buckets[key] = GagBucket(
-        entity_id="binary_sensor.fridge_door",
+        entity_id="binary_sensor.example_fridge_door",
         label="Kitchen ritual",
         old_state="chiuso",
         new_state="aperto",
@@ -4411,8 +4420,8 @@ async def test_producer_records_no_gag_moment_for_plain_bucket():
     state = _make_state()
     state.moment_store = _moment_store()
     ledger = EveningLedger()
-    ledger.buckets["switch.fan|off->on"] = GagBucket(
-        entity_id="switch.fan",
+    ledger.buckets["switch.example_fan|off->on"] = GagBucket(
+        entity_id="switch.example_fan",
         label="Ventilatore",
         old_state="spento",
         new_state="acceso",
@@ -4432,7 +4441,7 @@ async def test_producer_records_no_gag_moment_for_plain_bucket():
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch.object(ledger, "offer_gag", return_value=("switch.fan|off->on", "Il ventilatore, di nuovo.")),
+        patch.object(ledger, "offer_gag", return_value=("switch.example_fan|off->on", "Il ventilatore, di nuovo.")),
     ):
         await _run_until_queued(queue, state, config)
 
@@ -5748,7 +5757,7 @@ def test_companionship_claim_eligibility_excludes_priority_lanes(blocked_field):
     elif blocked_field == "no_llm":
         kwargs["script_llm_available"] = False
     elif blocked_field == "prompt_fact":
-        kwargs["prompt_fact"] = PromptFact("f", "weather.home", "weather", "x", "Rain", 1)
+        kwargs["prompt_fact"] = PromptFact("f", "weather.example_home", "weather", "x", "Rain", 1)
     elif blocked_field == "directive":
         state.ha_pending_directive = "React now"
     elif blocked_field == "request":
@@ -6182,8 +6191,9 @@ async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return(
     config = _make_config()
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
-        "ha:person.florian_horner",
+        "ha:person.example_resident_one",
         "Residente uno è appena tornato a casa. Un caloroso bentornato.",
+        bindings=SYNTHETIC_BINDINGS,
     )
     lines = [(config.hosts[0], "Bentornato Residente uno.")]
 
@@ -6213,8 +6223,9 @@ async def test_listener_truth_guard_rejects_return_line_that_names_another_resid
     config = _make_config()
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
-        "ha:person.florian_horner",
+        "ha:person.example_resident_one",
         "Residente uno è appena tornato a casa. Un caloroso bentornato.",
+        bindings=SYNTHETIC_BINDINGS,
     )
     safe_lines = [(config.hosts[0], "The studio keeps moving, amici.")]
 
@@ -6792,67 +6803,6 @@ async def test_impossible_moment_cancellation_drains_tts_before_cleanup(tmp_path
 
     assert list(tmp_path.glob("impossible_*.mp3")) == []
     assert list(tmp_path.glob("impossible_xf_*.mp3")) == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("blocked_stage", ["stinger", "concat"])
-async def test_transition_sting_cancellation_drains_worker_and_preserves_source(
-    tmp_path,
-    blocked_stage,
-):
-    """Neither transition worker can republish scratch after cancellation cleanup."""
-    from mammamiradio.scheduling.producer import _maybe_add_transition_sting
-
-    config = _make_config()
-    config.tmp_dir = tmp_path
-    state = _make_state()
-    source = tmp_path / "dry_banter.mp3"
-    source.write_bytes(b"dry")
-    segment = Segment(type=SegmentType.BANTER, path=source, ephemeral=True)
-    worker_started = threading.Event()
-    release_worker = threading.Event()
-    imaging = MagicMock()
-
-    def _maybe_block(stage: str) -> None:
-        if blocked_stage != stage:
-            return
-        worker_started.set()
-        assert release_worker.wait(timeout=2.0)
-
-    def _pick_stinger(_previous, _actual, output_path) -> Path:
-        _maybe_block("stinger")
-        output_path.write_bytes(b"sting")
-        return output_path
-
-    def _concat(_inputs, output_path, *_args, **_kwargs) -> Path:
-        _maybe_block("concat")
-        output_path.write_bytes(b"merged")
-        return output_path
-
-    imaging.pick_stinger.side_effect = _pick_stinger
-    with (
-        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
-        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat),
-    ):
-        task = asyncio.create_task(_maybe_add_transition_sting(segment, SegmentType.MUSIC, config, state))
-        try:
-            deadline = asyncio.get_running_loop().time() + 2.0
-            while not worker_started.is_set():
-                if asyncio.get_running_loop().time() > deadline:
-                    raise AssertionError(f"{blocked_stage} worker did not start")
-                await asyncio.sleep(0.01)
-            task.cancel()
-            await asyncio.sleep(0.02)
-            assert not task.done()
-            release_worker.set()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        finally:
-            release_worker.set()
-
-    assert source.read_bytes() == b"dry"
-    assert list(tmp_path.glob("transition_*.mp3")) == []
-    assert list(tmp_path.glob("segment_with_sting_*.mp3")) == []
 
 
 @pytest.mark.asyncio
@@ -11671,7 +11621,7 @@ async def test_fire_interrupt_failed_bridge_validation_preserves_interrupt_state
     [
         ("ha", True),
         ("timer", True),
-        ("ha:binary_sensor.kitchen_presence", True),
+        ("ha:binary_sensor.example_kitchen_presence", True),
         # Blank and unknown provenance fail closed as Home-owned so the
         # playback gate can drop the bridge after a Home privacy cutover.
         ("", True),

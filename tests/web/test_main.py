@@ -253,7 +253,7 @@ async def test_startup_cold_install_stays_narrow_after_database_created_and_rest
     assert preflight.database_preexisted is False
     assert load_legacy_home_database_preflight_v1(config.cache_dir / "mammamiradio.db") == preflight
     assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
-    assert app.state.station_state.home_entity_ids_observer is None
+    assert not hasattr(app.state.station_state, "home_entity_ids_observer")
 
 
 @pytest.mark.asyncio
@@ -291,10 +291,10 @@ async def test_startup_contains_legacy_external_media_reconciliation_failure(tmp
 
 
 @pytest.mark.asyncio
-async def test_startup_preexisting_database_gets_legacy_bridge_and_metadata_only_provenance(tmp_path):
+async def test_startup_existing_database_without_profile_keeps_home_off(tmp_path):
     from mammamiradio.core.models import Track
     from mammamiradio.home.authorization import HomeAuthorizationMode
-    from mammamiradio.home.migration import LEGACY_HOME_MANIFEST_V1, load_legacy_home_provenance_v1
+    from mammamiradio.home.migration import load_legacy_home_provenance_v1
 
     config = _privacy_startup_config(tmp_path)
     config.cache_dir.mkdir(parents=True)
@@ -311,17 +311,12 @@ async def test_startup_preexisting_database_gets_legacy_bridge_and_metadata_only
 
         await startup()
 
+    await _adopt_private_home()
     state = app.state.station_state
-    assert state.home_authorization.mode is HomeAuthorizationMode.LEGACY
-    assert state.home_entity_ids_observer is not None
-    state.home_entity_ids_observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
-    await app.state.legacy_home_provenance_task
-    provenance = load_legacy_home_provenance_v1(
-        config.cache_dir / "state",
-        config.cache_dir / "mammamiradio.db",
-    )
-    assert provenance is not None
-    assert provenance.manifest_digest == LEGACY_HOME_MANIFEST_V1.entity_id_digest
+    assert state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    assert state.home_compatibility_status == "needs_consent"
+    assert config.homeassistant.context_enabled is False
+    assert load_legacy_home_provenance_v1(config.cache_dir / "state", config.cache_dir / "mammamiradio.db") is None
 
 
 @pytest.mark.asyncio
@@ -381,7 +376,7 @@ async def test_first_listen_existing_addon_omission_restores_legacy_on_only_afte
     config.is_addon = True
     config.homeassistant.context_enabled = True
     config.cache_dir.mkdir(parents=True)
-    (config.cache_dir / "mammamiradio.db").touch()
+    _seed_private_home(config, monkeypatch)
     tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
     coordinator = MagicMock()
     producer_ready = asyncio.Event()
@@ -408,6 +403,7 @@ async def test_first_listen_existing_addon_omission_restores_legacy_on_only_afte
         from mammamiradio.main import app, startup
 
         await startup()
+        await _adopt_private_home()
         await app.state.first_listen_origin_task
 
     assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
@@ -441,7 +437,7 @@ async def test_existing_install_omitted_context_choice_preserves_evening_ledger(
     (config.cache_dir / "mammamiradio.db").touch()
     seed = EveningLedger()
     seed.buckets["legacy-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -471,7 +467,7 @@ async def test_existing_install_omitted_context_choice_preserves_evening_ledger(
 
     assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
     assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.MISSING
-    assert config.homeassistant.context_enabled is True
+    assert config.homeassistant.context_enabled is False
     assert app.state.home_context_off_ledger_persist_task is None
     assert "legacy-home-event" in app.state.station_state.evening_ledger.buckets
     assert "legacy-home-event" in EveningLedger.load(config.cache_dir).buckets
@@ -493,7 +489,7 @@ async def test_explicit_context_off_purges_evening_ledger_after_audio_tasks(tmp_
     (config.cache_dir / "mammamiradio.db").touch()
     seed = EveningLedger()
     seed.buckets["private-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -558,7 +554,7 @@ async def test_explicit_context_off_ledger_save_failure_stays_fail_closed(tmp_pa
     config.cache_dir.mkdir(parents=True)
     seed = EveningLedger()
     seed.buckets["private-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -611,7 +607,7 @@ async def test_explicit_context_off_ledger_save_is_drained_when_shutdown_cancels
     config.cache_dir.mkdir(parents=True)
     seed = EveningLedger()
     seed.buckets["private-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -869,16 +865,17 @@ async def test_first_listen_explicit_keep_off_wins_over_late_existing_install_mi
     from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
     from mammamiradio.core.models import Track
     from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+    from mammamiradio.web import streamer
 
     config = _privacy_startup_config(tmp_path)
     config.is_addon = True
     config.homeassistant.context_enabled = True
-    config.cache_dir.mkdir(parents=True)
-    (config.cache_dir / "mammamiradio.db").touch()
+    _seed_private_home(config, monkeypatch)
     tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
     migration_entered = asyncio.Event()
     allow_migration = asyncio.Event()
     monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+    monkeypatch.setattr(streamer, "_persist_home_context_choice", AsyncMock())
 
     async def migrate(*args, **kwargs):
         migration_entered.set()
@@ -897,13 +894,15 @@ async def test_first_listen_explicit_keep_off_wins_over_late_existing_install_mi
 
         await startup()
         await migration_entered.wait()
-        app.state.home_context_choice_explicit = True
-        config.homeassistant.context_enabled = False
+        await streamer._apply_home_context_choice(app.state, enabled=False)
         allow_migration.set()
         await app.state.first_listen_origin_task
+        assert app.state.station_state.home_context_requested is False
+        await _adopt_private_home()
 
     assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
     assert config.homeassistant.context_enabled is False
+    assert app.state.station_state.home_context_requested is False
     assert app.state.home_context_choice_explicit is True
 
 
@@ -928,6 +927,7 @@ async def test_first_listen_explicit_context_choice_wins_on_fresh_addon(tmp_path
         from mammamiradio.main import app, startup
 
         await startup()
+        await _adopt_private_home()
         await app.state.first_listen_origin_task
 
     assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
@@ -936,7 +936,7 @@ async def test_first_listen_explicit_context_choice_wins_on_fresh_addon(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_startup_legacy_with_ha_and_anthropic_logs_label_generation_notice(tmp_path, caplog):
+async def test_startup_legacy_with_ha_and_anthropic_logs_label_generation_notice(tmp_path, caplog, monkeypatch):
     """A legacy install with HA + Anthropic configured logs the label-generation
     metadata notice; narrow installs never reach that gated line."""
     from mammamiradio.core.models import Track
@@ -944,7 +944,7 @@ async def test_startup_legacy_with_ha_and_anthropic_logs_label_generation_notice
 
     config = _privacy_startup_config(tmp_path)
     config.cache_dir.mkdir(parents=True)
-    (config.cache_dir / "mammamiradio.db").touch()  # pre-existing DB => legacy bridge
+    _seed_private_home(config, monkeypatch)
     config.homeassistant.enabled = True
     config.ha_token = "ha-token"
     config.anthropic_api_key = "sk-test"
@@ -960,6 +960,7 @@ async def test_startup_legacy_with_ha_and_anthropic_logs_label_generation_notice
         from mammamiradio.main import app, startup
 
         await startup()
+        await _adopt_private_home()
 
     assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
     assert "Label generation sends entity metadata" in caplog.text
@@ -1211,67 +1212,8 @@ async def test_startup_invalid_database_origin_fails_narrow_without_repairing_si
         await startup()
 
     assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
-    assert app.state.station_state.home_entity_ids_observer is None
+    assert not hasattr(app.state.station_state, "home_entity_ids_observer")
     assert not preflight_path(config.cache_dir / "state").exists()
-
-
-@pytest.mark.asyncio
-async def test_startup_provenance_observer_runs_fsync_work_off_event_loop(tmp_path):
-    import threading
-
-    from mammamiradio.core.models import Track
-    from mammamiradio.home.migration import LEGACY_HOME_MANIFEST_V1
-
-    config = _privacy_startup_config(tmp_path)
-    config.cache_dir.mkdir(parents=True)
-    (config.cache_dir / "mammamiradio.db").touch()
-    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
-    started = threading.Event()
-    release = threading.Event()
-    seal_calls = 0
-
-    def _slow_seal(*_args, **_kwargs):
-        nonlocal seal_calls
-        seal_calls += 1
-        if seal_calls > 1:
-            return None
-        started.set()
-        release.wait(timeout=2.0)
-        raise RuntimeError("disk fault")
-
-    with (
-        patch(f"{MODULE}.load_config", return_value=config),
-        patch(f"{MODULE}.read_persisted_source", return_value=None),
-        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
-        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
-        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
-        patch(f"{MODULE}.seal_legacy_home_provenance_v1", side_effect=_slow_seal) as seal,
-    ):
-        from mammamiradio.main import app, startup
-
-        await startup()
-        observer = app.state.station_state.home_entity_ids_observer
-        assert observer is not None
-        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
-
-        assert await asyncio.to_thread(started.wait, 1.0)
-        task = app.state.legacy_home_provenance_task
-        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
-        assert app.state.legacy_home_provenance_task is task
-        assert not task.done()
-        assert task in app.state.background_tasks
-        # Event-loop work continues while the durability call is blocked in its thread.
-        await asyncio.sleep(0)
-        release.set()
-        await task
-        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
-        retry_task = app.state.legacy_home_provenance_task
-        assert retry_task is not task
-        await retry_task
-
-    assert task not in app.state.background_tasks
-    assert retry_task not in app.state.background_tasks
-    assert seal.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -1663,7 +1605,7 @@ async def test_startup_wires_running_gag_policy_from_config():
     # Real lists (not Mock attrs) so the `... or None` translation is exercised.
     mock_config.running_gags.domain_allowlist = ["light"]
     mock_config.running_gags.entity_allowlist = []  # empty → None
-    mock_config.running_gags.entity_denylist = ["binary_sensor.flappy"]
+    mock_config.running_gags.entity_denylist = ["binary_sensor.example_flappy"]
 
     demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
 
@@ -1687,7 +1629,7 @@ async def test_startup_wires_running_gag_policy_from_config():
         TEST_CACHE,
         domain_allowlist=["light"],
         entity_allowlist=None,
-        entity_denylist={"binary_sensor.flappy"},
+        entity_denylist={"binary_sensor.example_flappy"},
     )
 
 
@@ -1695,18 +1637,18 @@ async def test_startup_wires_running_gag_policy_from_config():
 async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_session(tmp_path):
     """A bucket persisted before a mute (or from a session whose purge-on-mute
     save_if_dirty() failed) must not survive a restart and still be offerable
-    as a running gag (codex adversarial review)."""
+    as a running gag."""
     from mammamiradio.core.models import Track
     from mammamiradio.home.entity_policy import set_entity_muted
     from mammamiradio.home.evening_memory import EveningLedger, GagBucket
 
-    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    muted_id = "switch.example_coffee_switch"
     set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
 
     seed_ledger = EveningLedger()
     seed_ledger.buckets["k"] = GagBucket(muted_id, "Coffee machine", "off", "on", count=3, last_ts=time.time())
     seed_ledger.buckets["other"] = GagBucket(
-        "switch.bad_gross_waschmaschine_steckdose", "Washer", "off", "on", count=3, last_ts=time.time()
+        "switch.example_laundry_switch", "Washer", "off", "on", count=3, last_ts=time.time()
     )
     seed_ledger._dirty = True
     seed_ledger.save_if_dirty(tmp_path)
@@ -1762,7 +1704,7 @@ async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(t
 
     seed = EveningLedger()
     seed.buckets["private"] = GagBucket(
-        "switch.private_kitchen",
+        "switch.example_private_kitchen",
         "Private kitchen",
         "off",
         "on",
@@ -4154,3 +4096,277 @@ async def test_shutdown_leaves_a_finished_resume_starter_verification_alone():
 
     finished.cancel.assert_not_called()
     main_mod.app.state.resume_starter_prepare_task = None
+
+
+def _seed_private_home(config, monkeypatch, *, binding="complete"):
+    from tests.home_fixtures import allow_synthetic_snapshot, synthetic_home_document, write_compatibility_install
+
+    document = synthetic_home_document()
+    allow_synthetic_snapshot(monkeypatch, document)
+    return write_compatibility_install(
+        config.cache_dir / "state", config.cache_dir / "mammamiradio.db", document, binding=binding
+    )
+
+
+async def _adopt_private_home():
+    from mammamiradio.main import app
+
+    await app.state.first_listen_origin_task
+    await app.state.legacy_home_provenance_task
+    app.state.station_state.home_bindings_adopter()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("complete", "pending", "failed", "cancelled"))
+async def test_private_home_verification_is_background_and_adopted_at_boundary(tmp_path, monkeypatch, caplog, scenario):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.compatibility import read_home_compatibility
+
+    config = _privacy_startup_config(tmp_path)
+    _seed_private_home(config, monkeypatch, binding="pending" if scenario == "pending" else "complete")
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    started, release = threading.Event(), threading.Event()
+    event_loop_thread = threading.get_ident()
+    calls = 0
+
+    def slow_read(*args):
+        nonlocal calls
+        assert threading.get_ident() != event_loop_thread
+        calls += 1
+        started.set()
+        assert release.wait(timeout=5)
+        if scenario == "failed":
+            raise OSError("PRIVATE-COMPATIBILITY-CANARY")
+        return read_home_compatibility(*args)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock) as produce,
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock) as play,
+        patch(f"{MODULE}.read_home_compatibility", side_effect=slow_read),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert await asyncio.to_thread(started.wait, 1)
+        task = app.state.legacy_home_provenance_task
+        assert not task.done() and task in app.state.background_tasks
+        assert not app.state.home_profile_ready
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+        assert not config.homeassistant.context_enabled
+        await asyncio.sleep(0)
+        produce.assert_awaited()
+        play.assert_awaited()
+        if scenario == "cancelled":
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not app.state.home_profile_ready
+            assert not config.homeassistant.context_enabled
+            return
+        release.set()
+        if scenario == "failed":
+            async with asyncio.timeout(2):
+                while app.state.home_compatibility_result is None:
+                    await asyncio.sleep(0.001)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
+        assert not config.homeassistant.context_enabled
+        await app.state.first_listen_origin_task
+        app.state.station_state.home_bindings_adopter()
+        assert calls == 1
+        if scenario == "failed":
+            assert not app.state.home_profile_ready
+            assert app.state.station_state.home_compatibility_status == "unavailable"
+            assert not app.state.station_state.home_ambient_consent_required
+            assert "PRIVATE-COMPATIBILITY-CANARY" not in caplog.text
+            assert not config.homeassistant.context_enabled
+        else:
+            assert app.state.home_profile_ready
+            assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+            assert config.homeassistant.context_enabled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consent", [None, False, True])
+@pytest.mark.parametrize("profile_present", [False, True])
+async def test_saved_enabled_option_needs_verified_profile_or_durable_consent(
+    tmp_path, monkeypatch, consent, profile_present
+):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.consent import save_ambient_consent
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = True
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "true")
+    path, _ = _seed_private_home(config, monkeypatch)
+    if not profile_present:
+        path.unlink()
+    if consent is not None:
+        save_ambient_consent(config.cache_dir / "mammamiradio.db", granted=consent)
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")], None, ""),
+        ),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert not config.homeassistant.context_enabled
+        await _adopt_private_home()
+        expected = consent is True or (consent is None and profile_present)
+        assert config.homeassistant.context_enabled is expected
+        assert app.state.station_state.home_authorization.allows_household_moments is (
+            consent is None and profile_present
+        )
+
+
+@pytest.mark.asyncio
+async def test_keep_off_before_compatibility_adoption_revokes_pending_grant(tmp_path, monkeypatch):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.consent import load_ambient_consent, save_ambient_consent
+    from mammamiradio.web import streamer
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = True
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "true")
+    _seed_private_home(config, monkeypatch)
+    database = config.cache_dir / "mammamiradio.db"
+    save_ambient_consent(database, granted=True)
+    monkeypatch.setattr(streamer, "_persist_home_context_choice", AsyncMock())
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")], None, ""),
+        ),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.legacy_home_provenance_task
+        assert app.state.station_state.home_compatibility_status == "checking"
+        await streamer._apply_home_context_choice(app.state, enabled=False)
+        await _adopt_private_home()
+        state = app.state.station_state
+        assert not config.homeassistant.context_enabled and not state.home_context_requested
+        assert not state.home_ambient_consent_granted
+        assert state.home_compatibility_status == "needs_consent"
+        assert not load_ambient_consent(database).granted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capped,keep_off,failed_revoke",
+    [(False, False, False), (False, True, False), (True, False, False), (True, True, False), (True, True, True)],
+)
+async def test_unavailable_home_retries_without_losing_profile_or_keep_off(
+    tmp_path, monkeypatch, capped, keep_off, failed_revoke
+):
+    import mammamiradio.main as main_mod
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorization
+    from mammamiradio.home.compatibility import HomeCompatibility, read_home_compatibility
+    from mammamiradio.home.consent import load_ambient_consent, save_ambient_consent
+    from mammamiradio.web import streamer
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = True
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "true")
+    profile, _ = _seed_private_home(config, monkeypatch)
+    original = profile.read_bytes()
+    database = config.cache_dir / "mammamiradio.db"
+    if capped:
+        save_ambient_consent(database, granted=True)
+    retry_started, release_retry = threading.Event(), threading.Event()
+    reads = 0
+    writes = []
+
+    def read(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return HomeCompatibility(HomeAuthorization.narrow(), "unavailable")
+        retry_started.set()
+        assert release_retry.wait(timeout=5)
+        return read_home_compatibility(*args)
+
+    real_save = main_mod._persist_home_ambient_consent
+
+    async def revoke(app_state, *, granted):
+        assert granted is False
+        writes.append(granted)
+        if failed_revoke and len(writes) == 1:
+            raise OSError("synthetic transient write failure")
+        await real_save(app_state, granted=granted)
+
+    monkeypatch.setattr(main_mod, "_HOME_COMPATIBILITY_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(main_mod, "_persist_home_ambient_consent", revoke)
+    option_write = AsyncMock()
+    monkeypatch.setattr(streamer, "_persist_home_context_choice", option_write)
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")], None, ""),
+        ),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock) as produce,
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock) as play,
+        patch(f"{MODULE}.read_home_compatibility", side_effect=read),
+    ):
+        await main_mod.startup()
+        app = main_mod.app
+        task = app.state.legacy_home_provenance_task
+        try:
+            assert await asyncio.to_thread(retry_started.wait, 2)
+            await app.state.first_listen_origin_task
+            app.state.station_state.home_bindings_adopter()
+            state = app.state.station_state
+            assert state.home_compatibility_status == "unavailable"
+            assert not state.home_ambient_consent_required
+            assert not config.homeassistant.context_enabled
+            produce.assert_awaited()
+            play.assert_awaited()
+            if keep_off:
+                response = await asyncio.wait_for(streamer._apply_home_context_choice(app.state, enabled=False), 1)
+                assert response.status_code == 503
+                option_write.assert_awaited_once_with(config, False)
+                assert not task.done()
+                assert writes == []
+                assert load_ambient_consent(database).capped is capped
+            release_retry.set()
+            await asyncio.wait_for(task, 2)
+            assert not config.homeassistant.context_enabled
+            if capped and keep_off:
+                assert not load_ambient_consent(database).granted
+            state.home_bindings_adopter()
+            assert config.homeassistant.context_enabled is (not keep_off)
+            assert state.home_context_requested is (not keep_off)
+            assert state.home_authorization.allows_household_moments is (not capped)
+            assert load_ambient_consent(database).capped is capped
+            assert profile.read_bytes() == original
+            assert reads == (3 if failed_revoke else 2)
+            assert writes == ([False, False] if failed_revoke else [False] if capped and keep_off else [])
+        finally:
+            release_retry.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)

@@ -85,6 +85,7 @@ from mammamiradio.web.streamer import (
     router,
     run_playback_loop,
 )
+from tests.home_fixtures import SYNTHETIC_BINDINGS
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 SAME_ORIGIN = {"Origin": "http://testserver"}
@@ -161,7 +162,7 @@ ACTIVE_SETUP_ROUTE_CASES = [
     (
         "PATCH",
         "/api/homeassistant/entity-policy",
-        {"entity_id": "switch.coffee_machine", "muted": False},
+        {"entity_id": "switch.example_coffee_machine", "muted": False},
     ),
     ("POST", "/api/setup/first-listen/listener-confirm", {"heard": True}),
 ]
@@ -6590,7 +6591,7 @@ async def test_entity_policy_requires_and_accepts_dashboard_csrf_token(tmp_path)
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    payload = {"entity_id": "switch.coffee_machine", "muted": True}
+    payload = {"entity_id": "switch.example_coffee_machine", "muted": True}
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         blocked = await client.patch("/api/homeassistant/entity-policy", json=payload)
@@ -8629,12 +8630,12 @@ async def test_ha_playback_service_wiring_uses_real_resume_and_receipt_closures(
     await service._resume_station()
     assert state.session_stopped is False
 
-    attempt_id = await service._persist_accepted_attempt("media_player.kitchen")
+    attempt_id = await service._persist_accepted_attempt("media_player.example_kitchen")
 
     assert attempt_id
     receipt = app.state.first_listen_receipt
     assert receipt is not None
-    assert receipt.selected_entity_id == "media_player.kitchen"
+    assert receipt.selected_entity_id == "media_player.example_kitchen"
     assert receipt.accepted_attempt_id == attempt_id
 
 
@@ -10581,7 +10582,7 @@ async def test_admin_first_paint_seeds_running_state_for_direct_and_ingress_rout
         (
             FirstListenInstallOriginStatus.FRESH,
             FirstListenReceiptV1(
-                selected_entity_id="media_player.kitchen",
+                selected_entity_id="media_player.example_kitchen",
                 accepted_attempt_id="abcdefghijklmnop",
                 accepted_at=100.0,
                 heard_at=101.0,
@@ -10989,12 +10990,12 @@ async def test_capabilities_exposes_anthropic_degraded_health():
 @pytest.mark.asyncio
 async def test_homeassistant_labels_regenerate_schedules_once(tmp_path):
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.cache_dir = tmp_path
     app.state.config.anthropic_api_key = "sk-ant-test"
     cached_context = SimpleNamespace(
-        raw_states={"light.counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}}},
-        scored=[SimpleNamespace(entity_id="light.counter", score=0.6)],
+        raw_states={"light.example_counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}}},
+        scored=[SimpleNamespace(entity_id="light.example_counter", score=0.6)],
     )
 
     with (
@@ -11022,17 +11023,17 @@ async def test_homeassistant_labels_regenerate_excludes_entity_muted_since_last_
     from mammamiradio.home.entity_policy import set_entity_muted
     from mammamiradio.home.ha_context import HomeContext, ScoredEntity
 
-    muted_id = "switch.bar_kaffeemaschine_steckdose"
+    muted_id = "switch.example_coffee_switch"
     set_entity_muted(tmp_path, muted_id, True, label="Coffee machine")
 
     stale_cache = HomeContext(
         raw_states={
             muted_id: {"state": "on", "attributes": {"friendly_name": "Coffee"}},
-            "light.counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}},
+            "light.example_counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}},
         },
         scored=[
             ScoredEntity(
-                entity_id="light.counter",
+                entity_id="light.example_counter",
                 area="Kitchen",
                 domain="light",
                 score=0.6,
@@ -11043,10 +11044,11 @@ async def test_homeassistant_labels_regenerate_excludes_entity_muted_since_last_
             )
         ],
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
 
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.cache_dir = tmp_path
     app.state.config.anthropic_api_key = "sk-ant-test"
 
@@ -11123,7 +11125,7 @@ async def test_homeassistant_labels_regenerate_has_no_candidates_in_narrow_mode(
 @pytest.mark.asyncio
 async def test_homeassistant_labels_regenerate_disabled_context_returns_unscheduled():
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.homeassistant.context_enabled = False
     app.state.config.anthropic_api_key = "sk-ant-test"
 
@@ -11146,11 +11148,11 @@ async def test_homeassistant_labels_regenerate_no_candidates_is_not_a_conflict()
     # schedule_label_generation returns False with nothing to label; the route
     # must report a successful no-op, not a bogus 409 "already in progress".
     app = _make_test_app()
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.config.anthropic_api_key = "sk-ant-test"
     cached_context = SimpleNamespace(
-        raw_states={"light.counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}}},
-        scored=[SimpleNamespace(entity_id="light.counter", score=0.6)],
+        raw_states={"light.example_counter": {"state": "on", "attributes": {"friendly_name": "Counter light"}}},
+        scored=[SimpleNamespace(entity_id="light.example_counter", score=0.6)],
     )
 
     with (
@@ -11173,7 +11175,7 @@ async def test_homeassistant_context_candidates_returns_sanitized_admin_preview(
     app.state.station_state.ha_context_last_updated = time.time()
     app.state.station_state.ha_scored_entities = [
         {
-            "entity_id": "switch.coffee_machine",
+            "entity_id": "switch.example_coffee_machine",
             "label": "Coffee machine",
             "area": "Kitchen",
             "domain": "switch",
@@ -11191,12 +11193,12 @@ async def test_homeassistant_context_candidates_returns_sanitized_admin_preview(
     assert body["status"] == "ready"
     assert body["entities"]
     assert body["entities"][0]["row_state"] == "used_by_hosts"
-    assert body["entities"][0]["entity_id"] == "switch.coffee_machine"
+    assert body["entities"][0]["entity_id"] == "switch.example_coffee_machine"
     assert "sent_now" in body
     assert "candidates" in body
     assert "muted" in body
     row = body["sent_now"][0]
-    assert row["entity_id"] == "switch.coffee_machine"
+    assert row["entity_id"] == "switch.example_coffee_machine"
     assert row["label"] == "Coffee machine"
     assert row["state_summary"] == "Coffee machine: on"
     assert "score" not in row
@@ -11210,7 +11212,7 @@ def test_copy_home_context_to_state_projects_cached_context():
 
     state = StationState()
     scored = ScoredEntity(
-        entity_id="light.hallway",
+        entity_id="light.example_hallway",
         area="Hallway",
         domain="light",
         score=0.8,
@@ -11220,12 +11222,12 @@ def test_copy_home_context_to_state_projects_cached_context():
         summary_line="Hallway light: on",
     )
     context = HomeContext(
-        raw_states={"light.hallway": scored.raw_state},
+        raw_states={"light.example_hallway": scored.raw_state},
         summary="- Hallway light: on",
         events=deque(
             [
                 HomeEvent(
-                    entity_id="light.hallway",
+                    entity_id="light.example_hallway",
                     label="Hallway light",
                     old_state="off",
                     new_state="on",
@@ -11256,7 +11258,7 @@ def test_copy_home_context_to_state_projects_cached_context():
     assert state.ha_recent_event_count == 1
     assert state.ha_last_event_label == "Hallway light"
     assert state.ha_last_event_ts == 321.0
-    assert state.ha_scored_entities[0]["entity_id"] == "light.hallway"
+    assert state.ha_scored_entities[0]["entity_id"] == "light.example_hallway"
     assert state.ha_denylist_hits == {"user_muted": 1}
     assert state.ha_catalog_hit_rate == 1.0
     assert state.ha_label_stats == {"catalog_hit_rate": 1.0, "total": 1}
@@ -11289,7 +11291,7 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
     state.ha_context_char_count = 42
     state.ha_scored_entities = [
         {
-            "entity_id": "switch.coffee_machine",
+            "entity_id": "switch.example_coffee_machine",
             "label": "Coffee machine",
             "area": "Kitchen",
             "domain": "switch",
@@ -11298,7 +11300,7 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
         }
     ]
     coffee = ScoredEntity(
-        entity_id="switch.coffee_machine",
+        entity_id="switch.example_coffee_machine",
         area="Kitchen",
         domain="switch",
         score=0.9,
@@ -11308,7 +11310,7 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
         summary_line="Coffee machine: on",
     )
     hallway = ScoredEntity(
-        entity_id="light.hallway",
+        entity_id="light.example_hallway",
         area="Hallway",
         domain="light",
         score=0.8,
@@ -11319,21 +11321,21 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
     )
     cached_context = HomeContext(
         raw_states={
-            "switch.coffee_machine": coffee.raw_state,
-            "light.hallway": hallway.raw_state,
+            "switch.example_coffee_machine": coffee.raw_state,
+            "light.example_hallway": hallway.raw_state,
         },
         summary="- Coffee machine: on\n- Hallway light: on",
         events=deque(
             [
                 HomeEvent(
-                    entity_id="switch.coffee_machine",
+                    entity_id="switch.example_coffee_machine",
                     label="Coffee machine",
                     old_state="off",
                     new_state="on",
                     timestamp=time.time(),
                 ),
                 HomeEvent(
-                    entity_id="light.hallway",
+                    entity_id="light.example_hallway",
                     label="Hallway light",
                     old_state="off",
                     new_state="on",
@@ -11351,7 +11353,7 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
             resp = await client.patch(
                 "/api/homeassistant/entity-policy",
                 headers=ACTIVE_SETUP_HEADERS,
-                json={"entity_id": "switch.coffee_machine", "muted": True},
+                json={"entity_id": "switch.example_coffee_machine", "muted": True},
             )
             preview = await client.get("/api/homeassistant/context-candidates")
             setup_status = await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)
@@ -11360,22 +11362,22 @@ async def test_homeassistant_entity_policy_partial_mute_preserves_remaining_home
     assert resp.status_code == 200
     assert resp.json()["muted"] is True
     policy = tmp_path / "state" / "ha_entity_policy.json"
-    assert "switch.coffee_machine" in policy.read_text()
+    assert "switch.example_coffee_machine" in policy.read_text()
     assert "Hallway light" in state.ha_context
     assert "Coffee machine" not in state.ha_context
     assert state.ha_pending_directive == ""
     assert state.ha_running_gag == ""
-    assert [row["entity_id"] for row in state.ha_scored_entities] == ["light.hallway"]
+    assert [row["entity_id"] for row in state.ha_scored_entities] == ["light.example_hallway"]
     assert state.ha_context_last_updated > 0
     assert state.ha_context_entity_count == 1
     assert preview.json()["status"] == "ready"
     muted_rows = preview.json()["muted"]
-    assert muted_rows[0]["entity_id"] == "switch.coffee_machine"
+    assert muted_rows[0]["entity_id"] == "switch.example_coffee_machine"
     assert muted_rows[0]["sent_to_prompt"] is False
     entity_rows = {row["entity_id"]: row for row in preview.json()["entities"]}
-    assert entity_rows["switch.coffee_machine"]["row_state"] == "muted"
-    assert entity_rows["switch.coffee_machine"]["muted"] is True
-    assert entity_rows["light.hallway"]["row_state"] == "used_by_hosts"
+    assert entity_rows["switch.example_coffee_machine"]["row_state"] == "muted"
+    assert entity_rows["switch.example_coffee_machine"]["muted"] is True
+    assert entity_rows["light.example_hallway"]["row_state"] == "used_by_hosts"
     setup_home_context = setup_status.json()["guided_setup"]["home_context"]
     assert setup_home_context["status"] == "ready"
     assert setup_home_context["readiness"] == "prompt_ready"
@@ -11391,15 +11393,16 @@ async def test_homeassistant_entity_policy_mute_discards_baselines_before_later_
     from mammamiradio.home.ha_context import HomeContext
     from mammamiradio.home.radio_events import match_radio_events
 
-    entity_id = "switch.coffee_machine"
+    entity_id = "switch.example_coffee_machine"
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
-    app.state.station_state.home_authorization = HomeAuthorization.legacy()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
     app.state.station_state.ha_context_refresh_mailbox = MagicMock()
     prior = HomeContext(
         raw_states={entity_id: {"state": "off", "attributes": {}}},
         timestamp=time.time(),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        bindings=SYNTHETIC_BINDINGS,
     )
     rule = RadioEventRule(id="coffee_started", entity_id=entity_id, to_state="on")
 
@@ -11453,7 +11456,7 @@ async def test_homeassistant_entity_policy_mute_does_not_purge_already_rendered_
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.coffee_machine", "muted": True},
+            json={"entity_id": "switch.example_coffee_machine", "muted": True},
         )
 
     assert resp.status_code == 200
@@ -11470,7 +11473,7 @@ async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued
     state = app.state.station_state
     state.ha_scored_entities = [
         {
-            "entity_id": "binary_sensor.living_presence",
+            "entity_id": "binary_sensor.example_living_presence",
             "label": "Living presence",
             "area": "Living room",
             "domain": "binary_sensor",
@@ -11483,7 +11486,7 @@ async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued
     queued = Segment(
         type=SegmentType.BANTER,
         path=Path("/tmp/presence-break.mp3"),
-        metadata={"queue_id": "q-presence-1", "home_fact_entity_id": "binary_sensor.living_presence"},
+        metadata={"queue_id": "q-presence-1", "home_fact_entity_id": "binary_sensor.example_living_presence"},
     )
     app.state.queue.put_nowait(queued)
     state.queued_segments = [{"type": "banter", "label": "Presence break", "id": "q-presence-1"}]
@@ -11493,12 +11496,12 @@ async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued
         opt_in = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": True},
+            json={"entity_id": "binary_sensor.example_living_presence", "personal_moment_enabled": True},
         )
         opt_out = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "binary_sensor.living_presence", "personal_moment_enabled": False},
+            json={"entity_id": "binary_sensor.example_living_presence", "personal_moment_enabled": False},
         )
 
     assert opt_in.status_code == 200
@@ -11523,7 +11526,7 @@ async def test_homeassistant_entity_policy_mute_purges_running_gag_ledger(tmp_pa
     state = app.state.station_state
     state.ha_scored_entities = [
         {
-            "entity_id": "switch.coffee_machine",
+            "entity_id": "switch.example_coffee_machine",
             "label": "Coffee machine",
             "area": "Kitchen",
             "domain": "switch",
@@ -11533,7 +11536,7 @@ async def test_homeassistant_entity_policy_mute_purges_running_gag_ledger(tmp_pa
     ]
     ledger = EveningLedger()
     ledger.buckets["k"] = GagBucket(
-        "switch.coffee_machine", "Coffee machine", "off", "on", count=3, last_ts=time.time()
+        "switch.example_coffee_machine", "Coffee machine", "off", "on", count=3, last_ts=time.time()
     )
     ledger.session_id = 1
     state.evening_ledger = ledger
@@ -11543,14 +11546,14 @@ async def test_homeassistant_entity_policy_mute_purges_running_gag_ledger(tmp_pa
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.coffee_machine", "muted": True},
+            json={"entity_id": "switch.example_coffee_machine", "muted": True},
         )
 
     assert resp.status_code == 200
     assert ledger.buckets == {}
     ledger_file = tmp_path / "evening_ledger.json"
     assert ledger_file.exists()
-    assert "switch.coffee_machine" not in ledger_file.read_text()
+    assert "switch.example_coffee_machine" not in ledger_file.read_text()
 
 
 @pytest.mark.asyncio
@@ -11566,7 +11569,7 @@ async def test_homeassistant_entity_policy_hard_mute_fences_detached_llm_work_be
         return {
             "schema_version": 1,
             "policy_revision": 1,
-            "muted": {"switch.coffee_machine": {}},
+            "muted": {"switch.example_coffee_machine": {}},
             "personal_moment_opt_ins": {},
         }
 
@@ -11588,7 +11591,7 @@ async def test_homeassistant_entity_policy_hard_mute_fences_detached_llm_work_be
             response = await client.patch(
                 "/api/homeassistant/entity-policy",
                 headers=ACTIVE_SETUP_HEADERS,
-                json={"entity_id": "switch.coffee_machine", "muted": True},
+                json={"entity_id": "switch.example_coffee_machine", "muted": True},
             )
 
     assert response.status_code == 200
@@ -11602,7 +11605,7 @@ async def test_homeassistant_entity_policy_hard_mute_blocks_late_label_catalog_p
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.anthropic_api_key = "test-key"
-    entity_id = "switch.coffee_machine"
+    entity_id = "switch.example_coffee_machine"
     states = {
         entity_id: {
             "entity_id": entity_id,
@@ -11632,7 +11635,9 @@ async def test_homeassistant_entity_policy_hard_mute_blocks_late_label_catalog_p
         patch("mammamiradio.home.catalog._call_anthropic_labels", side_effect=cancellation_resistant_provider),
         patch("mammamiradio.home.catalog.save_catalog") as save,
     ):
-        assert catalog.schedule_label_generation(states, cache_dir=tmp_path, config=app.state.config, force=True)
+        assert catalog.schedule_label_generation(
+            states, cache_dir=tmp_path, config=app.state.config, force=True, bindings=SYNTHETIC_BINDINGS
+        )
         await asyncio.wait_for(provider_entered.wait(), timeout=1)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.patch(
@@ -11653,18 +11658,20 @@ async def test_homeassistant_entity_policy_unmute_is_idempotent_for_existing_mut
     app.state.config.cache_dir = tmp_path
     from mammamiradio.home.entity_policy import set_entity_muted
 
-    set_entity_muted(tmp_path, "switch.coffee_machine", True, label="Coffee machine", domain="switch", area="Kitchen")
+    set_entity_muted(
+        tmp_path, "switch.example_coffee_machine", True, label="Coffee machine", domain="switch", area="Kitchen"
+    )
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         first = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.coffee_machine", "muted": False},
+            json={"entity_id": "switch.example_coffee_machine", "muted": False},
         )
         second = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.coffee_machine", "muted": False},
+            json={"entity_id": "switch.example_coffee_machine", "muted": False},
         )
 
     assert first.status_code == 200
@@ -11678,7 +11685,7 @@ async def test_homeassistant_entity_policy_unmute_removes_live_muted_ledger_deny
     from mammamiradio.home.evening_memory import EveningLedger
     from mammamiradio.home.ha_context import HomeEvent
 
-    entity_id = "switch.coffee_machine"
+    entity_id = "switch.example_coffee_machine"
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     set_entity_muted(tmp_path, entity_id, True, label="Coffee machine", domain="switch", area="Kitchen")
@@ -11716,7 +11723,7 @@ async def test_homeassistant_entity_policy_unmute_preserves_config_ledger_deny(t
     from mammamiradio.home.entity_policy import set_entity_muted
     from mammamiradio.home.evening_memory import EveningLedger
 
-    entity_id = "switch.noisy"
+    entity_id = "switch.example_noisy"
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.running_gags.entity_denylist = [entity_id]
@@ -11751,7 +11758,7 @@ async def test_homeassistant_entity_policy_token_auth_public_ip_allows_write(tmp
     app.state.config.cache_dir = tmp_path
     app.state.station_state.ha_scored_entities = [
         {
-            "entity_id": "switch.coffee_machine",
+            "entity_id": "switch.example_coffee_machine",
             "label": "Coffee machine",
             "area": "Kitchen",
             "domain": "switch",
@@ -11764,7 +11771,7 @@ async def test_homeassistant_entity_policy_token_auth_public_ip_allows_write(tmp
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
             headers={"X-Radio-Admin-Token": "tok"},
-            json={"entity_id": "switch.coffee_machine", "muted": True},
+            json={"entity_id": "switch.example_coffee_machine", "muted": True},
         )
     assert resp.status_code == 200
 
@@ -11790,7 +11797,7 @@ async def test_homeassistant_entity_policy_rejects_non_boolean_muted():
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.coffee_machine", "muted": "yes"},
+            json={"entity_id": "switch.example_coffee_machine", "muted": "yes"},
         )
     assert resp.status_code == 422
 
@@ -11809,12 +11816,12 @@ async def test_homeassistant_entity_policy_can_mute_entity_absent_from_preview(t
         resp = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.never_seen", "muted": True},
+            json={"entity_id": "switch.example_never_seen", "muted": True},
         )
     assert resp.status_code == 200
     assert resp.json()["muted"] is True
     policy = tmp_path / "state" / "ha_entity_policy.json"
-    assert "switch.never_seen" in policy.read_text()
+    assert "switch.example_never_seen" in policy.read_text()
 
 
 @pytest.mark.asyncio
@@ -11823,7 +11830,7 @@ async def test_homeassistant_entity_policy_write_failure_returns_500(tmp_path):
     app.state.config.cache_dir = tmp_path
     app.state.station_state.ha_scored_entities = [
         {
-            "entity_id": "switch.coffee_machine",
+            "entity_id": "switch.example_coffee_machine",
             "label": "Coffee machine",
             "area": "Kitchen",
             "domain": "switch",
@@ -11837,7 +11844,7 @@ async def test_homeassistant_entity_policy_write_failure_returns_500(tmp_path):
             resp = await client.patch(
                 "/api/homeassistant/entity-policy",
                 headers=ACTIVE_SETUP_HEADERS,
-                json={"entity_id": "switch.coffee_machine", "muted": True},
+                json={"entity_id": "switch.example_coffee_machine", "muted": True},
             )
     assert resp.status_code == 500
 
@@ -11988,7 +11995,7 @@ async def test_hot_reload_unauthenticated_rejected():
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_language_policy_stage_failure_returns_500():
+async def test_hot_reload_language_policy_stage_failure_returns_500(caplog):
     """First reload stage (language_policy) raises → 500 with stream_status=unaffected.
 
     Guards the failure contract for the leaves-first stage. With language_policy reloaded
@@ -12007,15 +12014,19 @@ async def test_hot_reload_language_policy_stage_failure_returns_500():
             )
     assert resp.status_code == 500
     body = resp.json()
-    assert body["ok"] is False
-    assert body["stream_status"] == "unaffected"
-    assert body["error_code"] == "reload_failed"
-    assert body["retryable"] is True
-    assert "syntax error in language_policy.py" in body["exception"]
+    assert body == {"ok": False, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": True}
+    assert "syntax error in language_policy.py" not in resp.text
+    assert any(
+        record.name == "mammamiradio.web.streamer"
+        and record.levelname == "ERROR"
+        and record.exc_info is not None
+        and "syntax error in language_policy.py" in str(record.exc_info[1])
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_hot_reload_scriptwriter_stage_failure_returns_500():
+async def test_hot_reload_scriptwriter_stage_failure_returns_500(caplog):
     """Last reload stage (the scriptwriter facade) fails after the leaves succeed → 500.
 
     The data leaves reload cleanly, then the scriptwriter facade raises at the
@@ -12036,11 +12047,15 @@ async def test_hot_reload_scriptwriter_stage_failure_returns_500():
             )
     assert resp.status_code == 500
     body = resp.json()
-    assert body["ok"] is False
-    assert body["stream_status"] == "unaffected"
-    assert body["error_code"] == "reload_failed"
-    assert body["retryable"] is True
-    assert "syntax error in scriptwriter.py" in body["exception"]
+    assert body == {"ok": False, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": True}
+    assert "syntax error in scriptwriter.py" not in resp.text
+    assert any(
+        record.name == "mammamiradio.web.streamer"
+        and record.levelname == "ERROR"
+        and record.exc_info is not None
+        and "syntax error in scriptwriter.py" in str(record.exc_info[1])
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -12424,7 +12439,7 @@ async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_f
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     presence = ScoredEntity(
-        entity_id="binary_sensor.office_presence",
+        entity_id="binary_sensor.example_office_presence",
         area="Office",
         domain="binary_sensor",
         score=0.9,
@@ -12435,14 +12450,14 @@ async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_f
     )
     context = HomeContext(scored=[presence], timestamp=time.time())
     state = app.state.station_state
-    state.home_context_director = HomeContextDirector()
+    state.home_context_director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     state.home_context_director.observe([], policy_revision=0)
     queued = Segment(
         type=SegmentType.BANTER,
         path=Path("/tmp/context-fact.mp3"),
         metadata={
             "queue_id": "fact-queue",
-            "home_fact_entity_id": "binary_sensor.office_presence",
+            "home_fact_entity_id": "binary_sensor.example_office_presence",
             "home_fact_id": "opaque",
         },
     )
@@ -12455,12 +12470,12 @@ async def test_personal_moment_consent_is_presence_only_and_mute_purges_queued_f
             enabled = await client.patch(
                 "/api/homeassistant/entity-policy",
                 headers=ACTIVE_SETUP_HEADERS,
-                json={"entity_id": "binary_sensor.office_presence", "personal_moment_enabled": True},
+                json={"entity_id": "binary_sensor.example_office_presence", "personal_moment_enabled": True},
             )
             muted = await client.patch(
                 "/api/homeassistant/entity-policy",
                 headers=ACTIVE_SETUP_HEADERS,
-                json={"entity_id": "binary_sensor.office_presence", "muted": True},
+                json={"entity_id": "binary_sensor.example_office_presence", "muted": True},
             )
 
     assert enabled.status_code == 200
@@ -12481,11 +12496,11 @@ async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_pat
 
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
-    director = HomeContextDirector()
+    director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     director.observe(
         [
             DirectorObservation(
-                entity_id="weather.forecast_home", domain="weather", state="sunny", score=9.0, temperature_c=24.0
+                entity_id="weather.example_weather", domain="weather", state="sunny", score=9.0, temperature_c=24.0
             )
         ],
         policy_revision=0,
@@ -12503,7 +12518,7 @@ async def test_mute_releases_inflight_home_fact_reservation_not_in_queue(tmp_pat
         muted = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "weather.forecast_home", "muted": True},
+            json={"entity_id": "weather.example_weather", "muted": True},
         )
 
     assert muted.status_code == 200
@@ -12543,7 +12558,7 @@ async def test_personal_moment_enable_rejects_non_presence_entity(tmp_path):
             resp = await client.patch(
                 "/api/homeassistant/entity-policy",
                 headers=ACTIVE_SETUP_HEADERS,
-                json={"entity_id": "switch.kitchen_light", "personal_moment_enabled": True},
+                json={"entity_id": "switch.example_kitchen_light", "personal_moment_enabled": True},
             )
 
     assert resp.status_code == 422
@@ -12563,12 +12578,12 @@ async def test_entity_policy_requires_exactly_one_action(tmp_path):
         both = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.kitchen_light", "muted": True, "personal_moment_enabled": True},
+            json={"entity_id": "switch.example_kitchen_light", "muted": True, "personal_moment_enabled": True},
         )
         neither = await client.patch(
             "/api/homeassistant/entity-policy",
             headers=ACTIVE_SETUP_HEADERS,
-            json={"entity_id": "switch.kitchen_light"},
+            json={"entity_id": "switch.example_kitchen_light"},
         )
 
     assert both.status_code == 422
@@ -12583,13 +12598,13 @@ async def test_first_listen_players_requires_exact_empty_json_and_returns_saved_
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     store = FirstListenReceiptStore(tmp_path)
-    receipt = await store.record_accepted("media_player.kitchen")
+    receipt = await store.record_accepted("media_player.example_kitchen")
     app.state.first_listen_store = store
     app.state.first_listen_receipt = receipt
     discovery = HADiscoveryResult(
         candidates=(
             HAPlayerCandidate(
-                entity_id="media_player.kitchen",
+                entity_id="media_player.example_kitchen",
                 friendly_name="Kitchen",
                 state="idle",
                 device_class="speaker",
@@ -12601,7 +12616,7 @@ async def test_first_listen_players_requires_exact_empty_json_and_returns_saved_
     )
     service = SimpleNamespace(
         discover=AsyncMock(return_value=discovery),
-        pending_receipt_entity_id=MagicMock(return_value="media_player.kitchen"),
+        pending_receipt_entity_id=MagicMock(return_value="media_player.example_kitchen"),
     )
     app.state.ha_playback_fingerprint = _ha_playback_access_snapshot(app.state.config)[2]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -12617,12 +12632,12 @@ async def test_first_listen_players_requires_exact_empty_json_and_returns_saved_
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "invalid_request"
     assert valid.status_code == 200
-    assert valid.json()["selected_entity_id"] == "media_player.kitchen"
+    assert valid.json()["selected_entity_id"] == "media_player.example_kitchen"
     assert valid.json()["candidates"] == valid.json()["players"]
     assert valid.json()["media_source_uri"] == "media-source://mammamiradio/live"
     assert valid.json()["receipt_recovery"] == {
         "available": True,
-        "entity_id": "media_player.kitchen",
+        "entity_id": "media_player.example_kitchen",
     }
 
 
@@ -12630,7 +12645,7 @@ async def test_first_listen_players_requires_exact_empty_json_and_returns_saved_
 async def test_setup_status_projects_server_owned_receipt_recovery_without_ha_io():
     app = _make_test_app()
     app.state.ha_playback_service = SimpleNamespace(
-        pending_receipt_entity_id=MagicMock(return_value="media_player.kitchen")
+        pending_receipt_entity_id=MagicMock(return_value="media_player.example_kitchen")
     )
     app.state.ha_playback_fingerprint = _ha_playback_access_snapshot(app.state.config)[2]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -12644,7 +12659,7 @@ async def test_setup_status_projects_server_owned_receipt_recovery_without_ha_io
 
     recovery = response.json()["guided_setup"]["first_listen"]["receipt_recovery"]
     assert response.status_code == 200
-    assert recovery == {"available": True, "entity_id": "media_player.kitchen"}
+    assert recovery == {"available": True, "entity_id": "media_player.example_kitchen"}
     app.state.ha_playback_service.pending_receipt_entity_id.assert_called_once_with()
 
 
@@ -12654,7 +12669,7 @@ async def test_setup_status_hides_cached_receipt_recovery_after_ha_access_change
     app.state.config.homeassistant.enabled = True
     app.state.config.homeassistant.url = "http://supervisor/core"
     app.state.config.ha_token = "first-supervisor-token"
-    projection = MagicMock(return_value="media_player.kitchen")
+    projection = MagicMock(return_value="media_player.example_kitchen")
     app.state.ha_playback_service = SimpleNamespace(pending_receipt_entity_id=projection)
     app.state.ha_playback_fingerprint = _ha_playback_access_snapshot(app.state.config)[2]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -12671,7 +12686,7 @@ async def test_setup_status_hides_cached_receipt_recovery_after_ha_access_change
     assert before_rotation.status_code == 200
     assert before_rotation.json()["guided_setup"]["first_listen"]["receipt_recovery"] == {
         "available": True,
-        "entity_id": "media_player.kitchen",
+        "entity_id": "media_player.example_kitchen",
     }
     assert after_rotation.status_code == 200
     assert after_rotation.json()["guided_setup"]["first_listen"]["receipt_recovery"] == {
@@ -12689,13 +12704,13 @@ async def test_first_listen_play_and_matching_heard_confirmation_persist(tmp_pat
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     store = FirstListenReceiptStore(tmp_path)
-    accepted = await store.record_accepted("media_player.living_room")
+    accepted = await store.record_accepted("media_player.example_living_room")
     app.state.first_listen_store = store
     app.state.first_listen_receipt = accepted
     service = SimpleNamespace(
         play=AsyncMock(
             return_value=HAPlayResult(
-                entity_id="media_player.living_room",
+                entity_id="media_player.example_living_room",
                 accepted=True,
                 station_resumed=True,
                 receipt_persisted=True,
@@ -12712,7 +12727,7 @@ async def test_first_listen_play_and_matching_heard_confirmation_persist(tmp_pat
         ) as client:
             play = await client.post(
                 "/api/setup/first-listen/play",
-                json={"entity_id": "media_player.living_room"},
+                json={"entity_id": "media_player.example_living_room"},
             )
             heard = await client.post(
                 "/api/setup/first-listen/verify",
@@ -12778,7 +12793,7 @@ async def test_listener_confirm_keeps_completed_legacy_ha_receipt(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     store = FirstListenReceiptStore(tmp_path)
-    accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+    accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=100.0)
     completed = await store.verify(
         accepted.accepted_attempt_id,
         heard=True,
@@ -12816,7 +12831,7 @@ async def test_listener_completion_wins_over_older_ha_persistence_callback():
     from mammamiradio.web.streamer import _ha_playback_service
 
     older_ha_receipt = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="older-ha-attempt",
         accepted_at=90.0,
     )
@@ -12841,7 +12856,7 @@ async def test_listener_completion_wins_over_older_ha_persistence_callback():
     app.state.first_listen_store = store
     app.state.first_listen_receipt = None
     service = _ha_playback_service(app.state)
-    older_ha_callback = asyncio.create_task(service._persist_accepted_attempt("media_player.kitchen"))
+    older_ha_callback = asyncio.create_task(service._persist_accepted_attempt("media_player.example_kitchen"))
     await ha_persistence_started.wait()
 
     try:
@@ -12871,12 +12886,12 @@ async def test_privacy_completion_wins_over_older_ha_persistence_callback():
     from mammamiradio.web.streamer import _ha_playback_service
 
     older_ha_receipt = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="older-ha-attempt",
         accepted_at=90.0,
     )
     privacy_complete_receipt = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="current-ha-attempt",
         accepted_at=100.0,
         heard_at=105.0,
@@ -12894,7 +12909,7 @@ async def test_privacy_completion_wins_over_older_ha_persistence_callback():
     app.state.first_listen_store = SimpleNamespace(record_accepted=AsyncMock(side_effect=delayed_ha_receipt))
     app.state.first_listen_receipt = None
     service = _ha_playback_service(app.state)
-    older_ha_callback = asyncio.create_task(service._persist_accepted_attempt("media_player.kitchen"))
+    older_ha_callback = asyncio.create_task(service._persist_accepted_attempt("media_player.example_kitchen"))
     await ha_persistence_started.wait()
 
     app.state.first_listen_receipt = privacy_complete_receipt
@@ -12909,13 +12924,13 @@ def test_first_listen_receipt_cache_adoption_preserves_ha_retest_semantics():
     from mammamiradio.web.streamer import _adopt_first_listen_receipt
 
     completed_ha_receipt = FirstListenReceiptV1(
-        selected_entity_id="media_player.kitchen",
+        selected_entity_id="media_player.example_kitchen",
         accepted_attempt_id="completed-ha-attempt",
         accepted_at=90.0,
         heard_at=100.0,
     )
     newer_ha_attempt = FirstListenReceiptV1(
-        selected_entity_id="media_player.bedroom",
+        selected_entity_id="media_player.example_bedroom",
         accepted_attempt_id="newer-ha-attempt",
         accepted_at=110.0,
     )
@@ -13241,7 +13256,7 @@ async def test_first_listen_routes_return_safe_errors_for_ha_and_receipt_failure
             side_effect=[
                 HAPlaybackError(HAPlaybackReason.SERVICE_REJECTED, station_resumed=True),
                 HAPlayResult(
-                    entity_id="media_player.kitchen",
+                    entity_id="media_player.example_kitchen",
                     accepted=True,
                     station_resumed=True,
                     receipt_persisted=False,
@@ -13261,11 +13276,11 @@ async def test_first_listen_routes_return_safe_errors_for_ha_and_receipt_failure
             invalid_play = await client.post("/api/setup/first-listen/play", json={})
             playback_failed = await client.post(
                 "/api/setup/first-listen/play",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
             receipt_write_failed = await client.post(
                 "/api/setup/first-listen/play",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
             app.state.first_listen_store = SimpleNamespace(
                 verify=AsyncMock(side_effect=FirstListenReceiptUnavailableError("receipt write failed"))
@@ -13288,7 +13303,7 @@ async def test_first_listen_routes_return_safe_errors_for_ha_and_receipt_failure
     assert receipt_write_failed.json()["error"]["code"] == "receipt_unavailable"
     assert receipt_write_failed.json()["accepted"] is True
     assert receipt_write_failed.json()["receipt_persisted"] is False
-    assert receipt_write_failed.json()["entity_id"] == "media_player.kitchen"
+    assert receipt_write_failed.json()["entity_id"] == "media_player.example_kitchen"
     assert verify_failed.status_code == 503
     assert verify_failed.json()["error"]["code"] == "receipt_unavailable"
     assert verify_failed.json()["accepted"] is True
@@ -13309,7 +13324,7 @@ async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
     service = SimpleNamespace(
         play=AsyncMock(
             return_value=HAPlayResult(
-                entity_id="media_player.kitchen",
+                entity_id="media_player.example_kitchen",
                 accepted=True,
                 station_resumed=True,
                 receipt_persisted=False,
@@ -13319,13 +13334,13 @@ async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
             side_effect=[
                 HAPlaybackError(HAPlaybackReason.RECEIPT_UNAVAILABLE, station_resumed=True),
                 HAPlayResult(
-                    entity_id="media_player.kitchen",
+                    entity_id="media_player.example_kitchen",
                     accepted=True,
                     station_resumed=True,
                     receipt_persisted=False,
                 ),
                 HAPlayResult(
-                    entity_id="media_player.kitchen",
+                    entity_id="media_player.example_kitchen",
                     accepted=True,
                     station_resumed=True,
                     receipt_persisted=True,
@@ -13343,23 +13358,23 @@ async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
         ) as client:
             play = await client.post(
                 "/api/setup/first-listen/play",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
             invalid = await client.post(
                 "/api/setup/first-listen/receipt/retry",
-                json={"entity_id": "media_player.kitchen", "unexpected": True},
+                json={"entity_id": "media_player.example_kitchen", "unexpected": True},
             )
             still_unavailable = await client.post(
                 "/api/setup/first-listen/receipt/retry",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
             still_missing_attempt = await client.post(
                 "/api/setup/first-listen/receipt/retry",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
             recovered = await client.post(
                 "/api/setup/first-listen/receipt/retry",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
 
     assert play.status_code == 503
@@ -13376,7 +13391,7 @@ async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
     assert recovered.status_code == 200
     assert recovered.json()["attempt_id"] == "saved-listening-check"
     assert "No playback request was sent again" in recovered.json()["message"]
-    service.play.assert_awaited_once_with("media_player.kitchen")
+    service.play.assert_awaited_once_with("media_player.example_kitchen")
     assert service.persist_pending_receipt.await_count == 3
 
 
@@ -13400,7 +13415,7 @@ async def test_first_listen_receipt_retry_requires_server_owned_pending_acceptan
             missing_body = await client.post("/api/setup/first-listen/receipt/retry")
             missing_proof = await client.post(
                 "/api/setup/first-listen/receipt/retry",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
 
     assert missing_body.status_code == 422
@@ -13408,16 +13423,16 @@ async def test_first_listen_receipt_retry_requires_server_owned_pending_acceptan
     assert missing_proof.status_code == 409
     assert missing_proof.json()["error"]["code"] == "receipt_recovery_missing"
     assert "Nothing was replayed" in missing_proof.json()["error"]["message"]
-    service.persist_pending_receipt.assert_awaited_once_with("media_player.kitchen")
+    service.persist_pending_receipt.assert_awaited_once_with("media_player.example_kitchen")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("content", "content_type"),
     [
-        (b'{"entity_id":"media_player.kitchen"}', "text/plain"),
+        (b'{"entity_id":"media_player.example_kitchen"}', "text/plain"),
         (b"{bad", "application/json"),
-        (b'["media_player.kitchen"]', "application/json"),
+        (b'["media_player.example_kitchen"]', "application/json"),
         (b'{"entity_id":42}', "application/json"),
     ],
 )
@@ -13474,7 +13489,7 @@ async def test_first_listen_receipt_retry_does_not_invent_acceptance_for_other_e
         ) as client:
             response = await client.post(
                 "/api/setup/first-listen/receipt/retry",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
 
     payload = response.json()
@@ -13482,7 +13497,7 @@ async def test_first_listen_receipt_retry_does_not_invent_acceptance_for_other_e
     assert payload["error"]["code"] == reason
     assert "accepted" not in payload
     assert "receipt_persisted" not in payload
-    service.persist_pending_receipt.assert_awaited_once_with("media_player.kitchen")
+    service.persist_pending_receipt.assert_awaited_once_with("media_player.example_kitchen")
 
 
 @pytest.mark.asyncio
@@ -13503,7 +13518,7 @@ async def test_first_listen_play_requires_explicit_durable_attempt_truth(
     service = SimpleNamespace(
         play=AsyncMock(
             return_value=HAPlayResult(
-                entity_id="media_player.kitchen",
+                entity_id="media_player.example_kitchen",
                 accepted=True,
                 station_resumed=True,
                 receipt_persisted=receipt_persisted,
@@ -13520,14 +13535,14 @@ async def test_first_listen_play_requires_explicit_durable_attempt_truth(
         ) as client:
             response = await client.post(
                 "/api/setup/first-listen/play",
-                json={"entity_id": "media_player.kitchen"},
+                json={"entity_id": "media_player.example_kitchen"},
             )
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "receipt_unavailable"
     assert response.json()["accepted"] is True
     assert response.json()["receipt_persisted"] is False
-    service.play.assert_awaited_once_with("media_player.kitchen")
+    service.play.assert_awaited_once_with("media_player.example_kitchen")
 
 
 @pytest.mark.asyncio
@@ -13694,7 +13709,7 @@ async def test_fresh_empty_home_preview_unlocks_enable_without_publishing_contex
     app.state.config.ha_token = "supervisor-token"
     app.state.station_state.home_authorization = HomeAuthorization.narrow()
     store = FirstListenReceiptStore(tmp_path)
-    accepted = await store.record_accepted("media_player.kitchen", accepted_at=time.time() - 2)
+    accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=time.time() - 2)
     heard = await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=time.time() - 1)
     app.state.first_listen_store = store
     app.state.first_listen_receipt = heard
@@ -13842,7 +13857,7 @@ async def test_enabled_home_context_can_retry_privacy_receipt_after_a_fresh_prev
     app.state.config.ha_token = "supervisor-token"
     app.state.station_state.home_authorization = HomeAuthorization.narrow()
     store = FirstListenReceiptStore(tmp_path)
-    accepted = await store.record_accepted("media_player.kitchen", accepted_at=time.time() - 2)
+    accepted = await store.record_accepted("media_player.example_kitchen", accepted_at=time.time() - 2)
     heard = await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=time.time() - 1)
     reviewed = replace(heard, privacy_reviewed_at=time.time())
     app.state.first_listen_store = store
@@ -13902,7 +13917,7 @@ async def test_detached_home_preview_projects_existing_personal_moment_opt_in_as
     app.state.config.ha_token = "supervisor-token"
     app.state.station_state.home_authorization = HomeAuthorization.narrow()
     app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
-    entity_id = "binary_sensor.office_presence"
+    entity_id = "binary_sensor.example_office_presence"
     set_personal_moment_enabled(
         tmp_path,
         entity_id,
@@ -14038,7 +14053,7 @@ async def test_keep_home_context_off_needs_no_preview_and_stays_live_off_when_sa
     state = app.state.station_state
     state.ha_context = "Private retained context"
     state.ha_context_last_updated = 123.0
-    state.ha_scored_entities = [{"entity_id": "switch.private"}]
+    state.ha_scored_entities = [{"entity_id": "switch.example_private"}]
     state.home_context_policy_generation = 4
     segment = Segment(
         type=SegmentType.BANTER,
@@ -14129,7 +14144,7 @@ def test_home_context_disable_retires_only_pending_home_interrupt(tmp_path):
     bridge.write_bytes(b"ID3")
     state.interrupt_slot = bridge
     state.interrupt_slot_ephemeral = True
-    state.interrupt_slot_source = "ha:binary_sensor.kitchen_presence"
+    state.interrupt_slot_source = "ha:binary_sensor.example_kitchen_presence"
     state.interrupt_slot_home_context_generation = 4
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
     urgent_force_revision = state.set_force_next(SegmentType.BANTER)
@@ -14169,7 +14184,7 @@ def test_home_context_disable_preserves_newer_operator_force(tmp_path):
     bridge.write_bytes(b"ID3")
     state.interrupt_slot = bridge
     state.interrupt_slot_ephemeral = True
-    state.interrupt_slot_source = "ha:binary_sensor.kitchen_presence"
+    state.interrupt_slot_source = "ha:binary_sensor.example_kitchen_presence"
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
     state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
     operator_force_revision = state.set_force_next(SegmentType.AD)
@@ -14332,10 +14347,10 @@ def test_home_entity_metadata_prefers_cache_then_runtime_then_safe_default(tmp_p
     state = app.state.station_state
     cached_context = SimpleNamespace(
         scored=[
-            SimpleNamespace(to_status_dict=lambda: {"entity_id": "sensor.other"}),
+            SimpleNamespace(to_status_dict=lambda: {"entity_id": "sensor.example_other"}),
             SimpleNamespace(
                 to_status_dict=lambda: {
-                    "entity_id": "binary_sensor.kitchen_presence",
+                    "entity_id": "binary_sensor.example_kitchen_presence",
                     "label": "Kitchen presence",
                     "domain": "binary_sensor",
                     "area": "Kitchen",
@@ -14345,25 +14360,25 @@ def test_home_entity_metadata_prefers_cache_then_runtime_then_safe_default(tmp_p
     )
 
     with patch("mammamiradio.web.streamer.get_cached_home_context", return_value=cached_context):
-        cached = _home_entity_metadata(state, app.state.config, "binary_sensor.kitchen_presence")
+        cached = _home_entity_metadata(state, app.state.config, "binary_sensor.example_kitchen_presence")
 
     assert cached == {"label": "Kitchen presence", "domain": "binary_sensor", "area": "Kitchen"}
 
     state.ha_scored_entities = [
-        {"entity_id": "sensor.other"},
+        {"entity_id": "sensor.example_other"},
         {
-            "entity_id": "switch.espresso_machine",
+            "entity_id": "switch.example_espresso_machine",
             "label": "",
             "domain": "",
             "area": None,
         },
     ]
     with patch("mammamiradio.web.streamer.get_cached_home_context", return_value=None):
-        runtime = _home_entity_metadata(state, app.state.config, "switch.espresso_machine")
-        missing = _home_entity_metadata(state, app.state.config, "light.unlisted")
+        runtime = _home_entity_metadata(state, app.state.config, "switch.example_espresso_machine")
+        missing = _home_entity_metadata(state, app.state.config, "light.example_unlisted")
 
-    assert runtime == {"label": "switch.espresso_machine", "domain": "switch", "area": ""}
-    assert missing == {"label": "light.unlisted", "domain": "light", "area": ""}
+    assert runtime == {"label": "switch.example_espresso_machine", "domain": "switch", "area": ""}
+    assert missing == {"label": "light.example_unlisted", "domain": "light", "area": ""}
 
 
 @pytest.mark.asyncio
@@ -14396,7 +14411,7 @@ async def test_home_context_enable_rejects_preview_after_policy_revision_changes
             headers=ACTIVE_SETUP_HEADERS,
         ) as client:
             preview = await client.post("/api/setup/home-context-preview", json={})
-            set_entity_muted(tmp_path, "weather.forecast_home", True)
+            set_entity_muted(tmp_path, "weather.example_weather", True)
             enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
 
     assert preview.status_code == 200
@@ -14420,7 +14435,7 @@ async def test_home_context_enable_compensates_policy_change_while_choice_persis
     app.state.config.ha_token = "supervisor-token"
     app.state.station_state.home_authorization = HomeAuthorization.narrow()
     app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
-    entity_id = "weather.forecast_home"
+    entity_id = "weather.example_weather"
     set_entity_muted(tmp_path, entity_id, True)
     preview_result = HomeContextPreviewResult(
         kind="fresh",
@@ -14491,7 +14506,7 @@ async def test_home_context_enable_serializes_entity_policy_widening(tmp_path):
     app.state.config.ha_token = "supervisor-token"
     app.state.station_state.home_authorization = HomeAuthorization.narrow()
     app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
-    entity_id = "weather.forecast_home"
+    entity_id = "weather.example_weather"
     set_entity_muted(tmp_path, entity_id, True)
     preview_result = HomeContextPreviewResult(
         kind="fresh",
@@ -14625,7 +14640,7 @@ async def test_home_context_enable_rejects_stale_preview_proof(tmp_path, invalid
             elif invalidation == "ha_config":
                 app.state.config.ha_token = "rotated-supervisor-token"
             else:
-                app.state.station_state.home_authorization = HomeAuthorization.legacy()
+                app.state.station_state.home_authorization = HomeAuthorization.legacy(SYNTHETIC_BINDINGS)
 
             enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
 
@@ -14702,11 +14717,11 @@ async def test_keep_home_context_off_clears_all_runtime_context_and_generated_br
     state.ha_running_gag_key = "private-gag"
     state.last_banter_home_fact = MagicMock()
 
-    director = HomeContextDirector()
+    director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     director.observe(
         [
             DirectorObservation(
-                entity_id="weather.forecast_home",
+                entity_id="weather.example_weather",
                 domain="weather",
                 state="sunny",
                 score=9.0,
@@ -14722,7 +14737,7 @@ async def test_keep_home_context_off_clears_all_runtime_context_and_generated_br
 
     ledger = EveningLedger(session_id=1, started_at=1.0, last_active=1.0)
     ledger.buckets["private-gag"] = GagBucket(
-        "switch.private",
+        "switch.example_private",
         "Private switch",
         "off",
         "on",
@@ -14767,7 +14782,7 @@ async def test_keep_home_context_off_clears_all_runtime_context_and_generated_br
     ]
 
     retained = HomeContext(
-        raw_states={"switch.private": {"state": "on", "attributes": {}}},
+        raw_states={"switch.example_private": {"state": "on", "attributes": {}}},
         authorization_mode=HomeAuthorizationMode.NARROW.value,
         timestamp=1.0,
     )
@@ -14776,8 +14791,8 @@ async def test_keep_home_context_off_clears_all_runtime_context_and_generated_br
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with (
         patch.object(ha_context, "_ha_cache", retained),
-        patch.object(ha_context, "_radio_event_state_cache", {"switch.private": {"state": "on"}}),
-        patch.object(ha_context, "_ritual_recipe_state_cache", {"switch.private": {"state": "on"}}),
+        patch.object(ha_context, "_radio_event_state_cache", {"switch.example_private": {"state": "on"}}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {"switch.example_private": {"state": "on"}}),
         patch.object(ha_context, "_ha_registry_snapshot_cache", HomeRegistrySnapshot(source="memory")),
         patch.object(ha_context, "_ha_registry_fetched_at", 1.0),
         patch.object(ha_context, "_weather_forecast_cache", "Private weather"),
@@ -15837,3 +15852,42 @@ def test_continuity_slot_status_does_not_advertise_a_released_slot(tmp_path):
     slot.release()
 
     assert _continuity_slot_status(state) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["checking", "unavailable", "unknown-future-status"])
+async def test_unresolved_home_evidence_blocks_preview_enable_and_old_proof(tmp_path, status):
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.home_compatibility_status = status
+    authorization = state.home_authorization or HomeAuthorization.narrow()
+    proof = streamer._HomeContextPreviewProof(
+        expires_at=time.monotonic() + 60,
+        config_fingerprint=streamer._home_access_fingerprint(app.state.config),
+        authorization_mode=authorization.mode.value,
+        binding_identity=authorization.bindings.identity,
+        policy_revision=streamer.policy_revision(tmp_path),
+        context_generation=state.home_context_policy_generation,
+    )
+    app.state.home_context_preview_proof = proof
+    assert not streamer._home_context_preview_proof_valid(app.state, proof)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch.object(streamer, "_first_listen_audio_gate_open", new=AsyncMock(return_value=True)) as audio,
+        patch.object(streamer, "fetch_home_context_preview", new=AsyncMock()) as fetch,
+        patch.object(streamer, "_persist_home_context_choice", new=AsyncMock()) as persist,
+    ):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver", headers=ACTIVE_SETUP_HEADERS
+        ) as client:
+            preview = await client.post("/api/setup/home-context-preview", json={})
+            enabled = await client.patch("/api/setup/home-context-choice", json={"enabled": True})
+    for response in (preview, enabled):
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "home_check_pending"
+    audio.assert_not_awaited()
+    fetch.assert_not_awaited()
+    persist.assert_not_awaited()
