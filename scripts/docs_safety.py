@@ -20,6 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+if __package__:
+    from .public_tree_safety import entity_violations
+else:
+    from public_tree_safety import entity_violations
+
 _PROTECTED_PATH = r"/(?:config|data|addon_configs)(?:/[^\s,;:)]*)?"
 _IMPERATIVE_WRITE = (
     r"(?:edit|write|create|overwrite|truncate|delete|remove|clear|modify|export|copy|"
@@ -153,7 +158,6 @@ _HISTORICAL_REQUIREMENT = re.compile(
     r"^(?:The\s+)?(?:old|former|previous)\s+(?:release|policy|process)\s+(?:required|used to)\b",
     re.IGNORECASE,
 )
-_HOUSEHOLD_IDENTIFIER = re.compile(r"\b(?:person|device_tracker|lock)\.([a-z0-9_]+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -188,7 +192,10 @@ class ProseUnit:
 
 
 def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    if "\0" in text:
+        raise UnicodeError("unexpected NUL in documentation")
+    return text
 
 
 def _blocks(text: str) -> list[Block]:
@@ -543,13 +550,11 @@ def _is_emit_command(line: str) -> bool:
 
 
 def public_example_identity_issues(path: Path, text: str) -> list[Issue]:
-    """Selected public examples use synthetic IDs, including inside code fences."""
-    issues: list[Issue] = []
-    for line_number, line in enumerate(text.splitlines(), 1):
-        if any(not match.group(1).lower().startswith("example_") for match in _HOUSEHOLD_IDENTIFIER.finditer(line)):
-            # Never reproduce the identifying value in a public CI log.
-            issues.append(Issue(path, line_number, "non-synthetic household identifier", "use an example_ object ID"))
-    return issues
+    """Public examples share the tracked-tree policy, including code fences."""
+    return [
+        Issue(path, line, "non-synthetic household identifier", "use an example_ object ID")
+        for line, _ in sorted(entity_violations(path.as_posix(), text))
+    ]
 
 
 def _find_closing(text: str, start: int, opener: str, closer: str) -> int | None:

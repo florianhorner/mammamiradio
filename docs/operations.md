@@ -1021,7 +1021,14 @@ compatibility notice. Eligible installations may recover matching private
 evidence; other older installations need later Home Profile support. Installing
 3.0.0 alone does not guarantee recoverable evidence.
 
-An affected installation can instead choose daylight and weather after fresh
+Unreadable evidence remains unresolved and is retried in the background.
+Preview and sharing remain blocked until the read completes. Keep Home private
+disables runtime access immediately; a pending check or failed write is reported
+honestly and cannot create a permanent scope cap. A later successful read
+preserves that explicit disabled choice.
+
+After a completed check finds no usable profile, an affected installation can
+choose daylight and weather after fresh
 sound confirmation and a fresh narrow preview. This records a permanent narrow
 scope that remains after revocation and takes precedence over any later profile
 restoration. **Keep Home private** stops Home work immediately, revokes consent,

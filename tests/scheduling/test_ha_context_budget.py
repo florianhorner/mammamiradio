@@ -409,7 +409,7 @@ async def test_late_success_started_before_the_stale_threshold_keeps_its_one_sho
     state = StationState()
     clock = [1_000.0]
     prior = HomeContext(summary="almost stale", timestamp=clock[0] - 119.99)
-    event = HomeEvent("switch.lamp", "Lamp", "off", "on", clock[0])
+    event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", clock[0])
     match = RadioEventMatch("lamp", "directive", "say it once", event, 60, clock[0])
 
     async def _late_fetch(**_kwargs):
@@ -448,8 +448,8 @@ async def test_completed_mailbox_aged_past_threshold_is_withheld_at_adoption(tmp
     )
     clock = [1_010.0]
     prior = HomeContext(summary="safe prior", timestamp=1_000.0)
-    event = HomeEvent("switch.lamp", "Lamp", "off", "on", 1_010.0)
-    radio_baseline = {"switch.lamp": {"state": "on"}}
+    event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", 1_010.0)
+    radio_baseline = {"switch.example_lamp": {"state": "on"}}
     ritual_baseline = {"ritual.lamp": {"state": "on"}}
     published: list[_HomeContextFetchOutcome] = []
     completed = asyncio.Event()
@@ -525,8 +525,8 @@ async def test_normal_late_success_hands_unmuted_one_shots_to_exactly_one_bounda
     config = _config(tmp_path, poll_interval=1.0)
     state = StationState()
     prior = _snapshot("old", age=1.1)
-    muted_id = "switch.muted"
-    live_id = "switch.live"
+    muted_id = "switch.example_muted"
+    live_id = "switch.example_live"
     now = time.time()
     muted_event = HomeEvent(muted_id, "Muted", "off", "on", now)
     live_event = HomeEvent(live_id, "Live", "off", "on", now)
@@ -586,7 +586,7 @@ async def test_stale_gap_resynchronizes_ambient_context_without_delayed_events(t
     state = StationState()
     prior = _snapshot("too old", age=121.0)
     now = time.time()
-    delayed_event = HomeEvent("switch.lamp", "Lamp", "off", "on", now)
+    delayed_event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", now)
     delayed_match = RadioEventMatch("lamp", "directive", "late directive", delayed_event, 60, now)
 
     async def _fresh_after_gap(**_kwargs):
@@ -826,7 +826,7 @@ async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_p
         attempt_started_at=candidate.timestamp,
         attempt_finished_at=candidate.timestamp,
         duration_seconds=0.001,
-        observed_entity_ids=frozenset({"sensor.private_room"}),
+        observed_entity_ids=frozenset({"sensor.example_private_room"}),
     )
 
     async def _completed_fetch(**_kwargs):
@@ -871,7 +871,7 @@ async def test_normal_completion_rechecks_generation_after_mute_revalidation_bef
         attempt_started_at=candidate.timestamp,
         attempt_finished_at=candidate.timestamp,
         duration_seconds=0.001,
-        observed_entity_ids=frozenset({"sensor.private_room"}),
+        observed_entity_ids=frozenset({"sensor.example_private_room"}),
     )
 
     async def _completed_fetch(**_kwargs):
@@ -908,7 +908,7 @@ async def test_normal_completion_rechecks_generation_after_mute_revalidation_bef
     ("source", "preserved"),
     [
         ("ha", False),
-        ("ha:sensor.private_room", False),
+        ("ha:sensor.example_private_room", False),
         ("", False),
         ("legacy_home", False),
         ("operator", True),
@@ -1059,8 +1059,8 @@ async def test_inflight_mute_then_unmute_discards_the_pre_mute_candidate(tmp_pat
 
     config = _config(tmp_path, poll_interval=1.0)
     state = StationState(home_authorization=HomeAuthorization.legacy(SYNTHETIC_BINDINGS))
-    private_id = "switch.private"
-    live_id = "switch.live"
+    private_id = "switch.example_private"
+    live_id = "switch.example_live"
     prior = _snapshot(
         "safe prior",
         raw_states={private_id: {"state": "off", "attributes": {}}},

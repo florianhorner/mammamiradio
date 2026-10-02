@@ -315,13 +315,13 @@ def test_load_config_parses_running_gags_overrides(tmp_path):
     custom = source.read_text() + (
         "\n[home.running_gags]\n"
         'domain_allowlist = ["light", "switch"]\n'
-        'entity_denylist = ["binary_sensor.flappy", 42, ""]\n'  # non-strings/empties dropped
+        'entity_denylist = ["binary_sensor.example_flappy", 42, ""]\n'  # non-strings/empties dropped
     )
     custom_path = tmp_path / "radio.toml"
     custom_path.write_text(custom)
     config = load_config(str(custom_path))
     assert config.running_gags.domain_allowlist == ["light", "switch"]
-    assert config.running_gags.entity_denylist == ["binary_sensor.flappy"]
+    assert config.running_gags.entity_denylist == ["binary_sensor.example_flappy"]
     assert config.running_gags.entity_allowlist == []
 
 
@@ -403,7 +403,7 @@ def test_load_config_parses_radio_event_numeric_threshold(tmp_path):
 
 [[home.radio_event]]
 id = "washer_power"
-entity_id = "sensor.washer_power"
+entity_id = "sensor.example_washer_power"
 trigger = "numeric_threshold"
 threshold = 50.5
 direction = "above"
@@ -440,7 +440,7 @@ directive = "bad mode"
 
 [[home.radio_event]]
 id = "bad_threshold"
-entity_id = "sensor.power"
+entity_id = "sensor.example_power"
 trigger = "numeric_threshold"
 threshold = "hot"
 directive = "bad threshold"

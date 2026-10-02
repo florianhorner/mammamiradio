@@ -540,7 +540,7 @@ async def test_orphan_cart_is_not_repeated_and_discard_releases_home_fact(tmp_pa
     director.observe(
         [
             DirectorObservation(
-                entity_id="weather.example", domain="weather", state="sunny", temperature_c=24, score=9.0
+                entity_id="weather.example_example", domain="weather", state="sunny", temperature_c=24, score=9.0
             )
         ],
         policy_revision=0,

@@ -121,7 +121,7 @@ player through the native media source:
 ```yaml
 service: media_player.play_media
 target:
-  entity_id: media_player.your_speaker
+  entity_id: media_player.example_your_speaker
 data:
   media_content_id: media-source://mammamiradio/live
   media_content_type: music

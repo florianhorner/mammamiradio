@@ -21,10 +21,30 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 _PERSONAL_PATH = re.compile(r"(?:/(?:Users|home)/|[A-Za-z]:[\\/]Users[\\/])([^/\\\s'\"`]+)[/\\]")
 _SAMPLE_USERS = {"example", "user", "username", "<user>", "<username>", "your-user", "yourname", "you"}
-_ENTITY = re.compile(r"\b(person|device_tracker|lock)\.([a-zA-Z0-9_]+)")
-_FIXTURE_ENTITY = re.compile(
+_ENTITY = re.compile(
     r"\b(?:person|device_tracker|lock|sensor|binary_sensor|switch|light|fan|vacuum|weather|sun|input_select|input_button|media_player|climate|cover)\.[a-zA-Z0-9_]+"
 )
+_PUBLIC_ENTITIES = {
+    "sun.sun",
+    "sun.ambient",
+    "weather.ambient",
+    "media_player.mammamiradio",
+    "sensor.mammamiradio_listeners",
+    "sensor.mammamiradio_segment_type",
+    "binary_sensor.mammamiradio_on_air",
+    "sensor.mammamiradio_",  # Exact publisher prefix, not a wildcard exemption.
+    "media_player.play_media",
+    "light.turn_on",  # Public HA service names.
+}
+_ENTITY_EXCEPTIONS = {
+    "scripts/public_tree_safety.py": {"media_player.py"},  # Module filename in this inventory.
+    "custom_components/mammamiradio/media_player.py": {"media_player.mamma_mi_radio"},
+    "tests/home/test_ha_playback.py": {"media_player.mammamiradio_2"},
+    "mammamiradio/web/static/listener.js": {"weather.textContent"},
+    "tests/home/test_ha_context.py": {"cover.jpg"},
+    "tests/playlist/test_local_library.py": {"cover.jpg"},
+    "tests/web/test_streamer_routes_extended.py": {"cover.jpg"},
+}
 _IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\w.])")
 _IPV6 = re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]*(?:/\d{1,3})?(?![\w:])")
 _PRIVATE_NETWORKS = tuple(
@@ -108,8 +128,11 @@ def identity_units(relative: str, text: str) -> Iterator[tuple[int, str]]:
         # AST constants also join implicit adjacent string literals.
         tree = ast.parse(text)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                yield node.lineno, node.value
+            if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+                yield (
+                    node.lineno,
+                    node.value.decode("utf-8", errors="replace") if isinstance(node.value, bytes) else node.value,
+                )
         for token in tokenize.generate_tokens(io.StringIO(text).readline):
             if token.type == tokenize.COMMENT:
                 yield token.start[0], token.string
@@ -120,6 +143,8 @@ def identity_units(relative: str, text: str) -> Iterator[tuple[int, str]]:
                     value = token.string
                 if isinstance(value, str):
                     yield token.start[0], value
+                elif isinstance(value, bytes):
+                    yield token.start[0], value.decode("utf-8", errors="replace")
     except (tokenize.TokenError, SyntaxError):
         # Malformed Python cannot bypass string checks.
         yield 1, text
@@ -159,25 +184,28 @@ def scan_text(relative: str, text: str) -> list[Violation]:
                     ):
                         continue
                     violations.add((number, "concrete-private-destination"))
-    structured = relative.startswith(("tests/fixtures/", "scripts/showreel/")) or relative in {
-        f"mammamiradio/home/{name}.py"
-        for name in ("bindings", "profile", "migration", "authorization", "catalog", "ha_context", "context_director")
-    }
+    violations.update(entity_violations(relative, text))
+    return [Violation(relative, line, rule) for line, rule in sorted(violations)]
+
+
+def entity_violations(relative: str, text: str) -> set[tuple[int, str]]:
+    """Use the same entity policy for tracked text and explicit documentation."""
+    violations = set()
     for first_line, unit in identity_units(relative, text):
-        expression = _FIXTURE_ENTITY if structured else _ENTITY
         unit = unquote(unit)
-        for match in expression.finditer(unit):
+        cursor = 0
+        while match := _ENTITY.search(unit, cursor):
+            cursor = match.start() + 1
             value = match.group()
-            object_id = value.split(".", 1)[1]
-            if object_id.startswith("example_") or value in {"sun.sun", "sun.ambient", "weather.ambient"}:
+            domain, object_id = value.split(".", 1)
+            if object_id == domain and unit[match.end() :].startswith("."):
+                # Namespaced topics repeat the domain; inspect the nested ID next.
                 continue
-            if relative == "mammamiradio/home/ha_context.py" and value in {
-                "media_player.mammamiradio",
-                "sensor.mammamiradio_",
-                "sensor.mammamiradio_segment_type",
-                "sensor.mammamiradio_listeners",
-                "binary_sensor.mammamiradio_on_air",
-            }:
+            if object_id.startswith("example_") or value in _PUBLIC_ENTITIES:
+                continue
+            if value in _ENTITY_EXCEPTIONS.get(relative, set()):
+                continue
+            if relative == "scripts/public_tree_safety.py" and value in set().union(*_ENTITY_EXCEPTIONS.values()):
                 continue
             # Deliberate generic poison values are confined to negative fixtures.
             if (
@@ -186,7 +214,49 @@ def scan_text(relative: str, text: str) -> list[Violation]:
             ):
                 continue
             violations.add((first_line + unit[: match.start()].count("\n"), "non-synthetic-entity"))
-    return [Violation(relative, line, rule) for line, rule in sorted(violations)]
+    return violations
+
+
+def _scan_decoded_text(relative: str, text: str) -> list[Violation]:
+    violations = []
+    if "\0" in text:
+        violations.append(Violation(relative, text[: text.index("\0")].count("\n") + 1, "unexpected-nul-in-text"))
+    violations.extend(scan_text(relative, text.replace("\0", "\n")))
+    return violations
+
+
+def scan_bytes(relative: str, raw: bytes) -> list[Violation]:
+    """Scan readable content; NUL is never a reason to skip an entire file."""
+    for bom, encoding in (
+        (b"\xff\xfe\x00\x00", "utf-32"),
+        (b"\x00\x00\xfe\xff", "utf-32"),
+        (b"\xff\xfe", "utf-16"),
+        (b"\xfe\xff", "utf-16"),
+    ):
+        if raw.startswith(bom):
+            try:
+                return _scan_decoded_text(relative, raw.decode(encoding))
+            except UnicodeDecodeError:
+                return [Violation(relative, 1, "invalid-text-encoding")]
+    suffix = Path(relative).suffix.lower()
+    media = (
+        (suffix == ".png" and raw.startswith(b"\x89PNG\r\n\x1a\n"))
+        or (suffix == ".webp" and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP")
+        or (suffix == ".woff2" and raw.startswith(b"wOF2"))
+        or (suffix == ".mp3" and (raw.startswith(b"ID3") or (len(raw) > 1 and raw[0] == 255 and raw[1] & 224 == 224)))
+    )
+    # Scan readable metadata without treating compressed payloads as source text.
+    if media:
+        units = [part.decode("ascii") for part in re.findall(rb"[\x20-\x7e]{4,}", raw)]
+        for pattern, encoding in (
+            (rb"(?:[\x20-\x7e]\0){4,}", "utf-16-le"),
+            (rb"(?:\0[\x20-\x7e]){4,}", "utf-16-be"),
+            (rb"(?:[\x20-\x7e]\0{3}){4,}", "utf-32-le"),
+            (rb"(?:\0{3}[\x20-\x7e]){4,}", "utf-32-be"),
+        ):
+            units.extend(part.decode(encoding) for part in re.findall(pattern, raw))
+        return scan_text(relative, "\n".join(units))
+    return _scan_decoded_text(relative, raw.decode("utf-8", errors="replace"))
 
 
 def scan_repository(root: Path) -> list[Violation]:
@@ -216,14 +286,7 @@ def scan_repository(root: Path) -> list[Violation]:
             if hashlib.sha256(raw).hexdigest() != retained[relative]:
                 violations.append(Violation(relative, 1, "immutable-evidence-changed"))
             continue
-        if b"\0" in raw:
-            continue
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            # Preserve ASCII identifiers even in text with a different encoding.
-            text = raw.decode("utf-8", errors="replace")
-        violations.extend(scan_text(relative, text))
+        violations.extend(scan_bytes(relative, raw))
     return violations
 
 

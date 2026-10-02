@@ -41,7 +41,8 @@ def load_ambient_consent(db_path: Path) -> AmbientConsent:
         with closing(sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
             return _read_consent(connection)
     except (OSError, sqlite3.Error, ValueError):
-        return AmbientConsent(capped=True, readable=False)
+        # Unreadable evidence cannot establish either a grant or a scope choice.
+        return AmbientConsent(readable=False)
 
 
 def save_ambient_consent(db_path: Path, *, granted: bool) -> None:

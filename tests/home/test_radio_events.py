@@ -80,8 +80,8 @@ def test_binary_sensor_charging_transition_promotes_gag_event():
 
     matches = match_radio_events(
         [rule],
-        {"binary_sensor.phone_charging": _state("off", device_class="battery_charging")},
-        {"binary_sensor.phone_charging": _state("on", device_class="battery_charging")},
+        {"binary_sensor.example_phone_charging": _state("off", device_class="battery_charging")},
+        {"binary_sensor.example_phone_charging": _state("on", device_class="battery_charging")},
         now=300.0,
     )
 
@@ -102,14 +102,14 @@ def test_noise_device_classes_do_not_match_under_broad_globs():
         directive="A sensor changed.",
     )
     previous = {
-        "sensor.router_rssi": _state("-60", device_class="signal_strength"),
-        "sensor.boot_time": _state("2026-07-05T10:00:00+00:00", device_class="timestamp"),
-        "sensor.phone_battery": _state("55", device_class="battery"),
+        "sensor.example_router_rssi": _state("-60", device_class="signal_strength"),
+        "sensor.example_boot_time": _state("2026-07-05T10:00:00+00:00", device_class="timestamp"),
+        "sensor.example_phone_battery": _state("55", device_class="battery"),
     }
     current = {
-        "sensor.router_rssi": _state("-59", device_class="signal_strength"),
-        "sensor.boot_time": _state("2026-07-05T10:01:00+00:00", device_class="timestamp"),
-        "sensor.phone_battery": _state("56", device_class="battery"),
+        "sensor.example_router_rssi": _state("-59", device_class="signal_strength"),
+        "sensor.example_boot_time": _state("2026-07-05T10:01:00+00:00", device_class="timestamp"),
+        "sensor.example_phone_battery": _state("56", device_class="battery"),
     }
 
     assert match_radio_events([rule], previous, current, now=400.0) == []
@@ -118,7 +118,7 @@ def test_noise_device_classes_do_not_match_under_broad_globs():
 def test_numeric_threshold_requires_crossing():
     rule = RadioEventRule(
         id="washer_power",
-        entity_id="sensor.washer_power",
+        entity_id="sensor.example_washer_power",
         trigger="numeric_threshold",
         threshold=50.0,
         direction="above",
@@ -129,8 +129,8 @@ def test_numeric_threshold_requires_crossing():
     assert (
         match_radio_events(
             [rule],
-            {"sensor.washer_power": _state("49")},
-            {"sensor.washer_power": _state("51")},
+            {"sensor.example_washer_power": _state("49")},
+            {"sensor.example_washer_power": _state("51")},
             now=500.0,
         )
         != []
@@ -138,8 +138,8 @@ def test_numeric_threshold_requires_crossing():
     assert (
         match_radio_events(
             [rule],
-            {"sensor.washer_power": _state("51")},
-            {"sensor.washer_power": _state("55")},
+            {"sensor.example_washer_power": _state("51")},
+            {"sensor.example_washer_power": _state("55")},
             now=501.0,
         )
         == []

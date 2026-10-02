@@ -6818,7 +6818,7 @@ async def _run_producer_inner(
             # Restrict listener-visible events to the curated set: pre-Phase-A only
             # vetted entities could surface here, and Phase A's full-snapshot ingest
             # would otherwise leak any HA entity's friendly_name (e.g.
-            # binary_sensor.bedroom_motion, lock.example_gun_safe) to /public-status.
+            # binary_sensor.example_bedroom_motion, lock.example_gun_safe) to /public-status.
             state.ha_recent_event_count = len(ha_cache.events)
             _public_events = [
                 e

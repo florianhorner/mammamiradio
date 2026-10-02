@@ -28,7 +28,7 @@ from mammamiradio.home.ha_playback import (
 
 
 def _player_state(
-    entity_id: str = "media_player.kitchen",
+    entity_id: str = "media_player.example_kitchen",
     *,
     state: str = "idle",
     name: object = "Kitchen speaker",
@@ -51,7 +51,7 @@ def _default_results() -> dict[str, object]:
         "get_states": [_player_state()],
         "config/entity_registry/list": [
             {
-                "entity_id": "media_player.kitchen",
+                "entity_id": "media_player.example_kitchen",
                 "platform": "cast",
                 "config_entry_id": "cast-entry",
                 "device_id": "kitchen-device",
@@ -243,7 +243,7 @@ async def test_discovery_commands_share_the_total_envelope_instead_of_the_single
     result = await service.discover()
 
     assert service._timeouts.command < response_delay < service._timeouts.discovery_total
-    assert [candidate.entity_id for candidate in result.candidates] == ["media_player.kitchen"]
+    assert [candidate.entity_id for candidate in result.candidates] == ["media_player.example_kitchen"]
     assert len([message for message in server.sent if message.get("type") != "auth"]) == 6
 
 
@@ -294,24 +294,24 @@ async def test_discovery_sanitizes_labels_and_excludes_all_station_controllers()
         _player_state(name=hostile_name),
         _player_state("media_player.mammamiradio"),
         _player_state("media_player.mammamiradio_2"),
-        _player_state("media_player.renamed_station"),
-        _player_state("media_player.station_entry_owned"),
-        _player_state("media_player.offline", state="unavailable"),
-        _player_state("media_player.no_play", features=0),
+        _player_state("media_player.example_renamed_station"),
+        _player_state("media_player.example_station_entry_owned"),
+        _player_state("media_player.example_offline", state="unavailable"),
+        _player_state("media_player.example_no_play", features=0),
     ]
     registry = [
         {
-            "entity_id": "media_player.kitchen",
+            "entity_id": "media_player.example_kitchen",
             "platform": "cast",
             "device_id": "kitchen-device",
         },
         {
-            "entity_id": "media_player.renamed_station",
+            "entity_id": "media_player.example_renamed_station",
             "platform": "mammamiradio",
             "config_entry_id": "other-entry",
         },
         {
-            "entity_id": "media_player.station_entry_owned",
+            "entity_id": "media_player.example_station_entry_owned",
             "platform": "other",
             "config_entry_id": "station-entry",
         },
@@ -323,7 +323,7 @@ async def test_discovery_sanitizes_labels_and_excludes_all_station_controllers()
 
     result = await _service(_FakeHAServer(results=results)).discover()
 
-    assert [candidate.entity_id for candidate in result.candidates] == ["media_player.kitchen"]
+    assert [candidate.entity_id for candidate in result.candidates] == ["media_player.example_kitchen"]
     candidate = result.candidates[0]
     assert "\x00" not in candidate.friendly_name
     assert "\n" not in candidate.friendly_name
@@ -345,7 +345,7 @@ async def test_discovery_sanitizes_labels_and_excludes_all_station_controllers()
 async def test_discovery_caps_candidate_count() -> None:
     results = _default_results()
     results["get_states"] = [
-        _player_state(f"media_player.speaker_{index:03d}", name=f"Speaker {index:03d}")
+        _player_state(f"media_player.example_speaker_{index:03d}", name=f"Speaker {index:03d}")
         for index in range(MAX_CANDIDATES + 25)
     ]
     results["config/entity_registry/list"] = []
@@ -434,14 +434,14 @@ async def test_play_revalidates_target_and_sends_only_the_fixed_service_payload(
         server,
         resume_station=resume,
         persist_accepted_attempt=persist,
-    ).play("media_player.kitchen")
+    ).play("media_player.example_kitchen")
 
     assert result.accepted is True
     assert result.station_resumed is True
     assert result.receipt_persisted is True
     assert result.attempt_id == "attempt-123"
     assert resumed == 1
-    assert persisted == ["media_player.kitchen"]
+    assert persisted == ["media_player.example_kitchen"]
     service_calls = [message for message in server.sent if message.get("type") == "call_service"]
     assert service_calls == [
         {
@@ -453,7 +453,7 @@ async def test_play_revalidates_target_and_sends_only_the_fixed_service_payload(
                 "media_content_id": MEDIA_SOURCE_LIVE,
                 "media_content_type": MEDIA_CONTENT_TYPE,
             },
-            "target": {"entity_id": "media_player.kitchen"},
+            "target": {"entity_id": "media_player.example_kitchen"},
         }
     ]
     assert "volume" not in json.dumps(server.sent).lower()
@@ -463,12 +463,12 @@ async def test_play_revalidates_target_and_sends_only_the_fixed_service_payload(
 async def test_play_rejects_an_unavailable_selected_target_without_dispatch() -> None:
     results = _default_results()
     results["get_states"] = [
-        _player_state("media_player.kitchen", state="unavailable"),
-        _player_state("media_player.living_room", name="Living room"),
+        _player_state("media_player.example_kitchen", state="unavailable"),
+        _player_state("media_player.example_living_room", name="Living room"),
     ]
     server = _FakeHAServer(results=results)
 
-    error = await _reason(_service(server).play("media_player.kitchen"))
+    error = await _reason(_service(server).play("media_player.example_kitchen"))
 
     assert error.reason is HAPlaybackReason.PLAYER_UNAVAILABLE
     assert all(message.get("type") != "call_service" for message in server.sent)
@@ -482,7 +482,7 @@ async def test_dispatch_failure_reports_that_station_was_already_resumed_and_doe
         nonlocal resumes
         resumes += 1
 
-    error = await _reason(_service(server, resume_station=resume).play("media_player.kitchen"))
+    error = await _reason(_service(server, resume_station=resume).play("media_player.example_kitchen"))
 
     assert error.reason is HAPlaybackReason.SERVICE_REJECTED
     assert error.station_resumed is True
@@ -496,7 +496,7 @@ async def test_accepted_dispatch_returns_partial_truth_when_receipt_persistence_
     async def fail_persistence(_entity_id: str) -> str:
         raise OSError("private disk path")
 
-    result = await _service(server, persist_accepted_attempt=fail_persistence).play("media_player.kitchen")
+    result = await _service(server, persist_accepted_attempt=fail_persistence).play("media_player.example_kitchen")
 
     assert result.accepted is True
     assert result.receipt_persisted is False
@@ -509,7 +509,7 @@ async def test_accepted_dispatch_without_receipt_callback_is_explicitly_unsaved(
     """Missing persistence wiring is failure truth, never an ambiguous None."""
     server = _FakeHAServer()
 
-    result = await _service(server).play("media_player.kitchen")
+    result = await _service(server).play("media_player.example_kitchen")
 
     assert result.accepted is True
     assert result.receipt_persisted is False
@@ -539,11 +539,11 @@ async def test_pending_receipt_retry_never_rediscovers_resumes_or_dispatches_aga
         resume_station=resume,
         persist_accepted_attempt=persist,
     )
-    partial = await service.play("media_player.kitchen")
+    partial = await service.play("media_player.example_kitchen")
     connections_after_play = server.connections
-    assert service.pending_receipt_entity_id() == "media_player.kitchen"
+    assert service.pending_receipt_entity_id() == "media_player.example_kitchen"
 
-    recovered = await service.persist_pending_receipt("media_player.kitchen")
+    recovered = await service.persist_pending_receipt("media_player.example_kitchen")
 
     assert partial.accepted is True
     assert partial.receipt_persisted is False
@@ -556,7 +556,7 @@ async def test_pending_receipt_retry_never_rediscovers_resumes_or_dispatches_aga
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
     assert service.pending_receipt_entity_id() is None
 
-    error = await _reason(service.persist_pending_receipt("media_player.kitchen"))
+    error = await _reason(service.persist_pending_receipt("media_player.example_kitchen"))
     assert error.reason is HAPlaybackReason.RECEIPT_RECOVERY_MISSING
 
 
@@ -571,16 +571,16 @@ async def test_pending_receipt_retry_requires_matching_current_ha_acceptance() -
 
     service = _service(server, persist_accepted_attempt=persist)
 
-    no_pending = await _reason(service.persist_pending_receipt("media_player.kitchen"))
+    no_pending = await _reason(service.persist_pending_receipt("media_player.example_kitchen"))
     assert no_pending.reason is HAPlaybackReason.RECEIPT_RECOVERY_MISSING
 
-    partial = await service.play("media_player.kitchen")
+    partial = await service.play("media_player.example_kitchen")
     assert partial.receipt_persisted is False
-    assert service.pending_receipt_entity_id() == "media_player.kitchen"
+    assert service.pending_receipt_entity_id() == "media_player.example_kitchen"
     service.configure("http://replacement-ha.local:8123", "replacement-token")
     assert service.pending_receipt_entity_id() is None
 
-    superseded = await _reason(service.persist_pending_receipt("media_player.kitchen"))
+    superseded = await _reason(service.persist_pending_receipt("media_player.example_kitchen"))
     assert superseded.reason is HAPlaybackReason.RECEIPT_RECOVERY_MISSING
     assert persistence_attempts == 1
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
@@ -596,9 +596,9 @@ async def test_pending_receipt_retry_rejects_a_different_entity_without_persisti
         raise OSError("receipt unavailable")
 
     service = _service(server, persist_accepted_attempt=persist)
-    partial = await service.play("media_player.kitchen")
+    partial = await service.play("media_player.example_kitchen")
 
-    wrong_entity = await _reason(service.persist_pending_receipt("media_player.living_room"))
+    wrong_entity = await _reason(service.persist_pending_receipt("media_player.example_living_room"))
 
     assert partial.receipt_persisted is False
     assert wrong_entity.reason is HAPlaybackReason.RECEIPT_RECOVERY_MISSING
@@ -619,12 +619,12 @@ async def test_accepted_dispatch_waits_past_callback_timeout_for_durable_receipt
         server,
         persist_accepted_attempt=slow_persistence,
         timeouts=HAPlaybackTimeouts(callback=0.01),
-    ).play("media_player.kitchen")
+    ).play("media_player.example_kitchen")
 
     assert result.accepted is True
     assert result.receipt_persisted is True
     assert result.attempt_id == "attempt-after-slow-fsync"
-    assert persisted == ["media_player.kitchen"]
+    assert persisted == ["media_player.example_kitchen"]
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
 
 
@@ -651,7 +651,7 @@ async def test_resume_failure_maps_to_service_rejected_without_resumed_claim() -
     async def failing_resume() -> None:
         raise RuntimeError("no immediately playable runway")
 
-    error = await _reason(_service(server, resume_station=failing_resume).play("media_player.kitchen"))
+    error = await _reason(_service(server, resume_station=failing_resume).play("media_player.example_kitchen"))
 
     assert error.reason is HAPlaybackReason.SERVICE_REJECTED
     assert error.station_resumed is False
@@ -678,7 +678,7 @@ async def test_resume_timeout_drains_transition_instead_of_cancelling_it() -> No
             server,
             resume_station=slow_resume,
             timeouts=HAPlaybackTimeouts(callback=0.01),
-        ).play("media_player.kitchen")
+        ).play("media_player.example_kitchen")
     )
 
     assert error.reason is HAPlaybackReason.SERVICE_REJECTED
@@ -707,7 +707,7 @@ async def test_client_disconnect_during_resume_drains_transition_before_unlockin
         resume_completed = True
 
     service = _service(server, resume_station=blocking_resume)
-    first = asyncio.create_task(service.play("media_player.kitchen"))
+    first = asyncio.create_task(service.play("media_player.example_kitchen"))
     await asyncio.wait_for(resume_started.wait(), timeout=1)
 
     first.cancel()
@@ -733,10 +733,10 @@ async def test_duplicate_play_returns_request_in_flight_without_queueing_or_disp
 
     server = _FakeHAServer()
     service = _service(server, resume_station=blocking_resume)
-    first = asyncio.create_task(service.play("media_player.kitchen"))
+    first = asyncio.create_task(service.play("media_player.example_kitchen"))
     await asyncio.wait_for(resume_started.wait(), timeout=1)
 
-    duplicate_error = await _reason(service.play("media_player.kitchen"))
+    duplicate_error = await _reason(service.play("media_player.example_kitchen"))
     release_resume.set()
     first_result = await asyncio.wait_for(first, timeout=1)
 
@@ -761,12 +761,12 @@ async def test_cancel_after_dispatch_send_drains_ack_and_persists_before_unlocki
 
     server = _FakeHAServer(before_command=block_dispatch_ack)
     service = _service(server, persist_accepted_attempt=persist)
-    first = asyncio.create_task(service.play("media_player.kitchen"))
+    first = asyncio.create_task(service.play("media_player.example_kitchen"))
     await asyncio.wait_for(dispatch_sent.wait(), timeout=1)
 
     first.cancel()
     await asyncio.sleep(0)
-    duplicate_error = await _reason(service.play("media_player.kitchen"))
+    duplicate_error = await _reason(service.play("media_player.example_kitchen"))
     assert not first.done()
 
     release_dispatch_ack.set()
@@ -774,7 +774,7 @@ async def test_cancel_after_dispatch_send_drains_ack_and_persists_before_unlocki
         await asyncio.wait_for(first, timeout=1)
 
     assert duplicate_error.reason is HAPlaybackReason.REQUEST_IN_FLIGHT
-    assert persisted == ["media_player.kitchen"]
+    assert persisted == ["media_player.example_kitchen"]
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
 
 
@@ -794,7 +794,7 @@ async def test_repeated_cancel_after_dispatch_keeps_play_mutex_until_transaction
 
     server = _FakeHAServer(before_command=block_dispatch_ack)
     service = _service(server, persist_accepted_attempt=persist)
-    first = asyncio.create_task(service.play("media_player.kitchen"))
+    first = asyncio.create_task(service.play("media_player.example_kitchen"))
     await asyncio.wait_for(dispatch_sent.wait(), timeout=1)
 
     first.cancel()
@@ -803,14 +803,14 @@ async def test_repeated_cancel_after_dispatch_keeps_play_mutex_until_transaction
     await asyncio.sleep(0)
 
     assert not first.done()
-    duplicate_error = await _reason(service.play("media_player.kitchen"))
+    duplicate_error = await _reason(service.play("media_player.example_kitchen"))
     assert duplicate_error.reason is HAPlaybackReason.REQUEST_IN_FLIGHT
 
     release_dispatch_ack.set()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(first, timeout=1)
 
-    assert persisted == ["media_player.kitchen"]
+    assert persisted == ["media_player.example_kitchen"]
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
 
 
@@ -830,10 +830,10 @@ async def test_repeated_cancel_keeps_receipt_retry_mutex_until_persistence_settl
         return "attempt-after-retry-cancel"
 
     service = _service(server, persist_accepted_attempt=persist)
-    partial = await service.play("media_player.kitchen")
+    partial = await service.play("media_player.example_kitchen")
     assert partial.receipt_persisted is False
 
-    retry = asyncio.create_task(service.persist_pending_receipt("media_player.kitchen"))
+    retry = asyncio.create_task(service.persist_pending_receipt("media_player.example_kitchen"))
     await asyncio.wait_for(retry_started.wait(), timeout=1)
     retry.cancel()
     await asyncio.sleep(0)
@@ -841,7 +841,7 @@ async def test_repeated_cancel_keeps_receipt_retry_mutex_until_persistence_settl
     await asyncio.sleep(0)
 
     assert not retry.done()
-    duplicate_error = await _reason(service.persist_pending_receipt("media_player.kitchen"))
+    duplicate_error = await _reason(service.persist_pending_receipt("media_player.example_kitchen"))
     assert duplicate_error.reason is HAPlaybackReason.REQUEST_IN_FLIGHT
 
     release_retry.set()
@@ -850,5 +850,5 @@ async def test_repeated_cancel_keeps_receipt_retry_mutex_until_persistence_settl
 
     assert persistence_attempts == 2
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
-    settled = await _reason(service.persist_pending_receipt("media_player.kitchen"))
+    settled = await _reason(service.persist_pending_receipt("media_player.example_kitchen"))
     assert settled.reason is HAPlaybackReason.RECEIPT_RECOVERY_MISSING

@@ -542,7 +542,7 @@ def _ha_details_payload(state: StationState) -> dict | None:
         or refresh["last_result"]
         or bool(getattr(state, "ha_context_refresh_configured", False))
         or director_status
-        or state.home_compatibility_status in {"checking", "needs_consent", "ambient", "verified"}
+        or state.home_compatibility_status in {"checking", "unavailable", "needs_consent", "ambient", "verified"}
     )
     if not has_ha_observability:
         return None

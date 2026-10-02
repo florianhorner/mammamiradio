@@ -139,6 +139,7 @@ from mammamiradio.home.catalog import (
     invalidate_label_generation,
     schedule_label_generation,
 )
+from mammamiradio.home.compatibility import home_compatibility_resolved
 from mammamiradio.home.consent import save_ambient_consent
 from mammamiradio.home.context_director import HomeContextDirector
 from mammamiradio.home.context_value import (
@@ -4592,13 +4593,15 @@ async def _persist_home_ambient_consent(app_state, *, granted: bool) -> None:
 async def _persist_home_context_off(app_state) -> bool:
     persisted = True
     try:
-        task = getattr(app_state, "legacy_home_provenance_task", None)
-        if task is not None and not task.done():
-            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
         result = getattr(app_state, "home_compatibility_result", None)
-        if app_state.station_state.home_ambient_consent_required or bool(getattr(result, "requires_consent", False)):
+        status = result.status if result is not None else app_state.station_state.home_compatibility_status
+        if not home_compatibility_resolved(status):
+            # The retrying verifier owns unresolved evidence. An option write can
+            # keep access disabled, but cannot establish a permanent scope choice.
+            persisted = False
+        elif app_state.station_state.home_ambient_consent_required or bool(getattr(result, "requires_consent", False)):
             await _persist_home_ambient_consent(app_state, granted=False)
-    except (OSError, sqlite3.Error, ValueError, TimeoutError):
+    except (OSError, sqlite3.Error, ValueError):
         persisted = False
     try:
         await _persist_home_context_choice(app_state.config, False)
@@ -4617,7 +4620,7 @@ def _home_context_preview_proof_valid(app_state, proof: object) -> bool:
         and proof.config_fingerprint == _home_access_fingerprint(app_state.config)
         and proof.authorization_mode == authorization.mode.value
         and proof.binding_identity == authorization.bindings.identity
-        and state.home_compatibility_status != "checking"
+        and home_compatibility_resolved(state.home_compatibility_status)
         and proof.policy_revision == policy_revision(app_state.config.cache_dir)
         and proof.context_generation == getattr(state, "home_context_policy_generation", 0)
     )
@@ -8237,7 +8240,7 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
     if error is not None:
         return error
     app_state = request.app.state
-    if app_state.station_state.home_compatibility_status == "checking":
+    if not home_compatibility_resolved(app_state.station_state.home_compatibility_status):
         return _setup_error("home_check_pending")
     if not await _first_listen_audio_gate_open(app_state):
         return _setup_error("first_listen_required")
@@ -8310,7 +8313,7 @@ async def _apply_home_context_choice(app_state, *, enabled: bool):
 
     async with lock:
         state = app_state.station_state
-        if enabled and state.home_compatibility_status == "checking":
+        if enabled and not home_compatibility_resolved(state.home_compatibility_status):
             return _setup_error("home_check_pending")
         if enabled and not await _first_listen_audio_gate_open(app_state):
             return _setup_error("first_listen_required")

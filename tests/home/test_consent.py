@@ -4,7 +4,7 @@ import asyncio
 import json
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -42,12 +42,14 @@ def test_scope_survives_revocation_and_restart(database):
         f"CREATE TABLE {CONSENT_TABLE} AS SELECT 1 AS singleton, 'broad' AS scope_cap, 1 AS granted",
     ],
 )
-def test_malformed_evidence_stays_capped_and_cannot_be_repaired(database, definition):
+def test_malformed_evidence_stays_unresolved_and_cannot_be_repaired(database, definition):
     with sqlite3.connect(database) as connection:
         connection.execute(definition)
     before = database.read_bytes()
     consent = load_ambient_consent(database)
-    assert consent.capped and not consent.granted and not consent.readable
+    assert not consent.capped and not consent.granted and not consent.readable
+    decision = read_home_compatibility(database.parent / "state", database)
+    assert not decision.resolved and not decision.requires_consent and not decision.permits_saved_choice
     with pytest.raises((ValueError, sqlite3.Error)):
         save_ambient_consent(database, granted=True)
     assert database.read_bytes() == before
@@ -59,6 +61,29 @@ def test_missing_database_is_not_created(tmp_path):
     with pytest.raises(sqlite3.Error):
         save_ambient_consent(path, granted=True)
     assert not path.exists()
+
+
+@pytest.mark.parametrize("error", [OSError, sqlite3.OperationalError, ValueError])
+def test_unreadable_consent_defers_profile_without_creating_a_cap(tmp_path, monkeypatch, error):
+    from mammamiradio.home import compatibility, consent
+
+    document = synthetic_home_document()
+    allow_synthetic_snapshot(monkeypatch, document)
+    state_dir, db_path = tmp_path / "state", tmp_path / "mammamiradio.db"
+    profile_path, _ = write_compatibility_install(state_dir, db_path, document, binding="complete")
+    original = profile_path.read_bytes()
+    resume = Mock(wraps=compatibility.resume_home_profile_v1)
+    monkeypatch.setattr(compatibility, "resume_home_profile_v1", resume)
+    with monkeypatch.context() as read_failure:
+        read_failure.setattr(consent, "_read_consent", Mock(side_effect=error("synthetic unavailable evidence")))
+        unresolved = read_home_compatibility(state_dir, db_path)
+    assert unresolved.status == "unavailable"
+    assert not unresolved.resolved and not unresolved.requires_consent and not unresolved.permits_saved_choice
+    resume.assert_not_called()
+    recovered = read_home_compatibility(state_dir, db_path)
+    assert recovered.status == "verified" and recovered.permits_saved_choice
+    assert not load_ambient_consent(db_path).capped
+    assert profile_path.read_bytes() == original
 
 
 @pytest.mark.parametrize("choice", [None, False, True])
@@ -146,6 +171,29 @@ async def test_enable_order_option_preview_consent_runtime(choice_app, database,
     assert result["enabled"]
     assert load_ambient_consent(database).granted
     assert choice_app.config.homeassistant.context_enabled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["checking", "unavailable", "unknown-future-status"])
+async def test_unresolved_evidence_blocks_enable_and_never_persists_a_cap(choice_app, database, monkeypatch, status):
+    from mammamiradio.home.authorization import HomeAuthorization
+    from mammamiradio.home.compatibility import HomeCompatibility
+    from mammamiradio.web import streamer
+
+    choice_app.station_state.home_compatibility_status = status
+    choice_app.station_state.home_ambient_consent_required = False
+    choice_app.home_compatibility_result = HomeCompatibility(HomeAuthorization.narrow(), status)
+    save = Mock(wraps=streamer.save_ambient_consent)
+    monkeypatch.setattr(streamer, "save_ambient_consent", save)
+    result = await streamer._apply_home_context_choice(choice_app, enabled=True)
+    assert result.status_code == 409
+    assert json.loads(result.body)["error"]["code"] == "home_check_pending"
+    assert choice_app.writes == []
+    result = await streamer._apply_home_context_choice(choice_app, enabled=False)
+    assert not json.loads(result.body)["persisted"]
+    assert choice_app.writes == [False] and not choice_app.config.homeassistant.context_enabled
+    assert not load_ambient_consent(database).capped
+    save.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -266,3 +314,60 @@ async def test_enable_failure_revokes_before_runtime(choice_app, database, monke
     assert choice_app.writes == [True, False]
     assert not choice_app.option and not choice_app.config.homeassistant.context_enabled
     assert load_ambient_consent(database).capped and not load_ambient_consent(database).granted
+
+
+@pytest.mark.parametrize("binding", ["complete", "pending"])
+@pytest.mark.parametrize("failure", ["profile", "transaction", "sidecar", "provenance", "origin"])
+def test_profile_io_failure_remains_unresolved_then_recovers(tmp_path, monkeypatch, binding, failure):
+    from pathlib import Path
+
+    from mammamiradio.home import profile
+
+    document = synthetic_home_document()
+    allow_synthetic_snapshot(monkeypatch, document)
+    state_dir, database = tmp_path / "state", tmp_path / "mammamiradio.db"
+    path, _ = write_compatibility_install(state_dir, database, document, binding=binding)
+    original = path.read_bytes()
+    before = database.read_bytes()
+    with monkeypatch.context() as blocked:
+        if failure == "profile":
+            blocked.setattr(profile, "_read_profile", Mock(side_effect=PermissionError("synthetic denied read")))
+        elif failure == "transaction":
+            blocked.setattr(profile, "_binding", Mock(side_effect=sqlite3.OperationalError("database is locked")))
+        elif failure == "origin":
+            original_connect = sqlite3.connect
+
+            def connect(*args, **kwargs):
+                connection = original_connect(*args, **kwargs)
+                # Deny only the redundant origin read, after the consent read.
+                connection.set_authorizer(
+                    lambda action, arg1, *rest: (
+                        sqlite3.SQLITE_DENY
+                        if action == sqlite3.SQLITE_READ and arg1 == migration.DATABASE_ORIGIN_TABLE
+                        else sqlite3.SQLITE_OK
+                    )
+                )
+                return connection
+
+            blocked.setattr(sqlite3, "connect", connect)
+        else:
+            blocked_path = (
+                migration.preflight_path(state_dir) if failure == "sidecar" else migration.provenance_path(state_dir)
+            )
+            original_read = Path.read_text
+
+            def read_text(self, *args, **kwargs):
+                if self == blocked_path:
+                    raise OSError("synthetic temporarily unreadable witness")
+                return original_read(self, *args, **kwargs)
+
+            blocked.setattr(Path, "read_text", read_text)
+        decision = read_home_compatibility(state_dir, database)
+        assert decision.status == "unavailable"
+        assert not decision.resolved and not decision.requires_consent and not decision.permits_saved_choice
+        assert profile.resume_home_profile_v1(state_dir, database) is None
+        assert database.read_bytes() == before
+    assert not load_ambient_consent(database).capped
+    recovered = read_home_compatibility(state_dir, database)
+    assert recovered.status == "verified" and recovered.permits_saved_choice
+    assert path.read_bytes() == original

@@ -178,7 +178,7 @@ def test_spawned_projection_process_round_trips_representative_home_context():
             },
             *[
                 {
-                    "entity_id": f"sensor.synthetic_{index}",
+                    "entity_id": f"sensor.example_synthetic_{index}",
                     "state": str(index % 20),
                     "attributes": {
                         "friendly_name": f"Synthetic {index}",
@@ -821,7 +821,7 @@ def test_format_state_temperature_sensor_converts_fahrenheit_to_celsius():
             "friendly_name": "Hall temperature",
         },
     }
-    result = _format_state("sensor.hall_temperature", data, bindings=SYNTHETIC_BINDINGS)
+    result = _format_state("sensor.example_hall_temperature", data, bindings=SYNTHETIC_BINDINGS)
 
     assert result is not None
     assert "5°C" in result
@@ -841,7 +841,7 @@ def test_format_state_keeps_hot_but_real_temperature_sensors(celsius):
             "friendly_name": "Processor temperature",
         },
     }
-    result = _format_state("sensor.processor_temperature", data, bindings=SYNTHETIC_BINDINGS)
+    result = _format_state("sensor.example_processor_temperature", data, bindings=SYNTHETIC_BINDINGS)
 
     assert result is not None
     assert "°C" in result
@@ -856,7 +856,7 @@ def test_format_state_temperature_sensor_converts_kelvin_to_celsius():
             "friendly_name": "Hall temperature",
         },
     }
-    result = _format_state("sensor.hall_temperature", data, bindings=SYNTHETIC_BINDINGS)
+    result = _format_state("sensor.example_hall_temperature", data, bindings=SYNTHETIC_BINDINGS)
 
     assert result == "Hall temperature: 21°C"
 
@@ -868,7 +868,7 @@ def test_format_state_temperature_sensor_without_a_unit_is_dropped():
         "attributes": {"device_class": "temperature", "friendly_name": "Hall temperature"},
     }
 
-    assert _format_state("sensor.hall_temperature", data, bindings=SYNTHETIC_BINDINGS) is None
+    assert _format_state("sensor.example_hall_temperature", data, bindings=SYNTHETIC_BINDINGS) is None
 
 
 def test_format_state_temperature_sensor_with_an_unknown_unit_is_dropped():
@@ -881,7 +881,7 @@ def test_format_state_temperature_sensor_with_an_unknown_unit_is_dropped():
         },
     }
 
-    assert _format_state("sensor.hall_temperature", data, bindings=SYNTHETIC_BINDINGS) is None
+    assert _format_state("sensor.example_hall_temperature", data, bindings=SYNTHETIC_BINDINGS) is None
 
 
 @pytest.mark.parametrize(
@@ -921,7 +921,9 @@ def test_format_state_climate_without_usable_temperatures_states_only_the_mode()
         },
     }
 
-    assert _format_state("climate.salotto", data, bindings=SYNTHETIC_BINDINGS) == "Salotto: riscaldamento attivo"
+    assert (
+        _format_state("climate.example_salotto", data, bindings=SYNTHETIC_BINDINGS) == "Salotto: riscaldamento attivo"
+    )
 
 
 def test_format_state_climate_omits_only_the_missing_half():
@@ -930,7 +932,10 @@ def test_format_state_climate_omits_only_the_missing_half():
         "attributes": {"current_temperature": 20, "friendly_name": "Salotto"},
     }
 
-    assert _format_state("climate.salotto", data, bindings=SYNTHETIC_BINDINGS) == "Salotto: riscaldamento attivo, 20°C"
+    assert (
+        _format_state("climate.example_salotto", data, bindings=SYNTHETIC_BINDINGS)
+        == "Salotto: riscaldamento attivo, 20°C"
+    )
 
 
 def test_format_state_climate_with_only_a_target_still_states_it():
@@ -940,7 +945,7 @@ def test_format_state_climate_with_only_a_target_still_states_it():
     }
 
     assert (
-        _format_state("climate.salotto", data, bindings=SYNTHETIC_BINDINGS)
+        _format_state("climate.example_salotto", data, bindings=SYNTHETIC_BINDINGS)
         == "Salotto: riscaldamento attivo (target: 22°C)"
     )
 
@@ -955,7 +960,7 @@ def test_format_state_climate_without_a_unit_attribute_reads_as_celsius():
     }
 
     assert (
-        _format_state("climate.salotto", data, bindings=SYNTHETIC_BINDINGS)
+        _format_state("climate.example_salotto", data, bindings=SYNTHETIC_BINDINGS)
         == "Salotto: riscaldamento attivo, 20°C (target: 22°C)"
     )
 
@@ -990,31 +995,33 @@ def test_format_state_unknown_returns_none():
 def test_format_state_skips_entity_without_curated_or_friendly_label():
     # Anti-illusion guard: raw entity IDs must never reach the host.
     assert (
-        _format_state("sensor.some_random_helper", {"state": "on", "attributes": {}}, bindings=SYNTHETIC_BINDINGS)
+        _format_state(
+            "sensor.example_some_random_helper", {"state": "on", "attributes": {}}, bindings=SYNTHETIC_BINDINGS
+        )
         is None
     )
 
 
 def test_format_state_uses_friendly_name_when_uncurated():
     line = _format_state(
-        "sensor.some_random_helper",
+        "sensor.example_some_random_helper",
         {"state": "on", "attributes": {"friendly_name": "Hallway Motion"}},
         bindings=SYNTHETIC_BINDINGS,
     )
     assert line is not None
     assert "Hallway Motion" in line
-    assert "sensor.some_random_helper" not in line
+    assert "sensor.example_some_random_helper" not in line
 
 
 def test_format_state_uses_registry_entity_name_when_uncurated():
     line = _format_state(
-        "light.counter",
+        "light.example_counter",
         {"state": "on", "attributes": {"registry_entity_name": "Counter", "area": "Kitchen"}},
         bindings=SYNTHETIC_BINDINGS,
     )
     assert line is not None
     assert "Counter" in line
-    assert "light.counter" not in line
+    assert "light.example_counter" not in line
 
 
 def test_format_state_standard_entity_uses_translations():
@@ -1053,7 +1060,7 @@ def test_build_summary_includes_matching_entities():
 
 def test_build_summary_excludes_non_matching_entities():
     states = {
-        "sensor.random_thing_not_in_list": {"state": "42", "attributes": {}},
+        "sensor.example_random_thing_not_in_list": {"state": "42", "attributes": {}},
     }
     result = _build_summary(states, bindings=SYNTHETIC_BINDINGS)
     assert result == ""
@@ -1070,11 +1077,11 @@ def test_scored_entities_rank_curated_and_budget_prompt_slice():
             "state": "on",
             "attributes": {"friendly_name": "Generic coffee", "area": "Kitchen"},
         },
-        "media_player.living_room": {
+        "media_player.example_living_room": {
             "state": "playing",
             "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare", "area": "Living room"},
         },
-        "sensor.random_temperature": {
+        "sensor.example_random_temperature": {
             "state": "21",
             "attributes": {"friendly_name": "Random temperature", "device_class": "temperature"},
         },
@@ -1087,7 +1094,7 @@ def test_scored_entities_rank_curated_and_budget_prompt_slice():
     assert len(scored) == 2
     assert scored[0].entity_id == "switch.example_coffee_switch"
     assert scored[0].label_it == "La macchina del caffè"
-    assert all(entity.entity_id != "sensor.random_temperature" for entity in scored)
+    assert all(entity.entity_id != "sensor.example_random_temperature" for entity in scored)
     summary = _build_budgeted_summary(scored)
     assert "entity_id" not in summary
     assert "La macchina del caffè" in summary
@@ -1150,13 +1157,13 @@ def test_scored_entities_caps_uncurated_presence_and_retains_curated_presence():
         },
     }
     for idx, age in enumerate((600, 500, 400, 300, 200), start=1):
-        states[f"binary_sensor.room_{idx}_occupancy"] = _presence_state(
+        states[f"binary_sensor.example_room_{idx}_occupancy"] = _presence_state(
             f"Room {idx} Occupancy",
             state="on",
             area=f"Room {idx}",
             changed=_iso_changed(now, age),
         )
-    states["binary_sensor.recent_off_occupancy"] = _presence_state(
+    states["binary_sensor.example_recent_off_occupancy"] = _presence_state(
         "Recent Off Occupancy",
         state="off",
         area="Hallway",
@@ -1171,8 +1178,8 @@ def test_scored_entities_caps_uncurated_presence_and_retains_curated_presence():
 
     assert len(uncurated_ids) == MAX_PRESENCE_IN_SLICE
     assert curated_presence in ids
-    assert "binary_sensor.recent_off_occupancy" not in ids
-    assert "binary_sensor.room_1_occupancy" not in ids
+    assert "binary_sensor.example_recent_off_occupancy" not in ids
+    assert "binary_sensor.example_room_1_occupancy" not in ids
     assert {"weather.example_weather", "media_player.example_television", "climate.example_bedroom_climate"} <= set(ids)
     assert any("Room 5" in entity.summary_line for entity in scored)
 
@@ -1183,7 +1190,7 @@ def test_scored_entities_empty_presence_leaves_non_presence_summary_unchanged():
             "state": "cloudy",
             "attributes": {"temperature": 18, "temperature_unit": "°C"},
         },
-        "media_player.living_room": {
+        "media_player.example_living_room": {
             "state": "playing",
             "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
         },
@@ -1207,7 +1214,7 @@ def test_scored_entities_no_registry_excludes_uncurated_area_less_presence_but_k
             state="on",
             area=None,
         ),
-        "binary_sensor.kitchen_occupancy": _presence_state(
+        "binary_sensor.example_kitchen_occupancy": _presence_state(
             "Kitchen Occupancy",
             state="on",
             area=None,
@@ -1224,24 +1231,24 @@ def test_scored_entities_no_registry_excludes_uncurated_area_less_presence_but_k
     ids = [entity.entity_id for entity in scored]
 
     assert curated_presence in ids
-    assert "binary_sensor.kitchen_occupancy" not in ids
+    assert "binary_sensor.example_kitchen_occupancy" not in ids
     assert "weather.example_weather" in ids
 
 
 def test_scored_entities_include_registry_labeled_entity_and_drop_unlabeled():
     states = {
-        "light.counter": {
+        "light.example_counter": {
             "state": "on",
             "attributes": {"registry_entity_name": "Counter", "area": "Kitchen"},
         },
-        "sensor.no_label": {"state": "on", "attributes": {}},
+        "sensor.example_no_label": {"state": "on", "attributes": {}},
     }
 
     scored = _build_scored_entities(
         states, event_entity_ids=set(), now=time.time(), limit=5, char_limit=0, bindings=SYNTHETIC_BINDINGS
     )
 
-    assert [entity.entity_id for entity in scored] == ["light.counter"]
+    assert [entity.entity_id for entity in scored] == ["light.example_counter"]
     assert scored[0].label_en == "Counter (Kitchen)"
     assert scored[0].label_tier == "fallback"
 
@@ -1250,7 +1257,7 @@ def test_scored_entities_drops_labeled_entity_with_unavailable_state():
     # resolve_label succeeds (a friendly name exists) but _format_state returns
     # None for an unavailable state — the entity must be dropped, not scored.
     states = {
-        "light.counter": {"state": "unavailable", "attributes": {"friendly_name": "Counter light"}},
+        "light.example_counter": {"state": "unavailable", "attributes": {"friendly_name": "Counter light"}},
         "weather.example_weather": {"state": "sunny", "attributes": {"temperature": 22, "temperature_unit": "°C"}},
     }
 
@@ -1264,7 +1271,7 @@ def test_scored_entities_drops_labeled_entity_with_unavailable_state():
 def test_write_registry_snapshot_swallows_write_error(tmp_path, caplog):
     # A failed disk write must not raise into the polling path; previous bytes
     # stay and dotted temps are cleaned up.
-    snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    snapshot = HomeRegistrySnapshot(entity_areas={"light.example_x": "Kitchen"}, source="websocket")
     path = tmp_path / "ha_registry.json"
     previous = json.dumps(
         {
@@ -1293,7 +1300,7 @@ def test_write_registry_snapshot_swallows_write_error(tmp_path, caplog):
 def test_write_registry_snapshot_temp_file_is_created_owner_only(tmp_path):
     import tempfile
 
-    snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    snapshot = HomeRegistrySnapshot(entity_areas={"light.example_x": "Kitchen"}, source="websocket")
     modes: list[int] = []
     real_mkstemp = tempfile.mkstemp
 
@@ -1317,7 +1324,7 @@ def test_write_registry_snapshot_temp_names_are_unique(tmp_path):
     import tempfile
     from pathlib import Path
 
-    snapshot = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    snapshot = HomeRegistrySnapshot(entity_areas={"light.example_x": "Kitchen"}, source="websocket")
     names: list[str] = []
     real_mkstemp = tempfile.mkstemp
 
@@ -1378,7 +1385,7 @@ def test_load_registry_snapshot_rejects_malformed_data(tmp_path):
     assert _load_registry_snapshot(tmp_path) is None
     # Nested junk (a list value) must not surface as a stringified label -> None.
     path.write_text(
-        '{"fetched_at": 99999999999, "entity_areas": {"light.x": ["Kitchen"]},'
+        '{"fetched_at": 99999999999, "entity_areas": {"light.example_x": ["Kitchen"]},'
         ' "entity_names": {}, "entity_device_names": {}}',
         encoding="utf-8",
     )
@@ -1391,13 +1398,13 @@ def test_load_registry_snapshot_accepts_clean_string_maps(tmp_path):
     path = _ha_registry_cache_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        '{"fetched_at": 99999999999, "entity_areas": {"light.x": "Kitchen"},'
+        '{"fetched_at": 99999999999, "entity_areas": {"light.example_x": "Kitchen"},'
         ' "entity_names": {}, "entity_device_names": {}}',
         encoding="utf-8",
     )
     snapshot = _load_registry_snapshot(tmp_path, now=99999999999)
     assert snapshot is not None
-    assert snapshot.entity_areas == {"light.x": "Kitchen"}
+    assert snapshot.entity_areas == {"light.example_x": "Kitchen"}
     assert snapshot.source == "disk_fresh"
 
 
@@ -1418,7 +1425,7 @@ async def test_fetch_registry_snapshot_malformed_fresh_disk_triggers_websocket(t
         encoding="utf-8",
     )
 
-    fresh = HomeRegistrySnapshot(entity_areas={"light.x": "Kitchen"}, source="websocket")
+    fresh = HomeRegistrySnapshot(entity_areas={"light.example_x": "Kitchen"}, source="websocket")
     with patch(
         "mammamiradio.home.ha_context._fetch_ha_registry_snapshot_websocket",
         new=AsyncMock(return_value=fresh),
@@ -1426,7 +1433,7 @@ async def test_fetch_registry_snapshot_malformed_fresh_disk_triggers_websocket(t
         result = await _fetch_ha_registry_snapshot("http://ha:8123", "token", cache_dir=tmp_path)
 
     ws.assert_awaited_once()
-    assert result.entity_areas == {"light.x": "Kitchen"}
+    assert result.entity_areas == {"light.example_x": "Kitchen"}
     ha_mod._ha_registry_snapshot_cache = None
     ha_mod._ha_registry_fetched_at = 0.0
 
@@ -1436,7 +1443,7 @@ async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
     all_states = []
     registry_areas = {}
     for idx in range(100):
-        entity_id = f"binary_sensor.room_{idx}_occupancy"
+        entity_id = f"binary_sensor.example_room_{idx}_occupancy"
         all_states.append(
             {
                 "entity_id": entity_id,
@@ -1451,7 +1458,7 @@ async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
         registry_areas[entity_id] = f"Room {idx}"
     all_states.append(
         {
-            "entity_id": "media_player.living_room",
+            "entity_id": "media_player.example_living_room",
             "state": "playing",
             "attributes": {"friendly_name": "Living room speaker", "media_title": "Volare"},
         }
@@ -1482,29 +1489,31 @@ async def test_scored_entities_anti_flood_keeps_relevant_raw_states_intact():
         )
 
     scored_presence = _uncurated_presence_ids(result.scored)
-    relevant_presence = [entity_id for entity_id in result.raw_states if entity_id.startswith("binary_sensor.room_")]
+    relevant_presence = [
+        entity_id for entity_id in result.raw_states if entity_id.startswith("binary_sensor.example_room_")
+    ]
 
     assert len(scored_presence) == MAX_PRESENCE_IN_SLICE
-    assert "media_player.living_room" in [entity.entity_id for entity in result.scored]
+    assert "media_player.example_living_room" in [entity.entity_id for entity in result.scored]
     assert len(relevant_presence) == 100
 
 
 def test_scored_entities_excludes_area_less_aggregate_presence_from_slice():
     now = time.time()
     states = {
-        "binary_sensor.magic_areas_global_presence": _presence_state(
+        "binary_sensor.example_magic_areas_global_presence": _presence_state(
             "Whole Home Occupancy",
             state="on",
             area=None,
             changed=_iso_changed(now, 1),
         ),
-        "binary_sensor.kitchen_occupancy": _presence_state(
+        "binary_sensor.example_kitchen_occupancy": _presence_state(
             "Kitchen Occupancy",
             state="on",
             area="Kitchen",
             changed=_iso_changed(now, 60),
         ),
-        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+        "light.example_kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
     }
 
     scored = _build_scored_entities(
@@ -1512,9 +1521,9 @@ def test_scored_entities_excludes_area_less_aggregate_presence_from_slice():
     )
     ids = [entity.entity_id for entity in scored]
 
-    assert "binary_sensor.magic_areas_global_presence" not in ids
-    assert "binary_sensor.kitchen_occupancy" in ids
-    assert "light.kitchen" in ids
+    assert "binary_sensor.example_magic_areas_global_presence" not in ids
+    assert "binary_sensor.example_kitchen_occupancy" in ids
+    assert "light.example_kitchen" in ids
 
 
 def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
@@ -1533,7 +1542,7 @@ def test_presence_slice_privacy_invariant_keeps_device_trackers_denied():
 
     scored = _build_scored_entities(
         {
-            "binary_sensor.office_occupancy": _presence_state(
+            "binary_sensor.example_office_occupancy": _presence_state(
                 "Office Occupancy",
                 state="on",
                 area="Office",
@@ -1580,7 +1589,7 @@ def test_filter_state_denies_sensitive_entities_and_strips_secret_attributes():
     assert denylist_hits["privacy:device_tracker"] == 2
 
     filtered = _filter_state(
-        "sensor.router_status",
+        "sensor.example_router_status",
         {
             "state": "connected",
             "attributes": {
@@ -1632,19 +1641,19 @@ def test_filter_state_keeps_person_presence_but_strips_location_and_identity():
 def test_apply_registry_area_fills_missing_area_without_overwriting_state_attrs():
     state = {"state": "on", "attributes": {"friendly_name": "Counter light"}}
 
-    enriched = _apply_registry_area("light.counter", state, {"light.counter": "Kitchen"})
+    enriched = _apply_registry_area("light.example_counter", state, {"light.example_counter": "Kitchen"})
 
     assert enriched is not state
     assert enriched["attributes"]["area"] == "Kitchen"
     assert state["attributes"].get("area") is None
 
     with_area = {"state": "on", "attributes": {"friendly_name": "Counter light", "area": "Bar"}}
-    unchanged = _apply_registry_area("light.counter", with_area, {"light.counter": "Kitchen"})
+    unchanged = _apply_registry_area("light.example_counter", with_area, {"light.example_counter": "Kitchen"})
     assert unchanged is with_area
     assert unchanged["attributes"]["area"] == "Bar"
 
     # Entity absent from the registry mapping -> state returned unchanged.
-    missing = _apply_registry_area("light.missing", state, {})
+    missing = _apply_registry_area("light.example_missing", state, {})
     assert missing is state
     assert "area" not in missing["attributes"]
 
@@ -1652,13 +1661,13 @@ def test_apply_registry_area_fills_missing_area_without_overwriting_state_attrs(
 def test_apply_registry_snapshot_adds_names_without_overwriting_existing_area():
     state = {"state": "on", "attributes": {"area": "Bar"}}
     snapshot = HomeRegistrySnapshot(
-        entity_areas={"light.counter": "Kitchen"},
-        entity_names={"light.counter": "Counter"},
-        entity_device_names={"light.counter": "Ceiling relay"},
+        entity_areas={"light.example_counter": "Kitchen"},
+        entity_names={"light.example_counter": "Counter"},
+        entity_device_names={"light.example_counter": "Ceiling relay"},
         source="websocket",
     )
 
-    enriched = _apply_registry_snapshot("light.counter", state, snapshot)
+    enriched = _apply_registry_snapshot("light.example_counter", state, snapshot)
 
     assert enriched is not state
     assert enriched["attributes"]["area"] == "Bar"
@@ -1693,7 +1702,7 @@ async def test_home_context_preview_is_fresh_narrow_and_never_published(tmp_path
 
     states = [
         {
-            "entity_id": "weather.home",
+            "entity_id": "weather.example_home",
             "state": "sunny",
             "attributes": {"temperature": 21, "temperature_unit": "°C"},
         },
@@ -1711,12 +1720,12 @@ async def test_home_context_preview_is_fresh_narrow_and_never_published(tmp_path
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
     retained = HomeContext(
-        raw_states={"switch.private": {"state": "on", "attributes": {}}},
+        raw_states={"switch.example_private": {"state": "on", "attributes": {}}},
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
         bindings=SYNTHETIC_BINDINGS,
         timestamp=1.0,
     )
-    radio_baseline = {"switch.private": {"state": "on"}}
+    radio_baseline = {"switch.example_private": {"state": "on"}}
     ritual_baseline = {"person.example_private_resident": {"state": "home"}}
 
     async with client:
@@ -1795,12 +1804,12 @@ def test_invalidate_all_home_context_clears_runtime_and_registry_cache(tmp_path)
 
     registry_cache = tmp_path / "ha_registry.json"
     registry_cache.write_text("{}", encoding="utf-8")
-    context = HomeContext(raw_states={"switch.private": {"state": "on", "attributes": {}}})
+    context = HomeContext(raw_states={"switch.example_private": {"state": "on", "attributes": {}}})
 
     with (
         patch.object(ha_context, "_ha_cache", context),
-        patch.object(ha_context, "_radio_event_state_cache", {"switch.private": {"state": "on"}}),
-        patch.object(ha_context, "_ritual_recipe_state_cache", {"switch.private": {"state": "on"}}),
+        patch.object(ha_context, "_radio_event_state_cache", {"switch.example_private": {"state": "on"}}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {"switch.example_private": {"state": "on"}}),
         patch.object(ha_context, "_ha_registry_snapshot_cache", HomeRegistrySnapshot(source="memory")),
         patch.object(ha_context, "_ha_registry_fetched_at", 1.0),
         patch.object(ha_context, "_weather_forecast_cache", "Private weather"),
@@ -1829,7 +1838,7 @@ async def test_fetch_narrow_projects_only_normalized_ambient_basics_and_skips_ho
             "attributes": {"friendly_name": "Private terrace sun", "next_rising": "PRIVATE"},
         },
         {
-            "entity_id": "weather.my_secret_home",
+            "entity_id": "weather.example_my_secret_home",
             "state": "partlycloudy",
             "attributes": {
                 "friendly_name": "Private rooftop weather",
@@ -1844,12 +1853,12 @@ async def test_fetch_narrow_projects_only_normalized_ambient_basics_and_skips_ho
             "attributes": {"friendly_name": "PRIVATE PERSON"},
         },
         {
-            "entity_id": "switch.private_coffee_machine",
+            "entity_id": "switch.example_private_coffee_machine",
             "state": "on",
             "attributes": {"friendly_name": "PRIVATE COFFEE"},
         },
         {
-            "entity_id": "binary_sensor.kitchen_fridge_door",
+            "entity_id": "binary_sensor.example_kitchen_fridge_door",
             "state": "on",
             "attributes": {"friendly_name": "PRIVATE FRIDGE", "device_class": "door"},
         },
@@ -1955,12 +1964,12 @@ async def test_fetch_narrow_omits_ambiguous_weather_sources():
             "attributes": {},
         },
         {
-            "entity_id": "weather.one",
+            "entity_id": "weather.example_one",
             "state": "sunny",
             "attributes": {"temperature": 20, "temperature_unit": "°C"},
         },
         {
-            "entity_id": "weather.two",
+            "entity_id": "weather.example_two",
             "state": "rainy",
             "attributes": {"temperature": 18, "temperature_unit": "°C"},
         },
@@ -1991,7 +2000,7 @@ async def test_fetch_narrow_omits_ambiguous_weather_sources():
     ("muted_id", "expected_ids"),
     [
         ("weather.ambient", {"sun.ambient"}),
-        ("weather.local", {"sun.ambient"}),
+        ("weather.example_local", {"sun.ambient"}),
         ("sun.ambient", {"weather.ambient"}),
         ("sun.sun", {"weather.ambient"}),
     ],
@@ -2004,7 +2013,7 @@ async def test_fetch_narrow_honors_synthetic_and_source_hard_mutes(tmp_path, mut
     states = [
         {"entity_id": "sun.sun", "state": "above_horizon", "attributes": {}},
         {
-            "entity_id": "weather.local",
+            "entity_id": "weather.example_local",
             "state": "sunny",
             "attributes": {"temperature": 20, "temperature_unit": "°C"},
         },
@@ -2077,7 +2086,7 @@ def test_narrow_cached_hard_mute_does_not_reenable_derived_mood(tmp_path):
         },
         timestamp=time.time(),
         authorization_mode=HomeAuthorizationMode.NARROW.value,
-        ambient_sources={"weather.ambient": "weather.local", "sun.ambient": "sun.sun"},
+        ambient_sources={"weather.ambient": "weather.example_local", "sun.ambient": "sun.sun"},
     )
 
     with (
@@ -2350,7 +2359,7 @@ def test_get_cached_home_context_user_muted_count_is_stable_across_serves(tmp_pa
     from mammamiradio.home.entity_policy import set_entity_muted
 
     present_muted = "switch.example_coffee_switch"
-    absent_muted = "switch.absent"
+    absent_muted = "switch.example_absent"
     set_entity_muted(tmp_path, present_muted, True, label="Coffee machine")
     set_entity_muted(tmp_path, absent_muted, True, label="Absent switch")
     cached = HomeContext(
@@ -2385,7 +2394,7 @@ def test_get_cached_home_context_user_muted_count_is_stable_across_serves(tmp_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("weather_entity_id", ["weather.example_weather", "weather.garden"])
+@pytest.mark.parametrize("weather_entity_id", ["weather.example_weather", "weather.example_garden"])
 async def test_fetch_home_context_any_weather_mute_skips_weather_forecast(tmp_path, weather_entity_id):
     from mammamiradio.home.entity_policy import set_entity_muted
 
@@ -2395,7 +2404,7 @@ async def test_fetch_home_context_any_weather_mute_skips_weather_forecast(tmp_pa
     mock_resp.json.return_value = [
         *_mock_ha_response(),
         {
-            "entity_id": "weather.garden",
+            "entity_id": "weather.example_garden",
             "state": "cloudy",
             "attributes": {"temperature": 18, "temperature_unit": "°C"},
         },
@@ -2452,7 +2461,7 @@ def test_apply_entity_mute_policy_clears_stale_weather_arc_without_entity(tmp_pa
 def test_apply_entity_mute_policy_clears_stale_weather_arc_for_any_weather_entity(tmp_path):
     from mammamiradio.home.entity_policy import set_entity_muted
 
-    set_entity_muted(tmp_path, "weather.garden", True, label="Garden weather")
+    set_entity_muted(tmp_path, "weather.example_garden", True, label="Garden weather")
     context = HomeContext(
         weather_arc="Pioggia in arrivo",
         weather_arc_en="Rain incoming",
@@ -2587,7 +2596,7 @@ async def test_fetch_home_context_muted_entity_cannot_trigger_a_radio_event(tmp_
 async def test_fetch_matches_ritual_recipes_and_public_family_label():
     states = [
         {
-            "entity_id": "binary_sensor.kitchen_fridge_door",
+            "entity_id": "binary_sensor.example_kitchen_fridge_door",
             "state": "on",
             "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
         },
@@ -2611,7 +2620,7 @@ async def test_fetch_matches_ritual_recipes_and_public_family_label():
         patch(
             "mammamiradio.home.ha_context._ritual_recipe_state_cache",
             {
-                "binary_sensor.kitchen_fridge_door": {
+                "binary_sensor.example_kitchen_fridge_door": {
                     "state": "off",
                     "attributes": {"friendly_name": "Kitchen fridge door", "device_class": "door"},
                 }
@@ -2637,7 +2646,7 @@ async def test_fetch_matches_ritual_recipes_and_public_family_label():
 async def test_fetch_home_context_computes_catalog_hit_rate(tmp_path):
     from mammamiradio.home.catalog import compute_hash, save_catalog
 
-    entity_id = "light.counter"
+    entity_id = "light.example_counter"
     catalog_state = {
         "entity_id": entity_id,
         "state": "on",
@@ -2725,7 +2734,7 @@ async def test_failed_fetch_fallback_honors_mute_applied_mid_refresh(tmp_path):
     snapshot)."""
     stale_cache = HomeContext(
         summary="stale",
-        raw_states={"switch.muted": {"state": "on", "attributes": {}}},
+        raw_states={"switch.example_muted": {"state": "on", "attributes": {}}},
         timestamp=time.time() - 300.0,
     )
     mock_client = AsyncMock()
@@ -2737,7 +2746,7 @@ async def test_failed_fetch_fallback_honors_mute_applied_mid_refresh(tmp_path):
         # First (pre-await) read sees no mute; the mute lands while the refresh is
         # in flight, so every later read — including the except-path re-read — sees it.
         calls["n"] += 1
-        return set() if calls["n"] == 1 else {"switch.muted"}
+        return set() if calls["n"] == 1 else {"switch.example_muted"}
 
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
@@ -2753,7 +2762,7 @@ async def test_failed_fetch_fallback_honors_mute_applied_mid_refresh(tmp_path):
         )
 
     assert calls["n"] >= 2
-    assert "switch.muted" not in result.raw_states
+    assert "switch.example_muted" not in result.raw_states
 
 
 @pytest.mark.asyncio
@@ -2761,7 +2770,7 @@ async def test_direct_fresh_fetch_revalidates_mute_added_during_projection(tmp_p
     """The legacy direct-fetch path must not publish a worker-era mute leak."""
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.content = json.dumps([{"entity_id": "switch.muted", "state": "on", "attributes": {}}]).encode()
+    mock_resp.content = json.dumps([{"entity_id": "switch.example_muted", "state": "on", "attributes": {}}]).encode()
     mock_client = AsyncMock()
     mock_client.get.return_value = mock_resp
     calls = {"n": 0}
@@ -2770,7 +2779,7 @@ async def test_direct_fresh_fetch_revalidates_mute_added_during_projection(tmp_p
         # The worker's input sees no mute.  The final direct-call revalidation
         # must observe the policy which landed while projection was running.
         calls["n"] += 1
-        return set() if calls["n"] <= 2 else {"switch.muted"}
+        return set() if calls["n"] <= 2 else {"switch.example_muted"}
 
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
@@ -2793,9 +2802,9 @@ async def test_direct_fresh_fetch_revalidates_mute_added_during_projection(tmp_p
         )
 
     assert calls["n"] >= 3
-    assert "switch.muted" not in result.raw_states
+    assert "switch.example_muted" not in result.raw_states
     published = publish.call_args.args[0].context
-    assert "switch.muted" not in published.raw_states
+    assert "switch.example_muted" not in published.raw_states
 
 
 @pytest.mark.asyncio
@@ -2809,8 +2818,8 @@ async def test_fetch_outcome_defers_cache_and_event_baseline_publication():
     mock_resp.json.return_value = _mock_ha_response()
     mock_client = AsyncMock()
     mock_client.get.return_value = mock_resp
-    prior_radio_baseline = {"switch.old": {"state": "off"}}
-    prior_ritual_baseline = {"binary_sensor.old": {"state": "off"}}
+    prior_radio_baseline = {"switch.example_old": {"state": "off"}}
+    prior_ritual_baseline = {"binary_sensor.example_old": {"state": "off"}}
 
     with (
         patch("mammamiradio.home.ha_context._get_ha_client", return_value=mock_client),
@@ -3061,8 +3070,8 @@ async def test_fetch_outcome_cancellation_awaits_optional_enrichment():
 def test_revalidate_home_context_mutes_preserves_unmuted_fresh_one_shots(tmp_path):
     from mammamiradio.home.entity_policy import set_entity_muted
 
-    muted_id = "switch.muted"
-    live_id = "switch.live"
+    muted_id = "switch.example_muted"
+    live_id = "switch.example_live"
     set_entity_muted(tmp_path, muted_id, True, label="Muted switch")
     muted_radio = SimpleNamespace(event=SimpleNamespace(entity_id=muted_id))
     live_radio = SimpleNamespace(event=SimpleNamespace(entity_id=live_id))
@@ -3099,9 +3108,9 @@ def test_revalidate_home_context_mutes_preserves_unmuted_fresh_one_shots(tmp_pat
 def test_revalidate_home_context_outcome_mutes_filters_both_baselines_and_synthetic_aliases(tmp_path):
     from mammamiradio.home.entity_policy import set_entity_muted
 
-    source_id = "weather.private_source"
+    source_id = "weather.example_private_source"
     synthetic_id = "weather.ambient"
-    live_id = "switch.live"
+    live_id = "switch.example_live"
     set_entity_muted(tmp_path, source_id, True, label="Private weather")
     context = HomeContext(
         raw_states={
@@ -3142,9 +3151,9 @@ def test_revalidate_outcome_discards_an_entity_muted_and_unmuted_while_in_flight
     import mammamiradio.home.ha_context as ha_context
     from mammamiradio.home.entity_policy import set_entity_muted
 
-    source_id = "weather.private_source"
+    source_id = "weather.example_private_source"
     synthetic_id = "weather.ambient"
-    live_id = "switch.live"
+    live_id = "switch.example_live"
     private_radio = SimpleNamespace(event=SimpleNamespace(entity_id=synthetic_id))
     live_radio = SimpleNamespace(event=SimpleNamespace(entity_id=live_id))
     private_ritual = SimpleNamespace(
@@ -3208,7 +3217,7 @@ def test_revalidate_outcome_discards_an_entity_muted_and_unmuted_while_in_flight
 
 def test_mute_revalidation_is_a_noop_when_persistent_policy_is_unavailable():
     """Callers without a cache directory must retain their candidate unchanged."""
-    context = HomeContext(raw_states={"switch.live": {"state": "on", "attributes": {}}})
+    context = HomeContext(raw_states={"switch.example_live": {"state": "on", "attributes": {}}})
     outcome = _HomeContextFetchOutcome(
         kind="fresh",
         context=context,
@@ -3227,8 +3236,8 @@ def test_mute_baseline_helpers_noop_for_empty_invalidation_request():
     """An empty policy update must not replace retained state or matcher snapshots."""
     import mammamiradio.home.ha_context as ha_context
 
-    context = HomeContext(raw_states={"switch.live": {"state": "on", "attributes": {}}})
-    baseline = {"switch.live": {"state": "on"}}
+    context = HomeContext(raw_states={"switch.example_live": {"state": "on", "attributes": {}}})
+    baseline = {"switch.example_live": {"state": "on"}}
 
     with (
         patch.object(ha_context, "_ha_cache", context),
@@ -3236,7 +3245,7 @@ def test_mute_baseline_helpers_noop_for_empty_invalidation_request():
         patch.object(ha_context, "_ritual_recipe_state_cache", baseline),
     ):
         assert _filter_matcher_baseline(baseline, set()) is baseline
-        assert discard_home_context_entities(None, {"switch.live"}) is None
+        assert discard_home_context_entities(None, {"switch.example_live"}) is None
         assert discard_home_context_entities(context, set()) is context
 
         invalidate_home_context_entity_baselines(set())
@@ -3508,7 +3517,7 @@ def test_reactive_trigger_no_match_returns_none():
     events: deque[HomeEvent] = deque(maxlen=20)
     events.append(
         HomeEvent(
-            entity_id="sensor.unknown_entity",
+            entity_id="sensor.example_unknown_entity",
             label="Unknown",
             old_state="off",
             new_state="on",
@@ -3540,13 +3549,13 @@ def test_build_entity_label_maps_skips_entities_without_curated_or_friendly_labe
     from mammamiradio.home.ha_context import _build_entity_label_maps
 
     states = {
-        "sensor.some_random_helper": {"state": "on", "attributes": {}},
-        "sensor.named_helper": {"state": "on", "attributes": {"friendly_name": "Hallway Motion"}},
+        "sensor.example_some_random_helper": {"state": "on", "attributes": {}},
+        "sensor.example_named_helper": {"state": "on", "attributes": {"friendly_name": "Hallway Motion"}},
     }
     labels_it, labels_en = _build_entity_label_maps(states, bindings=SYNTHETIC_BINDINGS)
-    assert "sensor.some_random_helper" not in labels_it
-    assert "sensor.some_random_helper" not in labels_en
-    assert labels_it["sensor.named_helper"] == "Hallway Motion"
+    assert "sensor.example_some_random_helper" not in labels_it
+    assert "sensor.example_some_random_helper" not in labels_en
+    assert labels_it["sensor.example_named_helper"] == "Hallway Motion"
 
 
 def test_budgeted_summary_strips_angle_brackets_at_llm_boundary():
@@ -3557,7 +3566,7 @@ def test_budgeted_summary_strips_angle_brackets_at_llm_boundary():
 
     scored = [
         ScoredEntity(
-            entity_id="sensor.evil",
+            entity_id="sensor.example_evil",
             area=None,
             domain="sensor",
             score=1.0,
@@ -4660,7 +4669,7 @@ async def test_fetch_weather_forecast_upcoming_significant_condition():
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {
         "response": {
-            "weather.home": {
+            "weather.example_home": {
                 "forecast": forecast,
             }
         }
@@ -6399,9 +6408,9 @@ async def test_fetch_registry_areas_maps_entities_via_device_and_direct_area():
             "type": "result",
             "success": True,
             "result": [
-                {"entity_id": "light.counter", "device_id": "dev1", "name": "Counter"},
-                {"entity_id": "light.lamp", "area_id": "living", "original_name": "Lamp"},
-                {"entity_id": "light.orphan"},
+                {"entity_id": "light.example_counter", "device_id": "dev1", "name": "Counter"},
+                {"entity_id": "light.example_lamp", "area_id": "living", "original_name": "Lamp"},
+                {"entity_id": "light.example_orphan"},
             ],
         },
         {
@@ -6430,11 +6439,11 @@ async def test_fetch_registry_areas_maps_entities_via_device_and_direct_area():
         snapshot = await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok")
         result = snapshot.entity_areas
 
-    assert result == {"light.counter": "Kitchen", "light.lamp": "Living Room"}
-    assert snapshot.entity_names == {"light.counter": "Counter", "light.lamp": "Lamp"}
-    assert snapshot.entity_device_names == {"light.counter": "Ceiling relay"}
+    assert result == {"light.example_counter": "Kitchen", "light.example_lamp": "Living Room"}
+    assert snapshot.entity_names == {"light.example_counter": "Counter", "light.example_lamp": "Lamp"}
+    assert snapshot.entity_device_names == {"light.example_counter": "Ceiling relay"}
     assert snapshot.source == "websocket"
-    assert "light.orphan" not in result
+    assert "light.example_orphan" not in result
     # Auth frame carried the token; three registry commands were issued.
     assert fake_ws.sent[0] == {"type": "auth", "access_token": "tok"}
     assert {cmd["type"] for cmd in fake_ws.sent[1:]} == {
@@ -6466,13 +6475,15 @@ async def test_fetch_registry_areas_uses_cache_without_reconnecting():
         patch("mammamiradio.home.ha_context.websocket_connect", guard),
         patch(
             "mammamiradio.home.ha_context._ha_registry_snapshot_cache",
-            HomeRegistrySnapshot(entity_areas={"light.x": "Office"}, fetched_at=time.time(), source="websocket"),
+            HomeRegistrySnapshot(
+                entity_areas={"light.example_x": "Office"}, fetched_at=time.time(), source="websocket"
+            ),
         ),
         patch("mammamiradio.home.ha_context._ha_registry_fetched_at", time.time()),
     ):
         result = await _fetch_ha_registry_areas("http://supervisor/core/api", "tok")
 
-    assert result == {"light.x": "Office"}
+    assert result == {"light.example_x": "Office"}
     guard.assert_not_called()
 
 
@@ -6500,9 +6511,9 @@ async def test_fetch_registry_snapshot_loads_fresh_disk_before_websocket(tmp_pat
             {
                 "schema_version": 1,
                 "fetched_at": now,
-                "entity_areas": {"light.counter": "Kitchen"},
-                "entity_names": {"light.counter": "Counter"},
-                "entity_device_names": {"light.counter": "Ceiling relay"},
+                "entity_areas": {"light.example_counter": "Kitchen"},
+                "entity_names": {"light.example_counter": "Counter"},
+                "entity_device_names": {"light.example_counter": "Ceiling relay"},
             }
         ),
         encoding="utf-8",
@@ -6516,7 +6527,7 @@ async def test_fetch_registry_snapshot_loads_fresh_disk_before_websocket(tmp_pat
         snapshot = await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok", cache_dir=tmp_path)
 
     assert snapshot.source == "disk_fresh"
-    assert snapshot.entity_names["light.counter"] == "Counter"
+    assert snapshot.entity_names["light.example_counter"] == "Counter"
     guard.assert_not_called()
 
 
@@ -6528,7 +6539,7 @@ async def test_fetch_registry_snapshot_uses_stale_disk_on_websocket_failure(tmp_
             {
                 "schema_version": 1,
                 "fetched_at": now - (7 * 60 * 60),
-                "entity_areas": {"light.counter": "Kitchen"},
+                "entity_areas": {"light.example_counter": "Kitchen"},
             }
         ),
         encoding="utf-8",
@@ -6541,7 +6552,7 @@ async def test_fetch_registry_snapshot_uses_stale_disk_on_websocket_failure(tmp_
         snapshot = await _fetch_ha_registry_snapshot("http://supervisor/core/api", "tok", cache_dir=tmp_path)
 
     assert snapshot.source == "disk_stale"
-    assert snapshot.entity_areas == {"light.counter": "Kitchen"}
+    assert snapshot.entity_areas == {"light.example_counter": "Kitchen"}
 
 
 @pytest.mark.asyncio
@@ -6563,7 +6574,7 @@ async def test_fetch_registry_snapshot_websocket_writes_owner_only_cache(tmp_pat
     messages = [
         {"type": "auth_required"},
         {"type": "auth_ok"},
-        {"id": 1, "type": "result", "success": True, "result": [{"entity_id": "light.counter"}]},
+        {"id": 1, "type": "result", "success": True, "result": [{"entity_id": "light.example_counter"}]},
         {"id": 2, "type": "result", "success": True, "result": []},
         {"id": 3, "type": "result", "success": True, "result": []},
     ]
@@ -6588,19 +6599,24 @@ def test_filter_state_drops_domains_categories_classes_and_unavailable():
     assert _filter_state("update.firmware", {"state": "on", "attributes": {}}, hits) is None
     assert hits["domain:update"] == 1
 
-    assert _filter_state("sensor.uptime", {"state": "5", "attributes": {"entity_category": "diagnostic"}}, hits) is None
+    assert (
+        _filter_state("sensor.example_uptime", {"state": "5", "attributes": {"entity_category": "diagnostic"}}, hits)
+        is None
+    )
     assert hits["entity_category:diagnostic"] == 1
 
-    assert _filter_state("sensor.batt", {"state": "80", "attributes": {"device_class": "battery"}}, hits) is None
+    assert (
+        _filter_state("sensor.example_batt", {"state": "80", "attributes": {"device_class": "battery"}}, hits) is None
+    )
     assert hits["device_class:battery"] == 1
 
-    assert _filter_state("sensor.gone", {"state": "unavailable", "attributes": {}}, hits) is None
+    assert _filter_state("sensor.example_gone", {"state": "unavailable", "attributes": {}}, hits) is None
     assert hits["state:unavailable"] == 1
 
     # Re-filtering increments each counter (initialized-then-incremented).
     assert _filter_state("update.firmware", {"state": "on", "attributes": {}}, hits) is None
     assert hits["domain:update"] == 2
-    assert _filter_state("sensor.gone", {"state": "unavailable", "attributes": {}}, hits) is None
+    assert _filter_state("sensor.example_gone", {"state": "unavailable", "attributes": {}}, hits) is None
     assert hits["state:unavailable"] == 2
 
 
@@ -6616,7 +6632,7 @@ def test_filter_state_drops_station_own_entities():
 def test_filter_state_passes_through_and_sanitizes_list_attribute():
     hits: dict[str, int] = {}
     filtered = _filter_state(
-        "light.kitchen",
+        "light.example_kitchen",
         {"state": "on", "attributes": {"friendly_name": "Kitchen", "rgb_color": [255, 200, 100]}},
         hits,
     )
@@ -6641,18 +6657,20 @@ def test_score_entity_branches():
         )
 
     # Power sensor overrides the base sensor weight.
-    assert score("sensor.power", {"device_class": "power"}) == 0.5
+    assert score("sensor.example_power", {"device_class": "power"}) == 0.5
     # Presence/motion binary_sensor is highly salient.
-    assert score("binary_sensor.hall", {"device_class": "motion"}) == 0.9
+    assert score("binary_sensor.example_hall", {"device_class": "motion"}) == 0.9
     # Curated override entity gets the base + override boost.
     assert score("switch.example_coffee_switch", {}) == 1.0
     # Area metadata adds a boost on top of the domain weight.
-    assert score("light.x", {"area": "Kitchen"}) == 0.8
+    assert score("light.example_x", {"area": "Kitchen"}) == 0.8
 
-    base = _score_entity("light.y", {"attributes": {}}, event_entity_ids=set(), now=now, bindings=SYNTHETIC_BINDINGS)
+    base = _score_entity(
+        "light.example_y", {"attributes": {}}, event_entity_ids=set(), now=now, bindings=SYNTHETIC_BINDINGS
+    )
     # Recent change boosts score.
     recent = _score_entity(
-        "light.y",
+        "light.example_y",
         {"attributes": {}, "last_changed": datetime.datetime.now(datetime.UTC).isoformat()},
         event_entity_ids=set(),
         now=now,
@@ -6661,7 +6679,11 @@ def test_score_entity_branches():
     assert recent > base
     # Being in the recent-events set boosts score.
     with_event = _score_entity(
-        "light.y", {"attributes": {}}, event_entity_ids={"light.y"}, now=now, bindings=SYNTHETIC_BINDINGS
+        "light.example_y",
+        {"attributes": {}},
+        event_entity_ids={"light.example_y"},
+        now=now,
+        bindings=SYNTHETIC_BINDINGS,
     )
     assert with_event > base
 
@@ -6673,8 +6695,8 @@ def test_score_entity_branches():
 
 def test_build_scored_entities_char_limit_disabled_returns_full_selection():
     states = {
-        "media_player.living_room": {"state": "playing", "attributes": {"friendly_name": "Speaker"}},
-        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+        "media_player.example_living_room": {"state": "playing", "attributes": {"friendly_name": "Speaker"}},
+        "light.example_kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
     }
     # char_limit <= 0 skips budgeting and returns the full ranked selection.
     scored = _build_scored_entities(
@@ -6686,9 +6708,9 @@ def test_build_scored_entities_char_limit_disabled_returns_full_selection():
 
 def test_build_scored_entities_char_budget_drops_overflow():
     states = {
-        "media_player.living_room": {"state": "playing", "attributes": {"friendly_name": "Speaker"}},
-        "light.kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
-        "fan.bedroom": {"state": "on", "attributes": {"friendly_name": "Bedroom fan"}},
+        "media_player.example_living_room": {"state": "playing", "attributes": {"friendly_name": "Speaker"}},
+        "light.example_kitchen": {"state": "on", "attributes": {"friendly_name": "Kitchen light"}},
+        "fan.example_bedroom": {"state": "on", "attributes": {"friendly_name": "Bedroom fan"}},
     }
     # A tiny char budget admits fewer entities than the full ranked set; if no
     # single line fits, the budget loop yields an empty slice (it skips, never

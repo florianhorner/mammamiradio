@@ -437,7 +437,7 @@ async def test_existing_install_omitted_context_choice_preserves_evening_ledger(
     (config.cache_dir / "mammamiradio.db").touch()
     seed = EveningLedger()
     seed.buckets["legacy-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -489,7 +489,7 @@ async def test_explicit_context_off_purges_evening_ledger_after_audio_tasks(tmp_
     (config.cache_dir / "mammamiradio.db").touch()
     seed = EveningLedger()
     seed.buckets["private-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -554,7 +554,7 @@ async def test_explicit_context_off_ledger_save_failure_stays_fail_closed(tmp_pa
     config.cache_dir.mkdir(parents=True)
     seed = EveningLedger()
     seed.buckets["private-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -607,7 +607,7 @@ async def test_explicit_context_off_ledger_save_is_drained_when_shutdown_cancels
     config.cache_dir.mkdir(parents=True)
     seed = EveningLedger()
     seed.buckets["private-home-event"] = GagBucket(
-        "switch.kitchen",
+        "switch.example_kitchen",
         "Kitchen",
         "off",
         "on",
@@ -1605,7 +1605,7 @@ async def test_startup_wires_running_gag_policy_from_config():
     # Real lists (not Mock attrs) so the `... or None` translation is exercised.
     mock_config.running_gags.domain_allowlist = ["light"]
     mock_config.running_gags.entity_allowlist = []  # empty → None
-    mock_config.running_gags.entity_denylist = ["binary_sensor.flappy"]
+    mock_config.running_gags.entity_denylist = ["binary_sensor.example_flappy"]
 
     demo_tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
 
@@ -1629,7 +1629,7 @@ async def test_startup_wires_running_gag_policy_from_config():
         TEST_CACHE,
         domain_allowlist=["light"],
         entity_allowlist=None,
-        entity_denylist={"binary_sensor.flappy"},
+        entity_denylist={"binary_sensor.example_flappy"},
     )
 
 
@@ -1704,7 +1704,7 @@ async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(t
 
     seed = EveningLedger()
     seed.buckets["private"] = GagBucket(
-        "switch.private_kitchen",
+        "switch.example_private_kitchen",
         "Private kitchen",
         "off",
         "on",
@@ -4171,12 +4171,23 @@ async def test_private_home_verification_is_background_and_adopted_at_boundary(t
             assert not config.homeassistant.context_enabled
             return
         release.set()
-        await task
+        if scenario == "failed":
+            async with asyncio.timeout(2):
+                while app.state.home_compatibility_result is None:
+                    await asyncio.sleep(0.001)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
         assert not config.homeassistant.context_enabled
-        await _adopt_private_home()
+        await app.state.first_listen_origin_task
+        app.state.station_state.home_bindings_adopter()
         assert calls == 1
         if scenario == "failed":
             assert not app.state.home_profile_ready
+            assert app.state.station_state.home_compatibility_status == "unavailable"
+            assert not app.state.station_state.home_ambient_consent_required
             assert "PRIVATE-COMPATIBILITY-CANARY" not in caplog.text
             assert not config.homeassistant.context_enabled
         else:
@@ -4259,3 +4270,103 @@ async def test_keep_off_before_compatibility_adoption_revokes_pending_grant(tmp_
         assert not state.home_ambient_consent_granted
         assert state.home_compatibility_status == "needs_consent"
         assert not load_ambient_consent(database).granted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capped,keep_off,failed_revoke",
+    [(False, False, False), (False, True, False), (True, False, False), (True, True, False), (True, True, True)],
+)
+async def test_unavailable_home_retries_without_losing_profile_or_keep_off(
+    tmp_path, monkeypatch, capped, keep_off, failed_revoke
+):
+    import mammamiradio.main as main_mod
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorization
+    from mammamiradio.home.compatibility import HomeCompatibility, read_home_compatibility
+    from mammamiradio.home.consent import load_ambient_consent, save_ambient_consent
+    from mammamiradio.web import streamer
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = True
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "true")
+    profile, _ = _seed_private_home(config, monkeypatch)
+    original = profile.read_bytes()
+    database = config.cache_dir / "mammamiradio.db"
+    if capped:
+        save_ambient_consent(database, granted=True)
+    retry_started, release_retry = threading.Event(), threading.Event()
+    reads = 0
+    writes = []
+
+    def read(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return HomeCompatibility(HomeAuthorization.narrow(), "unavailable")
+        retry_started.set()
+        assert release_retry.wait(timeout=5)
+        return read_home_compatibility(*args)
+
+    real_save = main_mod._persist_home_ambient_consent
+
+    async def revoke(app_state, *, granted):
+        assert granted is False
+        writes.append(granted)
+        if failed_revoke and len(writes) == 1:
+            raise OSError("synthetic transient write failure")
+        await real_save(app_state, granted=granted)
+
+    monkeypatch.setattr(main_mod, "_HOME_COMPATIBILITY_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(main_mod, "_persist_home_ambient_consent", revoke)
+    option_write = AsyncMock()
+    monkeypatch.setattr(streamer, "_persist_home_context_choice", option_write)
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(
+            f"{MODULE}.fetch_startup_playlist",
+            return_value=([Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")], None, ""),
+        ),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock) as produce,
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock) as play,
+        patch(f"{MODULE}.read_home_compatibility", side_effect=read),
+    ):
+        await main_mod.startup()
+        app = main_mod.app
+        task = app.state.legacy_home_provenance_task
+        try:
+            assert await asyncio.to_thread(retry_started.wait, 2)
+            await app.state.first_listen_origin_task
+            app.state.station_state.home_bindings_adopter()
+            state = app.state.station_state
+            assert state.home_compatibility_status == "unavailable"
+            assert not state.home_ambient_consent_required
+            assert not config.homeassistant.context_enabled
+            produce.assert_awaited()
+            play.assert_awaited()
+            if keep_off:
+                response = await asyncio.wait_for(streamer._apply_home_context_choice(app.state, enabled=False), 1)
+                assert response.status_code == 503
+                option_write.assert_awaited_once_with(config, False)
+                assert not task.done()
+                assert writes == []
+                assert load_ambient_consent(database).capped is capped
+            release_retry.set()
+            await asyncio.wait_for(task, 2)
+            assert not config.homeassistant.context_enabled
+            if capped and keep_off:
+                assert not load_ambient_consent(database).granted
+            state.home_bindings_adopter()
+            assert config.homeassistant.context_enabled is (not keep_off)
+            assert state.home_context_requested is (not keep_off)
+            assert state.home_authorization.allows_household_moments is (not capped)
+            assert load_ambient_consent(database).capped is capped
+            assert profile.read_bytes() == original
+            assert reads == (3 if failed_revoke else 2)
+            assert writes == ([False, False] if failed_revoke else [False] if capped and keep_off else [])
+        finally:
+            release_retry.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)

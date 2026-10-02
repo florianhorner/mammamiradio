@@ -117,7 +117,7 @@ def _scored_home_entity(
     room: str | None = f"Room {idx}" if isinstance(area, _NoArea) else area
     label_base = room or f"Entity {idx}"
     return ScoredEntity(
-        entity_id=f"light.room_{idx}",
+        entity_id=f"light.example_room_{idx}",
         area=room,
         domain="light",
         score=1.0,
@@ -706,7 +706,7 @@ async def test_home_context_disable_while_prepare_is_paused_never_republishes_st
         weather_arc="Private weather",
         weather_arc_en="Private weather",
         scored=[_scored_home_entity(1)],
-        raw_states={"light.private_kitchen": {"state": "on", "attributes": {}}},
+        raw_states={"light.example_private_kitchen": {"state": "on", "attributes": {}}},
         timestamp=time.time(),
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
         bindings=SYNTHETIC_BINDINGS,
@@ -1136,7 +1136,7 @@ async def test_public_status_only_surfaces_curated_event_labels(tmp_path):
     mock_context.events = deque(
         [
             HomeEvent(
-                entity_id="binary_sensor.bedroom_motion",
+                entity_id="binary_sensor.example_bedroom_motion",
                 label="Hallway Motion",
                 old_state="spento/a",
                 new_state="acceso/a",
@@ -2498,7 +2498,7 @@ async def test_producer_consumes_fresh_ha_one_shots_once_then_uses_safe_cache_vi
     config.pacing.lookahead_segments = 2
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     host = config.hosts[0]
-    event = HomeEvent("switch.lamp", "Lamp", "off", "on", time.time())
+    event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", time.time())
     fresh_context = HomeContext(
         summary="lamp is on",
         timestamp=time.time(),
@@ -2558,7 +2558,7 @@ async def test_producer_stale_gap_resync_suppresses_delayed_event_consumers(tmp_
         authorization_mode=HomeAuthorizationMode.LEGACY.value,
         bindings=SYNTHETIC_BINDINGS,
     )
-    delayed_event = HomeEvent("switch.lamp", "Lamp", "off", "on", time.time())
+    delayed_event = HomeEvent("switch.example_lamp", "Lamp", "off", "on", time.time())
     fresh_context = HomeContext(
         summary="resynchronized ambient",
         timestamp=time.time(),

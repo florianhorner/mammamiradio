@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -94,10 +95,10 @@ def _binding(connection: sqlite3.Connection) -> tuple[str, str | None] | None:
     return rows[0][1], rows[0][2]
 
 
-def load_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfileV1 | None:
+def load_home_profile_v1(state_dir: Path, db_path: Path, *, strict_io: bool = False) -> HomeProfileV1 | None:
     """Read-only readiness check; missing or conflicting evidence is unready."""
     try:
-        if migration.load_legacy_home_provenance_v1(state_dir, db_path) is None:
+        if migration.load_legacy_home_provenance_v1(state_dir, db_path, strict_io=strict_io) is None:
             return None
         profile = _read_profile(state_dir / PROFILE_FILENAME)
         connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
@@ -106,12 +107,19 @@ def load_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfileV1 | None
                 return profile
         finally:
             connection.close()
-    except (OSError, ValueError, sqlite3.Error, KeyError, TypeError, RecursionError):
+    except (OSError, ValueError, sqlite3.Error, KeyError, TypeError, RecursionError) as exc:
+        if (
+            strict_io
+            and isinstance(exc, (OSError, sqlite3.Error))
+            and not isinstance(exc, FileNotFoundError)
+            and getattr(exc, "errno", None) != errno.ELOOP
+        ):
+            raise
         pass
     return None
 
 
-def resume_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfileV1 | None:
+def resume_home_profile_v1(state_dir: Path, db_path: Path, *, strict_io: bool = False) -> HomeProfileV1 | None:
     """Finish only a matching published file from an interrupted V1 export.
 
     No new profile or intent is created. Missing/conflicting evidence remains
@@ -119,7 +127,7 @@ def resume_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfileV1 | No
     """
     try:
         with _LOCK:
-            if migration.load_legacy_home_provenance_v1(state_dir, db_path) is None:
+            if migration.load_legacy_home_provenance_v1(state_dir, db_path, strict_io=strict_io) is None:
                 return None
             connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=rw", uri=True)
             try:
@@ -130,7 +138,7 @@ def resume_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfileV1 | No
                     if binding is None:
                         return None
                 if binding[1] is not None:
-                    existing = load_home_profile_v1(state_dir, db_path)
+                    existing = load_home_profile_v1(state_dir, db_path, strict_io=strict_io)
                     if existing is None:
                         raise ValueError("unverifiable bound profile")
                     return existing
@@ -144,7 +152,7 @@ def resume_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfileV1 | No
                     os.fsync(fd)
                 finally:
                     os.close(fd)
-                if migration.load_legacy_home_provenance_v1(state_dir, db_path) is None:
+                if migration.load_legacy_home_provenance_v1(state_dir, db_path, strict_io=strict_io) is None:
                     return None
                 with connection:
                     connection.execute("BEGIN IMMEDIATE")
@@ -157,8 +165,15 @@ def resume_home_profile_v1(state_dir: Path, db_path: Path) -> HomeProfileV1 | No
                         raise ValueError("conflicting profile binding")
             finally:
                 connection.close()
-            return load_home_profile_v1(state_dir, db_path)
-    except (OSError, ValueError, sqlite3.Error, KeyError, TypeError, RecursionError):
+            return load_home_profile_v1(state_dir, db_path, strict_io=strict_io)
+    except (OSError, ValueError, sqlite3.Error, KeyError, TypeError, RecursionError) as exc:
+        if (
+            strict_io
+            and isinstance(exc, (OSError, sqlite3.Error))
+            and not isinstance(exc, FileNotFoundError)
+            and getattr(exc, "errno", None) != errno.ELOOP
+        ):
+            raise
         # Exception details can contain household values or local paths.
         logger.warning("Private Home compatibility snapshot is incomplete; will retry")
         return None

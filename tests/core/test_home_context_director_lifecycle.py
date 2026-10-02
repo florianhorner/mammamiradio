@@ -9,7 +9,7 @@ def _reserved_fact(director: HomeContextDirector):
     director.observe(
         [
             DirectorObservation(
-                entity_id="weather.home",
+                entity_id="weather.example_home",
                 domain="weather",
                 state="sunny",
                 score=1.0,

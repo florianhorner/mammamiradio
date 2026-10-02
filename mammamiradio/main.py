@@ -100,6 +100,7 @@ from mammamiradio.web.streamer import (
     _clear_active_heading,
     _download_direction_track,
     _heading_selection_budget,
+    _persist_home_ambient_consent,
     _register_background_task,
     _session_stopped_flag,
     _stream_chunk_size,
@@ -128,6 +129,7 @@ def _configure_http_logging() -> None:
 _configure_http_logging()
 logger = logging.getLogger("mammamiradio")
 _FIRST_LISTEN_OPENING_WAIT_SECONDS = 15.0
+_HOME_COMPATIBILITY_RETRY_SECONDS = 5.0
 
 _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
@@ -575,19 +577,35 @@ async def startup():
 
     async def _verify_home_compatibility() -> None:
         nonlocal pending_home_compatibility
-        worker = asyncio.create_task(asyncio.to_thread(read_home_compatibility, config.cache_dir / "state", db_path))
-        try:
-            pending_home_compatibility = await asyncio.shield(worker)
-        except asyncio.CancelledError:
-            # A filesystem worker cannot be cancelled; drain it before shutdown.
-            await asyncio.gather(worker, return_exceptions=True)
-            raise
-        except Exception:
-            logger.warning("Private Home evidence is unavailable; Home remains off")
-            pending_home_compatibility = HomeCompatibility(
-                HomeAuthorization.narrow(), "needs_consent", requires_consent=True
+        while True:
+            worker = asyncio.create_task(
+                asyncio.to_thread(read_home_compatibility, config.cache_dir / "state", db_path)
             )
-        app.state.home_compatibility_result = pending_home_compatibility
+            try:
+                result = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # A filesystem worker cannot be cancelled; drain it before shutdown.
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
+            except Exception:
+                logger.warning("Private Home evidence is unavailable; Home remains off")
+                result = HomeCompatibility(HomeAuthorization.narrow(), "unavailable")
+            async with app.state.home_context_choice_lock:
+                if result.resolved and result.requires_consent and app.state.home_consent_choice is False:
+                    # Keep off may have arrived while the evidence was unreadable.
+                    # Revoke a verified cap before publishing it; a recovered legacy
+                    # profile must never acquire a cap because of a failed read.
+                    try:
+                        await _persist_home_ambient_consent(app.state, granted=False)
+                    except (OSError, sqlite3.Error, ValueError):
+                        result = HomeCompatibility(HomeAuthorization.narrow(), "unavailable")
+                    else:
+                        result = HomeCompatibility(result.authorization, "needs_consent", requires_consent=True)
+                pending_home_compatibility = result
+                app.state.home_compatibility_result = result
+            if result.resolved:
+                return
+            await asyncio.sleep(_HOME_COMPATIBILITY_RETRY_SECONDS)
 
     def _adopt_home_compatibility() -> None:
         """Called synchronously only at the producer's preparation boundary."""
@@ -614,7 +632,9 @@ async def startup():
             app.state.home_profile_ready = home_compatibility.status == "verified"
         if home_compatibility is None:
             return
-        permitted = not state.home_ambient_consent_required or state.home_ambient_consent_granted
+        permitted = home_compatibility.resolved and (
+            not state.home_ambient_consent_required or state.home_ambient_consent_granted
+        )
         should_enable = state.home_context_requested and permitted
         if should_enable and not config.homeassistant.context_enabled:
             if (

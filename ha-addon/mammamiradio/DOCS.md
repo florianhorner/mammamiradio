@@ -409,7 +409,13 @@ installations needs later Home Profile support.
 
 When a profile cannot be verified, radio keeps playing with Home cues and
 background Home reads off. An old saved enabled option does not restore access.
-Confirm sound again and review a fresh narrow preview before sharing daylight
+If saved evidence is temporarily unreadable, the station retries in the
+background. Preview and sharing stay unavailable until that check completes;
+a read failure does not change the saved scope. Keep Home private remains
+available and reports whether the disabled choice was fully saved.
+
+After a completed check finds no usable profile, confirm sound again and review
+a fresh narrow preview before sharing daylight
 and weather. That explicit choice records a permanent narrow scope, even if a
 profile appears later. **Keep Home private** revokes access immediately and
 saves the disabled option; the panel reports any persistence failure. The narrow

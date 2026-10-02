@@ -289,7 +289,7 @@ def test_public_segment_metadata_redacts_private_ritual_internals():
     metadata = {
         "source": "banter",
         "ritual_families": ["Kitchen ritual"],
-        "ritual_recipe_matches": [{"entity_id": "binary_sensor.kitchen_fridge_door"}],
+        "ritual_recipe_matches": [{"entity_id": "binary_sensor.example_kitchen_fridge_door"}],
         "ritual_directive": "Mention the exact fridge door.",
     }
 
@@ -354,9 +354,9 @@ def test_ha_details_payload_serializes_present_observability():
     state.ha_recent_event_count = 3
     state.ha_last_event_label = "Kitchen"
     state.ha_scored_entities = [{"entity_id": f"sensor.{i}"} for i in range(20)]
-    state.ha_denylist_hits = {"sensor.hidden": 2}
+    state.ha_denylist_hits = {"sensor.example_hidden": 2}
     state.ha_ritual_public_families = ["Kitchen ritual"]
-    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.fridge"}]
+    state.ha_ritual_matches = [{"recipe_id": "fridge_freezer_raid", "entity_id": "binary_sensor.example_fridge"}]
     state.ha_ritual_recipe_audit = [{"recipe_id": "chores_reminders", "status": "opportunity"}]
 
     payload = status_payload._ha_details_payload(state)
@@ -369,7 +369,7 @@ def test_ha_details_payload_serializes_present_observability():
     assert payload["recent_event_count"] == 3
     assert payload["last_event_label"] == "Kitchen"
     assert len(payload["scored_entities"]) == 12
-    assert payload["denylist_hits"] == {"sensor.hidden": 2}
+    assert payload["denylist_hits"] == {"sensor.example_hidden": 2}
     assert payload["rituals"]["public_families"] == ["Kitchen ritual"]
     assert payload["rituals"]["matches"][0]["recipe_id"] == "fridge_freezer_raid"
     assert payload["rituals"]["audit"][0]["status"] == "opportunity"
@@ -811,3 +811,8 @@ def test_unknown_recovery_evidence_is_not_reported_missing():
     assert "No verified backup audio" in project()["detail"]
     state.source_readiness.configure("recovery", True, bundled=True)
     assert project()["status"] == "cover_only"
+
+
+def test_unavailable_home_evidence_is_visible_without_other_ha_details():
+    state = StationState(home_compatibility_status="unavailable")
+    assert status_payload._ha_details_payload(state)["compatibility_status"] == "unavailable"

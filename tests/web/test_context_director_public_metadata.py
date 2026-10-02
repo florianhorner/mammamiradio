@@ -35,7 +35,7 @@ def test_public_metadata_scrubs_internal_keys_inside_a_tuple_branch():
     public = _public_segment_metadata(
         {
             "brand": "Radio",
-            "sources": ({"home_fact_entity_id": "binary_sensor.office", "keep": 1},),
+            "sources": ({"home_fact_entity_id": "binary_sensor.example_office", "keep": 1},),
         }
     )
 

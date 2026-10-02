@@ -638,7 +638,7 @@ async def test_write_banter_uses_only_selected_home_fact_and_keeps_opaque_handof
 
     fact = PromptFact(
         fact_id="opaque-fact-1",
-        entity_id="weather.home",
+        entity_id="weather.example_home",
         topic_key="ambient.temperature",
         fingerprint="fingerprint",
         prompt="Oggi il meteo è soleggiato, con 24 gradi.",
@@ -680,7 +680,9 @@ async def test_context_off_drops_supplied_prompt_fact_from_prompt_contract_and_h
     config.homeassistant.context_enabled = False
     from mammamiradio.home.context_director import PromptFact
 
-    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    fact = PromptFact(
+        "opaque-fact-1", "weather.example_home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3
+    )
     response = {
         "lines": [
             {"host": config.hosts[0].name, "text": "The studio stays with the music."},
@@ -717,7 +719,9 @@ async def test_write_banter_repairs_mismatched_home_fact_id_once(config, state):
     config.super_italian_mode = True
     from mammamiradio.home.context_director import PromptFact
 
-    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    fact = PromptFact(
+        "opaque-fact-1", "weather.example_home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3
+    )
     invalid = {
         "lines": [{"host": config.hosts[0].name, "text": "È una bella giornata."}],
         "new_joke": None,
@@ -746,7 +750,9 @@ async def test_write_banter_keeps_good_banter_when_home_fact_id_unrecoverable(co
     config.super_italian_mode = True
     from mammamiradio.home.context_director import HomeContextDirector, PromptFact
 
-    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    fact = PromptFact(
+        "opaque-fact-1", "weather.example_home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3
+    )
     state.home_context_director = HomeContextDirector(bindings=SYNTHETIC_BINDINGS)
     invalid = {
         "lines": [{"host": config.hosts[0].name, "text": "È una bella giornata di sole."}],
@@ -2325,7 +2331,7 @@ async def test_write_banter_restores_pending_directive_on_fallback(config, state
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["", "ha", "timer", "ha:light.private_kitchen", "unknown"])
+@pytest.mark.parametrize("source", ["", "ha", "timer", "ha:light.example_private_kitchen", "unknown"])
 async def test_context_off_retires_stale_home_directive_before_no_llm_return(config, state, source):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
@@ -2452,7 +2458,7 @@ async def test_context_off_clears_stale_home_directive_from_state_and_llm_prompt
     raw_directive = "Mention the private kitchen light."
     state.ha_pending_directive = raw_directive
     state.ha_pending_directive_moment_id = "private-moment"
-    state.ha_pending_directive_source = "ha:light.private_kitchen"
+    state.ha_pending_directive_source = "ha:light.example_private_kitchen"
     prompts: list[str] = []
 
     async def _generate(**kwargs):
@@ -2483,7 +2489,7 @@ async def test_revoked_home_directive_stays_retired_across_next_banter_iteration
     raw_directive = "Mention the private kitchen light."
     state.ha_pending_directive = raw_directive
     state.ha_pending_directive_moment_id = "private-moment"
-    state.ha_pending_directive_source = "ha:light.private_kitchen"
+    state.ha_pending_directive_source = "ha:light.example_private_kitchen"
     submission_allowed = True
     prompts: list[str] = []
     calls = 0

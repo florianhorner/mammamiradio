@@ -3758,7 +3758,7 @@ def test_radio_event_directive_does_not_override_existing_directive():
 def test_radio_event_gag_feeds_ledger_event_path():
     state = _make_state()
     event = HomeEvent(
-        "binary_sensor.phone_charging",
+        "binary_sensor.example_phone_charging",
         "A household device started charging",
         "off",
         "on",
@@ -3788,8 +3788,8 @@ def test_ritual_recipe_directive_uses_next_break_path():
     state = _make_state()
     matches = match_ritual_recipes(
         None,
-        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
-        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
         now=100.0,
     )
 
@@ -3808,8 +3808,8 @@ def test_ritual_recipe_directive_does_not_override_existing_directive():
     state.ha_pending_directive = "legacy directive"
     matches = match_ritual_recipes(
         None,
-        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
-        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
         now=100.0,
     )
 
@@ -3827,8 +3827,16 @@ def test_ritual_recipe_gag_feeds_ledger_event_path_without_spending_recipe_coold
     state = _make_state()
     matches = match_ritual_recipes(
         None,
-        {"binary_sensor.fridge_door": _ha_state("off", device_class="door", friendly_name="Kitchen fridge door")},
-        {"binary_sensor.fridge_door": _ha_state("on", device_class="door", friendly_name="Kitchen fridge door")},
+        {
+            "binary_sensor.example_fridge_door": _ha_state(
+                "off", device_class="door", friendly_name="Kitchen fridge door"
+            )
+        },
+        {
+            "binary_sensor.example_fridge_door": _ha_state(
+                "on", device_class="door", friendly_name="Kitchen fridge door"
+            )
+        },
         now=200.0,
     )
 
@@ -3977,12 +3985,12 @@ def _interrupt_lane_matches(now: float):
     return match_ritual_recipes(
         [_INTERRUPT_LANE_TEST_RECIPE],
         {
-            "binary_sensor.test_interrupt_source": _ha_state(
+            "binary_sensor.example_test_interrupt_source": _ha_state(
                 "off", device_class="occupancy", friendly_name="Test Interrupt Source"
             )
         },
         {
-            "binary_sensor.test_interrupt_source": _ha_state(
+            "binary_sensor.example_test_interrupt_source": _ha_state(
                 "on", device_class="occupancy", friendly_name="Test Interrupt Source"
             )
         },
@@ -3998,7 +4006,7 @@ def test_a_door_opening_has_no_audio_consequence():
     """
     clear_ritual_recipe_cooldowns()
     state = _make_state()
-    entity_id = "binary_sensor.test_front_door"
+    entity_id = "binary_sensor.example_test_front_door"
     attrs = {"device_class": "door", "friendly_name": "Test Front Door", "area_name": "Test Hallway"}
     matches = match_ritual_recipes(
         None,
@@ -4021,8 +4029,8 @@ def test_a_door_opening_has_no_audio_consequence():
 def _coffee_directive_matches(now: float):
     return match_ritual_recipes(
         None,
-        {"sensor.kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
-        {"sensor.kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("0", friendly_name="Kitchen coffee machine power")},
+        {"sensor.example_kitchen_coffee_power": _ha_state("80", friendly_name="Kitchen coffee machine power")},
         now=now,
     )
 
@@ -4041,7 +4049,7 @@ def test_ritual_directive_records_elected_moment_and_threads_id():
     assert row.lane == "directive"
     assert row.family == "morning_launch"
     assert row.public_label == "Morning launch"
-    assert row.entity_id == "sensor.kitchen_coffee_power"
+    assert row.entity_id == "sensor.example_kitchen_coffee_power"
     # The receipt id travels with the directive toward the consuming banter.
     assert state.ha_pending_directive_moment_id == row.id
 
@@ -4300,8 +4308,8 @@ async def test_producer_records_gag_moment_for_ritual_sourced_bucket_only():
     state = _make_state()
     state.moment_store = _moment_store()
     ledger = EveningLedger()
-    ledger.buckets["binary_sensor.fridge_door|off->on"] = GagBucket(
-        entity_id="binary_sensor.fridge_door",
+    ledger.buckets["binary_sensor.example_fridge_door|off->on"] = GagBucket(
+        entity_id="binary_sensor.example_fridge_door",
         label="Kitchen ritual",
         old_state="chiuso",
         new_state="aperto",
@@ -4327,7 +4335,7 @@ async def test_producer_records_gag_moment_for_ritual_sourced_bucket_only():
         patch.object(
             ledger,
             "offer_gag",
-            return_value=("binary_sensor.fridge_door|off->on", "Il frigo, di nuovo stasera."),
+            return_value=("binary_sensor.example_fridge_door|off->on", "Il frigo, di nuovo stasera."),
         ),
     ):
         await _run_until_queued(queue, state, config)
@@ -4352,9 +4360,9 @@ async def test_generated_running_gag_carries_receipt_until_stream_marks_airing(t
     state = _make_state()
     state.moment_store = _moment_store()
     ledger = EveningLedger()
-    key = "binary_sensor.fridge_door|off->on"
+    key = "binary_sensor.example_fridge_door|off->on"
     ledger.buckets[key] = GagBucket(
-        entity_id="binary_sensor.fridge_door",
+        entity_id="binary_sensor.example_fridge_door",
         label="Kitchen ritual",
         old_state="chiuso",
         new_state="aperto",
@@ -4412,8 +4420,8 @@ async def test_producer_records_no_gag_moment_for_plain_bucket():
     state = _make_state()
     state.moment_store = _moment_store()
     ledger = EveningLedger()
-    ledger.buckets["switch.fan|off->on"] = GagBucket(
-        entity_id="switch.fan",
+    ledger.buckets["switch.example_fan|off->on"] = GagBucket(
+        entity_id="switch.example_fan",
         label="Ventilatore",
         old_state="spento",
         new_state="acceso",
@@ -4433,7 +4441,7 @@ async def test_producer_records_no_gag_moment_for_plain_bucket():
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock, return_value=ha_context),
         patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
-        patch.object(ledger, "offer_gag", return_value=("switch.fan|off->on", "Il ventilatore, di nuovo.")),
+        patch.object(ledger, "offer_gag", return_value=("switch.example_fan|off->on", "Il ventilatore, di nuovo.")),
     ):
         await _run_until_queued(queue, state, config)
 
@@ -5749,7 +5757,7 @@ def test_companionship_claim_eligibility_excludes_priority_lanes(blocked_field):
     elif blocked_field == "no_llm":
         kwargs["script_llm_available"] = False
     elif blocked_field == "prompt_fact":
-        kwargs["prompt_fact"] = PromptFact("f", "weather.home", "weather", "x", "Rain", 1)
+        kwargs["prompt_fact"] = PromptFact("f", "weather.example_home", "weather", "x", "Rain", 1)
     elif blocked_field == "directive":
         state.ha_pending_directive = "React now"
     elif blocked_field == "request":
@@ -11613,7 +11621,7 @@ async def test_fire_interrupt_failed_bridge_validation_preserves_interrupt_state
     [
         ("ha", True),
         ("timer", True),
-        ("ha:binary_sensor.kitchen_presence", True),
+        ("ha:binary_sensor.example_kitchen_presence", True),
         # Blank and unknown provenance fail closed as Home-owned so the
         # playback gate can drop the bridge after a Home privacy cutover.
         ("", True),

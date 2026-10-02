@@ -70,12 +70,14 @@ def provenance_path(state_dir: Path) -> Path:
     return Path(state_dir) / PROVENANCE_FILENAME
 
 
-def _read_json(path: Path) -> object:
+def _read_json(path: Path, *, strict_io: bool = False) -> object:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return _MISSING
     except (OSError, json.JSONDecodeError, TypeError) as exc:
+        if strict_io and isinstance(exc, OSError):
+            raise
         logger.warning("Cannot trust legacy-home bridge state %s: %s", path, exc)
         return _INVALID
 
@@ -89,9 +91,9 @@ def _parse_preflight(data: object) -> LegacyHomePreflightV1 | None:
     return LegacyHomePreflightV1(database_preexisted=value)
 
 
-def load_legacy_home_preflight_v1(state_dir: Path) -> LegacyHomePreflightV1 | None:
+def load_legacy_home_preflight_v1(state_dir: Path, *, strict_io: bool = False) -> LegacyHomePreflightV1 | None:
     """Load the immutable first preflight fact, returning ``None`` on doubt."""
-    data = _read_json(preflight_path(state_dir))
+    data = _read_json(preflight_path(state_dir), strict_io=strict_io)
     if data is _MISSING or data is _INVALID:
         return None
     preflight = _parse_preflight(data)
@@ -100,7 +102,7 @@ def load_legacy_home_preflight_v1(state_dir: Path) -> LegacyHomePreflightV1 | No
     return preflight
 
 
-def load_legacy_home_database_preflight_v1(db_path: Path) -> LegacyHomePreflightV1 | None:
+def load_legacy_home_database_preflight_v1(db_path: Path, *, strict_io: bool = False) -> LegacyHomePreflightV1 | None:
     """Read the redundant install-origin witness without creating or migrating the DB.
 
     Older databases legitimately lack this R0 table on their first upgraded
@@ -124,9 +126,13 @@ def load_legacy_home_database_preflight_v1(db_path: Path) -> LegacyHomePreflight
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return None
+        if strict_io:
+            raise
         logger.warning("Cannot trust database Home install origin %s: %s", path, exc)
         return LegacyHomePreflightV1(database_preexisted=False, durable=False)
     except (OSError, sqlite3.DatabaseError) as exc:
+        if strict_io:
+            raise
         logger.warning("Cannot trust database Home install origin %s: %s", path, exc)
         return LegacyHomePreflightV1(database_preexisted=False, durable=False)
     finally:
@@ -141,10 +147,12 @@ def load_legacy_home_database_preflight_v1(db_path: Path) -> LegacyHomePreflight
 def load_authoritative_legacy_home_preflight_v1(
     state_dir: Path,
     db_path: Path,
+    *,
+    strict_io: bool = False,
 ) -> LegacyHomePreflightV1 | None:
     """Return a legacy-eligible preflight only when both durable witnesses agree."""
-    sidecar = load_legacy_home_preflight_v1(state_dir)
-    database = load_legacy_home_database_preflight_v1(db_path)
+    sidecar = load_legacy_home_preflight_v1(state_dir, strict_io=strict_io)
+    database = load_legacy_home_database_preflight_v1(db_path, strict_io=strict_io)
     if (
         sidecar is None
         or database is None
@@ -299,11 +307,13 @@ def _parse_provenance(data: object) -> LegacyHomeProvenanceV1 | None:
 def load_legacy_home_provenance_v1(
     state_dir: Path,
     db_path: Path,
+    *,
+    strict_io: bool = False,
 ) -> LegacyHomeProvenanceV1 | None:
     """Load only provenance that exactly matches the current v1 manifest."""
-    if load_authoritative_legacy_home_preflight_v1(state_dir, db_path) is None:
+    if load_authoritative_legacy_home_preflight_v1(state_dir, db_path, strict_io=strict_io) is None:
         return None
-    data = _read_json(provenance_path(state_dir))
+    data = _read_json(provenance_path(state_dir), strict_io=strict_io)
     if data is _MISSING or data is _INVALID:
         return None
     provenance = _parse_provenance(data)

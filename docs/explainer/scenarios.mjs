@@ -46,10 +46,10 @@ const scenarios = {
     rgb: "244, 208, 72",
     sensors: [
       ["⌂", "person.example_guest", "home · 4 min"],
-      ["↗", "binary_sensor.front_door", "closed"],
-      ["☼", "sensor.living_room_lux", "36 lx"],
-      ["°", "sensor.outdoor_temperature", "14 °C"],
-      ["♪", "media_player.kitchen", "idle"],
+      ["↗", "binary_sensor.example_front_door", "closed"],
+      ["☼", "sensor.example_living_room_lux", "36 lx"],
+      ["°", "sensor.example_outdoor_temperature", "14 °C"],
+      ["♪", "media_player.example_kitchen", "idle"],
     ],
     beats: [
       { kind: "tail", note: "starter-catalog song winding down, ~3s" },
@@ -85,11 +85,11 @@ const scenarios = {
     color: "#e8a030",
     rgb: "232, 160, 48",
     sensors: [
-      ["◉", "sensor.coffee_machine_power", "842 W"],
+      ["◉", "sensor.example_coffee_machine_power", "842 W"],
       ["⌂", "person.example_guest", "home · early"],
-      ["°", "sensor.kitchen_temperature", "14 °C"],
-      ["◌", "binary_sensor.kitchen_presence", "detected"],
-      ["☼", "sensor.kitchen_lux", "118 lx"],
+      ["°", "sensor.example_kitchen_temperature", "14 °C"],
+      ["◌", "binary_sensor.example_kitchen_presence", "detected"],
+      ["☼", "sensor.example_kitchen_lux", "118 lx"],
     ],
     beats: [
       { kind: "tail", note: "starter-catalog song winding down, ~3s" },
@@ -127,11 +127,11 @@ const scenarios = {
     color: "#b47850",
     rgb: "180, 120, 80",
     sensors: [
-      ["↻", "sensor.washing_machine", "finished · 2h 07m"],
-      ["◌", "binary_sensor.laundry_motion", "clear · 2h 12m"],
+      ["↻", "sensor.example_washing_machine", "finished · 2h 07m"],
+      ["◌", "binary_sensor.example_laundry_motion", "clear · 2h 12m"],
       ["⌂", "zone.home", "2 people"],
-      ["↗", "binary_sensor.laundry_door", "closed"],
-      ["⚡", "sensor.washer_power", "0.4 W"],
+      ["↗", "binary_sensor.example_laundry_door", "closed"],
+      ["⚡", "sensor.example_washer_power", "0.4 W"],
     ],
     beats: [
       { kind: "tail", note: "starter-catalog song winding down, ~3s" },
@@ -169,9 +169,9 @@ const scenarios = {
     rgb: "96, 165, 250",
     sensors: [
       ["☾", "sun.sun", "below_horizon · 20 min"],
-      ["☼", "weather.home", "clear-night"],
-      ["°", "weather.home · temperature", "11 °C"],
-      ["◌", "weather.home · humidity", "72 %"],
+      ["☼", "weather.example_home", "clear-night"],
+      ["°", "weather.example_home · temperature", "11 °C"],
+      ["◌", "weather.example_home · humidity", "72 %"],
       ["↗", "sun.sun · next_dawn", "06:12"],
     ],
     beats: [

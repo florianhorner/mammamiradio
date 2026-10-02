@@ -30,7 +30,7 @@ def _store_with_aired_row() -> tuple[MomentStore, str]:
         lane="directive",
         family="morning_launch",
         public_label="Morning launch",
-        entity_id="sensor.kitchen_coffee_power",
+        entity_id="sensor.example_kitchen_coffee_power",
         confidence=0.8,
         now=NOW,
     )
@@ -111,7 +111,7 @@ async def test_admin_status_moments_trail_and_cross_page_consistency():
     rows = admin["moments_admin"]
     assert len(rows) == 1
     assert rows[0]["id"] == moment_id
-    assert rows[0]["entity_id"] == "sensor.kitchen_coffee_power"
+    assert rows[0]["entity_id"] == "sensor.example_kitchen_coffee_power"
     assert rows[0]["confidence"] == 0.8
     assert rows[0]["status"] == "aired"
     # The admin-only trail never appears on the public surface...

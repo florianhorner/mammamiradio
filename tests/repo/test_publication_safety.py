@@ -111,7 +111,27 @@ def test_release_docs_preserve_history_and_other_receipts(tmp_path: Path, body: 
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("domain", ["person", "device_tracker", "lock"])
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "person",
+        "device_tracker",
+        "lock",
+        "sensor",
+        "binary_sensor",
+        "switch",
+        "light",
+        "fan",
+        "vacuum",
+        "weather",
+        "sun",
+        "input_select",
+        "input_button",
+        "media_player",
+        "climate",
+        "cover",
+    ],
+)
 def test_public_examples_require_synthetic_identity(tmp_path: Path, domain: str) -> None:
     guide = tmp_path / "example.md"
     canary = f"{domain}.recorded_household_value"
@@ -357,3 +377,127 @@ def test_release_docs_preserve_install_and_home_promises() -> None:
     guide = (ROOT / "docs/integrations/ha-integration.md").read_text()
     assert "2.10" in guide and "alpha" in guide and "shared Docker network" in guide
     assert "synthetic" in (ROOT / "docs/integrations/now-playing.md").read_text().lower()
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "person",
+        "device_tracker",
+        "lock",
+        "sensor",
+        "binary_sensor",
+        "switch",
+        "light",
+        "fan",
+        "vacuum",
+        "weather",
+        "sun",
+        "input_select",
+        "input_button",
+        "media_player",
+        "climate",
+        "cover",
+    ],
+)
+@pytest.mark.parametrize(
+    "name", ["docs/example.md", "tests/ordinary.py", "example.json", "template.html", "example.svg", "Dockerfile"]
+)
+def test_every_example_surface_requires_synthetic_entity_domains(domain, name):
+    from scripts.public_tree_safety import scan_text
+
+    poison = domain + ".recorded_household_value"
+    violations = scan_text(name, repr(poison))
+    assert [v.rule for v in violations] == ["non-synthetic-entity"]
+    assert poison not in violations[0].diagnostic()
+    assert not scan_text(name, repr(domain + ".example_device"))
+    if name.endswith(".py"):
+        assert not scan_text(name, domain + ".ordinary_attribute()")
+
+
+@pytest.mark.parametrize("prefix,suffix", [(b"\0", b""), (b"", b"\0"), (b"\x89PNG\r\n\x1a\n\0", b"")])
+@pytest.mark.parametrize("name", ["README.md", "Dockerfile", "example.py", "fake.mp3"])
+def test_nul_cannot_hide_tracked_text(tmp_path, monkeypatch, prefix, suffix, name):
+    from scripts import public_tree_safety as scanner
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/public-evidence-retention.json").write_text("{}")
+    poison = "sensor." + "recorded_household_value"
+    (tmp_path / name).write_bytes(prefix + repr(poison).encode() + suffix)
+    monkeypatch.setattr(scanner, "tracked_paths", lambda root: [name])
+    violations = scanner.scan_repository(tmp_path)
+    assert {v.rule for v in violations} == {"unexpected-nul-in-text", "non-synthetic-entity"}
+    assert all(poison not in v.diagnostic() for v in violations)
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-32"])
+def test_scanner_decodes_wide_text(encoding):
+    from scripts.public_tree_safety import scan_bytes
+
+    poison = "switch." + "recorded_household_value"
+    assert [v.rule for v in scan_bytes("README.md", poison.encode(encoding))] == ["non-synthetic-entity"]
+    assert not scan_bytes("README.md", "switch.example_device".encode(encoding))
+    assert scan_bytes("README.md", b"\xff\xfe\xff")[0].rule == "invalid-text-encoding"
+
+
+@pytest.mark.parametrize(
+    "name,header",
+    [
+        ("example.png", b"\x89PNG\r\n\x1a\n"),
+        ("example.webp", b"RIFF\0\0\0\0WEBP"),
+        ("example.woff2", b"wOF2"),
+        ("example.mp3", b"ID3"),
+        ("example.mp3", b"\xff\xfb"),
+    ],
+)
+def test_binary_metadata_is_scanned_without_rejecting_media(name, header):
+    from scripts.public_tree_safety import scan_bytes
+
+    assert not scan_bytes(name, header + b"\0\x80\x81\0safe metadata\0")
+    poison = "climate." + "recorded_household_value"
+    violations = scan_bytes(name, header + b"\0\x80\x81\0" + poison.encode() + b"\0")
+    assert [v.rule for v in violations] == ["non-synthetic-entity"]
+    assert poison not in violations[0].diagnostic()
+
+
+def test_public_functional_ids_are_exact_exceptions():
+    from scripts.public_tree_safety import scan_text
+
+    assert not scan_text("docs/example.md", "media_player.mammamiradio media_player.play_media light.turn_on sun.sun")
+    assert scan_text("docs/example.md", "sensor.mammamiradio_" + "recorded_household_value")
+    assert scan_text("docs/example.md", "media_player.play_media" + "_" + "recorded_household_value")
+
+
+def test_encoded_and_nested_identifiers_keep_the_same_policy():
+    from scripts.public_tree_safety import scan_bytes, scan_text
+
+    poison = "sensor." + "recorded_household_value"
+    assert scan_text("ordinary.py", f"body = b'{poison}'")
+    assert not scan_text("ordinary.py", 'topic = "ambient.vacuum.vacuum.example_device"')
+    assert scan_text("ordinary.py", f'topic = "ambient.sensor.{poison}"')
+    for encoding in ("utf-16", "utf-32"):
+        assert scan_bytes("README.md", ("sen\0sor." + "recorded_household_value").encode(encoding))
+    for encoding in ("utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"):
+        result = scan_bytes("example.mp3", b"ID3\0\xff" + poison.encode(encoding) + b"\0")
+        assert {v.rule for v in result} == {"non-synthetic-entity"}
+
+
+def test_explicit_document_nul_failure_is_redacted(tmp_path):
+    path = tmp_path / "example.md"
+    poison = "recorded_household_value"
+    path.write_text("sen\0sor." + poison)
+    result = _docs_check(path)
+    assert result.returncode == 1
+    assert "documentation file unreadable" in result.stdout
+    assert poison not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("suffix", ["state", "attributes.unit_of_measurement"])
+@pytest.mark.parametrize("name", ["docs/example.md", "ordinary.py", "template.html"])
+def test_template_attribute_suffix_cannot_hide_entity(name, suffix):
+    from scripts.public_tree_safety import scan_text
+
+    poison = "sensor." + "recorded_household_value"
+    expression = "{{ states." + poison + "." + suffix + " }}"
+    assert {v.rule for v in scan_text(name, repr(expression))} == {"non-synthetic-entity"}
+    assert not scan_text(name, repr(expression.replace(poison, "sensor.example_device")))

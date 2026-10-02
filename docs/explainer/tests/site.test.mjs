@@ -59,7 +59,7 @@ test("the experience has multiple interactive home moments", () => {
   }
   // The data lives in scenarios.mjs and only there; app.js imports it.
   assert.match(js, /import scenarios, \{ transcriptFor \} from "\.\/scenarios\.mjs"/);
-  assert.doesNotMatch(js, /binary_sensor\.front_door/, "sensor data must not creep back into app.js");
+  assert.doesNotMatch(js, /binary_sensor\./, "sensor data must not creep back into app.js");
 });
 
 test("no scenario accent is green", () => {
@@ -77,7 +77,7 @@ test("the day-one moment illustrates only daylight and weather after opt-in", ()
   const dayOneScenarios = Object.values(scenarios).filter((scenario) => scenario.reachability === "day-one");
   assert.equal(dayOneScenarios.length, 1);
   for (const [, name] of dayOneScenarios[0].sensors) {
-    assert.match(name, /^(sun\.sun|weather\.home)/, `day-one scenario uses non-ambient entity: ${name}`);
+    assert.match(name, /^(sun\.sun|weather\.example_home)/, `day-one scenario uses non-ambient entity: ${name}`);
   }
   assert.match(dayOneScenarios[0].summary, /staged recording/);
   assert.match(dayOneScenarios[0].summary, /not a literal prompt preview/);

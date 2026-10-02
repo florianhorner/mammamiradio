@@ -326,7 +326,7 @@ async (page) => {
       useful_context: true,
       sent_now: [],
       entities: [{
-          entity_id: 'binary_sensor.lab_presence',
+          entity_id: 'binary_sensor.example_lab_presence',
           label: '<script>not markup</script> Lab presence',
           area: 'Lab',
           domain: 'binary_sensor',
@@ -339,7 +339,7 @@ async (page) => {
     if (responseMode === 'stale') preview.fresh = false;
     if (responseMode === 'sent_now_nonempty') {
       preview.sent_now = [{
-        entity_id: 'binary_sensor.lab_presence',
+        entity_id: 'binary_sensor.example_lab_presence',
         label: 'Lab presence',
         sent_to_prompt: true,
       }];
@@ -723,13 +723,13 @@ async (page) => {
     await page.waitForFunction(()=>firstListenProjection().privacyUnlocked);
     assert(await page.evaluate(()=>journeySurface.dataset.currentStep!=='2'),
       'fresh Home confirmation left setup stuck on sound check');
-    for(const status of ['checking','needs_consent','ambient','verified','narrow']){
+    for(const status of ['checking','unavailable','needs_consent','ambient','verified','narrow']){
       const setup=setupProjection({audio:true,fresh:false,onboardingRequired:false});
       setup.guided_setup.home_context.compatibility={status,fresh_sound_required:false};
       await resetUi(setup);
       await page.evaluate(()=>showFirstListenConnection('home'));
       const notice=page.locator('#homeCompatibilityNotice');
-      if(['checking','needs_consent','ambient'].includes(status)){
+      if(['checking','unavailable','needs_consent','ambient'].includes(status)){
         assert(await notice.isVisible(),`${status}: compatibility notice missing from Home panel`);
         if(status==='needs_consent')assert((await notice.innerText()).includes('later Home Profile'),
           'compatibility notice promised universal profile recovery');

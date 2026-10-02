@@ -49,7 +49,7 @@ def weather(*, temperature: float = 28.0, state: str = "sunny", score: float = 9
 
 def climate(*, temperature: float = 22.0, state: str = "heat", score: float = 8.0) -> DirectorObservation:
     return DirectorObservation(
-        entity_id="climate.living_room",
+        entity_id="climate.example_living_room",
         domain="climate",
         state=state,
         score=score,
@@ -60,7 +60,7 @@ def climate(*, temperature: float = 22.0, state: str = "heat", score: float = 8.
 
 def temperature_sensor(*, temperature: float = 21.0, score: float = 7.0) -> DirectorObservation:
     return DirectorObservation(
-        entity_id="sensor.hall_temperature",
+        entity_id="sensor.example_hall_temperature",
         domain="sensor",
         state=str(temperature),
         score=score,
@@ -84,7 +84,7 @@ def sun(*, state: str = "above_horizon", score: float = 4.0) -> DirectorObservat
 
 def presence(*, area: str | None = "Living room", score: float = 5.0) -> DirectorObservation:
     return DirectorObservation(
-        entity_id="binary_sensor.living_room_presence",
+        entity_id="binary_sensor.example_living_room_presence",
         domain="binary_sensor",
         state="on",
         score=score,
@@ -124,7 +124,7 @@ def test_projection_keeps_only_typed_fields_and_rejects_invalid_values():
     for bad_payload in (None, ["state"], "sunny", 42):
         assert DirectorObservation.from_home_assistant_state("weather.example_weather", bad_payload) is None
     assert DirectorObservation.from_home_assistant_state(
-        "sensor.hall_temperature",
+        "sensor.example_hall_temperature",
         {
             "state": "21.5",
             "attributes": {
@@ -134,7 +134,7 @@ def test_projection_keeps_only_typed_fields_and_rejects_invalid_values():
             },
         },
     ) == DirectorObservation(
-        entity_id="sensor.hall_temperature",
+        entity_id="sensor.example_hall_temperature",
         domain="sensor",
         state="21.5",
         temperature_c=21.5,
@@ -144,7 +144,7 @@ def test_projection_keeps_only_typed_fields_and_rejects_invalid_values():
     # guessing Celsius — Home Assistant always publishes one for these.
     assert (
         DirectorObservation.from_home_assistant_state(
-            "sensor.hall_temperature",
+            "sensor.example_hall_temperature",
             {"state": "21.5", "attributes": {"device_class": "temperature"}},
         )
         is None
@@ -161,7 +161,7 @@ def test_projection_keeps_only_typed_fields_and_rejects_invalid_values():
             None,
         ),
         (
-            "climate.living_room",
+            "climate.example_living_room",
             {
                 "state": "heat",
                 "attributes": {"current_temperature": 41, "temperature": 59, "temperature_unit": "°F"},
@@ -170,7 +170,7 @@ def test_projection_keeps_only_typed_fields_and_rejects_invalid_values():
             15.0,
         ),
         (
-            "sensor.hall_temperature",
+            "sensor.example_hall_temperature",
             {"state": "41", "attributes": {"device_class": "temperature", "unit_of_measurement": "°F"}},
             5.0,
             None,
@@ -201,7 +201,7 @@ def test_projection_preserves_an_inexact_fahrenheit_conversion():
 def test_projection_rejects_a_classified_sensor_with_an_unreadable_unit(unit):
     assert (
         DirectorObservation.from_home_assistant_state(
-            "sensor.hall_temperature",
+            "sensor.example_hall_temperature",
             {"state": "21.5", "attributes": {"device_class": "temperature", "unit_of_measurement": unit}},
         )
         is None
@@ -210,7 +210,7 @@ def test_projection_rejects_a_classified_sensor_with_an_unreadable_unit(unit):
 
 def test_projection_normalizes_kelvin_temperature_sensors():
     observation = DirectorObservation.from_home_assistant_state(
-        "sensor.hall_temperature",
+        "sensor.example_hall_temperature",
         {"state": "294.15", "attributes": {"device_class": "temperature", "unit_of_measurement": "K"}},
     )
 
@@ -265,9 +265,9 @@ def test_safe_allowlist_denies_people_trackers_security_lights_media_and_unclass
         DirectorObservation("device_tracker.example_phone", "device_tracker", "home", score=99),
         DirectorObservation("lock.example_front_door", "lock", "locked", score=99),
         DirectorObservation("camera.hall", "camera", "recording", score=99),
-        DirectorObservation("light.kitchen", "light", "on", score=99),
-        DirectorObservation("media_player.radio", "media_player", "playing", score=99),
-        DirectorObservation("sensor.hall_temperature", "sensor", "21", score=99, temperature_c=21),
+        DirectorObservation("light.example_kitchen", "light", "on", score=99),
+        DirectorObservation("media_player.example_radio", "media_player", "playing", score=99),
+        DirectorObservation("sensor.example_hall_temperature", "sensor", "21", score=99, temperature_c=21),
     ]
 
     director.observe([*denied, vacuum()], policy_revision=0)
@@ -294,7 +294,7 @@ def test_explicit_temperature_sensor_joins_the_shared_temperature_family(directo
 
 def test_presence_is_explicit_opt_in_and_mute_wins(director):
     director.observe([presence(), vacuum()], policy_revision=0)
-    assert director.personal_moment_eligible("binary_sensor.living_room_presence") is True
+    assert director.personal_moment_eligible("binary_sensor.example_living_room_presence") is True
     first = director.select()
     assert first is not None
     assert first.entity_id == "vacuum.example_vacuum_one"
@@ -302,20 +302,20 @@ def test_presence_is_explicit_opt_in_and_mute_wins(director):
     director.observe(
         [presence(), vacuum()],
         policy_revision=1,
-        personal_moment_opt_ins={"binary_sensor.living_room_presence"},
+        personal_moment_opt_ins={"binary_sensor.example_living_room_presence"},
     )
-    assert director.personal_moment_eligible("binary_sensor.living_room_presence") is True
+    assert director.personal_moment_eligible("binary_sensor.example_living_room_presence") is True
     assert director.reserve("queue-vacuum", first) is False  # revision 0 fact is stale
     second = director.select()
     assert second is not None
-    assert second.entity_id == "binary_sensor.living_room_presence"
+    assert second.entity_id == "binary_sensor.example_living_room_presence"
     assert "Living room" not in second.prompt
 
     director.observe(
         [presence(), vacuum()],
         policy_revision=2,
-        personal_moment_opt_ins={"binary_sensor.living_room_presence"},
-        muted_entity_ids={"binary_sensor.living_room_presence"},
+        personal_moment_opt_ins={"binary_sensor.example_living_room_presence"},
+        muted_entity_ids={"binary_sensor.example_living_room_presence"},
     )
     selected = director.select()
     assert selected is not None
@@ -326,15 +326,15 @@ def test_presence_requires_an_area_even_when_opted_in(director):
     director.observe(
         [presence(area=None)],
         policy_revision=0,
-        personal_moment_opt_ins={"binary_sensor.living_room_presence"},
+        personal_moment_opt_ins={"binary_sensor.example_living_room_presence"},
     )
-    assert director.personal_moment_eligible("binary_sensor.living_room_presence") is False
+    assert director.personal_moment_eligible("binary_sensor.example_living_room_presence") is False
     assert director.select() is None
 
 
 def test_quiet_presence_can_be_consented_but_is_not_selected_until_it_is_active(director):
     quiet = DirectorObservation(
-        entity_id="binary_sensor.living_room_presence",
+        entity_id="binary_sensor.example_living_room_presence",
         domain="binary_sensor",
         state="off",
         device_class="occupancy",
@@ -343,10 +343,10 @@ def test_quiet_presence_can_be_consented_but_is_not_selected_until_it_is_active(
     director.observe(
         [quiet],
         policy_revision=0,
-        personal_moment_opt_ins={"binary_sensor.living_room_presence"},
+        personal_moment_opt_ins={"binary_sensor.example_living_room_presence"},
     )
 
-    assert director.personal_moment_eligible("binary_sensor.living_room_presence") is True
+    assert director.personal_moment_eligible("binary_sensor.example_living_room_presence") is True
     assert director.select() is None
 
 
@@ -634,7 +634,7 @@ def test_non_casual_lanes_bypass_selection_and_coffee_joke_never_copies_arbitrar
 
 
 def test_admin_status_is_fact_free_and_contains_only_documented_diagnostics(director):
-    private_entity = "vacuum.secret_cleaner"
+    private_entity = "vacuum.example_secret_cleaner"
     director.observe(
         [DirectorObservation(private_entity, "vacuum", "cleaning", score=7)],
         policy_revision=0,
