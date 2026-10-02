@@ -8,9 +8,8 @@
 # merge signal, this wrapper:
 #
 #   1. verifies a pre-ship squad entry that is still about THIS code
-#      (code-state freshness: the entry's commit must be the PR head or an
-#      ancestor of it, and no commits may have been pushed to the PR after
-#      the entry — wall-clock age is irrelevant, a soak of days is fine);
+#      (the entry's commit must exactly match the PR head — wall-clock age is
+#      irrelevant, a soak of days is fine);
 #   2. updates the branch from base if it is behind (user-auth gh, so CI
 #      retriggers normally; a conflict stops here for a human);
 #   3. arms GitHub auto-merge pinned to the exact head it verified:
@@ -28,10 +27,8 @@
 # Multiple PR numbers are processed sequentially: land #1, update #2, land #2.
 set -euo pipefail
 
-# Freshness grace: /ship pushes mechanical commits (version bump, changelog)
-# right after the squad logs its entry; commits within this window after the
-# entry are treated as part of the reviewed push, not new work.
-GRACE_SECONDS="${MMR_LAND_GRACE_SECONDS:-600}"
+# The review entry must name the exact PR head. Do not infer freshness from Git
+# commit dates: PR authors control author/committer timestamps.
 UPDATE_TIMEOUT_SECONDS="${MMR_LAND_UPDATE_TIMEOUT:-120}"
 # Reader override exists for tests only; defaults to the real gstack log.
 READER="${MMR_LAND_REVIEW_READER:-$HOME/.claude/skills/gstack/bin/gstack-review-read}"
@@ -61,10 +58,10 @@ iso_to_epoch() {
     || true
 }
 
-# squad_check <pr-head-sha> <last-push-epoch> -> 0 if a qualifying entry
+# squad_check <pr-head-sha> -> 0 if a qualifying entry
 # exists, else prints the reason and returns 1.
 squad_check() {
-  local pr_head="$1" last_push="$2" line skill rc ts es
+  local pr_head="$1" line skill rc ts es
   if [ ! -x "$READER" ]; then
     say "land-pr: no review log reader at $READER — cannot verify the pre-ship squad."
     say "         Run /ship (it logs the squad), or fix the gstack install, then re-run."
@@ -79,16 +76,11 @@ squad_check() {
     ts="$(printf '%s' "$line" | jq -r '.timestamp // ""' 2>/dev/null)"
     es="$(iso_to_epoch "$ts")"
     [ -n "$es" ] || continue
-    # The entry must be about this code: its commit is the PR head or an
-    # ancestor of it...
+    # The entry must be about exactly this code. Do not accept ancestor commits
+    # plus a timestamp freshness check: Git commit timestamps are controlled by
+    # the PR author and can be backdated after review.
     git cat-file -e "${rc}^{commit}" 2>/dev/null || continue
-    { [ "$(git rev-parse "${rc}^{commit}" 2>/dev/null)" = "$pr_head" ] \
-        || git merge-base --is-ancestor "$rc" "$pr_head" 2>/dev/null; } || continue
-    # ...and nothing was pushed to the PR after the entry (+grace for /ship's
-    # own mechanical commits). A later push means the review saw older code.
-    if [ "$last_push" -gt $((es + GRACE_SECONDS)) ]; then
-      continue
-    fi
+    [ "$(git rev-parse "${rc}^{commit}" 2>/dev/null)" = "$pr_head" ] || continue
     return 0
   done < <("$READER" 2>/dev/null)
   say "land-pr: no pre-ship squad entry covers the current PR head."
@@ -98,28 +90,25 @@ squad_check() {
 }
 
 land_one() {
-  local pr="$1" view state head merge_state last_push new_head waited
+  local pr="$1" view state head merge_state new_head waited
 
   case "$pr" in (*[!0-9]*|'') die "PR number must be numeric, got: $pr" ;; esac
 
-  view="$(gh pr view "$pr" --json state,headRefOid,mergeStateStatus,commits 2>/dev/null)" \
+  view="$(gh pr view "$pr" --json state,headRefOid,mergeStateStatus 2>/dev/null)" \
     || die "could not read PR #$pr. Check the number and your gh auth, then re-run."
   state="$(printf '%s' "$view" | jq -r '.state')"
   head="$(printf '%s' "$view" | jq -r '.headRefOid')"
   merge_state="$(printf '%s' "$view" | jq -r '.mergeStateStatus')"
-  last_push="$(printf '%s' "$view" | jq -r '[.commits[].committedDate] | max // empty')"
 
   if [ "$state" != "OPEN" ]; then
     say "land-pr: PR #$pr is $state, not open — nothing to land."
     return 1
   fi
 
-  [ -n "$last_push" ] || die "PR #$pr reports no commits — refusing to land; check the PR on GitHub."
-  local last_push_epoch
-  last_push_epoch="$(iso_to_epoch "$last_push")"
-  [ -n "$last_push_epoch" ] || die "could not parse the PR #$pr head commit date ($last_push)."
+  [ -n "$head" ] && [ "$head" != "null" ] \
+    || die "PR #$pr reports no head commit — refusing to land; check the PR on GitHub."
 
-  # Make sure the PR head commit exists locally for the ancestor check; in a
+  # Make sure the PR head commit exists locally for the exact-head check; in a
   # Conductor worktree the PR branch is usually checked out already.
   if ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
     git fetch -q origin "pull/${pr}/head" 2>/dev/null || true
@@ -127,7 +116,7 @@ land_one() {
   git cat-file -e "${head}^{commit}" 2>/dev/null \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify the squad entry against it."
 
-  squad_check "$head" "$last_push_epoch" || return 1
+  squad_check "$head" || return 1
 
   if [ "$merge_state" = "DIRTY" ]; then
     say "land-pr: PR #$pr has a merge conflict with its base."

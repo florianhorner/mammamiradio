@@ -2,9 +2,9 @@
 # Self-test for scripts/land-pr.sh
 #
 # Drives the landing wrapper with a mocked `gh` (PATH shim) and a mocked
-# review-log reader (MMR_LAND_REVIEW_READER), asserting the squad code-state
-# freshness check, the update-branch path, the conflict stop, and the
-# head-pinned arming. No network. Exits non-zero on any mismatch.
+# review-log reader (MMR_LAND_REVIEW_READER), asserting the exact-head squad
+# check, the update-branch path, the conflict stop, and the head-pinned arming.
+# No network. Exits non-zero on any mismatch.
 
 set -euo pipefail
 
@@ -44,7 +44,7 @@ fi
 #   GH_MOCK_MERGE_STATE   mergeStateStatus (default CLEAN)
 #   GH_MOCK_HEAD          headRefOid (default real repo HEAD)
 #   GH_MOCK_HEAD_AFTER    headRefOid returned after `pr update-branch` ran
-#   GH_MOCK_COMMIT_DATE   committedDate of the newest PR commit (default NOW)
+#   GH_MOCK_COMMIT_DATE   committedDate in mock commit payloads (ignored by land-pr)
 #   GH_MOCK_UPDATE_FAIL   non-empty => `pr update-branch` exits 1
 # Every invocation is appended to $GH_MOCK_LOG for assertions.
 MOCK_BIN="$TMPDIR_T/bin"
@@ -130,11 +130,13 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
 merged_with "$HEAD_FULL" || fail "clean PR should arm auto-merge pinned to head"
 pass "clean PR arms --squash --auto --match-head-commit <head>"
 
-# Case 2: entry commit is an ANCESTOR of head, push within grace => allow
+# Case 2: entry commit is an ANCESTOR of head => deny. A later descendant may
+# be malicious and Git commit timestamps are author-controlled, so only an exact
+# review-log/head match satisfies the gate.
 run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")"
-[ "$RUN_RC" -eq 0 ] || fail "ancestor entry within grace should arm (exit code)"
-merged_with "$HEAD_FULL" || fail "ancestor entry within grace should arm"
-pass "ancestor entry within grace arms"
+[ "$RUN_RC" -ne 0 ] || fail "ancestor entry must deny (exit code)"
+never_merged || fail "ancestor entry must never arm"
+pass "ancestor entry denied"
 
 # Case 3: BEHIND PR => update-branch first, then arm pinned to the NEW head
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
@@ -171,12 +173,13 @@ run_land "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")"
 never_merged || fail "bogus-commit entry must deny"
 pass "bogus-commit entry denies"
 
-# Case 8: commits pushed AFTER the entry (beyond grace) => deny — the review
-# saw older code. Entry is 6h old; newest PR commit is 3h old.
-run_land "$(make_reader review "$ANC_SHORT" "$VERY_OLD_ISO")" GH_MOCK_COMMIT_DATE="$OLD_ISO"
-[ "$RUN_RC" -ne 0 ] || fail "post-review push must invalidate the entry (exit code)"
-never_merged || fail "post-review push must invalidate the entry"
-pass "post-review push invalidates entry (code-state freshness)"
+# Case 8: backdated descendant after review => deny. This is the supply-chain
+# regression guard: committedDate may predate the review, but the reviewed
+# commit is still only an ancestor of the current head.
+run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")" GH_MOCK_COMMIT_DATE="$VERY_OLD_ISO"
+[ "$RUN_RC" -ne 0 ] || fail "backdated descendant must deny (exit code)"
+never_merged || fail "backdated descendant must never merge"
+pass "backdated descendant denied"
 
 # Case 9: OLD entry, no commits since (newest commit predates entry) => allow.
 # Wall-clock age alone must NOT deny — soak windows are days long by design.
@@ -216,19 +219,19 @@ never_merged || fail "missing reader must never reach gh merge"
 printf '%s' "$RUN_OUT" | grep -q "cannot verify" || fail "missing-reader message should say it cannot verify"
 pass "missing review-log reader fails closed"
 
-# Case 14: PR with an empty commits array => clean die, never merge
-run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_COMMITS_JSON='[]'
-[ "$RUN_RC" -ne 0 ] || fail "empty commits array must die cleanly (exit code)"
-never_merged || fail "empty commits array must never reach gh merge"
-pass "empty commits array dies cleanly"
+# Case 14: PR with no headRefOid => clean die, never merge
+run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_HEAD=null
+[ "$RUN_RC" -ne 0 ] || fail "missing headRefOid must die cleanly (exit code)"
+never_merged || fail "missing headRefOid must never reach gh merge"
+pass "missing headRefOid dies cleanly"
 
-# Case 15: multi-commit PR — freshness binds to the NEWEST commit. Entry is
-# 3h old; an older commit predates it but the newest commit is NOW => deny.
-run_land "$(make_reader review "$ANC_SHORT" "$OLD_ISO")" \
-  GH_MOCK_COMMITS_JSON='[{"committedDate":"'"$VERY_OLD_ISO"'"},{"committedDate":"'"$NOW_ISO"'"}]'
-[ "$RUN_RC" -ne 0 ] || fail "newest commit after entry must deny even when older commits predate it (exit code)"
-never_merged || fail "newest commit after entry must never merge"
-pass "multi-commit freshness binds to newest commit"
+# Case 15: commit dates cannot bless an ancestor review entry. Even when every
+# reported committedDate predates the review, an ancestor entry is not enough.
+run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")" \
+  GH_MOCK_COMMITS_JSON='[{"committedDate":"'"$VERY_OLD_ISO"'"},{"committedDate":"'"$OLD_ISO"'"}]'
+[ "$RUN_RC" -ne 0 ] || fail "commit dates must not bless ancestor entry (exit code)"
+never_merged || fail "commit dates must not bless ancestor entry"
+pass "commit dates ignored for ancestor entry"
 
 # Case 16: non-numeric PR argument => usage error, never calls gh merge
 GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
