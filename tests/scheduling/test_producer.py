@@ -479,6 +479,7 @@ async def test_render_music_track_writes_duration_to_norm_sidecar(tmp_path):
 
 @pytest.mark.asyncio
 async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path):
+    from mammamiradio.playlist.music_admission import build_music_admission_envelope
     from mammamiradio.scheduling.producer import _render_music_track
 
     track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
@@ -486,9 +487,10 @@ async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path)
     config = _make_config(tmp_path)
     raw_path = tmp_path / f"{track.cache_key}.mp3"
     raw_path.write_bytes(b"downloaded audio")
+    download = AsyncMock(return_value=raw_path)
 
     with (
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=raw_path),
+        patch(f"{PRODUCER_MODULE}.download_track", download),
         patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=7_200.0),
         patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
@@ -504,6 +506,8 @@ async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path)
     assert result is None
     assert raw_path.exists() is False
     mock_normalize.assert_not_called()
+    expected_threshold = build_music_admission_envelope([sibling], config.pacing).longform_threshold_sec
+    assert download.await_args.kwargs["longform_threshold_sec"] == expected_threshold
 
 
 @pytest.mark.asyncio

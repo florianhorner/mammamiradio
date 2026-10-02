@@ -145,7 +145,11 @@ from mammamiradio.playlist.downloader import (
     validate_download,
 )
 from mammamiradio.playlist.jamendo_transient import JamendoStreamProvider
-from mammamiradio.playlist.music_admission import classify_youtube_candidate, is_youtube_music_candidate
+from mammamiradio.playlist.music_admission import (
+    build_music_admission_envelope,
+    classify_youtube_candidate,
+    is_youtube_music_candidate,
+)
 from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted, normalized_track_key
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
@@ -1056,8 +1060,18 @@ async def _render_music_track(
     readiness = source_readiness
     if readiness is None and timing_state is not None:
         readiness = timing_state.source_readiness
+    envelope_playlist = (
+        [candidate for candidate in playlist if candidate.cache_key != track.cache_key] if playlist is not None else []
+    )
+    longform_threshold_sec = build_music_admission_envelope(envelope_playlist, config.pacing).longform_threshold_sec
     try:
-        audio_path = await download_track(track, config.cache_dir, music_dir=config.music_dir, background=background)
+        audio_path = await download_track(
+            track,
+            config.cache_dir,
+            music_dir=config.music_dir,
+            background=background,
+            longform_threshold_sec=longform_threshold_sec,
+        )
     except Exception:
         if readiness is not None:
             readiness.mark_failure(track.source, "A source candidate could not be prepared")
@@ -1081,11 +1095,6 @@ async def _render_music_track(
         actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
         if actual_duration_sec > 0:
             actual_duration_ms = round(actual_duration_sec * 1000)
-        envelope_playlist = (
-            [candidate for candidate in playlist if candidate.cache_key != track.cache_key]
-            if playlist is not None
-            else []
-        )
         verdict = classify_youtube_candidate(
             track,
             envelope_playlist,

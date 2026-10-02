@@ -15,12 +15,16 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import islice
 from pathlib import Path
-from types import ModuleType
+from types import FunctionType, ModuleType
 from typing import Literal
 
 from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.core.models import Track
 from mammamiradio.core.path_safety import safe_path_within
+from mammamiradio.playlist.music_admission import (
+    DEFAULT_SONGS_BETWEEN_BANTER,
+    build_music_admission_envelope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,12 @@ _EXTERNAL_MEDIA_SOURCES = frozenset({"youtube", "classic"})
 # `throttledratelimit`: yt-dlp then re-extracts in an uncapped loop whenever a
 # download is slow.
 _YTDLP_SOCKET_TIMEOUT_SEC = 30
+# One retry, not yt-dlp's CLI default of 10. Through the Python API an unset
+# value is already 0. Each attempt can block for the socket timeout above, and
+# a download still has no overall deadline, so this stays at one.
+_YTDLP_FRAGMENT_RETRIES = 1
+# A completed premiere (was_live) is an ordinary video and is judged by duration.
+_UNPLAYABLE_LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
 
 # Canonical YouTube video-id shape (11 chars, base64url alphabet). Single source
 # of truth for both the search-result filter (below) and the add-external payload
@@ -384,8 +394,80 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
     return None
 
 
-def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
+def _class_implements(obj: object, name: str) -> bool:
+    """True when ``name`` is a real method, not a test double's auto-attribute."""
+    return isinstance(getattr(type(obj), name, None), FunctionType)
+
+
+def _default_longform_threshold_sec() -> float:
+    """Admission envelope for a caller that did not pass the station's rotation."""
+
+    class _DefaultPacing:
+        songs_between_banter = DEFAULT_SONGS_BETWEEN_BANTER
+
+    return build_music_admission_envelope((), _DefaultPacing()).longform_threshold_sec
+
+
+def _positive_duration_sec(raw: object) -> float | None:
+    if isinstance(raw, bool) or raw in (None, ""):
+        return None
+    if isinstance(raw, int | float):
+        duration = float(raw)
+    elif isinstance(raw, str):
+        try:
+            duration = float(raw)
+        except ValueError:
+            return None
+    else:
+        return None
+    if duration <= 0 or duration != duration or duration == float("inf"):
+        return None
+    return duration
+
+
+def _primary_extract(info: object) -> dict | None:
+    """Return the video dict, including the first entry of a search playlist."""
+    if not isinstance(info, dict):
+        return None
+    entries = info.get("entries")
+    if entries is None:
+        return info
+    try:
+        iterator = iter(entries)
+    except TypeError:
+        return info
+    for entry in iterator:
+        if isinstance(entry, dict):
+            return entry
+    return None
+
+
+def _extract_refusal_reason(info: object, threshold_sec: float) -> str | None:
+    """Refuse a live or over-envelope extract before any media bytes."""
+    entry = _primary_extract(info)
+    if entry is None:
+        return None
+    live_status = entry.get("live_status")
+    if entry.get("is_live") is True or (isinstance(live_status, str) and live_status in _UNPLAYABLE_LIVE_STATUSES):
+        return "live_stream"
+    duration = _positive_duration_sec(entry.get("duration"))
+    if duration is not None and duration > threshold_sec:
+        return f"longform_duration ({duration:.0f}s > {threshold_sec:.0f}s)"
+    return None
+
+
+def _download_ytdlp(
+    track: Track,
+    cache_dir: Path,
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Download the best-effort public audio match for a track via yt-dlp."""
+    threshold = longform_threshold_sec if longform_threshold_sec is not None else _default_longform_threshold_sec()
+    known_duration = _positive_duration_sec(track.duration_ms / 1000.0 if track.duration_ms else None)
+    if known_duration is not None and known_duration > threshold:
+        raise RuntimeError(f"external extract refused: longform_duration ({known_duration:.0f}s > {threshold:.0f}s)")
+
     yt_dlp = _load_external_media_module()
 
     # Use the exact video ID when available to download the chosen upload,
@@ -409,7 +491,11 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "abort_on_unavailable_fragments": True,
+        # yt-dlp never reads abort_on_unavailable_fragments. The CLI flag
+        # --abort-on-unavailable-fragments stores this key as false, which
+        # makes a missing HLS/DASH fragment fail the download.
+        "skip_unavailable_fragments": False,
+        "fragment_retries": _YTDLP_FRAGMENT_RETRIES,
         "socket_timeout": _YTDLP_SOCKET_TIMEOUT_SEC,  # fail a stalled socket, never hang
         # Test only the format being downloaded. True test-downloads every
         # format (175 for one video).
@@ -420,7 +506,22 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([query])
+            if _class_implements(ydl, "extract_info"):
+                # Metadata only. A refusal raises before any media request.
+                info = ydl.extract_info(query, download=False)
+                refusal = _extract_refusal_reason(info, threshold)
+                if refusal:
+                    raise RuntimeError(f"external extract refused: {refusal}")
+                entry = _primary_extract(info)
+                # process_info transfers the extract we already have. download()
+                # would extract again. Test doubles that only implement
+                # download() take that path.
+                if entry is not None and _class_implements(ydl, "process_info"):
+                    ydl.process_info(entry)
+                else:
+                    ydl.download([query])
+            else:
+                ydl.download([query])
     finally:
         shutil.rmtree(ytdlp_tmp, ignore_errors=True)
 
@@ -558,7 +659,14 @@ def has_fresh_concrete_track_source(track: Track, cache_dir: Path, music_dir: Pa
         return False
 
 
-def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background: bool = False) -> Path:
+def _download_sync(
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path,
+    *,
+    background: bool = False,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Resolve a track from cache, local files, yt-dlp, or an unavailable marker."""
     if track.source == "jamendo":
         raise RuntimeError("persistent Jamendo track acquisition is retired")
@@ -569,7 +677,7 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
     # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
     if _ytdlp_enabled():
         try:
-            return _download_ytdlp(track, cache_dir)
+            return _download_ytdlp(track, cache_dir, longform_threshold_sec=longform_threshold_sec)
         except Exception as e:
             reason = f"yt-dlp failed: {e}"
             logger.warning("yt-dlp failed for %s: %s — marking track unavailable", track.display, e)
@@ -580,7 +688,13 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
         return _failed_download_path(track, cache_dir, reason)
 
 
-def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
+def _download_external_sync(
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path,
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Resolve an explicit external request without a silent fallback."""
     if track.local_path is not None:
         attached = (
@@ -608,7 +722,7 @@ def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> P
         logger.info("Cache hit: %s", track.display)
         return out_path
 
-    return _download_ytdlp(track, cache_dir)
+    return _download_ytdlp(track, cache_dir, longform_threshold_sec=longform_threshold_sec)
 
 
 YtdlpSearchStatus = Literal["ok", "disabled", "unavailable", "failed"]
@@ -714,17 +828,44 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
 
 
 async def download_track(
-    track: Track, cache_dir: Path, music_dir: Path | None = None, *, background: bool = False
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path | None = None,
+    *,
+    background: bool = False,
+    longform_threshold_sec: float | None = None,
 ) -> Path:
     """Run the synchronous download fallback chain off the event loop."""
     loop = asyncio.get_running_loop()
     _music_dir = music_dir or Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
-    download_fn = partial(_download_sync, track, cache_dir, _music_dir, background=background)
+    download_fn = partial(
+        _download_sync,
+        track,
+        cache_dir,
+        _music_dir,
+        background=background,
+        longform_threshold_sec=longform_threshold_sec,
+    )
     return await loop.run_in_executor(None, download_fn)
 
 
-async def download_external_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:
+async def download_external_track(
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path | None = None,
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Download an explicit external request, raising on failure instead of returning silence."""
     loop = asyncio.get_running_loop()
     _music_dir = music_dir or Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
-    return await loop.run_in_executor(None, _download_external_sync, track, cache_dir, _music_dir)
+    return await loop.run_in_executor(
+        None,
+        partial(
+            _download_external_sync,
+            track,
+            cache_dir,
+            _music_dir,
+            longform_threshold_sec=longform_threshold_sec,
+        ),
+    )

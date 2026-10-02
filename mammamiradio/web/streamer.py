@@ -183,6 +183,7 @@ from mammamiradio.playlist.downloader import external_media_enabled
 from mammamiradio.playlist.local_library import scan_and_reconcile_local_library
 from mammamiradio.playlist.music_admission import (
     YOUTUBE_ADMISSION_SEARCH_DEPTH,
+    build_music_admission_envelope,
     classify_youtube_candidate,
     is_youtube_music_candidate,
 )
@@ -10523,7 +10524,13 @@ async def _commit_external_download(
         track.album_art = await asyncio.to_thread(
             maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
         )
-    downloaded_path = await download_external_track(track, config.cache_dir, music_dir=config.music_dir)
+    longform_threshold_sec = build_music_admission_envelope(state.playlist, config.pacing).longform_threshold_sec
+    downloaded_path = await download_external_track(
+        track,
+        config.cache_dir,
+        music_dir=config.music_dir,
+        longform_threshold_sec=longform_threshold_sec,
+    )
     actual_duration_sec: float | None = None
     try:
         downloaded_path = Path(downloaded_path)

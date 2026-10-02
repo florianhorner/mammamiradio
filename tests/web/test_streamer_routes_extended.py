@@ -1300,10 +1300,9 @@ async def test_commit_external_download_holds_lied_actual_duration_and_purges(tm
     raw_path = tmp_path / f"{track.cache_key}.mp3"
     raw_path.write_bytes(b"long audio placeholder")
 
+    download_mock = AsyncMock(return_value=raw_path)
     with (
-        patch(
-            "mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock, return_value=raw_path
-        ),
+        patch("mammamiradio.playlist.downloader.download_external_track", download_mock),
         patch("mammamiradio.web.streamer.probe_duration_sec", return_value=7_200.0),
     ):
         status = await streamer._commit_external_download(
@@ -1318,6 +1317,10 @@ async def test_commit_external_download_holds_lied_actual_duration_and_purges(tm
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
     assert raw_path.exists() is False
+    from mammamiradio.playlist.music_admission import build_music_admission_envelope
+
+    expected_threshold = build_music_admission_envelope(state.playlist, app.state.config.pacing).longform_threshold_sec
+    assert download_mock.await_args.kwargs["longform_threshold_sec"] == expected_threshold
 
 
 @pytest.mark.asyncio
