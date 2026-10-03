@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap a Conductor workspace: create .venv, install -e, set up env.
+# Bootstrap a Conductor workspace: create .venv and install the locked environment.
 # Usage: scripts/bootstrap-conductor.sh
 set -euo pipefail
 
@@ -10,8 +10,9 @@ Usage: scripts/bootstrap-conductor.sh
 
 Bootstrap a fresh Conductor workspace:
   - Create .venv with PYTHON_BIN (defaults to python3.11)
-  - Install the package in editable mode (pip install -e .)
-  - Wire up Conductor-specific env defaults
+  - Install the dev tools, the hash-locked runtime (requirements.txt), and
+    the package in editable mode without dependency resolution
+  - Verify the installed set is consistent
 
 Env:
   PYTHON_BIN   Python interpreter to use (default: python3.11)
@@ -60,7 +61,14 @@ if ! python -m pip --version >/dev/null 2>&1; then
 fi
 
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e . pytest
+# Same order as CONTRIBUTING.md#local-setup: dev tools first, then the
+# hash-locked runtime over them, then the package without resolving its
+# dependencies. A setup run must never upgrade a runtime package past
+# requirements.txt.
+python -m pip install -r requirements-dev.txt
+python -m pip install --force-reinstall --require-hashes -r requirements.txt
+python -m pip install --no-deps -e .
+python -m pip check
 
 echo "Environment ready."
 echo "Activate with: source .venv/bin/activate"
