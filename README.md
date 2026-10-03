@@ -5,7 +5,7 @@
 </p>
 
 <h1 align="center">Mamma Mi Radio</h1>
-<p align="center"><em>A radio station that lives in your house and talks about it.</em></p>
+<p align="center"><em>Your smart home has a radio station. Naturally, the hosts are Italian.</em></p>
 
 ## You built the sensors. You wrote the automations. Now somebody finally notices.
 
