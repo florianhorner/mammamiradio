@@ -6,7 +6,7 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-## [3.0.0] - 2026-09-29
+## [3.0.0] - 2026-10-01
 
 ### Meet your station before setting it up
 
