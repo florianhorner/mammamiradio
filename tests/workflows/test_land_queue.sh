@@ -4,8 +4,8 @@
 # Hermetic: PATH-shimmed `gh` (every subcommand the planner uses) and a `git`
 # shim that forwards read-only verbs to real git and REFUSES every mutating one,
 # so a future write in the shadow planner fails the test instead of touching the
-# repo. Retired evidence and ledger inputs are still passed in, to prove nothing
-# reads them. No network. Exits non-zero on any mismatch.
+# repo. Retired evidence and ledger inputs are still passed in, to prove they
+# change nothing. No network. Exits non-zero on any mismatch.
 #
 # What these cases exist to hold:
 #   - shadow mode never writes (the premise of report-only mode)
@@ -74,9 +74,6 @@ case "$1 $2" in
     exit 0 ;;
   "repo view")
     printf '%s' "florianhorner/mammamiradio"
-    exit 0 ;;
-  "pr view")
-    printf '%s' "${GH_MOCK_LAST_PUSH:-2026-01-01T00:00:00Z}"
     exit 0 ;;
   "run list")
     [ "${GH_MOCK_RUN_FAIL:-0}" = "1" ] && exit 1
@@ -175,8 +172,8 @@ chmod +x "$TMPDIR_T/evidence-ok.sh" "$TMPDIR_T/evidence-missing.sh"
 pr_row() { # number title head merge draft labels created author is_bot [branch]
   local number="$1" title="$2" head="$3" merge="$4" draft="$5" labels="$6" created="$7" author="$8" is_bot="$9"
   local branch="${10:-feature/pr-$1}"
-  # committedDate feeds the ledger age check; default is deliberately old so a
-  # test that cares about staleness sets it explicitly.
+  # commits[].committedDate is a retired input, kept only to prove the queue
+  # ignores it.
   jq -cn --argjson number "$number" --arg title "$title" --arg head "$head" \
     --arg merge "$merge" --argjson draft "$draft" --argjson labels "$labels" \
     --arg created "$created" --arg author "$author" --argjson is_bot "$is_bot" \
@@ -330,7 +327,7 @@ OUT="$(run_plan "$PRS")"
 pass "dependabot lane is exempt and cannot stall the feature queue"
 
 # =============================================================================
-# Case 11: edge PRs never enter the feature FIFO (plan Q4/C).
+# Case 11: edge PRs never enter the feature FIFO.
 # =============================================================================
 PRS="[$(pr_row 90 "chore(edge): cut edge release abc1234" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false "edge-release/abc1234"),
       $(pr_row 91 "fix: real work" "$HEAD_FULL" CLEAN false '[]' "2026-02-01T00:00:00Z" florianhorner false)]"
@@ -356,7 +353,7 @@ OUT="$(run_plan "$PRS")"
 pass "hold label stops the PR and the queue"
 
 # =============================================================================
-# Case 13: merge-state routing (plan Q7). UNSTABLE is landable, BLOCKED is not,
+# Case 13: merge-state routing. UNSTABLE is landable, BLOCKED is not,
 # and an unrecognised state is never treated as landable.
 # =============================================================================
 for pair in "UNSTABLE:READY" "BLOCKED:CI_PENDING" "UNKNOWN:CI_PENDING" "HAS_HOOKS:READY"; do
@@ -566,8 +563,8 @@ pass "queue evaluates every verify_head gate, with no receipt/ledger exception"
 # Case 23: a PR whose author account was deleted (.author == null) must not
 # shift every field after it. Tab is IFS whitespace, so a tab-separated gather
 # collapsed the empty author field and slid the branch, title and url one place
-# left — putting an edge-release PR into the gated feature lane, where it has no
-# v2 receipt, and stalling the entire queue behind it.
+# left — putting an edge-release PR into the gated feature lane, where it could
+# become the stalled queue head.
 # =============================================================================
 GHOST="$(jq -cn --arg base "$ANC_FULL" --arg head "$HEAD_FULL" \
   '{number:130,title:"chore(edge): cut edge release abc1234",headRefOid:$head,
@@ -586,7 +583,7 @@ pass "deleted-author PR keeps every field aligned (empty-field shift guard)"
 
 # =============================================================================
 # Case 24: the generic bot lane. is_bot=true grants a TOTAL gate exemption — no
-# evidence, no thread check, dropped from head contention. Case 10 only ever
+# thread check, dropped from head contention. Case 10 only ever
 # exercised the dependabot branch, so this one was untested.
 # =============================================================================
 PRS="[$(pr_row 140 "chore: automated" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" "some-app[bot]" true),
@@ -598,8 +595,8 @@ OUT="$(run_plan "$PRS")"
 pass "generic bot lane is exempt and cannot stall the queue"
 
 # =============================================================================
-# Case 25: BLOCKED_HEAD. An unfetchable head must not silently skip the two
-# network gates — every other fixture uses a local SHA, so this never ran.
+# Case 25: BLOCKED_HEAD. An unfetchable head must not silently skip the
+# network gate — every other fixture uses a local SHA, so this never ran.
 # =============================================================================
 PRS="[$(pr_row 150 "fix: ghost head" "0000000000000000000000000000000000000000" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
 OUT="$(run_plan "$PRS")"

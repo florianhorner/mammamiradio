@@ -119,26 +119,21 @@ thread_check() {
 
 verify_head() {
   local pr="$1"
-  # Receipt/ledger helpers remain historical utilities, never admission gates.
+  # Review ledgers and pre-ship receipts are never admission gates.
   thread_check "$pr" || return 1
 }
 
 # refresh_landed_ref <base-sha> -> always 0. Need-driven `git fetch origin main`.
 #
-# The merge witness in verify_v2 trusts a base only if it is landed content in
-# origin/main. ensure_head_local fetches the PR head's OBJECTS, which carries the
-# base commit into the object store — but it never moves the origin/main REF. A
-# landing seat that has not fetched since main advanced then refuses GitHub's
-# real base as "not landed" and stalls the documented integrate-push-land flow
-# until someone thinks to fetch by hand.
+# ensure_head_local fetches the PR head's OBJECTS, which carries the base commit
+# into the object store, but it never moves the origin/main REF. This keeps a
+# local origin/main from lagging GitHub's real base. No landing gate reads
+# origin/main; the queue's edge lane compares its candidates against it.
 #
-# The refresh is keyed on the exact predicate the gate will evaluate: fetch only
-# when a resolvable local origin/main does NOT already contain the base. A seat
-# with complete history therefore never touches the network (a documented
-# invariant of its own), and a seat with no origin/main at all is left alone —
-# the evidence gate then refuses with "does not resolve", which is the
-# fail-closed outcome. Fetch failure is tolerated for the same reason: a stale
-# ref makes the gate refuse; the refresh can never be the thing that accepts.
+# It fetches only when a resolvable local origin/main does NOT already contain
+# the base, so a seat with complete history never touches the network, and a
+# seat with no origin/main at all is left alone. Fetch failure is tolerated:
+# the refresh can never be the thing that accepts.
 # MMR_LAND_SKIP_FETCH=1 keeps self-tests offline.
 refresh_landed_ref() {
   local base="$1"

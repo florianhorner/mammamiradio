@@ -83,12 +83,12 @@ EDGE_SELECT_LIB="$SCRIPT_DIR/edge-select.sh"
 
 # --- classification -----------------------------------------------------------
 # Prints "<state>\t<reason>". Ordering is deliberate: every free local fact is
-# settled before either network gate runs, and the two gates run BEFORE the
-# integrate/arm routing so the queue never spends a reattest cycle on a PR that
-# is blocked on a bot Major anyway.
+# settled before the network gate runs, and the gate runs BEFORE the
+# integrate/arm routing so the queue never proposes an integrate and push for a
+# PR that is blocked on a bot Major anyway.
 #
 # Deliberately NOT short-circuited on mergeStateStatus == BLOCKED, even though
-# the outcome is CI_PENDING either way and the gates are the expensive part:
+# the outcome is CI_PENDING either way and the gate is the expensive part:
 # main requires review-thread resolution, so an unresolved bot Major always
 # forces BLOCKED. Settling that state early would make BLOCKED_BOT unreachable
 # in practice and replace the one actionable reason ("2 unresolved Major
@@ -117,7 +117,7 @@ classify_pr() {
   if ! gate_out="$(thread_check "$pr" 2>&1)"; then
     printf 'BLOCKED_BOT\t%s\n' "$(printf '%s' "$gate_out" | head -1)"; return
   fi
-  # Plan Q7: UNSTABLE means only non-required checks are failing and is landable.
+  # UNSTABLE means only non-required checks are failing, so the PR is landable.
   case "$merge_state" in
     BEHIND)    printf 'READY_BEHIND\tgates pass; base moved — needs integrate + push\n' ;;
     CLEAN)     printf 'READY\tgates pass and required checks are green\n' ;;
