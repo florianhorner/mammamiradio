@@ -1076,7 +1076,7 @@ def reattest_v2(
     review — but only when git itself proves that HEAD is exactly the reviewed
     content three-way-merged with the base and nothing else: a conflicted merge,
     a hand-edited merge commit, or any commit that touches ordinary content
-    after the review all fail closed into a fresh squad run.
+    after the review all fail closed into a fresh review.
 
     The base must be landed, trusted content — contained in the landed ref
     (``origin/main`` by default). Only then is the three-way merge sound: every
@@ -1139,7 +1139,7 @@ def reattest_v2(
         return Path(os.fsdecode(chosen.path)), False, superseded
     if not head_snapshot.receipts:
         raise EvidenceError(
-            "no v2 receipt exists on this branch to derive from; run the review squad and emit a fresh receipt instead"
+            "no v2 receipt exists on this branch to derive from; run the review and emit a fresh receipt instead"
         )
 
     reasons: list[str] = []
@@ -1180,7 +1180,7 @@ def reattest_v2(
         raise EvidenceError(
             "no existing receipt derives this content ("
             + "; ".join(reasons)
-            + "); changed content needs a fresh review squad run and a fresh receipt"
+            + "); changed content needs a fresh review and a fresh receipt"
         )
 
     source_payload = _decode_json_object(

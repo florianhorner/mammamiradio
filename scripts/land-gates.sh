@@ -20,7 +20,7 @@ LAND_GATES_LABEL="${LAND_GATES_LABEL:-land-gates}"
 LAND_GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Freshness grace: /ship pushes mechanical commits (version bump, changelog)
-# right after the squad logs its entry; commits within this window after the
+# right after a review entry is logged; commits within this window after the
 # entry are treated as part of the reviewed push, not new work.
 GRACE_SECONDS="${MMR_LAND_GRACE_SECONDS:-600}"
 # Reader override exists for tests; default is the repo-local ledger dump.
@@ -79,7 +79,7 @@ fi
 . "$LAND_GATES_DIR/review-threads.sh"
 
 # iso_to_epoch <iso8601> -> epoch seconds, or empty on failure.
-# Handles both Z-suffixed UTC (BSD and GNU date) like the squad hook does.
+# Handles both Z-suffixed UTC (BSD and GNU date) as accepted by the review reader.
 # Empty input is rejected up front: GNU `date -d ""` silently returns
 # midnight today instead of failing, which would bless missing timestamps.
 iso_to_epoch() {
@@ -122,9 +122,9 @@ squad_check() {
     return 0
   done < <("$READER" 2>/dev/null)
   if [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
-    _gate_say "no pre-ship squad entry covers the current PR head."
-    _gate_cont "Either commits were pushed after the last review, or no squad ran."
-    _gate_cont "Re-run the review squad (/ship or /review) on this branch, then land again."
+    _gate_say "no review entry covers the current PR head."
+    _gate_cont "Either commits were pushed after the last review, or no review ran."
+    _gate_cont "Re-run the review (/ship or /review) on this branch, then land again."
   fi
   return 1
 }
@@ -137,7 +137,7 @@ evidence_check() {
   out="$(bash "$EVIDENCE_CHECKER" --v2 --target "$target" --base "$base" --mode pr 2>&1)" || rc=$?
   if [ "${rc:-0}" -ne 0 ]; then
     _gate_say "committed v2 pre-ship evidence does not cover PR head ${target:0:12}."
-    _gate_cont "Run the review squad, emit v2 evidence, commit it on the branch, then land again."
+    _gate_cont "Run the review, emit v2 evidence, commit it on the branch, then land again."
     if [ -n "$out" ]; then
       printf '%s\n' "$out" | sed "s/^/$(printf '%*s' $(( ${#LAND_GATES_LABEL} + 2 )) '')/"
     fi

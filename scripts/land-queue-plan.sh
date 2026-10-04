@@ -7,9 +7,8 @@
 # integrate or arm next, and why every other open PR is not that PR — and prints
 # it. It does not push, comment, arm, merge, or move edge. Nothing here writes.
 #
-# This is phase 1 of .context/plans/2026-08-28-auto-land-edge-queue-plan.md: run
-# the decision alongside the human landing seat long enough to trust it, then
-# flip it live. This queue stays advisory until separately authorized.
+# The queue is advisory. It reports next to scripts/land-pr.sh and acts on
+# nothing until going live is separately authorized.
 #
 # It reaches its verdict through the SAME predicates scripts/land-pr.sh arms on
 # (scripts/land-gates.sh) and the SAME selection scripts/cut-edge-release.sh cuts
