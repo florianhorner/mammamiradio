@@ -95,12 +95,16 @@ def test_setup_dispatches_cloud_workspaces_to_cloud_bootstrap(tmp_path: Path, sh
 def test_setup_keeps_local_workspaces_on_shared_bootstrap(tmp_path: Path, shell_env: dict[str, str]) -> None:
     setup = _install_script_fixture(tmp_path, SETUP)
     _fake_bootstrap(tmp_path)
+    (tmp_path / "requirements-dev.txt").write_text("pytest\n")
     shell_env["CONDUCTOR_IS_LOCAL"] = "1"
 
     result = _run(setup, tmp_path, env=shell_env)
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "bootstrap-python").exists()
+    # The shared bootstrap owns the whole install. A second pip run after its
+    # `pip check` could move a shared dependency off the lock unverified.
+    assert not (tmp_path / ".venv/pip-call").exists()
 
 
 def test_cloud_bootstrap_selects_first_supported_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:
@@ -167,9 +171,7 @@ def test_cloud_bootstrap_rejects_unsupported_explicit_interpreter(tmp_path: Path
     assert not (tmp_path / "bootstrap-python").exists()
 
 
-def test_cloud_bootstrap_installs_development_requirements_after_activation(
-    tmp_path: Path, shell_env: dict[str, str]
-) -> None:
+def test_cloud_bootstrap_leaves_the_install_to_the_shared_bootstrap(tmp_path: Path, shell_env: dict[str, str]) -> None:
     cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
     _fake_bootstrap(tmp_path)
     _fake_python(tmp_path / "bin", "python3.12")
@@ -178,7 +180,8 @@ def test_cloud_bootstrap_installs_development_requirements_after_activation(
     result = _run(cloud, tmp_path, env=shell_env)
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / ".venv/pip-call").read_text() == "-m pip install -r requirements-dev.txt"
+    assert (tmp_path / "bootstrap-python").exists()
+    assert not (tmp_path / ".venv/pip-call").exists()
 
 
 def test_cloud_bootstrap_preserves_same_root_env_file(tmp_path: Path, shell_env: dict[str, str]) -> None:
