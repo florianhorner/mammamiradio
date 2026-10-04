@@ -49,7 +49,7 @@ cp .env.example .env
 
 Install developer tools first, then the hash-locked runtime dependencies. Installing the application with `--no-deps` preserves those versions; `pip check` verifies its declared requirements. Quality CI and both container builds use the same runtime lock. The dependency tests also verify the requested runtime extras against installed package metadata.
 
-uv does not manage this environment. `pyproject.toml` sets `[tool.uv] managed = false`, so `uv run` uses `.venv` as it is and `uv sync` refuses; neither can replace the locked versions. If the dependency tests report a drifted package, repeat the installation above.
+uv does not manage this environment. `pyproject.toml` sets `[tool.uv] managed = false`, so `uv run` uses an existing `.venv` as it is and `uv sync` refuses; neither can replace the locked versions. Without a `.venv`, `uv run` creates none and falls back to another interpreter that lacks the locked packages, so create the environment with the commands above first. If the dependency tests report a drifted package, repeat the installation above.
 
 For a targeted runtime update, activate a Python 3.11 environment and install the pinned lock-generation tool first. Replace `PACKAGE==VERSION` with the dependency and version you intend to update:
 

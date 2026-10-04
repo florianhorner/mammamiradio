@@ -43,9 +43,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.uv]
 # requirements.txt is the hash-locked source of truth for .venv
-# (CONTRIBUTING.md#local-setup). Unmanaged, `uv run` uses .venv as it is and
-# `uv sync` refuses, so neither can install versions the lock does not pin.
-# `uv build` (scripts/media-proof.py) is not affected.
+# (CONTRIBUTING.md#local-setup). Unmanaged, `uv run` uses an existing .venv as
+# it is and `uv sync` refuses, so neither can install versions the lock does
+# not pin. `uv build` (scripts/media-proof.py) is not affected.
 managed = false
 
 [tool.ruff]
