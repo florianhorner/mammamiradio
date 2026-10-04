@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
+import shutil
 import subprocess
+import sys
 import tomllib
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -181,6 +184,43 @@ def test_standalone_image_pr_smoke_propagates_failures(
         expected.append("run --rm --network none --entrypoint python mammamiradio:pr-smoke -m pip check")
     assert calls.read_text().splitlines() == expected
     assert result.returncode == (42 if failed_command else 0), result.stderr
+
+
+def test_uv_never_manages_the_locked_environment() -> None:
+    # A managed project lets `uv run` and `uv sync` install uv's own resolution
+    # into .venv, replacing the versions requirements.txt pins.
+    tool = tomllib.loads((ROOT / "pyproject.toml").read_text()).get("tool", {})
+    assert tool.get("uv", {}).get("managed") is False, "keep [tool.uv] managed = false in pyproject.toml"
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv is not installed")
+def test_uv_run_leaves_the_environment_alone(tmp_path: Path) -> None:
+    # The behaviour the setting promises, on whichever uv this machine has.
+    (tmp_path / "pyproject.toml").write_text((ROOT / "pyproject.toml").read_text())
+    result = subprocess.run(
+        ["uv", "run", "--offline", "--python", sys.executable, "python", "-c", "pass"],
+        cwd=tmp_path,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / ".venv").exists(), "uv run created a project environment"
+    assert not (tmp_path / "uv.lock").exists(), "uv run wrote a lockfile"
+
+    sync = subprocess.run(
+        ["uv", "sync", "--offline"],
+        cwd=tmp_path,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert sync.returncode != 0, "uv sync should refuse an unmanaged project"
+    assert not (tmp_path / ".venv").exists()
 
 
 def test_addon_build_contexts_stage_the_canonical_runtime_lock() -> None:
