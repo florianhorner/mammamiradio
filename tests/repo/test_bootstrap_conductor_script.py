@@ -70,8 +70,8 @@ def test_bootstrap_runs_the_locked_install_in_order(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("fail_on", "steps_run"),
-    [("--require-hashes", 3), ("--no-deps", 4), ("pip check", 5)],
-    ids=["locked-runtime", "editable-install", "pip-check"],
+    [("--upgrade pip", 1), ("requirements-dev.txt", 2), ("--require-hashes", 3), ("--no-deps", 4), ("pip check", 5)],
+    ids=["pip-upgrade", "dev-tools", "locked-runtime", "editable-install", "pip-check"],
 )
 def test_bootstrap_aborts_at_the_first_failed_step(tmp_path: Path, fail_on: str, steps_run: int) -> None:
     result, calls = _run_bootstrap(tmp_path, fail_on=fail_on)

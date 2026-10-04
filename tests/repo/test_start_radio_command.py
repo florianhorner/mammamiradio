@@ -121,8 +121,13 @@ def test_python_selection_stops_with_a_way_out_when_only_old_python_exists(tmp_p
     assert "SELECTED=" not in result.stdout
     assert "needs Python 3.11 or newer" in result.stdout
     assert "then double-click again" in result.stdout
-    # The check runs before setup creates anything.
-    assert not (tmp_path / ".venv").exists()
+
+
+def test_python_check_runs_before_the_venv_is_created() -> None:
+    # "double-click again" is only true if a too-old Python stops setup before
+    # `.venv` exists; otherwise the next launch would skip setup.
+    source = LAUNCHER.read_text()
+    assert source.index('if [ -z "$PY" ]; then') < source.index('"$PY" -m venv .venv')
 
 
 def test_launcher_is_executable_and_parses() -> None:
