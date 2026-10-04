@@ -10908,12 +10908,13 @@ async def _commit_external_download(
     pick. Pins the track to play next when `should_pin()` is true. Returns one of:
     "pinned" (committed and claimed the play-next slot), "queued" (committed to
     the rotation pool but the play-next slot was occupied), "banned" (the song is on
-    the operator blocklist and was refused), "held" (long-form/non-rotation audio
-    refused after download), or "dropped" (source switched / consumed).
+    the operator blocklist and was refused), "held" (live, long-form or non-rotation
+    audio, refused before or after download), or "dropped" (source switched / consumed).
     Raises on download failure / cancellation for the caller to surface. Shared by the
     admin and listener download paths."""
     from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
     from mammamiradio.playlist.downloader import (
+        ExternalMediaRefusedError,
         accept_recovered_download,
         download_external_track,
         reject_cached_download,
@@ -10933,12 +10934,26 @@ async def _commit_external_download(
             maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
         )
     longform_threshold_sec = build_music_admission_envelope(state.playlist, config.pacing).longform_threshold_sec
-    downloaded_path = await download_external_track(
-        track,
-        config.cache_dir,
-        music_dir=config.music_dir,
-        longform_threshold_sec=longform_threshold_sec,
-    )
+    try:
+        downloaded_path = await download_external_track(
+            track,
+            config.cache_dir,
+            music_dir=config.music_dir,
+            longform_threshold_sec=longform_threshold_sec,
+        )
+    except ExternalMediaRefusedError as exc:
+        # A live or over-long result is a verdict on the pick, not a transient
+        # failure: report it like a long file found after download, so the
+        # caller asks for one song instead of suggesting a retry.
+        if state.source_revision != originating_source_revision or not should_commit():
+            return "dropped"
+        logger.info(
+            "External track held out of rotation before download: %s (yt:%s): %s",
+            track.display,
+            getattr(track, "youtube_id", ""),
+            exc,
+        )
+        return "held"
     actual_duration_sec: float | None = None
     try:
         downloaded_path = Path(downloaded_path)

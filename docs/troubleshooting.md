@@ -274,8 +274,12 @@ If a legitimate song is being rejected, check `mammamiradio/playlist/playlist.py
 
 This applies only to a standalone installation with the `external-media`
 extra. Before any audio is transferred, the station refuses a live, scheduled,
-or just-ended stream, and a result more than four times as long as the track it
-stands for. That limit is never below 14 minutes. When yt-dlp cannot fetch part
+or just-ended stream, and a result that runs too long. Too long means longer
+than the shorter of two limits: four times the length recorded for the track
+(never less than 14 minutes), and the station's current music window, the
+length the rotation uses to keep sets and albums out. The window is at least 7
+minutes and grows with the songs already in rotation and with the **Banter
+every** pacing setting (`songs_between_banter`). When yt-dlp cannot fetch part
 of the audio stream, the download fails instead of airing with a jump.
 
 For a rotation track the log names the reason, the track stays unavailable
@@ -283,10 +287,15 @@ until the next restart, and the station plays other music:
 
 ```text
 WARNING yt-dlp failed for Some Artist – Some Title: refused a live stream before download — marking track unavailable
+WARNING yt-dlp failed for Some Artist – Some Title: refused a result running 8:20 before download (limit 7:00) — marking track unavailable
 ```
 
-An admin add, a Direction pick, or a listener song request gets the same notice
-as any other failed download.
+In the second line, 8:20 is how long the result runs and 7:00 is the limit that
+applied.
+
+An admin add, a Direction pick, or a listener song request refused this way is
+reported as too long, with a prompt to choose a single song. Trying the same
+result again would be refused again.
 
 ## The station keeps rejecting the same track
 

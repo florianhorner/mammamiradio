@@ -206,13 +206,13 @@ def _accept(
 
 
 def _duration_ms_to_sec(value: Any) -> float | None:
+    # /api/playlist/add stores duration_ms unchecked: Infinity or a huge integer
+    # raises OverflowError, and one such entry must not break every envelope.
     try:
-        duration_ms = int(value)
-    except (TypeError, ValueError):
+        duration_sec = int(value) / 1000.0
+    except (TypeError, ValueError, OverflowError):
         return None
-    if duration_ms <= 0:
-        return None
-    return duration_ms / 1000.0
+    return duration_sec if math.isfinite(duration_sec) and duration_sec > 0 else None
 
 
 def _nearest_rank_percentile(values: list[float], percentile: float) -> float:

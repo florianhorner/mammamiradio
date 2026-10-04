@@ -479,11 +479,10 @@ async def test_render_music_track_writes_duration_to_norm_sidecar(tmp_path):
 
 @pytest.mark.asyncio
 async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path):
-    from mammamiradio.playlist.music_admission import build_music_admission_envelope
     from mammamiradio.scheduling.producer import _render_music_track
 
     track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
-    sibling = Track(title="Normal", artist="Artist", duration_ms=200_000, youtube_id="normal00001")
+    sibling = Track(title="Normal", artist="Artist", duration_ms=400_000, youtube_id="normal00001")
     config = _make_config(tmp_path)
     raw_path = tmp_path / f"{track.cache_key}.mp3"
     raw_path.write_bytes(b"downloaded audio")
@@ -506,8 +505,66 @@ async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path)
     assert result is None
     assert raw_path.exists() is False
     mock_normalize.assert_not_called()
-    expected_threshold = build_music_admission_envelope([sibling], config.pacing).longform_threshold_sec
-    assert download.await_args.kwargs["longform_threshold_sec"] == expected_threshold
+    # The window comes from the rest of the rotation: the 400 s sibling alone
+    # gives 2 x 400 s, while counting the candidate itself would give 420 s.
+    assert download.await_args.kwargs["longform_threshold_sec"] == 800.0
+
+
+@pytest.mark.asyncio
+async def test_render_music_track_skips_the_window_for_tracks_yt_dlp_never_fetches(tmp_path):
+    """Local renders never build the admission window, so no rotation entry can break them."""
+    from mammamiradio.scheduling.producer import _render_music_track
+
+    track = Track(title="Song", artist="Artist", duration_ms=200_000, source="local", local_path=tmp_path / "song.mp3")
+    poisoned = Track(title="Poisoned", artist="Artist", duration_ms=float("inf"), youtube_id="poison00001")
+    config = _make_config(tmp_path)
+    download = AsyncMock(return_value=tmp_path / "song.mp3")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", download),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "stop here")),
+        patch(f"{PRODUCER_MODULE}.reject_cached_download"),
+        patch(f"{PRODUCER_MODULE}.build_music_admission_envelope") as envelope,
+    ):
+        result = await _render_music_track(
+            track,
+            config,
+            temp_prefix="music",
+            context="music",
+            playlist=[poisoned, track],
+        )
+
+    assert result is None
+    assert download.await_args.kwargs["longform_threshold_sec"] is None
+    envelope.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_render_music_track_window_survives_a_malformed_rotation_entry(tmp_path):
+    """One entry /api/playlist/add stored with an unusable length must not stop other renders."""
+    from mammamiradio.scheduling.producer import _render_music_track
+
+    track = Track(title="Ok", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    poisoned = Track(title="Poisoned", artist="Artist", duration_ms=float("inf"), youtube_id="poison00001")
+    config = _make_config(tmp_path)
+    download = AsyncMock(return_value=tmp_path / "missing.mp3")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", download),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "stop here")),
+        patch(f"{PRODUCER_MODULE}.reject_cached_download"),
+    ):
+        result = await _render_music_track(
+            track,
+            config,
+            temp_prefix="music",
+            context="music",
+            playlist=[poisoned, track],
+        )
+
+    assert result is None
+    download.assert_awaited_once()
+    assert download.await_args.kwargs["longform_threshold_sec"] == 420.0
 
 
 @pytest.mark.asyncio

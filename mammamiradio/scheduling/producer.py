@@ -1058,10 +1058,15 @@ async def _render_music_track(
     readiness = source_readiness
     if readiness is None and timing_state is not None:
         readiness = timing_state.source_readiness
-    envelope_playlist = (
-        [candidate for candidate in playlist if candidate.cache_key != track.cache_key] if playlist is not None else []
-    )
-    longform_threshold_sec = build_music_admission_envelope(envelope_playlist, config.pacing).longform_threshold_sec
+    # Only tracks yt-dlp may fetch are judged against the station's music
+    # window; local and demo renders skip the whole-rotation pass.
+    youtube_candidate = is_youtube_music_candidate(track)
+    envelope_playlist: list[Track] = []
+    longform_threshold_sec: float | None = None
+    if youtube_candidate:
+        track_key = track.cache_key
+        envelope_playlist = [candidate for candidate in playlist or () if candidate.cache_key != track_key]
+        longform_threshold_sec = build_music_admission_envelope(envelope_playlist, config.pacing).longform_threshold_sec
     try:
         audio_path = await download_track(
             track,
@@ -1089,7 +1094,7 @@ async def _render_music_track(
     except OSError:
         should_probe_actual = False
     actual_duration_ms: int | None = None
-    if should_probe_actual and is_youtube_music_candidate(track):
+    if should_probe_actual and youtube_candidate:
         actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
         if actual_duration_sec > 0:
             actual_duration_ms = round(actual_duration_sec * 1000)

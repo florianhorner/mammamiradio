@@ -1295,6 +1295,7 @@ async def test_commit_external_download_holds_lied_actual_duration_and_purges(tm
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
     state = app.state.station_state
+    state.playlist[:] = [Track(title="Epic", artist="Band", duration_ms=500_000, youtube_id="epic0000001")]
     original_len = len(state.playlist)
     track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
     raw_path = tmp_path / f"{track.cache_key}.mp3"
@@ -1317,10 +1318,123 @@ async def test_commit_external_download_holds_lied_actual_duration_and_purges(tm
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
     assert raw_path.exists() is False
-    from mammamiradio.playlist.music_admission import build_music_admission_envelope
+    # The window follows the rotation: one 500 s track gives 2 x 500 s, not the 420 s floor.
+    assert download_mock.await_args.kwargs["longform_threshold_sec"] == 1000.0
 
-    expected_threshold = build_music_admission_envelope(state.playlist, app.state.config.pacing).longform_threshold_sec
-    assert download_mock.await_args.kwargs["longform_threshold_sec"] == expected_threshold
+
+_REFUSALS = [
+    "refused a result running 8:20 before download (limit 7:00)",
+    "refused a live stream before download",
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", _REFUSALS, ids=["over-window", "live"])
+async def test_commit_external_download_holds_a_result_refused_before_download(tmp_path, reason):
+    """A refusal judges the result, so it reads as too long, not as a failure worth retrying."""
+    from mammamiradio.playlist.downloader import ExternalMediaRefusedError
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        side_effect=ExternalMediaRefusedError(reason),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: True,
+        )
+
+    assert status == "held"
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    assert state.force_next is None
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_drops_a_refusal_nobody_waits_for(tmp_path):
+    from mammamiradio.playlist.downloader import ExternalMediaRefusedError
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        side_effect=ExternalMediaRefusedError(_REFUSALS[0]),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: False,
+            should_pin=lambda: True,
+        )
+
+    assert status == "dropped"
+
+
+@pytest.mark.asyncio
+async def test_admin_external_add_reports_a_refused_result_as_too_long(tmp_path):
+    from mammamiradio.playlist.downloader import ExternalMediaRefusedError
+    from mammamiradio.web.streamer import _download_admin_external_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    track = Track(title="Brano", artist="Artista", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        side_effect=ExternalMediaRefusedError(_REFUSALS[0]),
+    ):
+        await _download_admin_external_track(track, app.state, state.source_revision)
+
+    notice = list(state.external_add_notices)[-1]
+    assert notice["ok"] is False
+    assert notice["reason"] == "longform_audio"
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_direction_pick_reports_a_refused_result_as_too_long(tmp_path):
+    from mammamiradio.core.models import Heading
+    from mammamiradio.playlist.downloader import ExternalMediaRefusedError
+    from mammamiradio.web.streamer import _download_direction_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.heading = Heading("h-refused", "direction://sunday", "Sunday", 1.0, "operator")
+    track = Track(title="Brano", artist="Artista", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+
+    with patch(
+        "mammamiradio.playlist.downloader.download_external_track",
+        new_callable=AsyncMock,
+        side_effect=ExternalMediaRefusedError(_REFUSALS[1]),
+    ):
+        status = await _download_direction_track(track, app.state, state.source_revision, "h-refused")
+
+    assert status == "held"
+    notice = list(state.external_add_notices)[-1]
+    assert notice["ok"] is False
+    assert notice["reason"] == "longform_audio"
+    assert track not in state.playlist
 
 
 @pytest.mark.asyncio
@@ -5131,6 +5245,38 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
     assert req["song_found"] is False
     assert req["song_error"] is True
     assert req["song_error_reason"] == "download_failed"
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_refused_result_reads_as_too_long(tmp_path):
+    """A refused result asks the listener for another song instead of telling them to retry."""
+    from mammamiradio.playlist.downloader import ExternalMediaRefusedError
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    original_len = len(state.playlist)
+    req = {"message": "play track", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            side_effect=ExternalMediaRefusedError("refused a result running 8:20 before download (limit 7:00)"),
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.playlist_revision)
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert req["song_error_reason"] == "longform_audio"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 

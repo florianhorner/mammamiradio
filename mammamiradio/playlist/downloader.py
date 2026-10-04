@@ -55,8 +55,9 @@ _LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
 
 # An extract more than this many times the track's own length is plainly not
 # the song the track describes (an hour-long compilation, a mix). Generous on
-# purpose: for YouTube picks the admission envelope after download still
-# judges normal lengths.
+# purpose: callers that know the station's music window pass it as
+# ``longform_threshold_sec``, which tightens this cap, and the admission
+# envelope still judges the finished file.
 _EXTRACT_DURATION_MAX_MULTIPLE = 4
 
 # Canonical YouTube video-id shape (11 chars, base64url alphabet). Single source
@@ -399,7 +400,8 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
 
 
 class ExternalMediaRefusedError(RuntimeError):
-    """The extract was live or far longer than its track; no audio was downloaded."""
+    """The extract was live, longer than the station's music window, or far longer
+    than its track; no audio was downloaded."""
 
 
 def _refuse_live_or_overlong(
@@ -461,12 +463,6 @@ def _download_ytdlp(
     longform_threshold_sec: float | None = None,
 ) -> Path:
     """Download the best-effort public audio match for a track via yt-dlp."""
-    claimed_sec = _claimed_track_sec(track)
-    if longform_threshold_sec is not None and claimed_sec > longform_threshold_sec:
-        raise ExternalMediaRefusedError(
-            f"refused a result running {_clock(claimed_sec)} before download (limit {_clock(longform_threshold_sec)})"
-        )
-
     yt_dlp = _load_external_media_module()
 
     # Use the exact video ID when available to download the chosen upload,
