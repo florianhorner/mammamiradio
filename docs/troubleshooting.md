@@ -277,10 +277,11 @@ extra. Before any audio is transferred, the station refuses a live, scheduled,
 or just-ended stream, and a result that runs too long. Too long means longer
 than the shorter of two limits: four times the length recorded for the track
 (never less than 14 minutes), and the station's current music window, the
-length the rotation uses to keep sets and albums out. The window is at least 7
-minutes and grows with the songs already in rotation and with the **Banter
-every** pacing setting (`songs_between_banter`). When yt-dlp cannot fetch part
-of the audio stream, the download fails instead of airing with a jump.
+length the rotation uses to keep sets and albums out. The window is the typical
+song length in the rotation, counted as at least 3:30, times the **Banter
+every** pacing setting (`songs_between_banter`), so it is never under 7 minutes.
+When yt-dlp cannot fetch part of the audio stream, the download fails instead
+of airing with a jump.
 
 For a rotation track the log names the reason, the track stays unavailable
 until the next restart, and the station plays other music:
@@ -297,9 +298,9 @@ When an admin add or a **Record Hunt** pick is refused for its length, the
 notice asks for a single-track result, and the **Pending requests** card marks a
 refused song request as too long. The listener is told the song could not be
 prepared for air and is asked to try another title or artist. The same result
-is refused again while the limit stays the same. A live or scheduled stream is
-reported as a failed download instead, because it can become a normal video
-once the broadcast ends.
+is refused again while the limit stays the same. A live, scheduled, or
+just-ended stream is reported as a failed download instead, because it can
+become a normal video once the broadcast ends.
 
 ## The station keeps rejecting the same track
 
