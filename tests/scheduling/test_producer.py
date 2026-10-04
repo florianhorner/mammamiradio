@@ -484,6 +484,7 @@ async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path)
     track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
     sibling = Track(title="Normal", artist="Artist", duration_ms=400_000, youtube_id="normal00001")
     config = _make_config(tmp_path)
+    config.pacing.songs_between_banter = 5
     raw_path = tmp_path / f"{track.cache_key}.mp3"
     raw_path.write_bytes(b"downloaded audio")
     download = AsyncMock(return_value=raw_path)
@@ -505,9 +506,9 @@ async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path)
     assert result is None
     assert raw_path.exists() is False
     mock_normalize.assert_not_called()
-    # The window comes from the rest of the rotation: the 400 s sibling alone
-    # gives 2 x 400 s, while counting the candidate itself would give 420 s.
-    assert download.await_args.kwargs["longform_threshold_sec"] == 800.0
+    # The window comes from the rest of the rotation and the pacing: 5 songs x
+    # the 400 s sibling. Counting the candidate itself would give 5 x 210 s.
+    assert download.await_args.kwargs["longform_threshold_sec"] == 2000.0
 
 
 @pytest.mark.asyncio
@@ -547,6 +548,7 @@ async def test_render_music_track_window_survives_a_malformed_rotation_entry(tmp
     track = Track(title="Ok", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
     poisoned = Track(title="Poisoned", artist="Artist", duration_ms=float("inf"), youtube_id="poison00001")
     config = _make_config(tmp_path)
+    config.pacing.songs_between_banter = 2
     download = AsyncMock(return_value=tmp_path / "missing.mp3")
 
     with (

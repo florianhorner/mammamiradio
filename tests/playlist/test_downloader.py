@@ -477,7 +477,7 @@ def _extract_youtube_dl(cache_dir, track, extract_sec):
 
 def test_download_ytdlp_judges_the_extract_not_the_stored_length(cache_dir):
     """A long stored length is no verdict: the extract's own duration decides, before any audio."""
-    from mammamiradio.playlist.downloader import ExternalMediaRefusedError, _download_ytdlp
+    from mammamiradio.playlist.downloader import ExternalMediaTooLongError, _download_ytdlp
 
     track = Track(title="Metadata Says Long", artist="Artist", duration_ms=7_200_000, youtube_id="dQw4w9WgXcQ")
     out = cache_dir / f"{track.cache_key}.mp3"
@@ -489,12 +489,29 @@ def test_download_ytdlp_judges_the_extract_not_the_stored_length(cache_dir):
     # The 2-hour claim alone would allow 8 hours; the station window refuses 8:20.
     with (
         patch.dict(sys.modules, {"yt_dlp": _extract_youtube_dl(cache_dir, track, 500)}),
-        pytest.raises(ExternalMediaRefusedError, match=r"running 8:20 before download \(limit 7:00\)"),
+        pytest.raises(ExternalMediaTooLongError, match=r"running 8:20 before download \(limit 7:00\)"),
     ):
         _download_ytdlp(track, cache_dir, longform_threshold_sec=420)
 
     assert not out.exists()
     assert not (cache_dir / ".ytdlp_tmp" / track.cache_key).exists()
+
+
+def test_download_ytdlp_tells_a_live_refusal_from_a_long_one(track, cache_dir):
+    """Only a length refusal is final; a live stream can become a normal video later."""
+    from mammamiradio.playlist.downloader import (
+        ExternalMediaRefusedError,
+        ExternalMediaTooLongError,
+        _download_ytdlp,
+    )
+
+    with (
+        patch.dict(sys.modules, {"yt_dlp": _refusing_youtube_dl(cache_dir, track, sibling_downloads=False)}),
+        pytest.raises(ExternalMediaRefusedError, match="refused a live stream before download") as live,
+    ):
+        _download_ytdlp(track, cache_dir, longform_threshold_sec=420)
+
+    assert not isinstance(live.value, ExternalMediaTooLongError)
 
 
 def test_window_refusal_marks_the_track_unavailable_until_restart(track, cache_dir, music_dir):

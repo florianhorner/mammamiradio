@@ -10908,13 +10908,13 @@ async def _commit_external_download(
     pick. Pins the track to play next when `should_pin()` is true. Returns one of:
     "pinned" (committed and claimed the play-next slot), "queued" (committed to
     the rotation pool but the play-next slot was occupied), "banned" (the song is on
-    the operator blocklist and was refused), "held" (live, long-form or non-rotation
+    the operator blocklist and was refused), "held" (long-form or non-rotation
     audio, refused before or after download), or "dropped" (source switched / consumed).
     Raises on download failure / cancellation for the caller to surface. Shared by the
     admin and listener download paths."""
     from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
     from mammamiradio.playlist.downloader import (
-        ExternalMediaRefusedError,
+        ExternalMediaTooLongError,
         accept_recovered_download,
         download_external_track,
         reject_cached_download,
@@ -10941,14 +10941,15 @@ async def _commit_external_download(
             music_dir=config.music_dir,
             longform_threshold_sec=longform_threshold_sec,
         )
-    except ExternalMediaRefusedError as exc:
-        # A live or over-long result is a verdict on the pick, not a transient
-        # failure: report it like a long file found after download, so the
-        # caller asks for one song instead of suggesting a retry.
+    except ExternalMediaTooLongError as exc:
+        # An over-long result is a verdict on the pick, not a transient failure:
+        # report it like a long file found after download, so the caller asks for
+        # one song instead of suggesting a retry. A live stream still raises: it
+        # can become a normal video once the broadcast ends.
         if state.source_revision != originating_source_revision or not should_commit():
             return "dropped"
         logger.info(
-            "External track held out of rotation before download: %s (yt:%s): %s",
+            "External track refused before download: %s (yt:%s reason=%s)",
             track.display,
             getattr(track, "youtube_id", ""),
             exc,

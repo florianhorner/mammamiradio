@@ -212,7 +212,7 @@ def _duration_ms_to_sec(value: Any) -> float | None:
         duration_sec = int(value) / 1000.0
     except (TypeError, ValueError, OverflowError):
         return None
-    return duration_sec if math.isfinite(duration_sec) and duration_sec > 0 else None
+    return duration_sec if duration_sec > 0 else None
 
 
 def _nearest_rank_percentile(values: list[float], percentile: float) -> float:

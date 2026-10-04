@@ -52,6 +52,7 @@ _YTDLP_SOCKET_TIMEOUT_SEC = 30
 # scheduled, or just ended and not yet processed into a normal video. None of
 # them downloads as a song; a live one can run until the station restarts.
 _LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
+_LIVE_REFUSAL = "refused a live stream before download"
 
 # An extract more than this many times the track's own length is plainly not
 # the song the track describes (an hour-long compilation, a mix). Generous on
@@ -400,8 +401,11 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
 
 
 class ExternalMediaRefusedError(RuntimeError):
-    """The extract was live, longer than the station's music window, or far longer
-    than its track; no audio was downloaded."""
+    """The extract was live or too long for one song; no audio was downloaded."""
+
+
+class ExternalMediaTooLongError(ExternalMediaRefusedError):
+    """The extract runs longer than the station's music window or far longer than its track."""
 
 
 def _refuse_live_or_overlong(
@@ -424,7 +428,7 @@ def _refuse_live_or_overlong(
     # yt-dlp also passes ``incomplete=``; the verdict does not depend on it.
     def match_filter(info: dict[str, Any], **_: Any) -> str | None:
         if info.get("is_live") or info.get("live_status") in _LIVE_STATUSES:
-            reason = "refused a live stream before download"
+            reason = _LIVE_REFUSAL
         else:
             duration = info.get("duration")
             if isinstance(duration, float) and not math.isfinite(duration):
@@ -525,7 +529,9 @@ def _download_ytdlp(
     if out_path.exists():
         return out_path
     if refusals:
-        raise ExternalMediaRefusedError(refusals[0])
+        # A live stream can become a normal video later; a long result stays long.
+        refused = ExternalMediaRefusedError if refusals[0] == _LIVE_REFUSAL else ExternalMediaTooLongError
+        raise refused(refusals[0])
     raise FileNotFoundError(f"Download failed for {track.display}")
 
 

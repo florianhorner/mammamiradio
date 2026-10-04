@@ -293,9 +293,13 @@ WARNING yt-dlp failed for Some Artist – Some Title: refused a result running 8
 In the second line, 8:20 is how long the result runs and 7:00 is the limit that
 applied.
 
-An admin add, a Direction pick, or a listener song request refused this way is
-reported as too long, with a prompt to choose a single song. Trying the same
-result again would be refused again.
+When an admin add or a Direction pick is refused for its length, the notice asks
+for a single-track result, and the Listener Requests list marks a refused song
+request as too long. The listener is told the song could not be prepared for air
+and is asked to try another title or artist. The same result is refused again
+while the limit stays the same. A live or scheduled stream is reported as a
+failed download instead, because it can become a normal video once the
+broadcast ends.
 
 ## The station keeps rejecting the same track
 
