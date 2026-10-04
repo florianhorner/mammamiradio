@@ -1327,12 +1327,8 @@ _TOO_LONG = "refused a result running 8:20 before download (limit 7:00)"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "reason",
-    [_TOO_LONG, "refused a result running 60:00 before download (limit 14:00)"],
-    ids=["over-window", "over-4x"],
-)
-async def test_commit_external_download_holds_a_result_refused_before_download(tmp_path, reason):
+@pytest.mark.parametrize(("still_wanted", "expected"), [(True, "held"), (False, "dropped")], ids=["held", "dropped"])
+async def test_commit_external_download_reports_a_length_refusal(tmp_path, still_wanted, expected):
     """A length refusal judges the result, so it reads as too long, not as a failure worth retrying."""
     from mammamiradio.playlist.downloader import ExternalMediaTooLongError
     from mammamiradio.web import streamer
@@ -1346,46 +1342,20 @@ async def test_commit_external_download_holds_a_result_refused_before_download(t
     with patch(
         "mammamiradio.playlist.downloader.download_external_track",
         new_callable=AsyncMock,
-        side_effect=ExternalMediaTooLongError(reason),
-    ):
-        status = await streamer._commit_external_download(
-            track,
-            app.state,
-            state.source_revision,
-            should_commit=lambda: True,
-            should_pin=lambda: True,
-        )
-
-    assert status == "held"
-    assert len(state.playlist) == original_len
-    assert state.pinned_track is None
-    assert state.force_next is None
-
-
-@pytest.mark.asyncio
-async def test_commit_external_download_drops_a_refusal_nobody_waits_for(tmp_path):
-    from mammamiradio.playlist.downloader import ExternalMediaTooLongError
-    from mammamiradio.web import streamer
-
-    app = _make_test_app()
-    app.state.config.cache_dir = tmp_path
-    state = app.state.station_state
-    track = Track(title="Looks Short", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
-
-    with patch(
-        "mammamiradio.playlist.downloader.download_external_track",
-        new_callable=AsyncMock,
         side_effect=ExternalMediaTooLongError(_TOO_LONG),
     ):
         status = await streamer._commit_external_download(
             track,
             app.state,
             state.source_revision,
-            should_commit=lambda: False,
+            should_commit=lambda: still_wanted,
             should_pin=lambda: True,
         )
 
-    assert status == "dropped"
+    assert status == expected
+    assert len(state.playlist) == original_len
+    assert state.pinned_track is None
+    assert state.force_next is None
 
 
 @pytest.mark.asyncio
@@ -1412,31 +1382,14 @@ async def test_admin_external_add_drops_a_refusal_after_a_source_switch(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_admin_external_add_reports_a_live_refusal_as_a_failed_download(tmp_path):
-    """A live or scheduled stream is not too long; it can become a normal video later."""
-    from mammamiradio.playlist.downloader import ExternalMediaRefusedError
-    from mammamiradio.web.streamer import _download_admin_external_track
-
-    app = _make_test_app()
-    app.state.config.cache_dir = tmp_path
-    state = app.state.station_state
-    track = Track(title="Brano", artist="Artista", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
-
-    with patch(
-        "mammamiradio.playlist.downloader.download_external_track",
-        new_callable=AsyncMock,
-        side_effect=ExternalMediaRefusedError("refused a live stream before download"),
-    ):
-        await _download_admin_external_track(track, app.state, state.source_revision)
-
-    notice = list(state.external_add_notices)[-1]
-    assert notice["reason"] == "download_failed"
-    assert track not in state.playlist
-
-
-@pytest.mark.asyncio
-async def test_admin_external_add_reports_a_refused_result_as_too_long(tmp_path):
-    from mammamiradio.playlist.downloader import ExternalMediaTooLongError
+@pytest.mark.parametrize(
+    ("live", "expected_reason"),
+    [(False, "longform_audio"), (True, "download_failed")],
+    ids=["too-long", "live"],
+)
+async def test_admin_external_add_reports_a_refused_pick(tmp_path, live, expected_reason):
+    """Too long asks for one song; a live or scheduled stream can become a normal video later."""
+    from mammamiradio.playlist.downloader import ExternalMediaRefusedError, ExternalMediaTooLongError
     from mammamiradio.web.streamer import _download_admin_external_track
 
     app = _make_test_app()
@@ -1444,17 +1397,22 @@ async def test_admin_external_add_reports_a_refused_result_as_too_long(tmp_path)
     state = app.state.station_state
     original_len = len(state.playlist)
     track = Track(title="Brano", artist="Artista", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    refusal = (
+        ExternalMediaRefusedError("refused a live stream before download")
+        if live
+        else ExternalMediaTooLongError(_TOO_LONG)
+    )
 
     with patch(
         "mammamiradio.playlist.downloader.download_external_track",
         new_callable=AsyncMock,
-        side_effect=ExternalMediaTooLongError(_TOO_LONG),
+        side_effect=refusal,
     ):
         await _download_admin_external_track(track, app.state, state.source_revision)
 
     notice = list(state.external_add_notices)[-1]
     assert notice["ok"] is False
-    assert notice["reason"] == "longform_audio"
+    assert notice["reason"] == expected_reason
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 

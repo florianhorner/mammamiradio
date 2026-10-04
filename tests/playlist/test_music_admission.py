@@ -146,7 +146,7 @@ def test_music_admission_envelope_uses_station_pacing():
 def test_music_admission_envelope_ignores_unusable_durations(duration_ms):
     """/api/playlist/add stores duration_ms unchecked; one bad entry must not break the window."""
     playlist = [
-        Track(title="Poisoned", artist="Artist", duration_ms=duration_ms, youtube_id="poison00001"),
+        _track("Poisoned", duration_ms=duration_ms, youtube_id="poison00001"),
         _track("Single A", duration_ms=400_000, youtube_id="single00001"),
     ]
 
@@ -158,7 +158,7 @@ def test_music_admission_envelope_ignores_unusable_durations(duration_ms):
 
 @pytest.mark.parametrize("duration_ms", [float("inf"), 10**400], ids=["inf", "huge-int"])
 def test_music_admission_holds_candidate_with_unusable_duration(duration_ms):
-    candidate = Track(title="Poisoned", artist="Artist", duration_ms=duration_ms, youtube_id="poison00001")
+    candidate = _track("Poisoned", duration_ms=duration_ms, youtube_id="poison00001")
 
     verdict = classify_youtube_candidate(candidate, [], PacingSection(songs_between_banter=2))
 
