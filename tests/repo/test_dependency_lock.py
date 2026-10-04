@@ -199,10 +199,6 @@ def test_uv_never_manages_the_locked_environment() -> None:
 needs_uv = pytest.mark.skipif(shutil.which("uv") is None, reason="uv is not installed")
 
 
-# A runtime dependency, planted at a version uv would never resolve to.
-LOCKED_DIST, LOCKED_VERSION = "python-dotenv", "0.0.1"
-
-
 def _run_uv(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     # A private cache and no user-level uv config, so only the project decides.
     env = {
@@ -214,8 +210,18 @@ def _run_uv(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["uv", *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=120, check=False)
 
 
-def _listing(directory: Path) -> list[str]:
-    return sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*"))
+def _snapshot(directory: Path) -> dict[str, str]:
+    """Content of every file under directory, so an in-place rewrite shows up too."""
+    snapshot = {}
+    for path in sorted(directory.rglob("*")):
+        if "__pycache__" in path.parts:
+            continue
+        key = path.relative_to(directory).as_posix()
+        if path.is_symlink():
+            snapshot[key] = f"link:{os.readlink(path)}"
+        elif path.is_file():
+            snapshot[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return snapshot
 
 
 def _build_requirements_installed() -> bool:
@@ -241,6 +247,7 @@ def _write_wheel(directory: Path, name: str, version: str) -> Path:
         digest = base64.urlsafe_b64encode(hashlib.sha256(body.encode()).digest()).rstrip(b"=").decode()
         rows.append(f"{path},sha256={digest},{len(body)}")
     files[f"{dist}/RECORD"] = "\n".join([*rows, f"{dist}/RECORD,,"]) + "\n"
+    directory.mkdir(parents=True, exist_ok=True)
     wheel = directory / f"{name}-{version}-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         for path, body in files.items():
@@ -248,50 +255,65 @@ def _write_wheel(directory: Path, name: str, version: str) -> Path:
     return wheel
 
 
+def _probe_project(tmp_path: Path) -> Path:
+    """A one-dependency project carrying this repository's [tool.uv] managed value.
+
+    Its wheel folder offers demo-dep 2.0, so a managed `uv run` resolves and installs
+    it offline, and each assertion below fails for its own reason, not because the
+    real dependencies cannot be resolved without a network.
+    """
+    managed = tomllib.loads((ROOT / "pyproject.toml").read_text()).get("tool", {}).get("uv", {}).get("managed", True)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "probe"\nversion = "0"\nrequires-python = ">=3.11"\ndependencies = ["demo-dep"]\n'
+        f"\n[tool.uv]\nmanaged = {str(managed).lower()}\n"
+    )
+    _write_wheel(tmp_path / "wheels", "demo_dep", "2.0")
+    return project
+
+
 @needs_uv
 def test_uv_run_leaves_the_environment_alone(tmp_path: Path) -> None:
-    # The behaviour the setting promises, on whichever uv this machine has.
-    (tmp_path / "pyproject.toml").write_text((ROOT / "pyproject.toml").read_text())
-    result = _run_uv(["run", "--offline", "--python", sys.executable, "python", "-c", "pass"], tmp_path)
+    # Without a .venv, an unmanaged `uv run` creates none and writes no lockfile.
+    project = _probe_project(tmp_path)
+    links = ["--offline", "--find-links", os.fspath(tmp_path / "wheels")]
+    # The base interpreter, so uv is never pointed at the repository's own .venv.
+    base_python = getattr(sys, "_base_executable", sys.executable)
+    result = _run_uv(["run", *links, "--python", base_python, "python", "-c", "pass"], project)
     assert result.returncode == 0, result.stderr
-    assert not (tmp_path / ".venv").exists(), "uv run created a project environment"
-    assert not (tmp_path / "uv.lock").exists(), "uv run wrote a lockfile"
+    assert not (project / ".venv").exists(), "uv run created a project environment"
+    assert not (project / "uv.lock").exists(), "uv run wrote a lockfile"
 
-    sync = _run_uv(["sync", "--offline"], tmp_path)
+    sync = _run_uv(["sync", *links], project)
     assert sync.returncode != 0, "uv sync should refuse an unmanaged project"
     assert "unmanaged" in sync.stderr, sync.stderr
-    assert not (tmp_path / ".venv").exists()
+    assert not (project / ".venv").exists()
 
 
 @needs_uv
 @pytest.mark.parametrize("extra", [False, True], ids=["plain", "with-extra"])
 def test_uv_run_reuses_the_existing_locked_environment(tmp_path: Path, extra: bool) -> None:
     # The original failure: `uv run` from the repository root synced .venv to uv's own resolution.
-    (tmp_path / "pyproject.toml").write_text((ROOT / "pyproject.toml").read_text())
-    # A managed `uv run` only replaces a package the project depends on.
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-    declared = {canonicalize_name(Requirement(raw).name) for raw in project["dependencies"]}
-    assert canonicalize_name(LOCKED_DIST) in declared, f"{LOCKED_DIST} is no longer a runtime dependency; plant another"
-    venv = tmp_path / ".venv"
+    project = _probe_project(tmp_path)
+    venv = project / ".venv"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", os.fspath(venv)], check=True)
-    dist_info = f"{LOCKED_DIST.replace('-', '_')}-{LOCKED_VERSION}.dist-info"
-    locked = next(venv.glob("lib/python*/site-packages")) / dist_info
-    locked.mkdir()
-    (locked / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {LOCKED_DIST}\nVersion: {LOCKED_VERSION}\n")
-    (locked / "RECORD").write_text(f"{locked.name}/METADATA,,\n{locked.name}/RECORD,,\n")
-    before = _listing(venv)
+    # demo-dep 1.0 stands in for a locked package; the wheel folder offers 2.0.
+    with zipfile.ZipFile(_write_wheel(tmp_path / "locked", "demo_dep", "1.0")) as wheel:
+        wheel.extractall(next(venv.glob("lib/python*/site-packages")))
+    before = _snapshot(venv)
 
-    command = ["run", "--offline"]
-    probe = f"import importlib.metadata as m; print(m.version({LOCKED_DIST!r}))"
+    command = ["run", "--offline", "--find-links", os.fspath(tmp_path / "wheels")]
+    probe = "import importlib.metadata as m; print(m.version('demo-dep'))"
     if extra:
-        command += ["--with", os.fspath(_write_wheel(tmp_path, "withdemo", "1.0"))]
+        command += ["--with", os.fspath(_write_wheel(tmp_path / "extra", "withdemo", "1.0"))]
         probe += "; import withdemo"
-    result = _run_uv([*command, "python", "-c", probe], tmp_path)
+    result = _run_uv([*command, "python", "-c", probe], project)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == LOCKED_VERSION, "uv run replaced a locked package"
-    assert _listing(venv) == before, "uv run changed the existing environment"
-    assert not (tmp_path / "uv.lock").exists(), "uv run wrote a lockfile"
+    assert result.stdout.strip() == "1.0", "uv run replaced a locked package"
+    assert _snapshot(venv) == before, "uv run changed the existing environment"
+    assert not (project / "uv.lock").exists(), "uv run wrote a lockfile"
 
 
 @needs_uv
