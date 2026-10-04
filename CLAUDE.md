@@ -103,7 +103,7 @@ python -m pip install --no-deps -e .
 python -m pip check
 ```
 
-For an existing environment, activate it and repeat the four `python -m pip` commands to restore the runtime lock. See [Local setup](CONTRIBUTING.md#local-setup).
+For an existing environment, activate it and repeat the four `python -m pip` commands to restore the runtime lock. See [Local setup](CONTRIBUTING.md#local-setup). uv does not manage `.venv` (`[tool.uv] managed = false` in `pyproject.toml`): `uv sync`, `uv lock` and `uv add` refuse on purpose, so install with the pip commands and never remove the setting.
 
 - Run full local stack: `./start.sh`
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`

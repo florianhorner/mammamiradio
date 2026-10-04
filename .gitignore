@@ -46,8 +46,7 @@ output/
 # maintenance window (see CONTRACT.md). Never committed.
 .contract-window
 
-# uv.lock — no build, workflow, or image reads it (both container images and
-# CI install the hash-locked requirements.txt). Tracking it only produced
+# uv.lock — no build, workflow, or image reads it. Tracking it only produced
 # Dependabot alerts for a dependency graph that never ships. pyproject.toml
 # marks the project unmanaged for uv, so uv no longer writes one. The entry
 # stays so a leftover copy never shows up in git status or the media-proof
