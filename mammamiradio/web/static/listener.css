@@ -407,7 +407,7 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 /* Schedule, dedica, about-card all use the hero-stage's perception trick:
  * inset top-edge highlight + drop-shadow. Without this, dark surfaces blend
  * into the body bg mid-scroll and the eye registers them as page bg, not
- * panels. See .context/listener-contrast/ANALYSIS.md for the contrast math. */
+ * panels. */
 .mmr-dedica-form,
 #request-form,
 #req-name,

@@ -8,7 +8,7 @@
 # network. Exits non-zero on any mismatch.
 #
 # What these cases exist to hold:
-#   - shadow mode never writes (the whole premise of phase 1)
+#   - shadow mode never writes (the premise of report-only mode)
 #   - fail-closed classification: an unverifiable gate is BLOCKED, never READY
 #   - single-flight: exactly one decision per tick, never two
 #   - FIFO fairness: the key cannot drift to a field that a bounce mutates
@@ -245,7 +245,7 @@ pass "two READY PRs produce exactly one decision, the FIFO-older"
 
 # =============================================================================
 # Case 4: FIFO key is createdAt — a field a bounce cannot move. A PR that was
-# updated most recently must NOT jump the queue (plan section 6.3 fairness).
+# updated most recently must NOT jump the queue (FIFO fairness).
 # =============================================================================
 jq -e '.prs[0].fifo_key == "2026-01-01T00:00:00Z"' <<<"$OUT" >/dev/null \
   || fail "fifo_key must be the PR creation time"
@@ -285,7 +285,7 @@ OUT="$(run_plan "$PRS")"
 pass "skip-queue label releases the stall without reordering the rest"
 
 # =============================================================================
-# Case 8: an unresolved Major bot thread blocks — never READY (invariant I6).
+# Case 8: an unresolved Major bot thread blocks — never READY.
 # =============================================================================
 PRS="[$(pr_row 60 "fix: bot debt" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
 OUT="$(THREADS="$ONE_THREAD" COMMENTS="$MAJOR_COMMENTS" run_plan "$PRS")"
@@ -389,8 +389,8 @@ printf '%s' "$OUT" | grep -q "could not list open PRs" || fail "failure should n
 pass "unreadable PR list fails closed (never a soft empty queue)"
 
 # =============================================================================
-# Edge selection library (plan section 8.1). Sourced directly so the eligibility
-# function is tested as the auto-edge controller will call it.
+# Edge selection library, scripts/edge-select.sh. Sourced directly so the
+# eligibility function is tested as the auto-edge controller will call it.
 # =============================================================================
 edge_probe() { # RUN_SHAS -> prints "<rc>\t<stdout>"
   local out rc
@@ -422,7 +422,7 @@ IFS=$'\t' read -r rc out <<<"$(edge_probe "")"
 [ -z "$out" ] || fail "a refusal must not print a sha"
 pass "edge: no green build refuses instead of naming a tag"
 
-# 18: an unverifiable build query is a refusal, never a soft pass (invariant I9).
+# 18: an unverifiable build query is a refusal, never a soft pass (fail-closed).
 IFS=$'\t' read -r rc out <<<"$(edge_probe "" 1)"
 [ "$rc" != "0" ] || fail "a failed run query must refuse"
 [ -z "$out" ] || fail "a failed query must not print a sha"

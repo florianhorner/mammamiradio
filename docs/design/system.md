@@ -615,7 +615,7 @@ under the `production` key — never the listener `/public-status`.
 
 ## Listener site composition — canonical
 
-The listener surface (served at `/` and `/listen`) is a radio station website, not a player widget. Five-band vertical composition, designed for desktop first (1440px), scales down gracefully. Reference wireframe: `.context/designs/unified-player-20260421/site-v1.html` (approved 2026-04-21).
+The listener surface (served at `/` and `/listen`) is a radio station website, not a player widget. Five-band vertical composition, designed for desktop first (1440px), scales down gracefully. Interaction and state rules for these pages live in [listener-contract.md](listener-contract.md).
 
 **Ordering is normative. Each band can be edited independently, but the order and presence of all five cannot.**
 
