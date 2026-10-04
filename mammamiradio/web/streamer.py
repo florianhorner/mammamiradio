@@ -10933,7 +10933,14 @@ async def _commit_external_download(
         track.album_art = await asyncio.to_thread(
             maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
         )
-    longform_threshold_sec = build_music_admission_envelope(state.playlist, config.pacing).longform_threshold_sec
+    track_key = track.cache_key
+
+    def _rest_of_rotation() -> list[Any]:
+        # The candidate never votes on its own window, as in the producer: a
+        # re-requested long track must not widen the limit it is judged by.
+        return [candidate for candidate in state.playlist if candidate.cache_key != track_key]
+
+    longform_threshold_sec = build_music_admission_envelope(_rest_of_rotation(), config.pacing).longform_threshold_sec
     try:
         downloaded_path = await download_external_track(
             track,
@@ -10945,9 +10952,11 @@ async def _commit_external_download(
         # An over-long result is a verdict on the pick, not a transient failure:
         # report it like a long file found after download, so the caller asks for
         # one song instead of suggesting a retry. A live stream still raises: it
-        # can become a normal video once the broadcast ends.
-        if state.source_revision != originating_source_revision or not should_commit():
-            return "dropped"
+        # can become a normal video once the broadcast ends. Wait out an
+        # in-flight source switch first, as the commit below does.
+        async with app_state.source_switch_lock:
+            if state.source_revision != originating_source_revision or not should_commit():
+                return "dropped"
         logger.info(
             "External track refused before download: %s (yt:%s reason=%s)",
             track.display,
@@ -10982,7 +10991,7 @@ async def _commit_external_download(
         if is_youtube_music_candidate(track):
             verdict = classify_youtube_candidate(
                 track,
-                state.playlist,
+                _rest_of_rotation(),
                 config.pacing,
                 actual_duration_sec=actual_duration_sec if actual_duration_sec and actual_duration_sec > 0 else None,
             )

@@ -1359,6 +1359,41 @@ async def test_commit_external_download_reports_a_length_refusal(tmp_path, still
 
 
 @pytest.mark.asyncio
+async def test_commit_external_download_keeps_a_rotation_twin_out_of_its_own_window(tmp_path):
+    """A re-request of a long track already in rotation is judged without its own stored length."""
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.pacing.songs_between_banter = 2
+    state = app.state.station_state
+    twin = Track(title="Long Mix", artist="DJ", duration_ms=7_200_000, youtube_id="dQw4w9WgXcQ")
+    state.playlist[:] = [twin]
+    track = Track(title="Long Mix", artist="DJ", duration_ms=7_200_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"long audio placeholder")
+    download = AsyncMock(return_value=raw_path)
+
+    with (
+        patch("mammamiradio.playlist.downloader.download_external_track", download),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=7_200.0),
+    ):
+        status = await streamer._commit_external_download(
+            track,
+            app.state,
+            state.source_revision,
+            should_commit=lambda: True,
+            should_pin=lambda: True,
+        )
+
+    # Without its twin the rotation is empty, so both checks use the 7-minute floor.
+    assert download.await_args.kwargs["longform_threshold_sec"] == 420.0
+    assert status == "held"
+    assert state.playlist == [twin]
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
 async def test_admin_external_add_drops_a_refusal_after_a_source_switch(tmp_path):
     """A refusal for a pick from the old source says the music changed, not that it was too long."""
     from mammamiradio.playlist.downloader import ExternalMediaTooLongError
@@ -4115,11 +4150,14 @@ async def test_add_external_track_queued_behind_existing_pin(tmp_path, external_
 
 
 @pytest.mark.asyncio
-async def test_commit_external_waits_out_in_flight_source_switch(tmp_path):
+@pytest.mark.parametrize("refused", [False, True], ids=["downloaded", "refused-too-long"])
+async def test_commit_external_waits_out_in_flight_source_switch(tmp_path, refused):
     """A source switch in progress (source_switch_lock held) when the download
     finishes makes the commit wait, then drop against the bumped revision — no
-    track leaks into the new source, and the admin gets a source_changed notice."""
+    track leaks into the new source, and the admin gets a source_changed notice.
+    A result refused for its length waits the same way."""
     from mammamiradio.core.models import Track
+    from mammamiradio.playlist.downloader import ExternalMediaTooLongError
     from mammamiradio.web.streamer import _download_admin_external_track
 
     app = _make_test_app()
@@ -4129,13 +4167,12 @@ async def test_commit_external_waits_out_in_flight_source_switch(tmp_path):
     track = Track(title="Brano", artist="A", duration_ms=1000, youtube_id="dQw4w9WgXcQ")
     original_len = len(state.playlist)
 
+    outcome = (
+        {"side_effect": ExternalMediaTooLongError(_TOO_LONG)} if refused else {"return_value": tmp_path / "dl.mp3"}
+    )
     # Simulate an in-flight /api/playlist/load holding the lock.
     await app.state.source_switch_lock.acquire()
-    with patch(
-        "mammamiradio.playlist.downloader.download_external_track",
-        new_callable=AsyncMock,
-        return_value=tmp_path / "dl.mp3",
-    ):
+    with patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock, **outcome):
         task = asyncio.create_task(_download_admin_external_track(track, app.state, rev))
         await asyncio.sleep(0.05)  # download completes, commit blocks on the lock
         # The switch completes: bump source_revision, then release the lock.
