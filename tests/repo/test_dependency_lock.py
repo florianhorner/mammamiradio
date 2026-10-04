@@ -218,13 +218,15 @@ def _listing(directory: Path) -> list[str]:
     return sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*"))
 
 
-def _setuptools_meets_build_requirement() -> bool:
-    requires = tomllib.loads((ROOT / "pyproject.toml").read_text())["build-system"]["requires"]
-    requirement = next(Requirement(raw) for raw in requires if canonicalize_name(Requirement(raw).name) == "setuptools")
-    try:
-        return importlib.metadata.version("setuptools") in requirement.specifier
-    except importlib.metadata.PackageNotFoundError:
-        return False
+def _build_requirements_installed() -> bool:
+    for raw in tomllib.loads((ROOT / "pyproject.toml").read_text())["build-system"]["requires"]:
+        requirement = Requirement(raw)
+        try:
+            if importlib.metadata.version(requirement.name) not in requirement.specifier:
+                return False
+        except importlib.metadata.PackageNotFoundError:
+            return False
+    return True
 
 
 def _write_wheel(directory: Path, name: str, version: str) -> Path:
@@ -294,8 +296,8 @@ def test_uv_run_reuses_the_existing_locked_environment(tmp_path: Path, extra: bo
 
 @needs_uv
 @pytest.mark.skipif(
-    not _setuptools_meets_build_requirement(),
-    reason="--no-build-isolation needs setuptools matching [build-system] requires",
+    not _build_requirements_installed(),
+    reason="--no-build-isolation needs every [build-system] requirement installed",
 )
 def test_uv_build_ignores_the_unmanaged_setting(tmp_path: Path) -> None:
     # scripts/media-proof.py builds the wheel and sdist with `uv build`.
