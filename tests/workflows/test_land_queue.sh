@@ -4,8 +4,8 @@
 # Hermetic: PATH-shimmed `gh` (every subcommand the planner uses) and a `git`
 # shim that forwards read-only verbs to real git and REFUSES every mutating one,
 # so a future write in the shadow planner fails the test instead of touching the
-# repo. Evidence verification is stubbed through MMR_LAND_EVIDENCE_CHECKER. No
-# network. Exits non-zero on any mismatch.
+# repo. Retired evidence and ledger inputs are still passed in, to prove nothing
+# reads them. No network. Exits non-zero on any mismatch.
 #
 # What these cases exist to hold:
 #   - shadow mode never writes (the premise of report-only mode)
