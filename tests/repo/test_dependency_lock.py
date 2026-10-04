@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.metadata
 import os
 import shutil
 import subprocess
 import sys
 import tomllib
+import zipfile
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -193,34 +196,119 @@ def test_uv_never_manages_the_locked_environment() -> None:
     assert tool.get("uv", {}).get("managed") is False, "keep [tool.uv] managed = false in pyproject.toml"
 
 
-@pytest.mark.skipif(shutil.which("uv") is None, reason="uv is not installed")
+needs_uv = pytest.mark.skipif(shutil.which("uv") is None, reason="uv is not installed")
+
+
+# A runtime dependency, planted at a version uv would never resolve to.
+LOCKED_DIST, LOCKED_VERSION = "python-dotenv", "0.0.1"
+
+
+def _run_uv(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    # A private cache and no user-level uv config, so only the project decides.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "UV_CACHE_DIR": os.fspath(cwd.parent / f"{cwd.name}-uv-cache"),
+        "UV_NO_CONFIG": "1",
+    }
+    return subprocess.run(["uv", *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=120, check=False)
+
+
+def _listing(directory: Path) -> list[str]:
+    return sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*"))
+
+
+def _setuptools_meets_build_requirement() -> bool:
+    requires = tomllib.loads((ROOT / "pyproject.toml").read_text())["build-system"]["requires"]
+    requirement = next(Requirement(raw) for raw in requires if canonicalize_name(Requirement(raw).name) == "setuptools")
+    try:
+        return importlib.metadata.version("setuptools") in requirement.specifier
+    except importlib.metadata.PackageNotFoundError:
+        return False
+
+
+def _write_wheel(directory: Path, name: str, version: str) -> Path:
+    dist = f"{name}-{version}.dist-info"
+    files = {
+        f"{name}.py": f"VALUE = {version!r}\n",
+        f"{dist}/METADATA": f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n",
+        f"{dist}/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    }
+    rows = []
+    for path, body in files.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(body.encode()).digest()).rstrip(b"=").decode()
+        rows.append(f"{path},sha256={digest},{len(body)}")
+    files[f"{dist}/RECORD"] = "\n".join([*rows, f"{dist}/RECORD,,"]) + "\n"
+    wheel = directory / f"{name}-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for path, body in files.items():
+            archive.writestr(path, body)
+    return wheel
+
+
+@needs_uv
 def test_uv_run_leaves_the_environment_alone(tmp_path: Path) -> None:
     # The behaviour the setting promises, on whichever uv this machine has.
     (tmp_path / "pyproject.toml").write_text((ROOT / "pyproject.toml").read_text())
-    result = subprocess.run(
-        ["uv", "run", "--offline", "--python", sys.executable, "python", "-c", "pass"],
-        cwd=tmp_path,
-        env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")},
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    result = _run_uv(["run", "--offline", "--python", sys.executable, "python", "-c", "pass"], tmp_path)
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / ".venv").exists(), "uv run created a project environment"
     assert not (tmp_path / "uv.lock").exists(), "uv run wrote a lockfile"
 
-    sync = subprocess.run(
-        ["uv", "sync", "--offline"],
-        cwd=tmp_path,
-        env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")},
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    sync = _run_uv(["sync", "--offline"], tmp_path)
     assert sync.returncode != 0, "uv sync should refuse an unmanaged project"
+    assert "unmanaged" in sync.stderr, sync.stderr
     assert not (tmp_path / ".venv").exists()
+
+
+@needs_uv
+@pytest.mark.parametrize("extra", [False, True], ids=["plain", "with-extra"])
+def test_uv_run_reuses_the_existing_locked_environment(tmp_path: Path, extra: bool) -> None:
+    # The original failure: `uv run` from the repository root synced .venv to uv's own resolution.
+    (tmp_path / "pyproject.toml").write_text((ROOT / "pyproject.toml").read_text())
+    # A managed `uv run` only replaces a package the project depends on.
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    declared = {canonicalize_name(Requirement(raw).name) for raw in project["dependencies"]}
+    assert canonicalize_name(LOCKED_DIST) in declared, f"{LOCKED_DIST} is no longer a runtime dependency; plant another"
+    venv = tmp_path / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", os.fspath(venv)], check=True)
+    dist_info = f"{LOCKED_DIST.replace('-', '_')}-{LOCKED_VERSION}.dist-info"
+    locked = next(venv.glob("lib/python*/site-packages")) / dist_info
+    locked.mkdir()
+    (locked / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {LOCKED_DIST}\nVersion: {LOCKED_VERSION}\n")
+    (locked / "RECORD").write_text(f"{locked.name}/METADATA,,\n{locked.name}/RECORD,,\n")
+    before = _listing(venv)
+
+    command = ["run", "--offline"]
+    probe = f"import importlib.metadata as m; print(m.version({LOCKED_DIST!r}))"
+    if extra:
+        command += ["--with", os.fspath(_write_wheel(tmp_path, "withdemo", "1.0"))]
+        probe += "; import withdemo"
+    result = _run_uv([*command, "python", "-c", probe], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == LOCKED_VERSION, "uv run replaced a locked package"
+    assert _listing(venv) == before, "uv run changed the existing environment"
+    assert not (tmp_path / "uv.lock").exists(), "uv run wrote a lockfile"
+
+
+@needs_uv
+@pytest.mark.skipif(
+    not _setuptools_meets_build_requirement(),
+    reason="--no-build-isolation needs setuptools matching [build-system] requires",
+)
+def test_uv_build_ignores_the_unmanaged_setting(tmp_path: Path) -> None:
+    # scripts/media-proof.py builds the wheel and sdist with `uv build`.
+    (tmp_path / "pyproject.toml").write_text((ROOT / "pyproject.toml").read_text())
+    (tmp_path / "mammamiradio").mkdir()
+    (tmp_path / "mammamiradio" / "__init__.py").write_text("")
+    args = ["build", "--wheel", "--sdist", "--offline", "--no-build-isolation", "--python", sys.executable]
+    result = _run_uv([*args, "--out-dir", "dist"], tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert len(list((tmp_path / "dist").glob("*.whl"))) == 1
+    assert len(list((tmp_path / "dist").glob("*.tar.gz"))) == 1
+    assert not (tmp_path / ".venv").exists()
+    assert not (tmp_path / "uv.lock").exists()
 
 
 def test_addon_build_contexts_stage_the_canonical_runtime_lock() -> None:
