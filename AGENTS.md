@@ -32,8 +32,7 @@ as in-process asyncio tasks.
   bootstrap defaults to `python3.11`, which is not installed on this VM. Use
   `python3` (3.12) to create the environment, then follow the locked installation
   sequence in [Local setup](CONTRIBUTING.md#local-setup) before running tests.
-  Bootstrap may have installed newer runtime versions; the full suite checks
-  that installed versions match `requirements.txt`. A fresh venv ships
+  The full suite checks that installed versions match `requirements.txt`. A fresh venv ships
   setuptools < the `>=82.0.1` build requirement, so the update script upgrades
   pip/setuptools/wheel before the editable install.
 

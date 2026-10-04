@@ -109,6 +109,20 @@ def test_images_install_hashed_runtime_before_source(dockerfile: str) -> None:
     _assert_locked_install_order(source.replace("pip3", "pip"), development=False)
 
 
+@pytest.mark.parametrize(
+    ("script", "development"),
+    [("scripts/bootstrap-conductor.sh", True), ("Start Radio.command", False)],
+)
+def test_local_setup_scripts_install_the_same_lock(script: str, development: bool) -> None:
+    # Conductor setup and the Mac launcher used to resolve the editable install's
+    # dependencies, which upgraded the runtime past requirements.txt.
+    source = (ROOT / script).read_text()
+    _assert_locked_install_order(source, development=development)
+    editable = [line for line in source.splitlines() if "install" in line and " -e " in f"{line} "]
+    assert editable
+    assert all("--no-deps" in line for line in editable)
+
+
 def test_standalone_image_build_runs_on_prs_for_all_image_inputs() -> None:
     workflow = yaml.load((ROOT / ".github/workflows/docker.yml").read_text(), Loader=yaml.BaseLoader)
     paths = workflow["on"]["pull_request"]["paths"]
