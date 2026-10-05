@@ -102,6 +102,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Adding a new party mode theme    | `docs/party-mode-extension.md`   |
 | Design system (colors, fonts)    | `docs/design/system.md`          |
 | Admin panel layout standards     | `docs/design/admin-panel.md`     |
+| Listener interaction contract    | `docs/design/listener-contract.md` |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
 | Parallel workspaces + landing    | `docs/runbooks/parallel-workspaces.md` |
 | Listener QS integration train    | `docs/listener-qs-train.md`      |

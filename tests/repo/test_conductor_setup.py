@@ -95,12 +95,21 @@ def test_setup_dispatches_cloud_workspaces_to_cloud_bootstrap(tmp_path: Path, sh
 def test_setup_keeps_local_workspaces_on_shared_bootstrap(tmp_path: Path, shell_env: dict[str, str]) -> None:
     setup = _install_script_fixture(tmp_path, SETUP)
     _fake_bootstrap(tmp_path)
+    (tmp_path / "requirements-dev.txt").write_text("")
     shell_env["CONDUCTOR_IS_LOCAL"] = "1"
 
     result = _run(setup, tmp_path, env=shell_env)
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "bootstrap-python").exists()
+    # The shared bootstrap owns the whole install; neither wrapper installs again.
+    assert not (tmp_path / ".venv/pip-call").exists()
+
+
+@pytest.mark.parametrize("script", [SETUP, CLOUD_BOOTSTRAP], ids=lambda path: path.name)
+def test_setup_wrappers_never_install_packages_themselves(script: Path) -> None:
+    # Any install shape counts, not only the activate-then-pip form the stubs observe.
+    assert "pip install" not in script.read_text()
 
 
 def test_cloud_bootstrap_selects_first_supported_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:
@@ -167,18 +176,17 @@ def test_cloud_bootstrap_rejects_unsupported_explicit_interpreter(tmp_path: Path
     assert not (tmp_path / "bootstrap-python").exists()
 
 
-def test_cloud_bootstrap_installs_development_requirements_after_activation(
-    tmp_path: Path, shell_env: dict[str, str]
-) -> None:
+def test_cloud_bootstrap_leaves_the_install_to_the_shared_bootstrap(tmp_path: Path, shell_env: dict[str, str]) -> None:
     cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
     _fake_bootstrap(tmp_path)
     _fake_python(tmp_path / "bin", "python3.12")
-    (tmp_path / "requirements-dev.txt").write_text("pytest\n")
+    (tmp_path / "requirements-dev.txt").write_text("")
 
     result = _run(cloud, tmp_path, env=shell_env)
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / ".venv/pip-call").read_text() == "-m pip install -r requirements-dev.txt"
+    assert (tmp_path / "bootstrap-python").exists()
+    assert not (tmp_path / ".venv/pip-call").exists()
 
 
 def test_cloud_bootstrap_preserves_same_root_env_file(tmp_path: Path, shell_env: dict[str, str]) -> None:

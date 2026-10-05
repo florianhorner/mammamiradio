@@ -79,6 +79,7 @@ Everything else lives under `docs/`:
 - `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
+- `docs/design/listener-contract.md` - listener interaction and state contract for `/` and `/listen`
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
 - `docs/agents.md` - agent-specific notes and integration points
 - `docs/runbooks/parallel-workspaces.md` - WIP cap, Path A vs Path B, write-sets; no orchestrator agent; `land-pr.sh` is the human/feature merge path to `main`, with guarded Dependabot auto-merge as the automated exception

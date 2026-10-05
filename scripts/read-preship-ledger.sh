@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# read-preship-ledger.sh — repo-local review ledger reader for land-pr.sh.
+# read-preship-ledger.sh — standalone reader for the repo-local review ledger.
+# No landing script calls it; landing does not consult review ledgers.
 #
 # Emits gstack-review-read compatible JSONL (skill/commit/timestamp) followed by
 # ---CONFIG---. The ledger scan is inlined here rather than shelled out to
 # gstack-review-read: the reader must not depend on an unversioned third-party binary.
 #
 # Honors $GSTACK_HOME (default ~/.gstack). Exits 0 with only ---CONFIG--- when
-# no ledger exists (land-pr treats that as "no local review entry").
+# no ledger exists (callers treat that as "no local review entry").
 set -euo pipefail
 
 python3 - <<'PY'
