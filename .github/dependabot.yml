@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: pip
     directory: "/"
     schedule:
-      interval: weekly
+      interval: bi-weekly
       day: monday
     # Keep major upgrades standalone so they receive manual compatibility review.
     groups:
