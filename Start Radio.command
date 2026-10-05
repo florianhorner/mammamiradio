@@ -30,10 +30,14 @@ if [ ! -d .venv ]; then
 
     PY=""
     for p in python3.13 python3.12 python3.11 python3; do
-        if command -v "$p" > /dev/null 2>&1; then PY="$p"; break; fi
+        if command -v "$p" > /dev/null 2>&1 \
+            && "$p" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' > /dev/null 2>&1; then
+            PY="$p"; break
+        fi
     done
     if [ -z "$PY" ]; then
-        echo "ERROR: Python 3 not found and could not auto-install."
+        echo "Mamma Mi Radio needs Python 3.11 or newer, and none was found."
+        echo "Install it from python.org (or with Homebrew), then double-click again."
         echo "Press any key to close."
         read -n 1
         exit 1
@@ -41,12 +45,16 @@ if [ ! -d .venv ]; then
     echo "Using $("$PY" --version)..."
     "$PY" -m venv .venv
     .venv/bin/pip install --upgrade pip setuptools --quiet
-    .venv/bin/pip install -e . --quiet || {
+    # Install the hash-locked runtime, then the app without resolving its
+    # dependencies, so a first run gets exactly the tested versions.
+    if ! .venv/bin/pip install --force-reinstall --require-hashes -r requirements.txt --quiet \
+        || ! .venv/bin/pip install --no-deps -e . --quiet \
+        || ! .venv/bin/pip check; then
         echo "ERROR: pip install failed. See output above."
         echo "Press any key to close."
         read -n 1
         exit 1
-    }
+    fi
     echo "Setup complete!"
     echo ""
 fi
