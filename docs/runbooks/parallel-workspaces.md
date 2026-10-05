@@ -370,8 +370,8 @@ updates still use `scripts/land-pr.sh`. Before a cut, the release operator runs
 `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze`: disable new runs, drain existing runs, then
 disarm PRs. Stable-version changes require that verified freeze at landing.
 Keep human landings paused through both architecture promotions and resume
-explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`. The report-only queue covers ordinary
-review/proof readiness; its READY result does not establish cut admission. See
+explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`. The report-only queue covers merge state,
+labels and unresolved bot threads; its READY result does not establish cut admission. See
 `docs/runbooks/ha-addon.md`, "The cut window". Do not attach Dependabot branches
 to Conductor feature slots.
 

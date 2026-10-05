@@ -213,11 +213,11 @@ run_land "$(make_reader review "$HEAD_SHORT" "$FRACTIONAL_ISO")" \
 merged_with "$HEAD_FULL" || fail "fractional timestamps should arm auto-merge"
 pass "fractional commit metadata does not affect admission"
 
-# Case 2: entry commit is an ANCESTOR of head, push within grace => allow
+# Case 2: a ledger entry on an ANCESTOR of head does not gate landing
 run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")"
-[ "$RUN_RC" -eq 0 ] || fail "ancestor entry within grace should arm (exit code)"
-merged_with "$HEAD_FULL" || fail "ancestor entry within grace should arm"
-pass "ancestor entry within grace arms"
+[ "$RUN_RC" -eq 0 ] || fail "an ancestor ledger entry must not block (exit code)"
+merged_with "$HEAD_FULL" || fail "an ancestor ledger entry must not block arming"
+pass "ancestor ledger entry does not gate landing"
 
 # Case 3: a real divergent BEHIND graph stops before evidence or branch mutation.
 run_land "$(empty_reader)" GH_MOCK_MERGE_STATE=BEHIND \
@@ -436,6 +436,13 @@ fi
 
 [ ! -e "$RETIRED_READER_CALLS" ] || fail "retired receipt/ledger reader was invoked"
 pass "landing never invokes retired receipt or ledger readers"
+
+# The sentinel only fires when a retired knob is read by name; a retired reader
+# called by its default path would slip past it. No landing script may name one.
+RETIRED_NAMES='read-preship-ledger|check-preship-evidence|gstack-review-read|MMR_LAND_REVIEW_READER|MMR_LAND_EVIDENCE_CHECKER|squad_check|evidence_check'
+! grep -nE "$RETIRED_NAMES" "$REPO_ROOT/scripts/land-gates.sh" "$LAND" "$REPO_ROOT/scripts/land-queue-plan.sh" \
+  || fail "a landing script names a retired review reader or gate"
+pass "no landing script names a retired review reader or gate"
 
 echo
 echo "All $PASS_COUNT land-pr cases passed."

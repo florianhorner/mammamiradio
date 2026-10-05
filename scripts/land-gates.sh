@@ -19,17 +19,6 @@
 LAND_GATES_LABEL="${LAND_GATES_LABEL:-land-gates}"
 LAND_GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Freshness grace: /ship pushes mechanical commits (version bump, changelog)
-# right after a review entry is logged; commits within this window after the
-# entry are treated as part of the reviewed push, not new work.
-GRACE_SECONDS="${MMR_LAND_GRACE_SECONDS:-600}"
-# Reader override exists for tests; default is the repo-local ledger dump.
-READER="${MMR_LAND_REVIEW_READER:-$LAND_GATES_DIR/read-preship-ledger.sh}"
-if [ ! -x "$READER" ] && [ -x "$HOME/.claude/skills/gstack/bin/gstack-review-read" ]; then
-  READER="$HOME/.claude/skills/gstack/bin/gstack-review-read"
-fi
-EVIDENCE_CHECKER="${MMR_LAND_EVIDENCE_CHECKER:-$LAND_GATES_DIR/check-preship-evidence.sh}"
-
 if ! declare -F say >/dev/null 2>&1; then
   say() { printf '%s\n' "$*"; }
 fi
@@ -77,74 +66,6 @@ if [ ! -r "$LAND_GATES_DIR/review-threads.sh" ]; then
 fi
 # shellcheck source=scripts/review-threads.sh
 . "$LAND_GATES_DIR/review-threads.sh"
-
-# iso_to_epoch <iso8601> -> epoch seconds, or empty on failure.
-# Handles both Z-suffixed UTC (BSD and GNU date) as accepted by the review reader.
-# Empty input is rejected up front: GNU `date -d ""` silently returns
-# midnight today instead of failing, which would bless missing timestamps.
-iso_to_epoch() {
-  local ts="$1" normalized
-  [ -n "$ts" ] || return 0
-
-  # GitHub committedDate values may include fractional seconds, such as
-  # 2026-08-23T23:14:31.300Z. Strip the fraction before calling date.
-  normalized="$(printf '%s' "$ts" | sed -E 's/\.[0-9]+Z$/Z/')" || return 0
-  date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" +%s 2>/dev/null \
-    || date -u -d "$normalized" +%s 2>/dev/null \
-    || true
-}
-
-# squad_check <pr-head-sha> <last-push-epoch> -> 0 if a qualifying entry
-# exists, else prints the reason and returns 1.
-squad_check() {
-  local pr_head="$1" last_push="$2" line skill rc ts es resolved
-  if [ ! -x "$READER" ]; then
-    return 1
-  fi
-  while IFS= read -r line; do
-    case "$line" in ---CONFIG---*) break ;; esac
-    skill="$(printf '%s' "$line" | jq -r '.skill // ""' 2>/dev/null)" || continue
-    case "$skill" in review | adversarial-review) ;; *) continue ;; esac
-    rc="$(printf '%s' "$line" | jq -r '.commit // ""' 2>/dev/null)"
-    { [ -z "$rc" ] || [ "$rc" = "null" ]; } && continue
-    ts="$(printf '%s' "$line" | jq -r '.timestamp // ""' 2>/dev/null)"
-    es="$(iso_to_epoch "$ts")"
-    [ -n "$es" ] || continue
-    git cat-file -e "${rc}^{commit}" 2>/dev/null || continue
-    resolved="$(git rev-parse "${rc}^{commit}" 2>/dev/null)" || continue
-    { [ "$resolved" = "$pr_head" ] \
-        || git merge-base --is-ancestor "$rc" "$pr_head" 2>/dev/null; } || continue
-    # Nothing was pushed to the PR after the entry (+grace for /ship's own
-    # mechanical commits). A later push means the review saw older code.
-    if [ "$last_push" -gt $((es + GRACE_SECONDS)) ]; then
-      continue
-    fi
-    return 0
-  done < <("$READER" 2>/dev/null)
-  if [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
-    _gate_say "no review entry covers the current PR head."
-    _gate_cont "Either commits were pushed after the last review, or no review ran."
-    _gate_cont "Re-run the review (/ship or /review) on this branch, then land again."
-  fi
-  return 1
-}
-
-evidence_check() {
-  local target="$1" base="$2" out rc
-  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
-    return 0
-  fi
-  out="$(bash "$EVIDENCE_CHECKER" --v2 --target "$target" --base "$base" --mode pr 2>&1)" || rc=$?
-  if [ "${rc:-0}" -ne 0 ]; then
-    _gate_say "committed v2 pre-ship evidence does not cover PR head ${target:0:12}."
-    _gate_cont "Run the review, emit v2 evidence, commit it on the branch, then land again."
-    if [ -n "$out" ]; then
-      printf '%s\n' "$out" | sed "s/^/$(printf '%*s' $(( ${#LAND_GATES_LABEL} + 2 )) '')/"
-    fi
-    return 1
-  fi
-  return 0
-}
 
 thread_check() {
   local pr="$1" slug owner repo response blocked line
@@ -198,26 +119,21 @@ thread_check() {
 
 verify_head() {
   local pr="$1"
-  # Receipt/ledger helpers remain historical utilities, never admission gates.
+  # Review ledgers and pre-ship receipts are never admission gates.
   thread_check "$pr" || return 1
 }
 
 # refresh_landed_ref <base-sha> -> always 0. Need-driven `git fetch origin main`.
 #
-# The merge witness in verify_v2 trusts a base only if it is landed content in
-# origin/main. ensure_head_local fetches the PR head's OBJECTS, which carries the
-# base commit into the object store — but it never moves the origin/main REF. A
-# landing seat that has not fetched since main advanced then refuses GitHub's
-# real base as "not landed" and stalls the documented integrate-push-land flow
-# until someone thinks to fetch by hand.
+# ensure_head_local fetches the PR head's OBJECTS, which carries the base commit
+# into the object store, but it never moves the origin/main REF. This keeps a
+# local origin/main from lagging GitHub's real base. No landing gate reads
+# origin/main; the queue's edge lane compares its candidates against it.
 #
-# The refresh is keyed on the exact predicate the gate will evaluate: fetch only
-# when a resolvable local origin/main does NOT already contain the base. A seat
-# with complete history therefore never touches the network (a documented
-# invariant of its own), and a seat with no origin/main at all is left alone —
-# the evidence gate then refuses with "does not resolve", which is the
-# fail-closed outcome. Fetch failure is tolerated for the same reason: a stale
-# ref makes the gate refuse; the refresh can never be the thing that accepts.
+# It fetches only when a resolvable local origin/main does NOT already contain
+# the base, so a seat with complete history never touches the network, and a
+# seat with no origin/main at all is left alone. Fetch failure is tolerated:
+# the refresh can never be the thing that accepts.
 # MMR_LAND_SKIP_FETCH=1 keeps self-tests offline.
 refresh_landed_ref() {
   local base="$1"
