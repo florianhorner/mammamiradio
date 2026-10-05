@@ -36,6 +36,11 @@ as in-process asyncio tasks.
   setuptools < the `>=82.0.1` build requirement, so the update script upgrades
   pip/setuptools/wheel before the editable install.
 
+- **uv does not manage `.venv`.** `pyproject.toml` sets `[tool.uv] managed = false`, so
+  `uv sync`, `uv lock` and `uv add` fail with "The project is marked as unmanaged". That is
+  deliberate: install with the locked sequence in [Local setup](CONTRIBUTING.md#local-setup),
+  do not run `uv pip install` into `.venv`, and do not remove the setting.
+
 - **`python3.12-venv` is required before `python3 -m venv`.** The default image
   ships Python 3.12 without `ensurepip`. Creating `.venv` in that state yields a
   tree with no pip and the install exits 1. The environment install script
