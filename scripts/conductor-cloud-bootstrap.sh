@@ -26,10 +26,4 @@ fi
 
 "$ROOT/scripts/bootstrap-conductor.sh"
 
-if [ -f requirements-dev.txt ]; then
-  # shellcheck disable=SC1091
-  source .venv/bin/activate
-  python -m pip install -r requirements-dev.txt
-fi
-
 echo "[conductor-cloud-bootstrap] workspace ready (.venv, dev deps)"
