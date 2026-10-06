@@ -1458,6 +1458,7 @@ async def test_ad_break_requests_each_foreground_bumper_role_once():
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     imaging = MagicMock()
     requested_roles: list[str] = []
+    requested_files: list[tuple[str, str]] = []
 
     def _record_bumper(
         output_path: Path,
@@ -1466,6 +1467,7 @@ async def test_ad_break_requests_each_foreground_bumper_role_once():
         role: str = "in",
     ) -> Path:
         requested_roles.append(role)
+        requested_files.append((output_path.name, role))
         return output_path
 
     imaging.pick_ad_bumper.side_effect = _record_bumper
@@ -1495,7 +1497,13 @@ async def test_ad_break_requests_each_foreground_bumper_role_once():
 
     segment = queue.get_nowait()
     assert segment.type == SegmentType.AD
-    assert requested_roles == ["in", "mid", "out"]
+    # The opening and mid bumpers render concurrently, so their call order is
+    # not fixed. The closing bumper is built only after the spots.
+    assert sorted(requested_roles) == ["in", "mid", "out"]
+    assert requested_roles[-1] == "out"
+    # The producer names each bumper file after its slot: bumper_<slot>_<id>.mp3
+    role_by_slot = {name.split("_")[1]: role for name, role in requested_files}
+    assert role_by_slot == {"in": "in", "mid": "mid", "out": "out"}
     assert len(set(requested_roles)) == len(requested_roles)
 
 
