@@ -17,8 +17,9 @@ verifying the shared values are active.
 
 ## Scripts
 
+- `scripts/bootstrap-conductor.sh` — shared by both setup paths: creates `.venv`, installs the dev tools, the hash-locked runtime from `requirements.txt`, and the package without dependency resolution, then runs `pip check`.
 - `scripts/conductor-setup.sh` — dispatches Cloud workspaces to `scripts/conductor-cloud-bootstrap.sh`; local workspaces keep the shared bootstrap path, including `.env` discovery from `~/.config/mammamiradio/.env` and then `$CONDUCTOR_ROOT_PATH/.env`.
-- `scripts/conductor-cloud-bootstrap.sh` — selects an available Python 3.11+ interpreter, builds `.venv`, and installs development requirements. Cloud setup preserves any `.env` file or symlink already supplied by Conductor; it does not relink `$CONDUCTOR_ROOT_PATH/.env` because Cloud root and workspace paths are the same directory.
+- `scripts/conductor-cloud-bootstrap.sh` — selects an available Python 3.11+ interpreter and hands off to `scripts/bootstrap-conductor.sh`, which builds `.venv` and installs the locked environment. Cloud setup preserves any `.env` file or symlink already supplied by Conductor; it does not relink `$CONDUCTOR_ROOT_PATH/.env` because Cloud root and workspace paths are the same directory.
 - `scripts/conductor-run.sh` — starts the app with workspace-scoped runtime paths under `.context/conductor/` and keeps `MAMMAMIRADIO_ALLOW_YTDLP=false`. External extraction is a deliberate standalone opt-in that also requires the optional `external-media` package extra; the default Conductor run uses local-or-starter music.
 - `scripts/conductor-archive.sh` — cleans up workspace runtime state when the workspace is archived. The shared archive hook invokes this file.
 

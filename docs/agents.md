@@ -111,8 +111,8 @@ Hard rules agents must not invent around:
   dependency break.
 - Treat semver-major GitHub Actions PRs as manual landings: inspect the fresh
   rebased diff, confirm required checks are green, include HA integration checks
-  when workflow changes touch the Home Assistant surface, write review-log
-  coverage for the exact head, then run `scripts/land-pr.sh <pr>`.
+  when workflow changes touch the Home Assistant surface, review the exact
+  head, then run `scripts/land-pr.sh <pr>`.
 - If Dependabot says it cannot rebase a PR because the branch was edited, or a
   dependency PR becomes conflict-dirty after another dependency merge, use
   `@dependabot recreate` from an authenticated maintainer account and re-review

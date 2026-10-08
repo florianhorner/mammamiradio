@@ -15,7 +15,7 @@
 # on (scripts/edge-select.sh). A shadow that reasons from its own copy of the
 # gates would prove nothing about the thing it shadows.
 #
-# Fail-closed everywhere (invariant I9): a gh error, a git error, or a state
+# Fail-closed everywhere: a gh error, a git error, or a state
 # GitHub has not finished computing is reported as BLOCKED/CI_PENDING and the
 # queue does not advance past it. There is no soft-pass into "would arm".
 set -euo pipefail
@@ -83,19 +83,19 @@ EDGE_SELECT_LIB="$SCRIPT_DIR/edge-select.sh"
 
 # --- classification -----------------------------------------------------------
 # Prints "<state>\t<reason>". Ordering is deliberate: every free local fact is
-# settled before either network gate runs, and the two gates run BEFORE the
-# integrate/arm routing so the queue never spends a reattest cycle on a PR that
-# is blocked on a bot Major anyway (plan section 6.2).
+# settled before the network gate runs, and the gate runs BEFORE the
+# integrate/arm routing so the queue never proposes an integrate and push for a
+# PR that is blocked on a bot Major anyway.
 #
 # Deliberately NOT short-circuited on mergeStateStatus == BLOCKED, even though
-# the outcome is CI_PENDING either way and the gates are the expensive part:
+# the outcome is CI_PENDING either way and the gate is the expensive part:
 # main requires review-thread resolution, so an unresolved bot Major always
 # forces BLOCKED. Settling that state early would make BLOCKED_BOT unreachable
 # in practice and replace the one actionable reason ("2 unresolved Major
 # threads, here is the first") with "waiting on something".
 classify_pr() {
   local pr="$1" head="$2" base="$3" merge_state="$4" is_draft="$5" held="$6" skipped="$7"
-  local gate_out last_push
+  local gate_out
 
   if [ "$is_draft" = "true" ]; then
     printf 'OPEN\tdraft — not a landing candidate\n'; return
@@ -117,7 +117,7 @@ classify_pr() {
   if ! gate_out="$(thread_check "$pr" 2>&1)"; then
     printf 'BLOCKED_BOT\t%s\n' "$(printf '%s' "$gate_out" | head -1)"; return
   fi
-  # Plan Q7: UNSTABLE means only non-required checks are failing and is landable.
+  # UNSTABLE means only non-required checks are failing, so the PR is landable.
   case "$merge_state" in
     BEHIND)    printf 'READY_BEHIND\tgates pass; base moved — needs integrate + push\n' ;;
     CLEAN)     printf 'READY\tgates pass and required checks are green\n' ;;
@@ -135,11 +135,11 @@ PR_JSON="$(gh pr list --state open --limit 50 \
 printf '%s' "$PR_JSON" | jq -e 'type == "array"' >/dev/null 2>&1 \
   || die "gh returned invalid PR JSON — refusing to plan against unverifiable state."
 
-# FIFO key. The plan's ready_at (first entry into READY) needs a persisted ledger,
-# which shadow mode has no write path for; createdAt is the honest read-only
-# stand-in, and the JSON labels it as a proxy so a month of shadow data stays
-# interpretable after the swap. It carries the property section 6.3 actually asks
-# for — a PR that bounces and returns keeps its place — because it never changes.
+# FIFO key. The ideal key, ready_at (first entry into READY), needs a persisted
+# ledger, which shadow mode has no write path for; createdAt is the honest
+# read-only stand-in, and the JSON labels it as a proxy so a month of shadow data
+# stays interpretable after a swap. It keeps the fairness property that matters,
+# a PR that bounces and returns keeps its place, because it never changes.
 FIFO_KEY_SOURCE="createdAt (proxy for ready_at; shadow mode has no write path)"
 
 # One jq pass for the whole queue. Label membership is resolved to booleans here
@@ -164,11 +164,11 @@ GATHER="$(printf '%s' "$PR_JSON" | jq -r 'sort_by(.createdAt)[]
     ]
   | map(tostring | gsub("[\n\r\u001f]"; " ")) | join("\u001f")')"
 
-# --- decide (single-flight, plan section 6.4) ---------------------------------
-# At most ONE feature PR may be acted on per tick (invariant I8). The queue head
+# --- decide (single-flight) ---------------------------------------------------
+# At most ONE feature PR may be acted on per tick. The queue head
 # is the first feature-lane row in FIFO order that is in head contention; a
 # blocked head STALLS the queue rather than being skipped, which is what keeps
-# the ordering fair (plan section 15). Everything behind it waits — but is still
+# the ordering fair. Everything behind it waits — but is still
 # classified, because the shadow phase exists to be compared against the human
 # seat and a row with no reason is not comparable.
 DECISION_ACTION="none"
@@ -227,8 +227,8 @@ while IFS="$GATHER_SEP" read -r number head base merge_state is_draft held skipp
       reason:$reason,merge_state:$merge,fifo_key:$created,url:$url}')"$'\n'
 done <<<"$GATHER"
 
-# --- edge lane (plan section 8) -----------------------------------------------
-# Independent of the feature queue by design (Q4/C): edge cuts are mechanical
+# --- edge lane ----------------------------------------------------------------
+# Independent of the feature queue by design: edge cuts are mechanical
 # one-liners and must not sit behind feature FIFO.
 EDGE_TARGET=""
 EDGE_RC=0

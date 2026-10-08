@@ -79,6 +79,7 @@ Everything else lives under `docs/`:
 - `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
 - `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
+- `docs/design/listener-contract.md` - listener interaction and state contract for `/` and `/listen`
 - `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
 - `docs/agents.md` - agent-specific notes and integration points
 - `docs/runbooks/parallel-workspaces.md` - WIP cap, Path A vs Path B, write-sets; no orchestrator agent; `land-pr.sh` is the human/feature merge path to `main`, with guarded Dependabot auto-merge as the automated exception
@@ -103,7 +104,7 @@ python -m pip install --no-deps -e .
 python -m pip check
 ```
 
-For an existing environment, activate it and repeat the four `python -m pip` commands to restore the runtime lock. See [Local setup](CONTRIBUTING.md#local-setup).
+For an existing environment, activate it and repeat the four `python -m pip` commands to restore the runtime lock. See [Local setup](CONTRIBUTING.md#local-setup). uv does not manage `.venv` (`[tool.uv] managed = false` in `pyproject.toml`): `uv sync`, `uv lock` and `uv add` refuse on purpose, so install with the pip commands and never remove the setting.
 
 - Run full local stack: `./start.sh`
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
@@ -613,6 +614,8 @@ For every bug fix or behavior change, do not stop at the first broken instance.
 - Identify the user-visible promise or system invariant that failed.
 - Check sibling code paths for the same failure mode before concluding the fix is done.
 - Add or update at least one automated guard (test, validation, or build check) that would fail if the invariant breaks again.
+- Coverage shows that code ran, not that the assembled output is right. Also test the point where the parts become one output, for example the list an ad break is concatenated from, not only the parts.
+- For work that runs concurrently, assert which items were produced, which position each one takes, and the order the code guarantees. Never assert the order in which concurrent calls happened to run.
 - If duplicated state exists, explain what keeps it synchronized. If you cannot name the synchronization boundary, treat that as a design risk and either remove the duplication or add a guard around it.
 
 Review question to apply before merge:
