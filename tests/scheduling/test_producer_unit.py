@@ -1508,6 +1508,155 @@ async def test_ad_break_requests_each_foreground_bumper_role_once():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spots", "mid_roll", "handoff", "promo_fails", "expected"),
+    [
+        pytest.param(
+            3,
+            0.0,
+            False,
+            False,
+            {"adbreak_": "host-intro promo bumper-in spot-0 bumper-mid spot-1 spot-2 bumper-out host-outro"},
+            id="mid-bumper-after-first-spot",
+        ),
+        pytest.param(
+            3,
+            0.99,
+            False,
+            False,
+            {"adbreak_": "host-intro promo bumper-in spot-0 spot-1 spot-2 bumper-out host-outro"},
+            id="no-mid-bumper",
+        ),
+        pytest.param(
+            1,
+            0.0,
+            False,
+            False,
+            {"adbreak_": "host-intro promo bumper-in spot-0 bumper-out host-outro"},
+            id="one-spot-gets-no-mid-bumper",
+        ),
+        pytest.param(
+            3,
+            0.99,
+            False,
+            True,
+            {"adbreak_": "host-intro bumper-in spot-0 spot-1 spot-2 bumper-out host-outro"},
+            id="failed-promo-is-left-out",
+        ),
+        pytest.param(
+            3,
+            0.0,
+            True,
+            False,
+            {
+                "adbreak_": "intro-over-song promo bumper-in spot-0 bumper-mid spot-1 spot-2 bumper-out host-outro",
+                "adbreak_dry_": "host-intro promo bumper-in spot-0 bumper-mid spot-1 spot-2 bumper-out host-outro",
+            },
+            id="song-handoff-renders-both-versions",
+        ),
+    ],
+)
+async def test_ad_break_assembles_bumpers_around_the_spots(tmp_path, spots, mid_roll, handoff, promo_fails, expected):
+    """The break plays the host intro and promo tag, the opening bumper, the spots
+    in order with at most one mid bumper after the first, then the closing bumper
+    and the host outro. A song handoff renders a crossfaded and a dry version."""
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = config.cache_dir = tmp_path
+    config.pacing.ad_spots_per_break = spots
+    config.pacing.lookahead_segments = 2 if handoff else 1
+    host = config.hosts[0]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    prepared = _unit_prepared_handoff(tmp_path) if handoff else None
+    if prepared:
+        queue.put_nowait(prepared.music_segment)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = lambda output_path, *_args, **_kwargs: output_path
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+    concat_inputs: dict[str, list[str]] = {}
+
+    async def _write_ad(*_args, spot_index, **_kwargs):
+        return AdScript(
+            brand=config.ads.brands[0].name,
+            parts=[AdPart(type="voice", text="Compra subito.", role="hammer")],
+            summary=f"spot-{spot_index}",
+            format="classic_pitch",
+            sonic=SonicWorld(),
+            roles_used=["hammer"],
+        )
+
+    async def _render_spot(script, *_args, **_kwargs):
+        # Each spot's file is named after its script, never after call order.
+        return tmp_path / f"{script.summary}.mp3"
+
+    async def _synthesize(*_args, **kwargs):
+        if promo_fails and kwargs.get("rate") == "+40%":  # only the promo tag uses this rate
+            raise RuntimeError("promo voice unavailable")
+        return _fake_path()
+
+    async def _crossfade(path, *args, **_kwargs):
+        if handoff:
+            args[1].write_bytes(b"crossfaded")
+            return args[1]
+        return path
+
+    def _record_concat(parts, output_path, *_args, **_kwargs):
+        # A song handoff renders two versions of the break concurrently, so
+        # record each concat by its output file instead of by call order.
+        concat_inputs[Path(output_path).name] = [Path(part).name for part in parts]
+        return output_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=_write_ad),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=mid_roll),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_crossfade),
+        patch(f"{PRODUCER_MODULE}._prepare_music_handoff", new_callable=AsyncMock, return_value=prepared),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_synthesize),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_render_spot),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_record_concat),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queue_depth(queue, state, config, 2 if handoff else 1)
+
+    if prepared:
+        assert queue.get_nowait() is prepared.music_segment
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.AD
+    assert segment.metadata["spots"] == spots
+    labels = {
+        "ad_intro_": "host-intro",
+        "ad_trans_": "intro-over-song",
+        "promo_tag_": "promo",
+        "bumper_in_": "bumper-in",
+        "bumper_mid_": "bumper-mid",
+        "bumper_out_": "bumper-out",
+        "ad_outro_": "host-outro",
+    }
+
+    def _label(name: str) -> str:
+        if name.startswith("spot-"):
+            return name.removesuffix(".mp3")
+        # An unexpected part keeps its file name, so a failure shows what it was.
+        return next((label for prefix, label in labels.items() if name.startswith(prefix)), name)
+
+    break_concats = {name: parts for name, parts in concat_inputs.items() if name.startswith("adbreak_")}
+    assert len(break_concats) == len(expected)
+    assembled = {
+        ("adbreak_dry_" if name.startswith("adbreak_dry_") else "adbreak_"): [_label(part) for part in parts]
+        for name, parts in break_concats.items()
+    }
+    assert assembled == {output: parts.split() for output, parts in expected.items()}
+
+
+@pytest.mark.asyncio
 async def test_ad_recipe_resolves_once_and_reaches_tts_renderer():
     """Official brand recipes cross the producer boundary without LLM SFX state."""
     from mammamiradio.audio.imaging import ResolvedAdRecipe
