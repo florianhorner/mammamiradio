@@ -187,6 +187,7 @@ from mammamiradio.playlist.downloader import external_media_enabled
 from mammamiradio.playlist.local_library import scan_and_reconcile_local_library
 from mammamiradio.playlist.music_admission import (
     YOUTUBE_ADMISSION_SEARCH_DEPTH,
+    build_music_admission_envelope,
     classify_youtube_candidate,
     is_youtube_music_candidate,
 )
@@ -10907,12 +10908,13 @@ async def _commit_external_download(
     pick. Pins the track to play next when `should_pin()` is true. Returns one of:
     "pinned" (committed and claimed the play-next slot), "queued" (committed to
     the rotation pool but the play-next slot was occupied), "banned" (the song is on
-    the operator blocklist and was refused), "held" (long-form/non-rotation audio
-    refused after download), or "dropped" (source switched / consumed).
+    the operator blocklist and was refused), "held" (long-form or non-rotation
+    audio, refused before or after download), or "dropped" (source switched / consumed).
     Raises on download failure / cancellation for the caller to surface. Shared by the
     admin and listener download paths."""
     from mammamiradio.playlist.cover_art import maybe_resolve, needs_resolve
     from mammamiradio.playlist.downloader import (
+        ExternalMediaTooLongError,
         accept_recovered_download,
         download_external_track,
         reject_cached_download,
@@ -10931,7 +10933,37 @@ async def _commit_external_download(
         track.album_art = await asyncio.to_thread(
             maybe_resolve, current_art, track.artist, track.title, cache_dir=config.cache_dir
         )
-    downloaded_path = await download_external_track(track, config.cache_dir, music_dir=config.music_dir)
+    track_key = track.cache_key
+
+    def _rest_of_rotation() -> list[Any]:
+        # The candidate never votes on its own window, as in the producer: a
+        # re-requested long track must not widen the limit it is judged by.
+        return [candidate for candidate in state.playlist if candidate.cache_key != track_key]
+
+    longform_threshold_sec = build_music_admission_envelope(_rest_of_rotation(), config.pacing).longform_threshold_sec
+    try:
+        downloaded_path = await download_external_track(
+            track,
+            config.cache_dir,
+            music_dir=config.music_dir,
+            longform_threshold_sec=longform_threshold_sec,
+        )
+    except ExternalMediaTooLongError as exc:
+        # An over-long result is a verdict on the pick, not a transient failure:
+        # report it like a long file found after download, so the caller asks for
+        # one song instead of suggesting a retry. A live stream still raises: it
+        # can become a normal video once the broadcast ends. Wait out an
+        # in-flight source switch first, as the commit below does.
+        async with app_state.source_switch_lock:
+            if state.source_revision != originating_source_revision or not should_commit():
+                return "dropped"
+        logger.info(
+            "External track refused before download: %s (yt:%s reason=%s)",
+            track.display,
+            getattr(track, "youtube_id", ""),
+            exc,
+        )
+        return "held"
     actual_duration_sec: float | None = None
     try:
         downloaded_path = Path(downloaded_path)
@@ -10959,7 +10991,7 @@ async def _commit_external_download(
         if is_youtube_music_candidate(track):
             verdict = classify_youtube_candidate(
                 track,
-                state.playlist,
+                _rest_of_rotation(),
                 config.pacing,
                 actual_duration_sec=actual_duration_sec if actual_duration_sec and actual_duration_sec > 0 else None,
             )

@@ -473,7 +473,7 @@ def test_download_external_sync_calls_extractor_when_enabled(tmp_path):
     ):
         assert _download_external_sync(track, cache_dir, music_dir) == expected
 
-    extractor.assert_called_once_with(track, cache_dir)
+    extractor.assert_called_once_with(track, cache_dir, longform_threshold_sec=None)
 
 
 def test_download_external_sync_rejects_when_extractor_is_disabled(tmp_path):

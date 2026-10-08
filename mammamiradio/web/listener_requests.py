@@ -612,8 +612,9 @@ async def _download_listener_song(
         )
         # "pinned" or "queued" both mean the track landed in the playlist for this
         # request. "banned" means the operator blocklisted the song — a terminal
-        # answer. "held" means the downloaded file proved to be long-form or
-        # non-rotation audio. Both mark song_error rather than leaving the listener
+        # answer. "held" means the result was too long for one song, judged
+        # before download or on the downloaded file, or proved to be non-rotation
+        # audio. Both mark song_error rather than leaving the listener
         # spinning on "searching…" forever. "dropped" means a source switch /
         # consumption discarded it (a silent no-op, the request is gone anyway).
         if status in {"banned", "held"}:
@@ -635,7 +636,7 @@ async def _download_listener_song(
         else:
             if req in state.pending_requests:
                 _set_song_error(req, "source_changed")
-            logger.info("Listener song downloaded but playlist changed or request consumed: %s", track.display)
+            logger.info("Listener song dropped, playlist changed or request consumed: %s", track.display)
     except asyncio.CancelledError:
         _set_song_error(req, "download_cancelled")
         if req in state.pending_requests:
