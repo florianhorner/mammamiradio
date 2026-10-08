@@ -1631,6 +1631,8 @@ async def test_ad_break_assembles_bumpers_around_the_spots(tmp_path, spots, mid_
     segment = queue.get_nowait()
     assert segment.type == SegmentType.AD
     assert segment.metadata["spots"] == spots
+    # A packaged fallback ad also reports one spot; this must be the live break.
+    assert not segment.metadata.get("packaged")
     labels = {
         "ad_intro_": "host-intro",
         "ad_trans_": "intro-over-song",
