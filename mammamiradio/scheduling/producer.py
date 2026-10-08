@@ -1098,6 +1098,8 @@ async def _render_music_track(
         actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
         if actual_duration_sec > 0:
             actual_duration_ms = round(actual_duration_sec * 1000)
+        # Enrichment can change the rotation while the download is in flight.
+        envelope_playlist = [candidate for candidate in playlist or () if candidate.cache_key != track_key]
         verdict = classify_youtube_candidate(
             track,
             envelope_playlist,

@@ -512,6 +512,60 @@ async def test_render_music_track_holds_lied_longform_before_normalize(tmp_path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("actual_duration_sec", "accepted"),
+    [(480.0, False), (360.0, True)],
+    ids=["above-current-window", "within-current-window"],
+)
+async def test_render_music_track_rechecks_window_after_rotation_enrichment(tmp_path, actual_duration_sec, accepted):
+    """Enrichment during download can tighten the window used to admit the finished audio."""
+    from mammamiradio.scheduling.producer import _render_music_track
+
+    track = Track(title="Song", artist="Artist", duration_ms=210_000, youtube_id="dQw4w9WgXcQ")
+    sibling = Track(title="Long Single", artist="Artist", duration_ms=360_000, youtube_id="normal00001")
+    playlist = [track, sibling]
+    config = _make_config(tmp_path)
+    config.pacing.songs_between_banter = 2
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+
+    async def _download_with_enrichment(*_args, **_kwargs):
+        playlist.extend(
+            Track(title=f"Short Single {i}", artist="Artist", duration_ms=210_000, youtube_id=f"short00000{i}")
+            for i in range(3)
+        )
+        return raw_path
+
+    download = AsyncMock(side_effect=_download_with_enrichment)
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", download),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=actual_duration_sec),
+        patch(
+            f"{PRODUCER_MODULE}.normalize", side_effect=lambda _src, dst, *_args, **_kwargs: dst.write_bytes(b"norm")
+        ) as normalize,
+    ):
+        result = await _render_music_track(
+            track,
+            config,
+            temp_prefix="music",
+            context="music",
+            playlist=playlist,
+        )
+
+    assert download.await_args.kwargs["longform_threshold_sec"] == 720.0
+    assert (result is not None) is accepted
+    assert raw_path.exists() is accepted
+    if accepted:
+        assert result is not None
+        normalize.assert_called_once()
+        assert track.duration_ms == round(actual_duration_sec * 1000)
+        assert result.path.exists()
+    else:
+        normalize.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_render_music_track_skips_the_window_for_tracks_yt_dlp_never_fetches(tmp_path):
     """Local renders never build the admission window, so no rotation entry can break them."""
     from mammamiradio.scheduling.producer import _render_music_track
