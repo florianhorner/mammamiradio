@@ -614,6 +614,8 @@ For every bug fix or behavior change, do not stop at the first broken instance.
 - Identify the user-visible promise or system invariant that failed.
 - Check sibling code paths for the same failure mode before concluding the fix is done.
 - Add or update at least one automated guard (test, validation, or build check) that would fail if the invariant breaks again.
+- Coverage shows that code ran, not that the assembled output is right. Also test the point where the parts become one output, for example the list an ad break is concatenated from, not only the parts.
+- For work that runs concurrently, assert which items were produced, which position each one takes, and the order the code guarantees. Never assert the order in which concurrent calls happened to run.
 - If duplicated state exists, explain what keeps it synchronized. If you cannot name the synchronization boundary, treat that as a design risk and either remove the duplication or add a guard around it.
 
 Review question to apply before merge:

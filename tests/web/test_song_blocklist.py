@@ -456,7 +456,7 @@ async def test_commit_external_download_drops_banned_song(tmp_path):
     }
     banned = _track("Volare", "Modugno", "yt1")
 
-    async def _no_download(track, cache_dir, music_dir=None):
+    async def _no_download(track, cache_dir, music_dir=None, **_kwargs):
         return None
 
     with (

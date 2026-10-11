@@ -14,7 +14,6 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
 from itertools import islice
 from pathlib import Path
 from types import ModuleType
@@ -55,8 +54,9 @@ _LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
 
 # An extract more than this many times the track's own length is plainly not
 # the song the track describes (an hour-long compilation, a mix). Generous on
-# purpose: for YouTube picks the admission envelope after download still
-# judges normal lengths.
+# purpose: callers that know the station's music window pass it as
+# ``longform_threshold_sec``, which tightens this cap, and the admission
+# envelope still judges the finished file.
 _EXTRACT_DURATION_MAX_MULTIPLE = 4
 
 # Canonical YouTube video-id shape (11 chars, base64url alphabet). Single source
@@ -399,31 +399,48 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
 
 
 class ExternalMediaRefusedError(RuntimeError):
-    """The extract was live or far longer than its track; no audio was downloaded."""
+    """The extract was live or too long for one song; no audio was downloaded."""
 
 
-def _refuse_live_or_overlong(track: Track, refusals: list[str]) -> Callable[..., str | None]:
+class ExternalMediaTooLongError(ExternalMediaRefusedError):
+    """The extract runs longer than the station's music window or far longer than its track."""
+
+
+def _refuse_live_or_overlong(
+    track: Track,
+    refusals: list[ExternalMediaRefusedError],
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Callable[..., str | None]:
     """Build the yt-dlp ``match_filter`` that turns down a live or wildly longer extract.
 
     yt-dlp runs it on the extracted info before format selection, so a refusal
-    transfers no audio. Each reason is also appended to ``refusals`` for the caller.
+    transfers no audio. Each refusal is also appended to ``refusals`` as the error
+    the caller raises: a live stream stays the base class, because it can become a
+    normal video later, while a long result is final. A station window, when the
+    caller has one, can only tighten the 4x cap.
     """
     reference_sec = max(_claimed_track_sec(track), REFERENCE_SINGLE_TRACK_SEC)
     limit_sec = reference_sec * _EXTRACT_DURATION_MAX_MULTIPLE
+    if longform_threshold_sec is not None and longform_threshold_sec > 0:
+        limit_sec = min(limit_sec, longform_threshold_sec)
 
     # yt-dlp also passes ``incomplete=``; the verdict does not depend on it.
     def match_filter(info: dict[str, Any], **_: Any) -> str | None:
+        refusal: ExternalMediaRefusedError
         if info.get("is_live") or info.get("live_status") in _LIVE_STATUSES:
-            reason = "refused a live stream before download"
+            refusal = ExternalMediaRefusedError("refused a live stream before download")
         else:
             duration = info.get("duration")
             if isinstance(duration, float) and not math.isfinite(duration):
                 return None
             if not isinstance(duration, int | float) or duration <= limit_sec:
                 return None
-            reason = f"refused a result running {_clock(duration)} before download (limit {_clock(limit_sec)})"
-        refusals.append(reason)
-        return reason
+            refusal = ExternalMediaTooLongError(
+                f"refused a result running {_clock(duration)} before download (limit {_clock(limit_sec)})"
+            )
+        refusals.append(refusal)
+        return str(refusal)
 
     return match_filter
 
@@ -446,7 +463,12 @@ def _clock(seconds: float) -> str:
     return f"{whole // 60}:{whole % 60:02d}"
 
 
-def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
+def _download_ytdlp(
+    track: Track,
+    cache_dir: Path,
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Download the best-effort public audio match for a track via yt-dlp."""
     yt_dlp = _load_external_media_module()
 
@@ -456,8 +478,8 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
         query = f"https://www.youtube.com/watch?v={track.youtube_id}"
     else:
         query = f"ytsearch1:{track.artist} {track.title} official audio"
-    refusals: list[str] = []
-    match_filter = _refuse_live_or_overlong(track, refusals)
+    refusals: list[ExternalMediaRefusedError] = []
+    match_filter = _refuse_live_or_overlong(track, refusals, longform_threshold_sec=longform_threshold_sec)
     ytdlp_tmp = cache_dir / ".ytdlp_tmp" / track.cache_key
     ytdlp_tmp.mkdir(parents=True, exist_ok=True)
     opts = {
@@ -510,7 +532,7 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
     if out_path.exists():
         return out_path
     if refusals:
-        raise ExternalMediaRefusedError(refusals[0])
+        raise refusals[0]
     raise FileNotFoundError(f"Download failed for {track.display}")
 
 
@@ -642,7 +664,14 @@ def has_fresh_concrete_track_source(track: Track, cache_dir: Path, music_dir: Pa
         return False
 
 
-def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background: bool = False) -> Path:
+def _download_sync(
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path,
+    *,
+    background: bool = False,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Resolve a track from cache, local files, yt-dlp, or an unavailable marker."""
     if track.source == "jamendo":
         raise RuntimeError("persistent Jamendo track acquisition is retired")
@@ -653,7 +682,7 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
     # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
     if _ytdlp_enabled():
         try:
-            return _download_ytdlp(track, cache_dir)
+            return _download_ytdlp(track, cache_dir, longform_threshold_sec=longform_threshold_sec)
         except Exception as e:
             reason = f"yt-dlp failed: {e}"
             logger.warning("yt-dlp failed for %s: %s — marking track unavailable", track.display, e)
@@ -664,7 +693,13 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
         return _failed_download_path(track, cache_dir, reason)
 
 
-def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
+def _download_external_sync(
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path,
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Resolve an explicit external request without a silent fallback."""
     if track.local_path is not None:
         attached = (
@@ -692,7 +727,7 @@ def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> P
         logger.info("Cache hit: %s", track.display)
         return out_path
 
-    return _download_ytdlp(track, cache_dir)
+    return _download_ytdlp(track, cache_dir, longform_threshold_sec=longform_threshold_sec)
 
 
 YtdlpSearchStatus = Literal["ok", "disabled", "unavailable", "failed"]
@@ -798,17 +833,34 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
 
 
 async def download_track(
-    track: Track, cache_dir: Path, music_dir: Path | None = None, *, background: bool = False
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path | None = None,
+    *,
+    background: bool = False,
+    longform_threshold_sec: float | None = None,
 ) -> Path:
     """Run the synchronous download fallback chain off the event loop."""
-    loop = asyncio.get_running_loop()
     _music_dir = music_dir or Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
-    download_fn = partial(_download_sync, track, cache_dir, _music_dir, background=background)
-    return await loop.run_in_executor(None, download_fn)
+    return await asyncio.to_thread(
+        _download_sync,
+        track,
+        cache_dir,
+        _music_dir,
+        background=background,
+        longform_threshold_sec=longform_threshold_sec,
+    )
 
 
-async def download_external_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:
+async def download_external_track(
+    track: Track,
+    cache_dir: Path,
+    music_dir: Path | None = None,
+    *,
+    longform_threshold_sec: float | None = None,
+) -> Path:
     """Download an explicit external request, raising on failure instead of returning silence."""
-    loop = asyncio.get_running_loop()
     _music_dir = music_dir or Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
-    return await loop.run_in_executor(None, _download_external_sync, track, cache_dir, _music_dir)
+    return await asyncio.to_thread(
+        _download_external_sync, track, cache_dir, _music_dir, longform_threshold_sec=longform_threshold_sec
+    )

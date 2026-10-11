@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+import pytest
+
 from mammamiradio.core.config import PacingSection
 from mammamiradio.core.models import Track
 from mammamiradio.playlist.music_admission import (
@@ -134,3 +136,31 @@ def test_music_admission_envelope_uses_station_pacing():
     assert envelope.median_track_sec == 210.0
     assert envelope.intended_music_run_sec == 630.0
     assert envelope.longform_threshold_sec == 630.0
+
+
+@pytest.mark.parametrize(
+    "duration_ms",
+    [float("inf"), float("nan"), 10**400, -5_000, 0, "abc", None],
+    ids=["inf", "nan", "huge-int", "negative", "zero", "text", "none"],
+)
+def test_music_admission_envelope_ignores_unusable_durations(duration_ms):
+    """/api/playlist/add stores duration_ms unchecked; one bad entry must not break the window."""
+    playlist = [
+        _track("Poisoned", duration_ms=duration_ms, youtube_id="poison00001"),
+        _track("Single A", duration_ms=400_000, youtube_id="single00001"),
+    ]
+
+    envelope = build_music_admission_envelope(playlist, PacingSection(songs_between_banter=2))
+
+    assert envelope.sample_size == 1
+    assert envelope.longform_threshold_sec == 800.0
+
+
+@pytest.mark.parametrize("duration_ms", [float("inf"), 10**400], ids=["inf", "huge-int"])
+def test_music_admission_holds_candidate_with_unusable_duration(duration_ms):
+    candidate = _track("Poisoned", duration_ms=duration_ms, youtube_id="poison00001")
+
+    verdict = classify_youtube_candidate(candidate, [], PacingSection(songs_between_banter=2))
+
+    assert verdict.status == "hold"
+    assert verdict.reason == "unknown_duration"

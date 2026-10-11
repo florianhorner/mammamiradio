@@ -311,7 +311,8 @@ always remains best-effort and never blocks or delays audio.
   - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
   - uses one quiet bed and at most two timed dry cues for a resolved recipe, keeping only speech and pauses from the LLM output so generic SFX and legacy motifs cannot layer on top
   - preserves generated brand motifs for legacy/custom campaigns with no recipe and for configured recipes that cannot resolve
-  - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
+  - assembles each break in playback order: host intro, promo tag, opening bumper, one or more ad spots with at most one mid bumper after the first, closing bumper, and host outro; a promo tag that fails to render is left out
+  - takes bumpers, SFX, and beds from the imaging pack (SFX from a configured `[ads].sfx_dir` first) and synthesizes them when missing
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
 ### Exact-once music-to-speech handoffs

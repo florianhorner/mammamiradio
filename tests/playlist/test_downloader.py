@@ -335,11 +335,11 @@ def test_ytdlp_uses_no_progress_options(track, cache_dir):
 def test_extract_filter_refuses_live_streams(track, info):
     from mammamiradio.playlist.downloader import _refuse_live_or_overlong
 
-    refusals: list[str] = []
+    refusals: list[Exception] = []
     match_filter = _refuse_live_or_overlong(track, refusals)
 
     assert match_filter(info, incomplete=True) == "refused a live stream before download"
-    assert refusals == ["refused a live stream before download"]
+    assert [str(refusal) for refusal in refusals] == ["refused a live stream before download"]
 
 
 @pytest.mark.parametrize(
@@ -360,7 +360,7 @@ def test_extract_filter_refuses_wildly_longer_extracts(duration_ms, extract_sec,
     from mammamiradio.playlist.downloader import _refuse_live_or_overlong
 
     track = Track(title="Volare", artist="Domenico Modugno", duration_ms=duration_ms)
-    refusals: list[str] = []
+    refusals: list[Exception] = []
     verdict = _refuse_live_or_overlong(track, refusals)({"duration": extract_sec, "live_status": "not_live"})
 
     assert (verdict is not None) is refused
@@ -388,7 +388,7 @@ def test_extract_filter_reads_malformed_track_lengths_safely(duration_ms, limit_
     from mammamiradio.playlist.downloader import _refuse_live_or_overlong
 
     track = Track(title="Volare", artist="Domenico Modugno", duration_ms=duration_ms)
-    refusals: list[str] = []
+    refusals: list[Exception] = []
     match_filter = _refuse_live_or_overlong(track, refusals)
 
     assert match_filter({"duration": limit_sec}) is None
@@ -410,10 +410,138 @@ def test_extract_filter_reads_malformed_track_lengths_safely(duration_ms, limit_
 def test_extract_filter_accepts_normal_or_not_yet_known_extracts(track, info):
     from mammamiradio.playlist.downloader import _refuse_live_or_overlong
 
-    refusals: list[str] = []
+    refusals: list[Exception] = []
 
     assert _refuse_live_or_overlong(track, refusals)(info, incomplete=False) is None
     assert refusals == []
+
+
+def test_extract_filter_station_window_tightens_the_four_x_cap(track):
+    """The admission envelope can refuse an extract the 4x cap would still allow."""
+    from mammamiradio.playlist.downloader import _refuse_live_or_overlong
+
+    refusals: list[Exception] = []
+    match_filter = _refuse_live_or_overlong(track, refusals, longform_threshold_sec=420)
+
+    assert match_filter({"duration": 400, "live_status": "not_live"}) is None
+    assert match_filter({"duration": 500, "live_status": "not_live"}) is not None
+    assert [str(refusal) for refusal in refusals] == ["refused a result running 8:20 before download (limit 7:00)"]
+
+
+@pytest.mark.parametrize(
+    ("window", "extract_sec", "refused"),
+    [
+        (420, 420, False),  # exactly the station window
+        (420, 421, True),
+        (12_600, 840, False),  # a window wider than the 4x cap never loosens it
+        (12_600, 841, True),
+    ],
+)
+def test_extract_filter_station_window_only_ever_tightens(track, window, extract_sec, refused):
+    from mammamiradio.playlist.downloader import _refuse_live_or_overlong
+
+    verdict = _refuse_live_or_overlong(track, [], longform_threshold_sec=window)({"duration": extract_sec})
+
+    assert (verdict is not None) is refused
+
+
+@pytest.mark.parametrize("window", [0, -5, float("nan"), float("inf")], ids=["zero", "negative", "nan", "inf"])
+def test_extract_filter_ignores_an_unusable_station_window(track, window):
+    from mammamiradio.playlist.downloader import _refuse_live_or_overlong
+
+    match_filter = _refuse_live_or_overlong(track, [], longform_threshold_sec=window)
+
+    assert match_filter({"duration": 840}) is None
+    assert match_filter({"duration": 841}) is not None
+
+
+def _extract_youtube_dl(cache_dir, track, extract_sec):
+    """A fake yt-dlp that offers one finished extract of ``extract_sec`` to the filter."""
+
+    class _FakeYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, queries):
+            if self.opts["match_filter"]({"duration": extract_sec, "live_status": "not_live"}) is None:
+                (cache_dir / f"{track.cache_key}.mp3").write_text("downloaded audio")
+
+    return SimpleNamespace(YoutubeDL=_FakeYoutubeDL)
+
+
+def test_download_ytdlp_judges_the_extract_not_the_stored_length(cache_dir):
+    """A long stored length is no verdict: the extract's own duration decides, before any audio."""
+    from mammamiradio.playlist.downloader import ExternalMediaTooLongError, _download_ytdlp
+
+    track = Track(title="Metadata Says Long", artist="Artist", duration_ms=7_200_000, youtube_id="dQw4w9WgXcQ")
+    out = cache_dir / f"{track.cache_key}.mp3"
+
+    with patch.dict(sys.modules, {"yt_dlp": _extract_youtube_dl(cache_dir, track, 180)}):
+        assert _download_ytdlp(track, cache_dir, longform_threshold_sec=420) == out
+
+    out.unlink()
+    # The 2-hour claim alone would allow 8 hours; the station window refuses 8:20.
+    with (
+        patch.dict(sys.modules, {"yt_dlp": _extract_youtube_dl(cache_dir, track, 500)}),
+        pytest.raises(ExternalMediaTooLongError, match=r"running 8:20 before download \(limit 7:00\)"),
+    ):
+        _download_ytdlp(track, cache_dir, longform_threshold_sec=420)
+
+    assert not out.exists()
+    assert not (cache_dir / ".ytdlp_tmp" / track.cache_key).exists()
+
+
+def test_window_refusal_marks_the_track_unavailable_until_restart(track, cache_dir, music_dir):
+    """A refused rotation track is only out for this session; a restart judges it again."""
+    from mammamiradio.playlist.downloader import _download_sync, purge_suspect_cache_files
+
+    with (
+        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True),
+        patch.dict(sys.modules, {"yt_dlp": _extract_youtube_dl(cache_dir, track, 500)}),
+    ):
+        marker = _download_sync(track, cache_dir, music_dir, longform_threshold_sec=420)
+
+    assert marker == cache_dir / f"_failed_{track.cache_key}.mp3"
+    assert marker.read_text() == "yt-dlp failed: refused a result running 8:20 before download (limit 7:00)"
+    assert not (cache_dir / f"{track.cache_key}.mp3").exists()
+
+    purge_suspect_cache_files(cache_dir)
+
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_async_downloads_forward_the_station_window(track, cache_dir, music_dir):
+    from mammamiradio.playlist.downloader import download_external_track, download_track
+
+    with (
+        patch("mammamiradio.playlist.downloader._download_sync", return_value=cache_dir / "a.mp3") as regular,
+        patch("mammamiradio.playlist.downloader._download_external_sync", return_value=cache_dir / "a.mp3") as external,
+    ):
+        await download_track(track, cache_dir, music_dir, longform_threshold_sec=420)
+        await download_external_track(track, cache_dir, music_dir, longform_threshold_sec=420)
+
+    assert regular.call_args.kwargs["longform_threshold_sec"] == 420
+    assert external.call_args.kwargs["longform_threshold_sec"] == 420
+
+
+def test_sync_downloads_forward_the_station_window(track, cache_dir, music_dir):
+    from mammamiradio.playlist.downloader import _download_external_sync, _download_sync
+
+    with (
+        patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=True),
+        patch("mammamiradio.playlist.downloader._download_ytdlp", return_value=cache_dir / "a.mp3") as ytdlp,
+    ):
+        _download_sync(track, cache_dir, music_dir, longform_threshold_sec=420)
+        _download_external_sync(track, cache_dir, music_dir, longform_threshold_sec=420)
+
+    assert [call.kwargs["longform_threshold_sec"] for call in ytdlp.call_args_list] == [420, 420]
 
 
 def test_download_sync_skips_refused_extract_without_writing_audio(track, cache_dir, music_dir):
@@ -489,16 +617,22 @@ def test_download_external_sync_raises_refusal_without_leaving_files(track, cach
     """An explicit request surfaces the refusal to its caller instead of a marker file."""
     import os
 
-    from mammamiradio.playlist.downloader import ExternalMediaRefusedError, _download_external_sync
+    from mammamiradio.playlist.downloader import (
+        ExternalMediaRefusedError,
+        ExternalMediaTooLongError,
+        _download_external_sync,
+    )
 
     fake = _refusing_youtube_dl(cache_dir, track, sibling_downloads=False)
     with (
         patch.dict(os.environ, {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
         patch.dict(sys.modules, {"yt_dlp": fake}),
-        pytest.raises(ExternalMediaRefusedError, match="refused a live stream before download"),
+        pytest.raises(ExternalMediaRefusedError, match="refused a live stream before download") as refusal,
     ):
         _download_external_sync(track, cache_dir, music_dir)
 
+    # Only a length refusal is final; a live stream can become a normal video later.
+    assert not isinstance(refusal.value, ExternalMediaTooLongError)
     assert not (cache_dir / f"{track.cache_key}.mp3").exists()
     assert not (cache_dir / f"_failed_{track.cache_key}.mp3").exists()
     assert not (cache_dir / ".ytdlp_tmp" / track.cache_key).exists()
@@ -543,7 +677,7 @@ def test_real_ytdlp_refuses_before_selecting_or_downloading_a_format(track, tmp_
     yt_dlp = pytest.importorskip("yt_dlp")
     from mammamiradio.playlist.downloader import _refuse_live_or_overlong
 
-    refusals: list[str] = []
+    refusals: list[Exception] = []
     ydl = yt_dlp.YoutubeDL(
         {
             "quiet": True,
@@ -559,7 +693,7 @@ def test_real_ytdlp_refuses_before_selecting_or_downloading_a_format(track, tmp_
     ):
         ydl.process_ie_result(_synthetic_extract(**fields), download=True)
 
-    assert refusals == [reason]
+    assert [str(refusal) for refusal in refusals] == [reason]
 
 
 @pytest.mark.parametrize("relative", [False, True], ids=["absolute-cache", "relative-cache"])
@@ -601,7 +735,7 @@ def test_real_ytdlp_lets_a_normal_extract_reach_download(track, tmp_path):
     yt_dlp = pytest.importorskip("yt_dlp")
     from mammamiradio.playlist.downloader import _refuse_live_or_overlong
 
-    refusals: list[str] = []
+    refusals: list[Exception] = []
     ydl = yt_dlp.YoutubeDL(
         {
             "quiet": True,
