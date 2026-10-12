@@ -141,7 +141,9 @@ def audit_changelog(root: Path, name: str, dates: dict[str, date]) -> tuple[list
         actual = suffix.removeprefix("-").strip() or "<missing>"
         expected = dates[version].isoformat()
         if suffix != f"- {expected}":
-            findings.append(f"{name}:{line_number}: {version}: date {actual}; expected {expected}")
+            findings.append(
+                f"{name}:{line_number}: {version}: date {actual}; expected {expected}; heading suffix {suffix!r}"
+            )
     if not checked:
         raise AuditError(f"{name}: no headings match published releases; cannot certify an empty audit")
     return findings, checked, skipped

@@ -81,12 +81,16 @@ class ChangelogDatesTests(unittest.TestCase):
                 self.assertIn(f"{name}:1: 1.2.3: date 2026-04-05; expected 2026-04-06", result.stdout)
 
     def test_all_missing_invalid_and_duplicate_dates_are_reported(self) -> None:
-        root = "## [1.2.3]\n## [1.2.3] - 2026-02-30\n## [1.2.3] - someday\n## [1.2.3] - 2026-04-06"
+        root = (
+            "## [1.2.3]\n## [1.2.3] - 2026-02-30\n## [1.2.3] - someday\n"
+            "## [1.2.3] - 2026-04-06\n## [1.2.3] -  2026-04-06"
+        )
         code, stdout, _ = self.run_main(self.inputs(root_heading=root, addon_heading="## 1.2.3"))
         self.assertEqual(code, 1)
         for line, actual in [(1, "<missing>"), (2, "2026-02-30"), (3, "someday")]:
             self.assertIn(f"CHANGELOG.md:{line}: 1.2.3: date {actual}; expected 2026-04-06", stdout)
-        self.assertIn("Found 4 date finding(s)", stdout)
+        self.assertIn("heading suffix '-  2026-04-06'", stdout)
+        self.assertIn("Found 5 date finding(s)", stdout)
 
     def test_publication_time_not_creation_time_and_local_timezone(self) -> None:
         data = release("v2.0.1")
