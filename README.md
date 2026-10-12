@@ -170,12 +170,14 @@ Stop the station in its window and let any running setup finish. Then, from
 the checkout root:
 
 ```bash
-[ -f "./Start Radio.command" ] && mkdir -p ./tmp && backup_dir="$(mktemp -d "./tmp/venv-backup.XXXXXX")" && mv .venv "$backup_dir/environment" && open "./Start Radio.command"
+[ -f "./Start Radio.command" ] && [ -f ./mammamiradio/main.py ] && mkdir -p ./tmp && backup_dir="$(mktemp -d "./tmp/venv-backup.XXXXXX")" && mv .venv "$backup_dir/environment" && open "./Start Radio.command"
 ```
 
-Run anywhere else, the command changes nothing. It moves the old environment
-into a new directory under `tmp/` and leaves earlier backups alone. That
-backup is not a station you can run. `.env` and `music/` stay where they are.
+The command first checks for `Start Radio.command` and
+`mammamiradio/main.py`, so outside a Mamma Mi Radio checkout it changes
+nothing. It moves the old environment into a new directory under `tmp/` and
+leaves earlier backups alone. That backup is not a station you can run. `.env` and `music/`
+stay where they are.
 
 </details>
 

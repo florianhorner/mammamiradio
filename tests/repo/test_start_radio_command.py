@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "Start Radio.command"
 ANCHOR = 'Recovery steps: README.md section "Mac launcher recovery".'
 RECOVERY = (
-    '[ -f "./Start Radio.command" ] && mkdir -p ./tmp && backup_dir="$(mktemp -d "./tmp/venv-backup.XXXXXX")" '
+    '[ -f "./Start Radio.command" ] && [ -f ./mammamiradio/main.py ] && mkdir -p ./tmp '
+    '&& backup_dir="$(mktemp -d "./tmp/venv-backup.XXXXXX")" '
     '&& mv .venv "$backup_dir/environment" && open "./Start Radio.command"'
 )
 EXPECTED_PIP = [
@@ -332,6 +333,8 @@ class Harness:
         self.pyproject = self.root / "pyproject.toml"
         self.requirements.write_text("requests==1\n")
         self.pyproject.write_text('[project]\nname = "mammamiradio"\nversion = "0"\n')
+        (self.root / "mammamiradio").mkdir()
+        (self.root / "mammamiradio" / "main.py").write_text("")
         (self.root / ".env").write_text("ANTHROPIC_API_KEY=keep\n")
         music = self.root / "music"
         music.mkdir()
@@ -1808,6 +1811,32 @@ def test_every_failure_tells_the_user_what_to_do_next() -> None:
         assert action is not None and "README.md" in action.group(1), name
 
 
+def test_a_launcher_that_cannot_open_its_folder_says_what_to_do(tmp_path: Path) -> None:
+    # The first step runs before the setup region, so the boundary harness cannot reach it.
+    text = LAUNCHER.read_text()
+    marker = "# Use login shell environment"
+    assert marker in text
+    head = text.split(marker, 1)[0]
+    moved_away = tmp_path / "moved-away" / "Start Radio.command"
+
+    result = subprocess.run(
+        ["/bin/bash", "-c", head, str(moved_away)],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    lines = result.stdout.splitlines()
+    assert lines[0] == "ERROR: The launcher could not open its own folder."
+    assert "double-click Start Radio.command" in lines[2]
+    assert lines[-1] == ANCHOR
+
+
 def test_readme_documents_the_mac_launcher_and_recovery() -> None:
     readme = (ROOT / "README.md").read_text()
     heading = "#### Mac launcher recovery"
@@ -1865,10 +1894,24 @@ def test_readme_recovery_sequence_preserves_operator_data_and_retries(tmp_path: 
     assert harness.marker_path().is_file()
 
 
-def test_readme_recovery_sequence_outside_a_checkout_moves_nothing(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "files",
+    [
+        {},
+        {"Start Radio.command": "#!/bin/bash\n"},
+        {
+            "Start Radio.command": "#!/bin/bash\n",
+            "pyproject.toml": '[project]\nname = "other"\n\n[[tool.uv.index]]\nname = "mammamiradio"\n',
+        },
+    ],
+    ids=["plain-folder", "copied-launcher", "other-project-naming-an-index-mammamiradio"],
+)
+def test_readme_recovery_sequence_outside_a_checkout_moves_nothing(tmp_path: Path, files: dict[str, str]) -> None:
     harness = Harness(tmp_path)
     elsewhere = tmp_path / "elsewhere"
     (elsewhere / ".venv").mkdir(parents=True)
+    for name, text in files.items():
+        (elsewhere / name).write_text(text)
     open_log = harness.state / "open-log"
 
     failed = _run_recovery(harness, cwd=elsewhere, check=False)

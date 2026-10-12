@@ -1,7 +1,17 @@
 #!/bin/bash
 # Double-click this file in Finder to start Mamma Mi Radio.
 # Drag it to your Dock for one-click launch.
-cd "$(dirname "$0")" || exit 1
+if ! cd "$(dirname "$0")"; then
+  printf '%s\n' "ERROR: The launcher could not open its own folder." \
+    "The folder may have been moved, renamed or disconnected after the double-click." \
+    "Find the Mamma Mi Radio folder in Finder and double-click Start Radio.command there." \
+    'Recovery steps: README.md section "Mac launcher recovery".'
+  if [ -t 0 ]; then
+    printf '%s\n' "Press any key to close."
+    read -r -n 1 _key || true
+  fi
+  exit 1
+fi
 
 # Use login shell environment so homebrew/pyenv/etc. are on PATH
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"
