@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,77 @@ def release(tag: str = "v1.2.3", published: object = "2026-04-05T22:50:27Z", dra
 
 
 class ChangelogDatesTests(unittest.TestCase):
+    def assert_workflow_contract(self, text: str) -> None:
+        self.assertRegex(
+            text,
+            r"(?m)^on:\n  schedule:\n    - cron: [\"\']35 9 \* \* \*[\"\']\n  workflow_dispatch:\n\npermissions:",
+        )
+        self.assertRegex(text, r"(?m)^permissions:\n  contents: read\n\njobs:")
+        self.assertNotRegex(text, r"(?m)^    [\"']?permissions[\"']?:")
+        self.assertNotRegex(text, r"(?m)^ +(?:- +)?[\"']?(?:if|continue-on-error)[\"']?:")
+        jobs = text.split("\njobs:\n")[1]
+        self.assertEqual(re.findall(r"(?m)^  [^ \n]+:", jobs), ["  audit:"])
+        self.assertRegex(text, r"(?m)^    timeout-minutes: [1-5]$")
+        steps = text.split("\n      - ")[1:]
+        self.assertEqual(len(steps), 4)
+        for step, action in zip(steps[:2], ["checkout", "setup-python"], strict=True):
+            self.assertRegex(step, rf"^uses: actions/{action}@[0-9a-f]{{40}}(?: #.*)?\n")
+        self.assertIn("          persist-credentials: false\n", steps[0])
+        self.assertIn('          python-version: "3.11"\n', steps[1])
+        self.assertRegex(steps[2], r"(?m)^        run: python tests/scripts/test_check_changelog_dates\.py -v$")
+        self.assertRegex(steps[3], r"(?m)^        run: python scripts/check_changelog_dates\.py$")
+        self.assertIn("        env:\n          GH_TOKEN: ${{ github.token }}\n", steps[3])
+        self.assertEqual(text.count("GH_TOKEN:"), 1)
+        self.assertEqual(len(re.findall(r"\b(?:github\.token|secrets\.GITHUB_TOKEN)\b", text)), 1)
+
+    def test_workflow_contract(self) -> None:
+        workflow = SCRIPT.parents[1] / ".github/workflows/changelog-dates.yml"
+        self.assert_workflow_contract(workflow.read_text(encoding="utf-8"))
+
+    def test_workflow_contract_rejects_drift(self) -> None:
+        workflow = SCRIPT.parents[1] / ".github/workflows/changelog-dates.yml"
+        text = workflow.read_text(encoding="utf-8")
+        blocks = text.split("\n      - ")
+        mutations = {
+            "schedule": text.replace('  schedule:\n    - cron: "35 9 * * *"\n', ""),
+            "manual": text.replace("  workflow_dispatch:\n", ""),
+            "permissions": text.replace("contents: read", "contents: write"),
+            "job permissions": text.replace("  audit:\n", "  audit:\n    permissions: write-all\n"),
+            "quoted job permissions": text.replace("  audit:\n", '  audit:\n    "permissions": write-all\n'),
+            "single-quoted job permissions": text.replace("  audit:\n", "  audit:\n    'permissions': write-all\n"),
+            "action pin": re.sub(r"actions/checkout@[0-9a-f]{40}", "actions/checkout@v7", text),
+            "timeout": text.replace("    timeout-minutes: 5\n", ""),
+            "credentials": text.replace("persist-credentials: false", "persist-credentials: true"),
+            "python": text.replace('python-version: "3.11"', 'python-version: "3.10"'),
+            "ordering": "\n      - ".join([*blocks[:3], blocks[4], blocks[3]]),
+            "token": text.replace("          GH_TOKEN: ${{ github.token }}\n", ""),
+            "token isolation": text.replace("          GH_TOKEN: ${{ github.token }}\n", "").replace(
+                "jobs:\n", "env:\n  GH_TOKEN: ${{ github.token }}\n\njobs:\n"
+            ),
+            "job ignores errors": text.replace("  audit:\n", "  audit:\n    continue-on-error: true\n"),
+            "step ignores errors": text.replace(
+                "Run offline self-tests\n", "Run offline self-tests\n        continue-on-error: true\n"
+            ),
+            "conditional job": text.replace("  audit:\n", "  audit:\n    if: github.event_name == 'push'\n"),
+            "conditional step": text.replace(
+                "Run offline self-tests\n", "Run offline self-tests\n        if: github.event_name == 'push'\n"
+            ),
+            "step-first condition": text.replace(
+                "      - name: Run offline self-tests\n",
+                "      - if: github.event_name == 'push'\n        name: Run offline self-tests\n",
+            ),
+            "step-first ignored error": text.replace(
+                "      - name: Audit published release dates\n",
+                "      - continue-on-error: true\n        name: Audit published release dates\n",
+            ),
+            "token alias": text.replace(
+                "  audit:\n", "  audit:\n    env:\n      AUDIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+            ),
+        }
+        for name, changed in mutations.items():
+            with self.subTest(guard=name), self.assertRaises(AssertionError):
+                self.assert_workflow_contract(changed)
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="changelog dates ")
         self.addCleanup(temporary.cleanup)
@@ -181,7 +253,10 @@ class ChangelogDatesTests(unittest.TestCase):
                 self.assertIn("ERROR:", result.stderr)
                 self.assertNotIn("dates match", result.stdout)
         args = self.inputs()
-        with patch.object(watch.Path, "read_text", side_effect=PermissionError("unreadable")):
+        with (
+            patch.object(watch, "load_releases", return_value=[release()]),
+            patch.object(watch.Path, "read_text", side_effect=PermissionError("unreadable")),
+        ):
             self.assertEqual(self.run_main(args)[0], 2)
 
     def test_missing_bad_json_and_bad_utf8_fixture_never_pass(self) -> None:
