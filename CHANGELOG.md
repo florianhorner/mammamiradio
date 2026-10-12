@@ -4,6 +4,8 @@ All notable changes to `mammamiradio` are documented here.
 
 The current version source of truth is `pyproject.toml`.
 
+Dates for published releases use Europe/Berlin.
+
 ## [Unreleased]
 
 ## [3.0.0] - 2026-10-01
@@ -100,7 +102,7 @@ household cache files begin with owner-only permissions, and shared clips
 respect recording boundaries. Images and automated checks install the same
 checked runtime dependency lock.
 
-## [2.18.0] - 2026-08-07
+## [2.18.0] - 2026-08-08
 
 The station stops going quiet. v2.18 closes every path we could find where a control, a failure, or a busy moment became silence or a repeated song — and starts new Home Assistant installations with a deliberately small home context.
 
@@ -208,7 +210,7 @@ First listen, then home context. v2.17 makes the station easier to start and giv
 - **Provider key fields are gone from the add-on Configuration tab.** API credentials now live only in `/config/secrets.env` (written for you by the admin setup panel), so on a fresh install add-on diagnostics like `ha addons info` never see them. Keys saved through the old Configuration-tab fields move into the secrets file automatically the first time the updated add-on starts — nothing to re-enter. Older saved values can linger in Home Assistant's stored add-on settings until you open the add-on's Configuration tab and press Save once.
 - **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
 
-## [2.14.1] - 2026-06-21
+## [2.14.1] - 2026-06-25
 
 ### Added
 
@@ -575,7 +577,7 @@ First listen, then home context. v2.17 makes the station easier to start and giv
   stream. Set `MAMMAMIRADIO_HTTP_LOG_LEVEL=INFO` (or `DEBUG`) to re-enable
   detailed HTTP traffic logs.
 
-## [2.12.4] - 2026-05-18
+## [2.12.4] - 2026-05-26
 
 ### Added
 
@@ -1061,7 +1063,7 @@ UI truth and playback safety fixes — five admin and log fixes, plus a normaliz
 - **`allow_ytdlp` dual env-var read**: `fetch_startup_playlist()` read `MAMMAMIRADIO_ALLOW_YTDLP` directly from env instead of using the already-parsed `config.allow_ytdlp`. Fixed to use the config object as the single source of truth.
 - **Clip rate-limit dict unbounded growth**: `_clip_rate` dict in `create_clip()` was never pruned. Now evicts entries older than 5 minutes on each request.
 
-## [2.7.0] - 2026-04-12
+## [2.7.0] - 2026-04-13
 
 ### Added
 
@@ -1089,7 +1091,7 @@ UI truth and playback safety fixes — five admin and log fixes, plus a normaliz
 - SFX volume reduced ~12dB across all generators (bumper jingles, station ID beds, time check tones).
 - Mid-bumpers between ad spots now only play ~25% of the time instead of every transition.
 
-## [2.6.0] - 2026-04-12
+## [2.6.0] - 2026-04-13
 
 ### Added
 
@@ -1113,7 +1115,7 @@ UI truth and playback safety fixes — five admin and log fixes, plus a normaliz
 - **Accessibility**: Request name and message inputs in `listener.html` now have `aria-label` attributes for screen reader support.
 - **Download exact yt-dlp result**: `_download_ytdlp` now uses the direct `youtube.com/watch?v=ID` URL when a `youtube_id` is present on the Track, so the admin-selected video is always downloaded rather than a fresh text-search result that may return a different upload.
 
-## [2.5.1] - 2026-04-11
+## [2.5.1] - 2026-04-12
 
 ### Fixed
 
@@ -1226,7 +1228,7 @@ UI truth and playback safety fixes — five admin and log fixes, plus a normaliz
 - **Playlist URL loading**: `/api/playlist/load` now routes URL requests to charts instead of erroring with "Unsupported source kind: url".
 - **Admin queue linking**: Fixed frontend reading `track_id` while backend sends `spotify_id`, breaking queue-to-playlist highlighting.
 
-## [2.2.2] - 2026-04-10
+## [2.2.2] - 2026-04-11
 
 ### Changed
 
@@ -1248,7 +1250,7 @@ UI truth and playback safety fixes — five admin and log fixes, plus a normaliz
 - **Silence fallback duration**: Fallback silence generator now produces 35s+ audio (was 5s), passing the MUSIC quality gate minimum.
 - **Audio quality gate documentation**: Added `-38dB coincidence` comment, updated `validate_segment_audio` docstring.
 
-## [2.2.1] - 2026-04-10
+## [2.2.1] - 2026-04-11
 
 ### Added
 

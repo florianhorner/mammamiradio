@@ -1,5 +1,7 @@
 # Changelog
 
+Dates for published releases use Europe/Berlin.
+
 ## Unreleased
 
 ## 3.0.0 - 2026-10-01
@@ -96,7 +98,7 @@ household cache files begin with owner-only permissions, and shared clips
 respect recording boundaries. Images and automated checks install the same
 checked runtime dependency lock.
 
-## 2.18.0 - 2026-08-07
+## 2.18.0 - 2026-08-08
 
 The station stops going quiet. v2.18 closes every path we could find where a control, a failure, or a busy moment became silence or a repeated song — and starts new Home Assistant installations with a deliberately small home context.
 
@@ -191,7 +193,7 @@ First listen, then home context. v2.17 makes first audio sturdier and gives Home
 - **Provider key fields are gone from the add-on Configuration tab.** API credentials now live only in `/config/secrets.env` (written for you by the admin setup panel), so on a fresh install add-on diagnostics like `ha addons info` never see them. Keys saved through the old Configuration-tab fields move into the secrets file automatically the first time the updated add-on starts — nothing to re-enter. Older saved values can linger in Home Assistant's stored add-on settings until you open the add-on's Configuration tab and press Save once.
 - **Listener requests are harder to spoof behind Home Assistant ingress.** The station now rate-limits requests by the closest real listener address that Home Assistant forwards, so a forged `X-Forwarded-For` entry cannot move a listener into someone else's bucket. Direct callers are still bucketed by their direct connection, and raw addresses remain HMAC-only.
 
-## 2.14.1 - 2026-06-21
+## 2.14.1 - 2026-06-25
 
 ### Added
 
@@ -219,7 +221,7 @@ First listen, then home context. v2.17 makes first audio sturdier and gives Home
 
 ## 2.14.0
 
-## 2.13.0
+## 2.13.0 - 2026-06-20
 
 ### Security
 
@@ -357,7 +359,7 @@ First listen, then home context. v2.17 makes first audio sturdier and gives Home
 - **yt-dlp downloads now time out after 30 seconds.** A hung YouTube connection can no longer permanently block a thread in the audio pipeline.
 - **`httpx` and `httpcore` request logs are quiet by default.** Successful outbound HTTP calls no longer flood the log stream. Set `MAMMAMIRADIO_HTTP_LOG_LEVEL=INFO` (or `DEBUG`) to re-enable detailed traffic logs.
 
-## 2.12.4
+## 2.12.4 - 2026-05-26
 
 ### Added
 
@@ -415,7 +417,7 @@ First listen, then home context. v2.17 makes first audio sturdier and gives Home
 - **Listener-request rate limiting respects HA ingress client headers.** Requests through trusted local proxy paths bucket by the real listener IP while direct callers cannot spoof forwarded headers.
 - **Listener song-request failures leave clear state.** Search failures and shutdown cancellation now mark the request errored instead of leaving it stuck as "still downloading."
 
-## 2.12.0
+## 2.12.0 - 2026-05-15
 
 ### Added
 
@@ -513,7 +515,7 @@ The big one for the addon: Italian-trending music as the default Jamendo source,
 - `pydantic-settings` 2.13.1 → 2.14.1.
 - Routine: `certifi` 2026.2.25 → 2026.4.22, `click` 8.3.2 → 8.3.3, `idna` 3.11 → 3.13.
 
-## 2.10.10
+## 2.10.10 - 2026-04-28
 
 Brand engine, listener redesign, mobile host control room, and security hardening.
 
