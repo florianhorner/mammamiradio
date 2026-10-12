@@ -6,6 +6,8 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+- **The Mac launcher finishes its setup before it starts the station.** `Start Radio.command` used to start an environment whose first setup had failed or been interrupted. It now records a finished setup and runs setup again until that record exists, lets only one window install at a time, and brings environments from the old launcher onto `requirements.txt`. A moved checkout is prepared again in place. When an update cannot be downloaded and needs no new components, the station you already have keeps playing. Every failure explains what to do next, and the README now describes the first run and how to start over.
+
 ## [3.0.0] - 2026-10-01
 
 ### Meet your station before setting it up
