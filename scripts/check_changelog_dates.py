@@ -15,7 +15,7 @@ a corrective PR. Cut-time dates are provisional until publication. Scheduled che
 are best-effort; the maintainer responds to failed jobs (no automatic repair).
 
 Offline self-test:
-  python3.11 -m unittest discover -s tests/scripts -p 'test_check_changelog_dates.py' -v
+  python3.11 tests/scripts/test_check_changelog_dates.py -v
 """
 
 from __future__ import annotations

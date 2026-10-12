@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Run offline self-tests
-        run: python -m unittest discover -s tests/scripts -p 'test_check_changelog_dates.py' -v
+        run: python tests/scripts/test_check_changelog_dates.py -v
 
       - name: Audit published release dates
         env:
