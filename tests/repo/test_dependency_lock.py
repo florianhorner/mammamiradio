@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import gc
 import hashlib
 import importlib.metadata
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -18,6 +20,7 @@ import pytest
 import yaml
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,6 +39,51 @@ def _runtime_pins() -> dict[str, Requirement]:
 def test_test_environment_uses_the_runtime_lock(pin: Requirement) -> None:
     installed = importlib.metadata.version(pin.name)
     assert installed in pin.specifier, f"{pin}: installed {installed}; install requirements.txt before testing"
+
+
+def test_multidict_lock_excludes_items_view_reference_leak() -> None:
+    pin = _runtime_pins()["multidict"]
+    assert len(pin.specifier) == 1, "multidict must have one exact runtime pin"
+    specifier = next(iter(pin.specifier))
+    assert specifier.operator == "==", "multidict must remain hash-locked to an exact version"
+    assert Version(specifier.version) >= Version("6.9.1"), (
+        "GHSA-54p9-h82j-f925 requires multidict>=6.9.1; regenerate the runtime lock with compatible patched "
+        "dependencies rather than lowering this security floor"
+    )
+
+
+@pytest.mark.skipif(sys.implementation.name != "cpython", reason="C-extension reference counts require CPython")
+@pytest.mark.parametrize("dictionary_class", ["MultiDict", "CIMultiDict"])
+@pytest.mark.parametrize("operation", ["reflected_union", "subtraction", "intersection"])
+def test_multidict_c_items_view_releases_operand_references(dictionary_class: str, operation: str) -> None:
+    module_name = "multidict._multidict"
+    if importlib.util.find_spec(module_name) is None:
+        pytest.skip("multidict C extension is absent; its reference-leak remediation is unverified")
+    # An installed but unloadable extension must fail rather than silently skip.
+    extension = importlib.import_module(module_name)
+    dictionary = getattr(extension, dictionary_class)(seed="x")
+    sentinel = object()
+    operand = [(f"key-{index}", sentinel) for index in range(32)]
+    # Finish expected-result setup before measuring operand reference ownership.
+    expected = {
+        "reflected_union": {("seed", "x"), *operand},
+        "subtraction": {("seed", "x")},
+        "intersection": set(),
+    }[operation]
+    gc.collect()
+    before = sys.getrefcount(sentinel)
+
+    if operation == "reflected_union":
+        result = operand | dictionary.items()
+    elif operation == "subtraction":
+        result = dictionary.items() - operand
+    else:
+        result = dictionary.items() & operand
+
+    assert result == expected
+    del result
+    gc.collect()
+    assert sys.getrefcount(sentinel) == before, f"{dictionary_class} {operation} retained operand references"
 
 
 def test_lock_satisfies_source_requirements() -> None:
