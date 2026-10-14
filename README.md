@@ -141,7 +141,43 @@ reads a folder in the Media panel when that storage is mounted (the Music folder
 setting, default `mammamiradio`) and `/data/music` when it is not. Source
 checkouts use `./music`. Set `MAMMAMIRADIO_MUSIC_DIR` to override a standalone
 install.
-macOS users can run `./setup-mac.sh`; venv installs can run `./start.sh`.
+
+On a Mac, double-click `Start Radio.command` in the checkout. The first time,
+it prepares `.venv`; after that it opens the station straight away.
+`./setup-mac.sh` builds a Dock app from an environment that already exists,
+and `./start.sh` starts one from the terminal.
+
+#### Mac launcher
+
+`Start Radio.command` needs Python 3.11 or newer and `ffmpeg`. With Homebrew
+installed, the first run installs whichever of the two is missing.
+When both are already installed, the launcher uses those copies.
+
+The launcher installs the versions pinned in `requirements.txt`, then this
+checkout. Leave the window open: on a slow network the download takes
+several minutes. Once setup finishes, later double-clicks skip it, and a
+setup that stopped early runs again. When `requirements.txt`,
+`pyproject.toml` or the launcher's setup steps change, the next double-click
+prepares the station again. If you are offline then and the update needs no
+new components, the launcher starts the station you already have and finishes
+the update on a later double-click; otherwise it asks you to connect first.
+Moving the checkout folder works too: the next double-click prepares the
+station for its new place. `.env` and `music/` stay in the checkout.
+
+#### Mac launcher recovery
+
+Stop the station in its window and let any running setup finish. Then, from
+the checkout root:
+
+```bash
+[ -f "./Start Radio.command" ] && [ -f ./mammamiradio/main.py ] && mkdir -p ./tmp && backup_dir="$(mktemp -d "./tmp/venv-backup.XXXXXX")" && mv .venv "$backup_dir/environment" && open "./Start Radio.command"
+```
+
+The command first checks for `Start Radio.command` and
+`mammamiradio/main.py`, so outside a Mamma Mi Radio checkout it changes
+nothing. It moves the old environment into a new directory under `tmp/` and
+leaves earlier backups alone. That backup is not a station you can run. `.env` and `music/`
+stay where they are.
 
 </details>
 

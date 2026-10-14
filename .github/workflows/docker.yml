@@ -87,7 +87,7 @@ jobs:
       - name: Upload HA Green release proof
         if: always() && env.MMR_REQUIRE_HA_RECEIPTS == '1'
 
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
         with:
           name: ha-green-release-proof-standalone-${{ github.sha }}
           path: ha-green-release-proof.json
@@ -101,7 +101,7 @@ jobs:
 
       - name: Upload strict media proof
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
         with:
           name: media-proof-standalone-${{ github.sha }}
           path: media-proof.json
