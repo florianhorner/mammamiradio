@@ -106,21 +106,17 @@ def runtime_directory(root: Path) -> Path:
     runtime = root.resolve() / "tmp" / "isolated-demo"
     if runtime.resolve() != runtime:
         raise DemoStartupError("The demo folder points elsewhere. Use a normal tmp/isolated-demo folder and try again.")
-    for name in (
-        "cache",
-        "tmp",
-        "music",
-        ".env",
-        ".env.tmp",
-        "radio.toml",
-        "model_registry.toml",
-        "events.jsonl",
-        "events.jsonl.1",
-        "events.jsonl.2",
-    ):
-        path = runtime / name
-        if path.resolve() != path:
-            raise DemoStartupError(f"The demo's {name} points elsewhere. Remove that link before starting the demo.")
+    pending = list(runtime.iterdir()) if runtime.exists() else []
+    while pending:
+        path = pending.pop()
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            pending.extend(path.iterdir())
+        elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise DemoStartupError(
+                "A demo runtime path points elsewhere or is not a private regular file. "
+                "Remove links and special files from tmp/isolated-demo, then try again."
+            )
     return runtime
 
 

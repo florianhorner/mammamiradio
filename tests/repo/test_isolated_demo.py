@@ -105,7 +105,9 @@ def test_missing_ytdlp_has_install_and_bundled_only_escape(monkeypatch):
     demo.require_dependencies(ytdlp=False)
 
 
-def test_runtime_uses_copies_and_preserves_local_edits(isolated_root):
+def test_runtime_uses_copies_and_preserves_local_edits(isolated_root, monkeypatch):
+    from mammamiradio.web.persistence import _save_dotenv, _save_media_source_settings
+
     runtime = demo.prepare_runtime(isolated_root)
     copied = runtime / "radio.toml"
     assert copied.read_bytes() == (isolated_root / "radio.toml").read_bytes()
@@ -115,6 +117,12 @@ def test_runtime_uses_copies_and_preserves_local_edits(isolated_root):
     demo.prepare_runtime(isolated_root)
     assert copied.read_text() == "# experiment settings\n"
     assert (isolated_root / "radio.toml").read_bytes() == original
+    monkeypatch.chdir(runtime)
+    _save_dotenv({"OPENAI_API_KEY": "synthetic-test-value"})
+    _save_media_source_settings({"JAMENDO_CLIENT_ID": "synthetic-client"}, addon=False)
+    assert demo.prepare_runtime(isolated_root) == runtime
+    assert "synthetic-test-value" in (runtime / ".env").read_text()
+    assert not (isolated_root / ".env").exists()
 
 
 def test_escaped_runtime_or_settings_link_is_refused(isolated_root, tmp_path):
@@ -126,6 +134,54 @@ def test_escaped_runtime_or_settings_link_is_refused(isolated_root, tmp_path):
     (runtime / ".env").symlink_to(isolated_root / ".env")
     with pytest.raises(demo.DemoStartupError, match="points elsewhere"):
         demo.demo_environment(isolated_root, ytdlp=True)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".env.env.tmp",
+        ".env.tmp",
+        ".env",
+        "radio.toml",
+        "model_registry.toml",
+        "cache/_failed_sample.mp3",
+        "tmp/clip.mp3",
+    ],
+)
+def test_runtime_rejects_unsafe_descendants_before_reads_or_writes(isolated_root, tmp_path, name, kind):
+    runtime = demo.prepare_runtime(isolated_root)
+    outside = tmp_path / "outside"
+    outside.write_text("preserve")
+    original_mode = outside.stat().st_mode
+    path = runtime / name
+    path.unlink(missing_ok=True)
+    if kind == "fifo":
+        os.mkfifo(path)
+    else:
+        getattr(path, f"{kind}_to")(outside)
+    for operation in (
+        lambda: demo.demo_environment(isolated_root, ytdlp=True),
+        lambda: demo.prepare_runtime(isolated_root),
+    ):
+        with pytest.raises(demo.DemoStartupError):
+            operation()
+    assert outside.read_text() == "preserve"
+    assert outside.stat().st_mode == original_mode
+
+
+def test_runtime_scan_fails_on_unreadable_directory(isolated_root, monkeypatch):
+    runtime = demo.prepare_runtime(isolated_root)
+    original = Path.iterdir
+
+    def iterdir(path):
+        if path == runtime / "cache":
+            raise PermissionError("unreadable fixture")
+        return original(path)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    with pytest.raises(PermissionError):
+        demo.prepare_runtime(isolated_root)
 
 
 def test_occupied_port_is_not_reclaimed(isolated_root, monkeypatch, capsys):
