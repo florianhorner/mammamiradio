@@ -14,6 +14,10 @@ SCHEMA_VERSION='1.2.0'
 ALLOWED_TYPES_RE='^(v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ )?(feat|fix|docs|style|refactor|test|chore|ci|build|perf|revert)(\([a-z0-9][a-z0-9-]*\))?: .*[^[:space:]]'
 SUBJECT_MAX=72
 
+# PR-title evaluation can collect all blockers before deciding whether a bot
+# may skip them. Normal commit-msg calls still stop at the first blocker.
+BLOCKED=0
+
 emit_block() {
     local rule_id="$1"
     local message="$2"
@@ -25,6 +29,10 @@ emit_block() {
         printf 'SPEC: %s (rule %s)\n' "$SPEC_URL" "$rule_id"
         printf 'OFFENDING: %s\n' "$offending"
     } >&2
+    BLOCKED=1
+    if [ "${COMMIT_LINT_COLLECT_ALL:-0}" = "1" ]; then
+        return 0
+    fi
     exit 1
 }
 
@@ -142,5 +150,5 @@ if printf '%s' "$SUBJECT" | grep -E -q '^feat(\([a-z0-9][a-z0-9-]*\))?: '; then
     fi
 fi
 
-# All checks passed.
-exit 0
+# Collection mode must still fail when any check blocked.
+exit "$BLOCKED"

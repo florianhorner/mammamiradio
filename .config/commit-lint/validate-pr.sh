@@ -62,10 +62,11 @@ mkdir -p "$SCRATCH_DIR/messages" "$SCRATCH_DIR/results"
 # Everything checked here is committed text or a pull request title, so a
 # line that starts with `#` is part of the message, not an editor comment.
 run_hook() {
+  local collect_all="${2:-0}"
   if command -v timeout >/dev/null 2>&1; then
-    COMMIT_LINT_COMMITTED=1 timeout 30s bash "$HOOK" "$1"
+    COMMIT_LINT_COMMITTED=1 COMMIT_LINT_COLLECT_ALL="$collect_all" timeout 30s bash "$HOOK" "$1"
   else
-    COMMIT_LINT_COMMITTED=1 bash "$HOOK" "$1"
+    COMMIT_LINT_COMMITTED=1 COMMIT_LINT_COLLECT_ALL="$collect_all" bash "$HOOK" "$1"
   fi
 }
 
@@ -144,7 +145,7 @@ FAIL_COUNT=0
 
 if [ -n "$PR_TITLE" ]; then
   printf '%s\n' "$PR_TITLE" > "$SCRATCH_DIR/messages/__pr_title__.txt"
-  if ! run_hook "$SCRATCH_DIR/messages/__pr_title__.txt" \
+  if ! run_hook "$SCRATCH_DIR/messages/__pr_title__.txt" 1 \
     2> "$SCRATCH_DIR/results/__pr_title__.err"; then
     if is_trusted_bot "$PR_AUTHOR" \
       && all_blocks_skippable "$SCRATCH_DIR/results/__pr_title__.err"; then

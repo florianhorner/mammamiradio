@@ -26,10 +26,38 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}\Z")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,99}(?:\[bot\])?\Z")
 POLICY_FILES = ("validate-trusted.py", "validate-pr.sh", "commit-msg")
+RULE_IDS = frozenset({"WEB_UI_DEFAULT", "VERSION_IN_SUBJECT", "SUBJECT_FORMAT",
+                      "SUBJECT_TOO_LONG", "SUBJECT_TRAILING_PERIOD",
+                      "OPERATOR_ATTRIBUTION", "AGENT_SELF_TALK"})
+REPORT_ROW = re.compile(r"\| (PR title|[0-9a-f]{12}) \| ([A-Z_]+(?:,[A-Z_]+)*) \|\Z")
 
 
 class Unusable(Exception):
     """A fixed, safe diagnostic; never include untrusted text in its message."""
+
+
+def failure_rows(output: bytes) -> list[tuple[str, tuple[str, ...]]]:
+    """Project bounded report rows; never relay raw runner output or stderr."""
+    if len(output) > 64 * 1024:
+        return []
+    try:
+        text = output.decode("ascii")
+    except UnicodeDecodeError:
+        return []
+    if any(not char.isprintable() and char != "\n" for char in text):
+        return []
+    rows: list[tuple[str, tuple[str, ...]]] = []
+    for line in text.split("\n"):
+        if line == "| ref | rule IDs |" or not line.startswith("|"):
+            continue
+        match = REPORT_ROW.fullmatch(line)
+        if match is None:
+            return []
+        ids = tuple(match[2].split(","))
+        if not set(ids) <= RULE_IDS or len(ids) > len(RULE_IDS) or len(rows) >= 100:
+            return []
+        rows.append((match[1], ids))
+    return rows
 
 
 def sha(value: object) -> str:
@@ -199,12 +227,15 @@ def validate(environ: dict[str, str], policy_dir: Path) -> int:
         # No inherited Git configuration overrides or auth reach the runner.
         runner_env = {**env, "PR_BASE_SHA": base, "PR_HEAD_SHA": head,
                       "PR_TITLE": title, "PR_AUTHOR": author}
-        code, _ = process(["/bin/bash", str(policy_dir / "validate-pr.sh")],
-                          bare, runner_env, timeout=300, capture=False)
+        code, output = process(["/bin/bash", str(policy_dir / "validate-pr.sh")],
+                               bare, runner_env, timeout=300)
         if snapshot(read_pull(repository, number, token), repository, number) != expected:
             raise Unusable("Pull request changed during validation; rerun the check.")
         if code not in (0, 1):
             raise Unusable("Trusted policy could not validate the commit range.")
+        if code == 1:
+            for ref, ids in failure_rows(output):
+                print(f"| {ref} | {','.join(ids)} |")
         return code
 
 
@@ -212,6 +243,8 @@ def main() -> int:
     try:
         code = validate(dict(os.environ), Path(__file__).absolute().parent)
         print("Commit policy passed." if code == 0 else "::error::Commit policy failed.")
+        if code == 1:
+            print("Check the PR title or commit message with: bash .config/commit-lint/commit-msg <message-file>")
         return code
     except (Unusable, OSError, ValueError) as error:
         # Unexpected filesystem/encoding errors must not disclose paths or text.
