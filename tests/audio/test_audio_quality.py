@@ -58,7 +58,7 @@ def test_real_ad_gap_threshold_preserves_valid_audio(tmp_path, gap):
     assert longest == pytest.approx(gap, abs=0.03)
     assert total / _probe_duration_sec(path) < 0.25  # span, not ratio, is the rejecting gate
     if gap > 2.5:
-        with pytest.raises(AudioQualityError, match=r"long silent gap \(2.79s > 2.50s\)"):
+        with pytest.raises(AudioQualityError, match=r"long silent gap \(2\.\d\ds > 2\.50s\)"):
             validate_segment_audio(path, SegmentType.AD)
     else:
         validate_segment_audio(path, SegmentType.AD)
