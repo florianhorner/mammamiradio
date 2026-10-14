@@ -26,9 +26,10 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}\Z")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,99}(?:\[bot\])?\Z")
 POLICY_FILES = ("validate-trusted.py", "validate-pr.sh", "commit-msg")
+# UNKNOWN is the trusted runner's fixed fallback for an unclassified hook exit.
 RULE_IDS = frozenset({"WEB_UI_DEFAULT", "VERSION_IN_SUBJECT", "SUBJECT_FORMAT",
                       "SUBJECT_TOO_LONG", "SUBJECT_TRAILING_PERIOD",
-                      "OPERATOR_ATTRIBUTION", "AGENT_SELF_TALK"})
+                      "OPERATOR_ATTRIBUTION", "AGENT_SELF_TALK", "UNKNOWN"})
 REPORT_ROW = re.compile(r"\| (PR title|[0-9a-f]{12}) \| ([A-Z_]+(?:,[A-Z_]+)*) \|\Z")
 
 

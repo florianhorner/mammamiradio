@@ -1,12 +1,12 @@
 {
   "managed_by": "commit-lint-kit-v1",
-  "source_revision": "e59d0274770361d5a10a42e06c902d8df4cdb703",
+  "source_revision": "15c91e9d801ddc92eed077aaf1b06d026ce2627a",
   "stage": "bootstrap",
   "rules_schema_version": "1.2.0",
   "files": {
     ".config/commit-lint/commit-msg": "6c329b7402cfdea36ae335b47bb5c1a0a5e3c0e064186e399a1a29e989a28dc0",
     ".config/commit-lint/validate-pr.sh": "03c94c99902c5aa0a1974a0f122ba33086023f4d8065624690f25978d27eae5f",
-    ".config/commit-lint/validate-trusted.py": "3ea243598415350e0478f70ce2b272f3f2b8a59e86fcc5cc867914653df5dd5f",
+    ".config/commit-lint/validate-trusted.py": "f4e9a01df1b09cd82cdfb125bf6ed8f60939dad2bebbe52712a236c994df47f6",
     ".github/workflows/commit-lint-trusted.yml": "4647a68020763615832fdb3b22db2e71f96cb1af21dc90121c977e83bbf2c342"
   }
 }
