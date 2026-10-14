@@ -1,0 +1,8 @@
+# Keep generated policy identical to its reviewed source and manifest hashes.
+extend = "../../pyproject.toml"
+
+[lint.extend-per-file-ignores]
+"validate-trusted.py" = ["I001", "N818"]
+
+[format]
+exclude = ["validate-trusted.py"]

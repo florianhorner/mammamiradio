@@ -1,4 +1,14 @@
-# Managed by commit-lint-kit-v1. Generated; do not edit by hand.
+# Per-repo includer for the engineering-standards reusable commit-lint workflow.
+# Canonical workflow: https://github.com/florianhorner/engineering-standards/blob/main/.github/workflows/commit-lint-reusable.yml
+# Pin to a SHA in production. b7f5ba76136c577f511edaa0f59d50b06bfd3c1a carries two
+# fixes on top of the earlier injection-safe pin (PR title / SHAs passed via env, so
+# an apostrophe in the title no longer crashes the validate step):
+#   - CI now reads `exemptions.trusted_bot_skips` from the vendored rules instead of
+#     hardcoding a lone WHY_REQUIRED, so that array is no longer decorative.
+#   - The bot allowlist applies to the PR title, not only to the commits in range.
+# Together with SUBJECT_TOO_LONG joining the skip list in rules schema 1.2.0, this
+# stops grouped Dependabot titles ("...in the <group> group across 1 directory")
+# failing the 72-character subject limit on every single dependency PR.
 name: commit-lint
 
 on:
@@ -7,20 +17,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   commit-lint:
-    name: commit-lint / validate commit messages
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      # The script reads the pull request from the event file, so its title
-      # never appears in this step's logged environment.
-      - name: Validate commit messages and pull request title
-        run: bash .config/commit-lint/validate-pr.sh
+    uses: florianhorner/engineering-standards/.github/workflows/commit-lint-reusable.yml@b7f5ba76136c577f511edaa0f59d50b06bfd3c1a
