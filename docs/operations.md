@@ -1169,3 +1169,35 @@ main-only deploy gate and the path filter, and runs on every pull request.
 - no launchd plist
 - no nginx or Caddy config
 - no Fly/Render/Netlify config (public preview deployment is a future idea — blocked on cost and music copyright)
+
+## Isolated demo diagnostics
+
+Run `.venv/bin/python scripts/isolated_demo.py --check` before an isolated demo;
+add `--no-ytdlp` to disable external extraction. The check creates no runtime
+files and starts no workers. A regular launch binds loopback and forces Home
+Assistant, Home context, Home media-player push, Jamendo and the prompt-bearing
+provenance ledger off. It also ignores the quality-gate bypass environment flag.
+Cloud writing and voice services can still use existing credentials.
+
+The launcher writes private metadata-only `tmp/isolated-demo/events.jsonl`
+logs, capped at three 1 MiB files. Records retain logger/line locations instead
+of arbitrary messages, arguments or tracebacks. A rejected ad's measured silence
+gap is retained without its audio or script. The runtime directory is mode 0700;
+new/current log files are mode 0600. Ordinary development log formatting is unchanged.
+Startup validation and demo extractor diagnostics use the same sanitized console;
+unexpected startup failures show a generic recovery message without exception text.
+
+Language records group each guard invocation by `id`, caller, quality profile,
+decision mode and last dispatched provider/model (`unknown` before dispatch).
+The profile follows the dispatched model, including a provider fallback.
+Exclude rows whose `requested_mode` differs from `mode` from matched-mode cohorts.
+Each attempt has one outcome: `accepted`, `repair`, `repair_accepted`, `fallback`,
+`provider_error` or `structural_bypass`. `final_fallback` records a subsequent
+language rejection after text processing. Count distinct `(id, attempt)` pairs,
+with initial attempts at `attempt=0` and repairs at `attempt=1`; the extra
+`final_fallback` record is not another attempt. Exclude structural bypasses and
+provider errors from language acceptance rates. A repair accepted by the guard
+can still fail final processing: join by `id` to remove terminal failures from
+repaired successes. These events measure language checks, not airing, perceived
+voice quality or human acceptance. Super Italian Mode retains its existing
+language-guard bypass. Historical rejection/failure totals lack a denominator.

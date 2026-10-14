@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -26,6 +27,41 @@ def _cp(*, returncode: int = 0, stdout: str = "", stderr: str = "") -> subproces
 def _mk_audio(path: Path) -> Path:
     path.write_bytes(b"\x01" * 4096)
     return path
+
+
+@pytest.mark.requires_ffmpeg
+@pytest.mark.parametrize("gap", [2.0, 2.79])
+def test_real_ad_gap_threshold_preserves_valid_audio(tmp_path, gap):
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("FFmpeg and ffprobe required")
+    path = tmp_path / "ad.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=16",
+            "-af",
+            f"volume=0:enable='between(t,5,{5 + gap})'",
+            "-c:a",
+            "libmp3lame",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    total, longest = _probe_silence(path)
+    assert longest == pytest.approx(gap, abs=0.03)
+    assert total / _probe_duration_sec(path) < 0.25  # span, not ratio, is the rejecting gate
+    if gap > 2.5:
+        with pytest.raises(AudioQualityError, match=r"long silent gap \(2.79s > 2.50s\)"):
+            validate_segment_audio(path, SegmentType.AD)
+    else:
+        validate_segment_audio(path, SegmentType.AD)
 
 
 def test_validate_segment_audio_passes(tmp_path):
