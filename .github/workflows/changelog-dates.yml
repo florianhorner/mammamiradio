@@ -1,0 +1,30 @@
+name: Changelog publication dates
+
+on:
+  schedule:
+    - cron: "35 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Run offline self-tests
+        run: python tests/scripts/test_check_changelog_dates.py -v
+
+      - name: Audit published release dates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_changelog_dates.py
