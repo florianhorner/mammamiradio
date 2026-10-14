@@ -40,6 +40,7 @@ def test_trusted_workflow_executes_only_default_branch_policy() -> None:
     workflow = _workflow()
     # PyYAML's YAML 1.1 loader decodes the unquoted GitHub Actions key as True.
     events = workflow.get("on", workflow.get(True))
+    assert events is not None
     assert set(events) == {"pull_request_target"}
     assert "edited" in events["pull_request_target"]["types"]
     assert workflow["permissions"] == {"contents": "read", "pull-requests": "read"}
