@@ -25,8 +25,6 @@ from mammamiradio.core.path_safety import safe_path_within
 from mammamiradio.playlist.music_admission import REFERENCE_SINGLE_TRACK_SEC
 
 logger = logging.getLogger(__name__)
-# Optional process-local sink for isolated launchers; None preserves normal yt-dlp output.
-diagnostic_logger: logging.Logger | None = None
 
 # Files that must never be evicted from the cache directory
 _CACHE_PROTECTED = {
@@ -486,7 +484,6 @@ def _download_ytdlp(
     ytdlp_tmp.mkdir(parents=True, exist_ok=True)
     opts = {
         "format": "bestaudio/best",
-        "logger": diagnostic_logger,
         # Relative to `paths`: an absolute template makes yt-dlp ignore both
         # paths, and a failed download then strands `.part` files in the cache.
         "outtmpl": f"{track.cache_key}.%(ext)s",
@@ -771,7 +768,6 @@ def search_ytdlp_metadata_outcome(query: str, max_results: int = 5) -> YtdlpSear
         # Gate passed, module vanished between that check and this load.
         return YtdlpSearchOutcome(status="unavailable", results=[])
     opts = {
-        "logger": diagnostic_logger,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,

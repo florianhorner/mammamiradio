@@ -18,7 +18,6 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from contextvars import ContextVar
 from dataclasses import dataclass
 from itertools import cycle, pairwise
 from typing import TYPE_CHECKING, Any
@@ -112,21 +111,6 @@ if TYPE_CHECKING:
     from mammamiradio.home.context_director import PromptFact
 
 logger = logging.getLogger(__name__)
-_language_context: ContextVar[dict[str, str | int] | None] = ContextVar("language_metrics", default=None)
-
-
-def _language_event(outcome: str, config: StationConfig) -> None:
-    """Metadata only; copied records cannot bleed between concurrent scripts."""
-    context = _language_context.get()
-    if context is not None:
-        mode = "super_italian" if config.super_italian_mode else "normal"
-        logger.info("language_guard", extra={"language_metrics": {**context, "mode": mode, "outcome": outcome}})
-
-
-def _language_dispatch(caller: str | None, provider: str, model: str, profile: str) -> None:
-    context = _language_context.get()
-    if context is not None and context["caller"] == caller:
-        _language_context.set({**context, "provider": provider, "model": model, "profile": profile})
 
 
 class AdGenerationUnavailableError(RuntimeError):
@@ -1210,12 +1194,6 @@ async def _generate_json_response(
                         effort_level = effort_for(config.models, "anthropic", model, caller=caller)
                         if effort_level:
                             create_kwargs["extra_body"] = {"output_config": {"effort": effort_level}}
-                        _language_dispatch(
-                            caller,
-                            "anthropic",
-                            model,
-                            str((_language_context.get() or {}).get("requested_profile", config.models.active_profile)),
-                        )
                         resp = await asyncio.wait_for(
                             client.with_options(max_retries=0).messages.create(**create_kwargs),
                             timeout=_attempt_timeout(current_max_tokens),
@@ -1425,7 +1403,6 @@ async def _generate_json_response(
     # Resolve the OpenAI model for THIS task's role (not one fixed fallback model),
     # so a transition falls back to the fast OpenAI model and banter to the creative one.
     openai_model = resolve_model(config.models, caller, "openai")
-    openai_profile = config.models.active_profile
     if not openai_model:
         raise RuntimeError("No configured OpenAI script model; check model_registry.toml")
     client = _get_openai_client(openai_key)
@@ -1490,7 +1467,6 @@ async def _generate_json_response(
         if _openai_script_blocked(state, openai_key):
             raise RuntimeError("OpenAI script provider is temporarily unavailable")
         try:
-            _language_dispatch(caller, "openai", openai_model, openai_profile)
             resp = await asyncio.wait_for(loop.run_in_executor(None, _call_openai), timeout=oa_timeout)
         except Exception as exc:
             if (
@@ -1698,12 +1674,9 @@ def _emit_llm_call(
 ) -> None:
     """Tier-1: record one raw LLM attempt (success OR failure) to the ledger.
 
-    Language accounting retains only provider/model even with the ledger off.
-    Prompt, raw output and provenance remain behind the enabled check.
+    The enabled-check is FIRST so that with the ledger off there is zero UUID /
+    hash / tag / contextvar work on the hot path. Never raises into generation.
     """
-    context = _language_context.get()
-    if context is not None and context["caller"] == caller:
-        _language_context.set({**context, "provider": provider, "model": model})
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return
@@ -2244,54 +2217,33 @@ async def _generate_json_response_with_language_guard(
 ) -> dict:
     """Generate JSON and enforce Normal Mode's English-led output invariant."""
     surface = caller or "script"
-    _language_context.set(
-        {
-            "id": uuid.uuid4().hex,
-            "caller": surface,
-            "profile": config.models.active_profile,
-            "requested_profile": config.models.active_profile,
-            "mode": "super_italian" if config.super_italian_mode else "normal",
-            "requested_mode": "super_italian" if config.super_italian_mode else "normal",
-        }
-    )
     current_prompt = prompt
     for attempt in range(2):
-        _language_context.set(
-            {**(_language_context.get() or {}), "attempt": attempt, "provider": "unknown", "model": "unknown"}
+        data = await _generate_json_response(
+            prompt=current_prompt,
+            config=config,
+            state=state,
+            model=model,
+            max_tokens=max_tokens,
+            caller=caller,
+            role=role,
+            spot_index=spot_index,
+            submission_guard=submission_guard,
         )
-        try:
-            data = await _generate_json_response(
-                prompt=current_prompt,
-                config=config,
-                state=state,
-                model=model,
-                max_tokens=max_tokens,
-                caller=caller,
-                role=role,
-                spot_index=spot_index,
-                submission_guard=submission_guard,
-            )
-        except Exception:
-            _language_event("provider_error", config)
-            raise
         # Direct campaigns have a structural safety repair below this guard.
         # Let that repair replace partner-only output with owned fallback copy;
         # otherwise the language retry raises first and skips the campaign-role
         # invariant entirely.
         if surface == "ad" and required_role and not _json_has_spoken_role(data, required_role):
-            _language_event("structural_bypass", config)
             return data
         if _normal_mode_language_ok(_speech_texts_from_json(data, surface=surface), config, surface=surface):
-            _language_event("repair_accepted" if attempt else "accepted", config)
             return data
         if attempt == 0:
-            _language_event("repair", config)
             state.language_guard_rejections += 1
             logger.warning("Normal Mode language guard rejected %s response; retrying once", surface)
             current_prompt = f"{prompt}\n\n{_NORMAL_MODE_LANGUAGE_REPAIR}"
             continue
         state.language_guard_failures += 1
-        _language_event("fallback", config)
         raise ValueError(f"{surface} response violated Normal Mode language mix")
 
     raise RuntimeError("unreachable language guard state")
@@ -3393,7 +3345,6 @@ Return JSON:
         # Normal Mode copy.
         if not _normal_mode_language_ok([line.text for line in result], config):
             state.language_guard_failures += 1
-            _language_event("final_fallback", config)
             raise ValueError("banter response violated Normal Mode language mix after post-processing")
         # Producer consumes this one-shot handoff only after a successful render;
         # the director is reserved at queue admission, never at prompt selection.
@@ -3662,7 +3613,6 @@ Return JSON: {{"lines": [{{"host": "HostName", "text": "what they say"}}]}}"""
             return None
     if not _normal_mode_language_ok([line.text for line in result], config):
         state.language_guard_failures += 1
-        _language_event("final_fallback", config)
         return None
     if not _banter_turn_taking_ok(result):
         return None
@@ -3998,7 +3948,6 @@ Return JSON:
         callback_landed = bool(data.get("callback_used"))
         if not _normal_mode_language_ok([text], config):
             state.language_guard_failures += 1
-            _language_event("final_fallback", config)
             logger.warning("News flash failed final Normal Mode language check; using stock copy")
             text = _news_flash_fallback(config)
             callback_landed = False
@@ -4137,7 +4086,6 @@ Return JSON:
             return (host, _transition_fallback_text(config, next_segment), None)
         if not _normal_mode_language_ok([text], config, surface="transition"):
             state.language_guard_failures += 1
-            _language_event("final_fallback", config)
             logger.warning("Massaged transition failed final Normal Mode language check; using stock copy")
             return (host, _transition_fallback_text(config, next_segment), None)
         logger.info("Generated transition: %s", text[:50])
@@ -4517,7 +4465,6 @@ Return JSON:
         voice_texts = [p.text for p in parts if p.type == "voice" and p.text]
         if not _normal_mode_language_ok(voice_texts, config):
             state.language_guard_failures += 1
-            _language_event("final_fallback", config)
             if require_generated:
                 raise AdGenerationUnavailableError(f"Generated ad for {brand.name} failed the language check")
             logger.warning("Ad failed final Normal Mode language check; using deterministic fallback")

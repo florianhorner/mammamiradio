@@ -2836,8 +2836,7 @@ async def test_write_banter_no_llm_returns_language_fallback(config, state):
 
 
 @pytest.mark.asyncio
-async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, state, caplog):
-    caplog.set_level("INFO", logger="mammamiradio.hosts.scriptwriter")
+async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, state):
     config.super_italian_mode = True
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
@@ -2860,11 +2859,6 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
     assert len(result) == 1
     assert result[0][0].name == host_name
     assert result[0][1] == "OpenAI salva la diretta."
-    rows = [r.language_metrics for r in caplog.records if r.msg == "language_guard"]
-    assert rows[-1]["provider"] == "openai"
-    assert rows[-1]["model"] == resolve_model(config.models, "banter", "openai")
-    assert rows[-1]["profile"] == config.models.active_profile
-    assert rows[-1]["mode"] == "super_italian"
 
 
 @pytest.mark.asyncio
@@ -8809,8 +8803,7 @@ async def test_write_banter_empty_fallback_and_post_restart_empty_deques(config,
         (["Questa canzone è bella.", RuntimeError("provider unavailable")], (1, 0), True),
     ],
 )
-async def test_language_guard_counts_only_language_rejections(config, state, responses, counts, raises, caplog):
-    caplog.set_level("INFO", logger="mammamiradio.hosts.scriptwriter")
+async def test_language_guard_counts_only_language_rejections(config, state, responses, counts, raises):
     config.super_italian_mode = False
     state.language_guard_rejections, state.language_guard_failures = 3, 2
     with patch(
@@ -8828,24 +8821,6 @@ async def test_language_guard_counts_only_language_rejections(config, state, res
             await call
     assert generate.await_count == len(responses)
     assert (state.language_guard_rejections, state.language_guard_failures) == (3 + counts[0], 2 + counts[1])
-    rows = [r.language_metrics for r in caplog.records if r.msg == "language_guard"]
-    assert len(rows) == len(responses)
-    assert [r["attempt"] for r in rows] == list(range(len(responses)))
-    assert sum(r["outcome"] == "repair" for r in rows) == counts[0]
-    assert sum(r["outcome"] == "fallback" for r in rows) == counts[1]
-    expected = (
-        "provider_error"
-        if isinstance(responses[-1], Exception)
-        else "fallback"
-        if raises
-        else "repair_accepted"
-        if len(responses) == 2
-        else "accepted"
-    )
-    assert rows[-1]["outcome"] == expected
-    assert all(r["provider"] == r["model"] == "unknown" for r in rows)
-    assert all(r["caller"] == "transition" and r["mode"] == "normal" for r in rows)
-    assert len({r["id"] for r in rows}) == 1
 
 
 @pytest.mark.parametrize("surface", [None, "banter", "news_flash", "ad", "transition"])
@@ -8859,8 +8834,7 @@ def test_bilingual_transition_exception_does_not_relax_other_surfaces(config, su
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repaired", [False, True])
-async def test_transition_final_language_failure_is_counted_once(config, state, repaired, caplog):
-    caplog.set_level("INFO", logger="mammamiradio.hosts.scriptwriter")
+async def test_transition_final_language_failure_is_counted_once(config, state, repaired):
     config.super_italian_mode = False
     responses = [{"text": "This song is ready for you."}]
     if repaired:
@@ -8873,9 +8847,6 @@ async def test_transition_final_language_failure_is_counted_once(config, state, 
     assert text != "Questa canzone è bella."
     assert track_ref is None
     assert (state.language_guard_rejections, state.language_guard_failures) == (int(repaired), 1)
-    rows = [r.language_metrics for r in caplog.records if r.msg == "language_guard"]
-    assert rows[-1]["outcome"] == "final_fallback"
-    assert sum(r["outcome"] in ("fallback", "final_fallback") for r in rows) == 1
 
 
 @pytest.mark.asyncio
@@ -8905,118 +8876,6 @@ async def test_listener_truth_repair_gets_its_one_language_retry(config, state):
     assert all(line.text == "This song is ready for you." for line in lines)
     assert generate.await_count == 2
     assert (state.language_guard_rejections, state.language_guard_failures) == (1, 0)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("italian", [False, True])
-async def test_language_metrics_isolate_concurrent_callers_without_script_content(config, state, caplog, italian):
-    import asyncio
-
-    caplog.set_level("INFO", logger="mammamiradio.hosts.scriptwriter")
-    config.super_italian_mode = italian
-
-    async def generate(**kwargs):
-        caller = kwargs["caller"]
-        scriptwriter_module._emit_llm_call(
-            state=state,
-            config=config,
-            caller=caller,
-            role=None,
-            spot_index=None,
-            provider="anthropic",
-            model=f"model-{caller}",
-            prompt="private prompt",
-            raw_output="private output",
-            ok=True,
-            fallback_reason=None,
-            input_tokens=1,
-            output_tokens=1,
-            duration_ms=1,
-            openai_fallback=False,
-        )
-        await asyncio.sleep(0)
-        text = "Questa canzone è bella." if italian else "This song is ready for you."
-        return {"lines": [{"text": text}], "parts": [{"text": text}], "text": text}
-
-    callers = ("banter", "transition", "ad", "news_flash", "banter_listener_truth_repair")
-    with patch.object(scriptwriter_module, "_generate_json_response", side_effect=generate):
-        await asyncio.gather(
-            *(
-                scriptwriter_module._generate_json_response_with_language_guard(
-                    prompt="private prompt", config=config, state=state, model=None, max_tokens=100, caller=caller
-                )
-                for caller in callers
-            )
-        )
-    rows = [r.language_metrics for r in caplog.records if r.msg == "language_guard"]
-    assert len(rows) == len(callers)
-    assert len({r["id"] for r in rows}) == len(callers)
-    assert {r["caller"] for r in rows} == set(callers)
-    for row in rows:
-        assert row["model"] == f"model-{row['caller']}"
-        assert row["provider"] == "anthropic"
-        assert row["mode"] == ("super_italian" if italian else "normal")
-        assert row["outcome"] == "accepted"
-        assert "private" not in json.dumps(row)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("italian", [False, True])
-async def test_language_metrics_record_mode_at_decision(config, state, caplog, italian):
-    caplog.set_level("INFO", logger="mammamiradio.hosts.scriptwriter")
-    config.super_italian_mode = italian
-
-    async def generate(**_kwargs):
-        config.super_italian_mode = not italian
-        return {"text": "This song is ready for you." if italian else "Questa canzone è bella."}
-
-    with patch.object(scriptwriter_module, "_generate_json_response", side_effect=generate):
-        await scriptwriter_module._generate_json_response_with_language_guard(
-            prompt="test", config=config, state=state, model=None, max_tokens=100, caller="transition"
-        )
-    row = next(r.language_metrics for r in caplog.records if r.msg == "language_guard")
-    assert row["mode"] == ("normal" if italian else "super_italian")
-    assert row["requested_mode"] != row["mode"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("terminal_error", [False, True])
-async def test_language_metrics_track_changed_profile_and_failed_fallback(config, state, caplog, terminal_error):
-    caplog.set_level("INFO", logger="mammamiradio.hosts.scriptwriter")
-    config.anthropic_api_key, config.openai_api_key = "test-anthropic", "test-openai"
-    config.models.active_profile = "balanced"
-
-    async def anthropic_failure(**_kwargs):
-        config.models.active_profile = "economy"
-        raise RuntimeError("synthetic failure")
-
-    client = MagicMock()
-    client.with_options.return_value = client
-    client.messages.create = AsyncMock(side_effect=anthropic_failure)
-    fallback = _mock_openai_response('{"text":"This song is ready for you."}')
-    if terminal_error:
-        fallback.chat.completions.create.side_effect = RuntimeError("synthetic fallback failure")
-    with (
-        patch.object(scriptwriter_module, "_get_client", return_value=client),
-        patch.object(scriptwriter_module, "_get_openai_client", return_value=fallback),
-    ):
-        call = scriptwriter_module._generate_json_response_with_language_guard(
-            prompt="test",
-            config=config,
-            state=state,
-            model=resolve_model(config.models, "banter", "anthropic"),
-            max_tokens=100,
-            caller="banter",
-        )
-        if terminal_error:
-            with pytest.raises(RuntimeError):
-                await call
-        else:
-            await call
-    row = next(r.language_metrics for r in caplog.records if r.msg == "language_guard")
-    assert row["provider"] == "openai" and row["profile"] == "economy"
-    assert row["model"] == resolve_model(config.models, "banter", "openai")
-    assert row["outcome"] == ("provider_error" if terminal_error else "accepted")
 
 
 @pytest.mark.asyncio
