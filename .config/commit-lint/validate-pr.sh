@@ -63,10 +63,11 @@ mkdir -p "$SCRATCH_DIR/messages" "$SCRATCH_DIR/results"
 # line that starts with `#` is part of the message, not an editor comment.
 run_hook() {
   local collect_all="${2:-0}"
+  local commit_sha="${3:-}"
   if command -v timeout >/dev/null 2>&1; then
-    COMMIT_LINT_COMMITTED=1 COMMIT_LINT_COLLECT_ALL="$collect_all" timeout 30s bash "$HOOK" "$1"
+    COMMIT_LINT_COMMITTED=1 COMMIT_LINT_COLLECT_ALL="$collect_all" COMMIT_LINT_COMMIT_SHA="$commit_sha" timeout 30s bash "$HOOK" "$1"
   else
-    COMMIT_LINT_COMMITTED=1 COMMIT_LINT_COLLECT_ALL="$collect_all" bash "$HOOK" "$1"
+    COMMIT_LINT_COMMITTED=1 COMMIT_LINT_COLLECT_ALL="$collect_all" COMMIT_LINT_COMMIT_SHA="$commit_sha" bash "$HOOK" "$1"
   fi
 }
 
@@ -160,7 +161,7 @@ fi
 while IFS= read -r SHA; do
   [ -z "$SHA" ] && continue
   git log -1 --format=%B "$SHA" > "$SCRATCH_DIR/messages/${SHA}.txt"
-  if ! run_hook "$SCRATCH_DIR/messages/${SHA}.txt" \
+  if ! run_hook "$SCRATCH_DIR/messages/${SHA}.txt" 0 "$SHA" \
     2> "$SCRATCH_DIR/results/${SHA}.err"; then
     FAIL_COUNT=$((FAIL_COUNT + 1))
     record_failure "${SHA:0:12}" "$SCRATCH_DIR/results/${SHA}.err"

@@ -143,9 +143,19 @@ if [ -n "$BODY" ]; then
 fi
 
 # Warn-only rule: WHY_REQUIRED; this hook does not block CI for it.
-# Heuristic: if subject is `feat(...)` and body lacks a `Why:` line, warn.
+# Local commits use the index; committed messages require their own revision.
+# Titles and unavailable diffs have no known changed-line count.
 if printf '%s' "$SUBJECT" | grep -E -q '^feat(\([a-z0-9][a-z0-9-]*\))?: '; then
-    if [ -z "$BODY" ] || ! printf '%s' "$BODY" | grep -E -q '^[Ww]hy:'; then
+    NUMSTAT=''
+    if [ "${COMMIT_LINT_COMMITTED:-}" = "1" ]; then
+        if printf '%s\n' "${COMMIT_LINT_COMMIT_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            NUMSTAT="$(git show --format= --numstat --find-renames --no-ext-diff --no-textconv "${COMMIT_LINT_COMMIT_SHA}^{commit}" -- 2>/dev/null)" || NUMSTAT=''
+        fi
+    else
+        NUMSTAT="$(git diff --cached --numstat --find-renames --no-ext-diff --no-textconv -- 2>/dev/null)" || NUMSTAT=''
+    fi
+    LINES_CHANGED="$(printf '%s\n' "$NUMSTAT" | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { n += $1 + $2 } END { print n+0 }')"
+    if [ "$LINES_CHANGED" -gt 50 ] && { [ -z "$BODY" ] || ! printf '%s' "$BODY" | grep -E -q '^[Ww]hy:'; }; then
         emit_warn 'WHY_REQUIRED' 'feat with >50 lines must include a `Why:` body line.' 'Add a body section starting with '"'"'Why: <one-line reason>'"'"'. See spec for templates.' "$SUBJECT"
     fi
 fi
