@@ -13,8 +13,8 @@ last_reviewed = "2026-09-10"
 
 [models.catalog.anthropic]
 fable = "claude-fable-5-1"  # unmapped by any profile — usable via CLAUDE_CREATIVE_MODEL, gated keys fall back to OpenAI
-opus = "claude-opus-5"
-sonnet = "claude-sonnet-5"
+opus = "claude-opus-5-5"
+sonnet = "claude-sonnet-5-5"
 haiku = "claude-haiku-4-5-20251001"
 
 [models.catalog.openai]
@@ -59,7 +59,7 @@ fallback_input_per_million = 15.0
 fallback_output_per_million = 75.0
 
 [pricing.catalog.anthropic]
-opus = { input_per_million = 5.0, output_per_million = 25.0 }
+opus = { input_per_million = 4.0, output_per_million = 20.0 }
 sonnet = { input_per_million = 2.0, output_per_million = 10.0 }
 haiku = { input_per_million = 1.0, output_per_million = 5.0 }
 fable = { input_per_million = 10.0, output_per_million = 50.0 }
