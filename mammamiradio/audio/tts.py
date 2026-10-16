@@ -627,7 +627,8 @@ def _cloud_http_status(exc: Exception) -> int | None:
 
     The OpenAI client raises its own exception hierarchy (``openai.APIStatusError``
     and subclasses) rather than ``httpx.HTTPStatusError``, even though it uses
-    httpx internally — so a bare ``isinstance(exc, httpx.HTTPStatusError)`` check
+    httpx2, the maintained httpx fork, internally — so a bare
+    ``isinstance(exc, httpx.HTTPStatusError)`` check
     never matches an OpenAI failure and silently skips the voice/route
     classification below for that engine.
     """

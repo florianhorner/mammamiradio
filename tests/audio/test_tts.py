@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import httpx2
 import pytest
 
 from mammamiradio.audio.tts import DISCLAIMER_TEMPO
@@ -502,8 +503,8 @@ async def test_synthesize_openai_404_disables_only_that_voice_not_the_route(_moc
     async def _fake_openai(text, voice, output_path, **kwargs):
         calls["cloud"] += 1
         if voice == "bad-voice-id":
-            request = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
-            response = httpx.Response(404, content=b"voice not found", request=request)
+            request = httpx2.Request("POST", "https://api.openai.com/v1/audio/speech")
+            response = httpx2.Response(404, content=b"voice not found", request=request)
             raise openai_mod.NotFoundError("Not Found", response=response, body=None)
         return _touch(Path(output_path))
 
@@ -540,8 +541,8 @@ async def test_synthesize_openai_auth_error_stays_disabled_past_cooldown_window(
 
     async def _fake_openai(text, voice, output_path, **kwargs):
         calls["cloud"] += 1
-        request = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
-        response = httpx.Response(401, content=b"invalid_api_key", request=request)
+        request = httpx2.Request("POST", "https://api.openai.com/v1/audio/speech")
+        response = httpx2.Response(401, content=b"invalid_api_key", request=request)
         raise openai_mod.AuthenticationError("Incorrect API key provided", response=response, body=None)
 
     monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_openai)
@@ -2071,7 +2072,8 @@ def test_should_disable_cloud_route_ignores_local_post_provider_failures():
     assert _should_disable_cloud_route(httpx.ConnectError("refused", request=request)) is True
     response_500 = httpx.Response(500, request=request)
     assert _should_disable_cloud_route(httpx.HTTPStatusError("boom", request=request, response=response_500)) is True
-    response_401 = httpx.Response(401, request=request, content=b"unauthorized")
+    sdk_request = httpx2.Request("POST", "https://example.invalid/tts")
+    response_401 = httpx2.Response(401, request=sdk_request, content=b"unauthorized")
     assert (
         _should_disable_cloud_route(openai_mod.AuthenticationError("bad key", response=response_401, body=None)) is True
     )
@@ -2079,7 +2081,8 @@ def test_should_disable_cloud_route_ignores_local_post_provider_failures():
     # Voice-specific statuses: never route-wide, from either error family.
     response_404 = httpx.Response(404, request=request, content=b"voice not found")
     assert _should_disable_cloud_route(httpx.HTTPStatusError("nf", request=request, response=response_404)) is False
-    assert _should_disable_cloud_route(openai_mod.NotFoundError("nf", response=response_404, body=None)) is False
+    sdk_response_404 = httpx2.Response(404, request=sdk_request, content=b"voice not found")
+    assert _should_disable_cloud_route(openai_mod.NotFoundError("nf", response=sdk_response_404, body=None)) is False
 
 
 @pytest.mark.asyncio
