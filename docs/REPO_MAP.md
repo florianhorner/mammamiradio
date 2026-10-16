@@ -37,15 +37,19 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Legacy Home install-origin + provenance bridge     | `mammamiradio/home/migration.py`             |
 | Home Context Director selection / lifecycle        | `mammamiradio/home/context_director.py`      |
 | HA event derivation (diffs, pruning)               | `mammamiradio/home/ha_enrichment.py`         |
+| Generated entity labels (catalog + resolver tiers) | `mammamiradio/home/catalog.py`               |
 | Segment scheduling (banter / ad / music)           | `mammamiradio/scheduling/scheduler.py`       |
 | Producer loop (queue ahead of playback)            | `mammamiradio/scheduling/producer.py`        |
 | Atomic queued-segment drop/accounting boundary     | `mammamiradio/scheduling/queue_mutations.py` |
 | WTF clip extraction + ring buffer                  | `mammamiradio/scheduling/clip.py`            |
 | Post-update cold-open campaign (release beat)      | `mammamiradio/release_campaign.py`           |
 | Post-restart music continuity spool                | `mammamiradio/restart_handoff.py`            |
+| Starter catalog manifest + attribution-only licence gate | `mammamiradio/media/starter.py`         |
+| Frozen v1 now-playing contract (schema, serializer, route) | `mammamiradio/integrations/` + `CONTRACT.md` |
 | Party mode toggle (Festival Mode, future themes)   | `mammamiradio/web/streamer.py` + `docs/party-mode-extension.md` |
 | HTTP routes / playback loop                        | `mammamiradio/web/streamer.py`               |
 | Admin auth (credentials, CSRF, trusted networks)   | `mammamiradio/web/auth.py`                   |
+| HA Ingress prefix injection / page URL rewrite     | `mammamiradio/web/pages.py`                  |
 | Listener-request endpoints (dedica, song wish)     | `mammamiradio/web/listener_requests.py`      |
 | Open Graph share card                              | `mammamiradio/web/og_card.py`                |
 | Listener / admin / clip HTML                       | `mammamiradio/web/templates/`                |
@@ -58,6 +62,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | First Listen packaged mini-show eligibility        | `mammamiradio/core/first_listen_show.py`     |
 | SQLite schema / migrations                         | `mammamiradio/core/sync.py`                  |
 | App startup / shutdown lifecycle                   | `mammamiradio/main.py`                       |
+| Station config (hosts, pacing, ad brands, audio, HA enablement) | `radio.toml`                    |
+| Dev entrypoint (uvicorn with reload)               | `start.sh`                                   |
 | Demo MP3s / SFX / studio bleeds / logo             | `mammamiradio/assets/`                       |
 | HACS/Home Assistant integration                    | `custom_components/mammamiradio/`            |
 | Home Assistant add-on packaging                    | `ha-addon/mammamiradio/` + `ha-addon/mammamiradio-edge/` |
@@ -86,6 +92,8 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | `mammamiradio/home/`     | `tests/home/`         |
 | `mammamiradio/scheduling/` | `tests/scheduling/` |
 | `mammamiradio/web/`      | `tests/web/`          |
+| `mammamiradio/media/`    | `tests/media/`        |
+| `mammamiradio/integrations/` | `tests/integrations/` (frozen contract tests, see `CONTRACT.md`) |
 | HA addon packaging       | `tests/addon/`        |
 | Repo scripts / lifecycle | `tests/repo/`         |
 | CI workflow contract     | `tests/workflows/`    |
