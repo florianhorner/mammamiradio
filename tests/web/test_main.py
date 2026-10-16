@@ -66,11 +66,14 @@ def _stub_provider_verdict():
 )
 def test_http_dependency_loggers_default_to_warning_with_env_override(monkeypatch, env_value, expected_level):
     """Dependency logs never expose query-string credentials at INFO or DEBUG."""
-    original_levels = {logger_name: logging.getLogger(logger_name).level for logger_name in ("httpx", "httpcore")}
+    original_levels = {
+        logger_name: logging.getLogger(logger_name).level
+        for logger_name in ("httpx", "httpcore", "httpx2", "httpcore2")
+    }
     try:
         from mammamiradio.main import _configure_http_logging
 
-        for logger_name in ("httpx", "httpcore"):
+        for logger_name in ("httpx", "httpcore", "httpx2", "httpcore2"):
             logging.getLogger(logger_name).setLevel(logging.NOTSET)
 
         if env_value is None:
@@ -80,8 +83,8 @@ def test_http_dependency_loggers_default_to_warning_with_env_override(monkeypatc
 
         _configure_http_logging()
 
-        assert logging.getLogger("httpx").level == expected_level
-        assert logging.getLogger("httpcore").level == expected_level
+        for logger_name in ("httpx", "httpcore", "httpx2", "httpcore2"):
+            assert logging.getLogger(logger_name).level == expected_level
     finally:
         for logger_name, level in original_levels.items():
             logging.getLogger(logger_name).setLevel(level)
@@ -93,16 +96,19 @@ def test_module_import_applies_http_logging_configuration(monkeypatch):
 
     import mammamiradio.main
 
-    original_levels = {logger_name: logging.getLogger(logger_name).level for logger_name in ("httpx", "httpcore")}
+    original_levels = {
+        logger_name: logging.getLogger(logger_name).level
+        for logger_name in ("httpx", "httpcore", "httpx2", "httpcore2")
+    }
     try:
-        for logger_name in ("httpx", "httpcore"):
+        for logger_name in ("httpx", "httpcore", "httpx2", "httpcore2"):
             logging.getLogger(logger_name).setLevel(logging.NOTSET)
         monkeypatch.setenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", "DEBUG")
 
         importlib.reload(mammamiradio.main)
 
-        assert logging.getLogger("httpx").level == logging.WARNING
-        assert logging.getLogger("httpcore").level == logging.WARNING
+        for logger_name in ("httpx", "httpcore", "httpx2", "httpcore2"):
+            assert logging.getLogger(logger_name).level == logging.WARNING
     finally:
         for logger_name, level in original_levels.items():
             logging.getLogger(logger_name).setLevel(level)
