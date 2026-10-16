@@ -10,8 +10,11 @@ GUIDE = REPO_ROOT / "CLAUDE.md"
 
 # The guide loads into every agent session, so reference material lives in docs/.
 # Raising this ceiling is the deliberate edit that says a new rule needs the room;
-# moving prose out is the default.
-MAX_BYTES = 40_000
+# moving prose out is the default. The ceiling sits 500 bytes above the size the
+# guide reached once its reference material had moved out and its rule prose was
+# compressed with every obligation, list, and boundary example kept; what remains
+# is the rules themselves plus the managed commit-message block.
+MAX_BYTES = 32_910
 
 # Headings and labels that scripts, tests, and docs cite by name.
 REQUIRED_HEADINGS = (
