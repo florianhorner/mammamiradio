@@ -1375,6 +1375,23 @@ def test_first_listen_navigation_keeps_one_visible_local_player() -> None:
     assert "view.document.getElementById('content')?.focus()" in bridge
 
 
+def test_local_player_visibility_has_accessible_controls_without_changing_playback() -> None:
+    html = _html()
+    assert 'id="firstListenPlayerOpen"' in html
+    assert 'aria-controls="firstListenPlayer" aria-expanded="false"' in html
+    assert 'id="firstListenPlayerClose"' in html
+    assert 'aria-label="Hide player"' in html
+    visibility = _function("setFirstListenPlayerVisible", "renderFirstListenPlayer")
+    for forbidden in (".play(", ".pause(", ".load(", "apiResponse(", "stopFirstListenStationAudio("):
+        assert forbidden not in visibility, f"panel visibility must not change playback: {forbidden}"
+    assert "sessionStorage" in visibility
+    assert ".focus(" in visibility
+    render = _function("renderFirstListenPlayer", "firstListenShareAddress")
+    assert "_firstListenPlayerUi.dismissed" in render
+    assert "aria-expanded" in render
+    assert "--local-player-height" in render
+
+
 def test_first_listen_force_start_is_confirmed_not_silent() -> None:
     """Onboarding must not silently rebuild the station with no runway.
 

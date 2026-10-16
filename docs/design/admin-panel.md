@@ -169,6 +169,11 @@ Italian headlines and station-feel words).
 - The header's **Listener view** link opens `/listen` in the same tab. If the
   First Listen player is active, it uses the existing listener handoff so that
   player remains owned by the admin page. The link is not a play control.
+- Once local listening is available, **This device** in the header reopens its
+  player. **Hide player** (×) closes the panel while audio keeps playing; opening
+  it also leaves playback unchanged. Dismissal survives refreshes within the
+  same browser tab, separately for each station path. Starting a new sound check
+  or recovering a failed listener handoff reveals the controls again.
 - Minimum touch target: 44px on control buttons, filter chips/pills (`.filter-pill`), and section tabs (`.mmr-tab`). Compact status/mode/segment badge chips (`.status-chip`, `.btn-chip`) remain smaller — they are read-only indicators, not tap targets.
 - Every destructive action (purge, stop, delete) must show a toast confirmation
 - Sliders must update their visual track fill immediately on change
