@@ -58,6 +58,24 @@ def test_pydantic_group_carries_pydantic_and_its_core() -> None:
     )
 
 
+def _patterns_overlap(ignore_pattern: str, group_pattern: str) -> bool:
+    """True when either pattern, read as a literal name, matches the other.
+
+    Dependabot accepts wildcards on both sides, so a one-way ``fnmatch`` misses an
+    ignore such as ``pydantic*`` against the literal group pattern ``pydantic``. Two
+    wildcards that overlap only through a third name (``pyd*`` and ``*core``) are
+    not detected.
+    """
+    return fnmatch(ignore_pattern, group_pattern) or fnmatch(group_pattern, ignore_pattern)
+
+
+def test_wildcard_ignore_overlaps_literal_group_pattern() -> None:
+    assert _patterns_overlap("pydantic*", "pydantic")
+    assert _patterns_overlap("pydantic", "pydantic*")
+    assert _patterns_overlap("pydantic*", "pyd*")
+    assert not _patterns_overlap("ruff", "pydantic*")
+
+
 def test_ignored_dependencies_are_never_also_grouped() -> None:
     pip_update = _pip_update()
     ignored = pip_update.get("ignore") or []
@@ -72,7 +90,7 @@ def test_ignored_dependencies_are_never_also_grouped() -> None:
         for group_name, group in groups.items():
             assert isinstance(group, dict), f"{group_name} must be a dependency-group mapping"
             for pattern in group.get("patterns") or []:
-                assert not fnmatch(dependency_name, pattern), (
+                assert not _patterns_overlap(dependency_name, pattern), (
                     f"{dependency_name} is ignored but also matches group {group_name!r} pattern {pattern!r}; "
                     "an ignored dependency can never move with its group, so its grouped siblings ship a stale pin"
                 )
