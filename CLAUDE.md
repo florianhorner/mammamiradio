@@ -75,18 +75,7 @@ private durable system for strategy or relationship context.
 
 ## Commands
 
-Set up the environment before running the app or tests:
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
-python -m pip install --force-reinstall --require-hashes -r requirements.txt
-python -m pip install --no-deps -e .
-python -m pip check
-```
-
-For an existing environment, activate it and repeat the four `python -m pip` commands to restore the runtime lock. See [Local setup](CONTRIBUTING.md#local-setup). uv does not manage `.venv` (`[tool.uv] managed = false` in `pyproject.toml`): `uv sync`, `uv lock` and `uv add` refuse on purpose, so install with the pip commands and never remove the setting.
+Set up the environment with the exact pip sequence in [Local setup](CONTRIBUTING.md#local-setup) (dev tools, then the hash-locked runtime, then `--no-deps -e .`, then `pip check`). uv does not manage `.venv` (`[tool.uv] managed = false` in `pyproject.toml`): `uv sync`, `uv lock` and `uv add` refuse on purpose, so never remove the setting.
 
 - Run full local stack: `./start.sh`
 - Run app only: `source .venv/bin/activate && python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio`
@@ -97,10 +86,10 @@ For an existing environment, activate it and repeat the four `python -m pip` com
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
-- All checks: `make check` (lint + format check + typecheck + coverage gate with per-module floors) — `format-check` mirrors CI's `ruff format --check` so a format nit can't pass locally then fail CI
+- All checks: `make check` (media check + lint + format check + typecheck + deadcode + coverage gate with per-module floors) — `format-check` mirrors CI's `ruff format --check` so a format nit can't pass locally then fail CI
 - Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg`
 - **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
-- **Release cooldown self-test**: `bash tests/workflows/test_cooldown_gate.sh` (9 scenarios, runs in `quality.yml` on PRs that touch `.github/`, `scripts/`, or `tests/workflows/`, and on every push to `main`)
+- **Release cooldown self-test**: `bash tests/workflows/test_cooldown_gate.sh` (9 scenarios; runs in `quality.yml` on the changed-lanes `workflows` lane (`scripts/ci-changed-lanes.sh`), and on every push to `main`, where every lane runs)
 
 ## Environment
 
@@ -127,10 +116,12 @@ mammamiradio/
   core/                     config, models, capabilities, guided setup, First Listen receipts/show, sync (SQLite schema)
   audio/                    normalizer (FFmpeg), audio_quality gate, tts, voice_catalog
   playlist/                 playlist source selection, downloader, song_cues, track_rationale, track_rules
-  hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
+  hosts/                    scriptwriter (LLM banter+ads), persona, context_cues, ad_creative
   home/                     HA context, preview-value classification, speaker discovery/playback, event enrichment, generated labels
   scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
-  web/                      streamer (TODO: split — routes/playback loop), auth (admin auth + CSRF), pages (ingress rewrite), listener_requests, og_card, templates/, static/
+  web/                      streamer (routes/playback loop), auth (admin auth + CSRF), pages (ingress rewrite), listener_requests, og_card, templates/, static/
+  media/                    rights-aware starter catalog helpers (attribution-only licence gate)
+  integrations/             frozen v1 now-playing contract (schema, serializer, route) — see CONTRACT.md
   assets/                   demo/ MP3s + SFX, logo.svg
   release_campaign.py       packaged release-beat manifest -> bounded on-air cold-open campaign
   restart_handoff.py        post-restart music continuity spool (producer writes, main.py admits at boot)
@@ -151,20 +142,9 @@ Do not deviate without explicit user approval. In QA mode, flag any code that do
 
 ## Brand assets
 
-- **Hero banner / social card**: `docs/banner.png` and `docs/social-card.png`, matching 1280×640 README hero and social preview. Warm Home Assistant-native room background composited with Playfair italic typography and the "La Casa Ti Ascolta" overlay. Source template: `docs/hero-composite.html` (contains regeneration instructions in comment header). The temporary background image (`banner-bg.png`) is generated externally and not committed to git.
-- **Logo SVG**: `mammamiradio/assets/logo.svg` — canonical vector source (variant G: classic radio with Italian flag stripe and sound waves)
-- **Palette**: Volare Refined — espresso dark with Italian warmth in accents. See `docs/design/system.md` for the full design system.
-  - Background: espresso dark (`#14110F`) with subtle warm gradient at top
-  - Cards: admin warm-brown `--surface` (`#251E19`); listener cards use brighter `--card` / `--card-strong` tokens for visibility on the dark page
-  - Accent: golden sun (`#F4D048`, `#ECCC30`) — play button, active borders
-  - Interactive: Lancia red (`#B82C20`) — FM dial needle
-  - Text: cream (`#F5EDD8`)
-  - Success/connected: blue (`#2563EB`) — never green (colorblind)
-- **Typography**: Playfair Display italic (station name, display text) + Outfit (body) + JetBrains Mono (technical)
-- **Favicon**: `mammamiradio/web/static/favicon.svg` is the browser-tab copy of the canonical logo; `tests/web/test_route_smoke.py` keeps it byte-for-byte synchronized with `mammamiradio/assets/logo.svg`. The browser fallback route is `/favicon.ico`.
-- **HA add-on icon**: `ha-addon/mammamiradio/icon.png` (256px) and `logo.png` (512px), rasterized from the SVG
-- To regenerate PNGs from SVG: `cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256 && cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512`
-- **Full design system**: `docs/design/system.md` — colors, typography, components, motion, anti-patterns
+- Logo source: `mammamiradio/assets/logo.svg` is the canonical vector; every raster (HA add-on icon and logo PNGs) is regenerated from it with the commands in `docs/design/system.md` "File locations".
+- Design system: `docs/design/system.md` owns the palette, typography, components, motion, and anti-patterns, and its "File locations" table maps every brand asset (hero banner, social card, hero composite template, favicon).
+- Favicon rule: `mammamiradio/web/static/favicon.svg` must stay byte-for-byte identical to the logo (`tests/web/test_route_smoke.py` enforces it); the browser fallback route is `/favicon.ico`.
 
 ## Brand safety — hard rule
 
@@ -176,7 +156,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 ## Notes for future edits
 
-- `admin.html`, `listener.html` and `clip.html` live in `mammamiradio/web/templates/` and are loaded by `mammamiradio/web/streamer.py`. **Before adding a UI feature to a template, verify which route serves it** — the mapping is not obvious: `/` serves `listener.html`, except under HA ingress from hassio/loopback, where it renders the admin page; `/listen` is a listener alias; `/admin` serves `admin.html`; `/dashboard` is only a redirect to `/admin`. Check the `@router.get` definitions in `web/streamer.py`, not the filename. The casa-card feature was built in the wrong file once — a full session wasted. (Moved here from the global `~/.claude/CLAUDE.md` on 2026-08-02; it was repo-specific and its paths had gone stale.)
+- `admin.html`, `listener.html` and `clip.html` live in `mammamiradio/web/templates/` and are loaded by `mammamiradio/web/streamer.py`. **Before adding a UI feature to a template, verify which route serves it** — the mapping is not obvious: `/` serves `listener.html`, except under HA ingress from hassio/loopback, where it renders the admin page; `/listen` is a listener alias; `/admin` serves `admin.html`; `/dashboard` is only a redirect to `/admin`. Check the `@router.get` definitions in `web/streamer.py`, not the filename. The casa-card feature was built in the wrong file once — a full session wasted.
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change. (See **Doc sync** rule below.)
@@ -200,7 +180,6 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   re-encoded, which is a derivative, and NoDerivatives forbids distributing
   one. That is why a track can be great, free, and still unusable.
 - Advertisements need a convincing underlying sound bed. Prefer CC-free music or sound design beds under ad voiceovers instead of dry voice-only spots.
-- To tune host behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py` (generation logic) and/or the prompt-data leaves — `mammamiradio/hosts/prompt_world.py` (expression banks, host fingerprints, exchange-shape/lore data, Chaos/Festival mode blocks), `mammamiradio/hosts/relationship.py` (roster-aware shape/lore selection and recency), `mammamiradio/hosts/transitions.py` (transition rewrite openers), `mammamiradio/hosts/fallbacks.py` (chaos stock lines, ad-break bumpers), `mammamiradio/hosts/station_name_guard.py` (foreign/competitor station-name scrubbing) — run `make check`, then `POST /api/hot-reload` (admin auth, empty body) — it reloads `language_policy`, `prompt_world`, `relationship`, `transitions`, `fallbacks`, `station_name_guard`, then `scriptwriter` leaves-first, so edits to any of them take effect — then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code. `mammamiradio/hosts/memory_extractor.py` (post-air memory extraction) is deliberately excluded from hot-reload — it holds live in-flight task/apply-lock state that a reload would reset mid-extraction; edit it and restart to pick up changes.
 
 ## Quality gates
 
@@ -231,7 +210,7 @@ These UI elements have regressed in past refactors. Always verify they survive a
 
 - **Token cost counter and cost split** (`admin.html` Engine Room) — backend computes `api_cost_estimate_usd` and `cost_breakdown` on every `/status` call. UI must display the session total and category split. The aggregate counter has disappeared twice in refactors.
 - **Play button blue state** (`mammamiradio/web/static/base.css`) — `.play-btn.playing` must use `var(--ok)` (blue), never `var(--sun2)` (golden). Colorblind safety.
-- **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
+- **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
 - **Station name in copy** (`docs/design/system.md`): Write **Mamma Mi Radio** in prose. Use `mammamiradio` only in URLs, paths, package names, environment variables, entity IDs, and container names. `tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files, including changelogs. Describe the typo without repeating it.
@@ -263,23 +242,7 @@ If the behavior changed and the docs didn't, the docs are wrong. Fix them in the
 
 **Where this content belongs instead:** runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`); post-mortems and workspace archaeology go to the private durable system (see Scope discipline). **Not** PR bodies and **not** GitHub issues — the same editorial boundary applies to pull-request descriptions and to maintainer-authored issues on the public tracker.
 
-**Enforcement — two pattern sets, unioned.**
-
-The *baseline* lives in `florianhorner/gh-workflows` and is shared by every repo. It matches the grammatical **shape** of a violation rather than a literal phrase — a review noun near a discovery verb, a review actor mid-action, a telemetry possessive, a numeric process tally, a review-artifact heading — so a paraphrase of a banned class does not walk through. A literal-phrase list cannot do this: the previous one held a pattern for `findings raised` and still passed "Findings from review". An em-dash rule ships alongside it and is now **blocking**, not advisory (gh-workflows v1.5, pinned in `.github/workflows/pr-body-lint.yml`). Two carve-outs keep it from contradicting the proof gate that runs on the same body in the same invocation: a line matching `n/a —` and any checkbox line (`- [ ]` / `- [x]`) are exempt, so a `## Proof` block never trips it. Only prose em-dashes fail.
-
-The *project* list is `scripts/lint-patterns.sh` here (`LINT_PATTERNS`), passed to the reusable workflow as `extra_patterns`. It holds only what is specific to mammamiradio: sprint labels, cathedral vocabulary, this repo's contributor archaeology. **Overlap with the baseline is deliberate and must not be tidied away.** The three local lints below source this file *alone*, so deleting a pattern because the baseline also covers it silently drops changelog and issue coverage for it.
-
-A repo may only ADD patterns. Suppressing a baseline pattern is a pull request to `gh-workflows`, not a local override.
-
-**What this cannot catch.** Regex reaches lexical tells, not meaning. Metaphor carrying no lexical signal is out of reach, and renaming a review section to a neutral label defeats the heading rule, which matches the label and never the content. A passing lint is a tripwire on habitual violations, never evidence that a body is clean.
-
-Three local lints consume `LINT_PATTERNS`:
-
-- `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
-- `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
-- `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml` on workflow/script PRs and on `main`).
-
-To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
+**Enforcement — two pattern sets, unioned.** The shared *baseline* lives in `florianhorner/gh-workflows` (shape-matching patterns plus a blocking em-dash rule); the *project* list is `LINT_PATTERNS` in `scripts/lint-patterns.sh`, consumed alone by the changelog, PR-body, and issue-body lints, so overlap with the baseline is deliberate and must not be tidied away. A repo may only ADD patterns. To extend the rules, add a regex to `LINT_PATTERNS` — all three lints pick it up automatically. The full mechanics (what each lint runs against, the local hooks, what regex cannot catch) are in `docs/runbooks/parallel-workspaces.md` "PR body and changelog lint mechanics".
 
 **Patterns are POSIX ERE and must behave identically under BSD grep and GNU grep.** The local pre-publish hook resolves BSD grep on macOS; CI runs GNU grep on ubuntu-latest. No lookahead, no non-capturing groups, no `\d`, no PCRE classes. A `(?:...)` construct sat in this array for four months: BSD grep accepted it silently, GNU grep wrote a diagnostic and matched nothing, and because the lint checks grep's exit code but not its stderr, CI read the dead pattern as a clean pass. When adding a pattern, confirm it produces **empty stderr**, not merely a tolerant exit code.
 
@@ -451,7 +414,7 @@ Discovered 2026-04-23 when PR #203 (Ashika Rai N's dashboard extraction) landed 
 - lint: ruff check .
 - test: pytest
 - deadcode: vulture mammamiradio/
-- shell: CI enforces shellcheck scripts/*.sh; broader local sweep: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*" -not -path "./.claude/skills/*")
+- shell: CI enforces shellcheck scripts/*.sh; broader local sweep: shellcheck $(find . -name "*.sh" -not -path "./.venv/*" -not -path "./.git/*")
 
 ## No-touch zones
 

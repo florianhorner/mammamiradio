@@ -124,6 +124,8 @@ Useful URLs:
 - `http://127.0.0.1:8000/public-status` — public JSON
 - `http://127.0.0.1:8000/status` — admin JSON
 
+To tune host behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py` (generation logic) and/or the prompt-data leaves — `mammamiradio/hosts/prompt_world.py` (expression banks, host fingerprints, exchange-shape/lore data, Chaos/Festival mode blocks), `mammamiradio/hosts/relationship.py` (roster-aware shape/lore selection and recency), `mammamiradio/hosts/transitions.py` (transition rewrite openers), `mammamiradio/hosts/fallbacks.py` (chaos stock lines, ad-break bumpers), `mammamiradio/hosts/station_name_guard.py` (foreign/competitor station-name scrubbing) — run `make check`, then `POST /api/hot-reload` (admin auth, empty body) — it reloads `language_policy`, `prompt_world`, `relationship`, `transitions`, `fallbacks`, `station_name_guard`, then `scriptwriter` leaves-first, so edits to any of them take effect — then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code. `mammamiradio/hosts/memory_extractor.py` (post-air memory extraction) is deliberately excluded from hot-reload — it holds live in-flight task/apply-lock state that a reload would reset mid-extraction; edit it and restart to pick up changes.
+
 ## Fast loop and complete gate
 
 During an edit, run the smallest relevant test file or test target. For a broader fast pass without coverage instrumentation, use `make test-fast`:
@@ -477,7 +479,7 @@ When behavior changes, update the matching docs in the same change:
   install steps and First Listen labels
 - `docs/integrations/` for integration setup and playback routes
 - `docs/architecture.md` for runtime flow and system design changes
-- `CLAUDE.md` for the codebase map used by coding agents
+- `CLAUDE.md` for the rules coding agents follow (the codebase map is `docs/REPO_MAP.md`)
 - `docs/troubleshooting.md` for failure modes users will actually hit
 - `docs/operations.md` for runtime and deployment assumptions
 - `CHANGELOG.md` for shipped behavior worth calling out
