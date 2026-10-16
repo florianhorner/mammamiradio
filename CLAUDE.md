@@ -58,33 +58,15 @@ The restart happens once, planned, when the addon updates. Not during the day. N
 
 ## Docs
 
-Core documentation at the repo root (one viewport, one job each):
-
 - `README.md` - product pitch and operator quick start
 - `CONTRIBUTING.md` - local setup, tests, and smoke checks
 - `CLAUDE.md` - agent rules and leadership principles (this file)
 - `CHANGELOG.md` - release notes
 - `CONTRACT.md` - frozen v1 integration surface and change ceremony
 
-Everything else lives under `docs/`:
+Everything else is indexed in `docs/REPO_MAP.md`.
 
-- `docs/status-quo.md` - dated product and market status
-- `docs/architecture.md` - runtime flow, queue model, and audio pipeline
-- `docs/operations.md` - runtime assumptions and deploy reality
-- `docs/troubleshooting.md` - common failures and recovery paths
-- `docs/release-process.md` - release *strategy*: themes vs versions, single-trunk cut-don't-open mental model — `main` always advertises the last **published** version, and the number changes only in the `chore(release): cut X.Y.Z` commit (the *how-to-cut* lives in the runbook below)
-- `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
-- `docs/runbooks/first-listen-local-ha.md` - disposable local HA + real Mac speaker acceptance lab
-- `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
-- `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
-- `docs/design/system.md` - Volare design system: colors, typography, components, motion
-- `docs/design/admin-panel.md` - admin control-room layout, info architecture, motion rules
-- `docs/design/listener-contract.md` - listener interaction and state contract for `/` and `/listen`
-- `docs/conductor.md` - Conductor workspace lifecycle and `.env` discovery
-- `docs/agents.md` - agent-specific notes and integration points
-- `docs/runbooks/parallel-workspaces.md` - WIP cap, Path A vs Path B, write-sets; no orchestrator agent; `land-pr.sh` is the human/feature merge path to `main`, with guarded Dependabot auto-merge as the automated exception
-- `docs/listener-qs-train.md` - `Train/Listener QS` intake, merge gate, and handoff contract (Path B only)
-- `docs/stabilization-log.md` - weekly fix-hours and emergency-patch counts (release cooldown gate)
+Docker and Home Assistant packaging (`Dockerfile`, `docker-compose.yml`, `.dockerignore`, `ha-addon/`, `.github/workflows/docker.yml`) is mapped there too; the add-on release process is `docs/runbooks/ha-addon.md`.
 
 There is no canonical tracked TODO file. Do not create or revive
 `TODO.md`, `TODOS.md`, `docs/todos.md`, `docs/backlog.md`, or similar
@@ -119,19 +101,6 @@ For an existing environment, activate it and repeat the four `python -m pip` com
 - Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg`
 - **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
 - **Release cooldown self-test**: `bash tests/workflows/test_cooldown_gate.sh` (9 scenarios, runs in `quality.yml` on PRs that touch `.github/`, `scripts/`, or `tests/workflows/`, and on every push to `main`)
-
-## Docker / Home Assistant
-
-- `Dockerfile`: standalone container image with Python 3.14 + FFmpeg
-- `docker-compose.yml`: one-command run for non-HA users
-- `.dockerignore`: keeps builds clean
-- `ha-addon/`: Home Assistant add-on scaffold
-  - `ha-addon/mammamiradio/config.yaml`: add-on metadata, options schema, ingress config
-  - `ha-addon/mammamiradio/Dockerfile`: HA add-on image (Alpine-based)
-  - `ha-addon/mammamiradio/rootfs/run.sh`: entrypoint mapping Supervisor env vars
-  - `ha-addon/mammamiradio/translations/en.yaml`: UI labels for add-on options
-  - `ha-addon/mammamiradio-edge/`: dev-release channel add-on (metadata only — pulls the same image as stable; version is the short SHA of the newest `main` commit with a built image, which may trail HEAD, cut with `make edge-release`). See `docs/runbooks/ha-addon.md` → "Edge channel".
-- `.github/workflows/docker.yml`: multi-arch Docker build CI
 
 ## Environment
 
@@ -242,27 +211,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   The hook remains registered to deny raw merges. Historical receipts and
   the standalone verifier remain available, but do not emit/reattest for
   ordinary PRs. Physical HA evidence is a separate, unchanged release gate.
-
-
-
-- **Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls (single source of truth; the runbook links here)**: The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until the maintainer's explicit merge signal. On the signal, `scripts/land-pr.sh <PR#>` (1) refuses a behind or conflicted branch without mutating the PR, directing its feature workspace to integrate `origin/main`, review any changed code, and push; (2) blocks unresolved current Major/Critical/P0/P1 bot threads and fails closed if thread data cannot be read, through `scripts/land-gates.sh` shared with the report-only shadow queue, without consulting receipts or local ledgers; (3) checks release-cut admission; and (4) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12); integrate the base in the owning workspace before landing. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. During a release cut, `scripts/check-advertised-version.sh` checks GHCR for the version advertised on `main`. Missing images make `dependabot-automerge.yml` disable auto-merge and add `cut-window-hold` to affected Dependabot PRs. The sweep only disarms. After publication, a fresh PR event with verified Dependabot metadata or the landing workflow can resume held PRs. Before arming, the workflow checks that the PR head matches the metadata and `main` matches the registry check. PR events can re-arm a PR you disarmed by hand. Before a cut, the release operator runs `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` to disable new runs, drain existing runs and disarm PRs. `land-pr.sh` requires verified freeze state for stable-version changes. Keep the human landing freeze through both architecture promotions, then resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`; see the add-on runbook for proof and recovery. GitHub Actions must not post Dependabot rebase or recreate commands. Handle behind branches through an authenticated maintainer. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`), which reads GitHub's effective rules for `main` rather than reimplementing ruleset pattern matching. Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and head matching does not eliminate non-conflicting staleness. The owning feature agent handles CI waits and review feedback; the landing seat reports `MERGED` only after confirming GitHub's state, never merely because arming succeeded.
-- **Shadow land queue (report-only)**: `.github/workflows/land-queue.yml` runs
-  `scripts/land-queue-plan.sh` every 30 minutes and writes to the job summary
-  the one thing an auto-land controller *would* do next — integrate or arm a PR,
-  and advance edge — plus why every other open PR is not that PR. It merges
-  nothing, comments nowhere, and holds no write permission; it is **not** an
-  exception to the Landing contract above. It reaches its verdict through the
-  same predicates `land-pr.sh` arms on (`scripts/land-gates.sh`) and the same
-  selection `cut-edge-release.sh` cuts on (`scripts/edge-select.sh`), so a
-  shadow cannot drift from the thing it shadows; a test asserts the queue
-  evaluates every gate `verify_head` arms on. Kill switches: delete
-  `.github/land-queue.enabled`, or set repository variable `LAND_QUEUE=0` (only
-  the literal `0` switches off) — both are enforced inside the script, so "off"
-  means off from a local run too. Going live needs a GitHub App: commits pushed
-  with `GITHUB_TOKEN` do not trigger `push`/`pull_request` workflows, so an
-  integrate commit pushed with it would land with no CI. Self-test:
-  `bash tests/workflows/test_land_queue.sh`. See
-  `docs/runbooks/parallel-workspaces.md` → "Shadow land queue".
+- **Landing contract**: human and feature PRs merge only through `scripts/land-pr.sh`; the full contract (behind/conflict refusal, bot-thread gates, head-pinned auto-merge, Dependabot exception, freeze/thaw) lives in docs/runbooks/ha-addon.md "Landing a PR".
 - **QA gates (mandatory, risk-scoped)**: Manual `/qa` is required for the surfaces a PR can affect, and every release candidate must pass both surfaces before user-facing release.
   1. **Player QA** (`/qa` on `/` dashboard) is required for listener-facing changes: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, public status, listener routes/assets, or playback-visible behavior.
   2. **Admin QA** (`/qa` on `/admin`) is required for operator-facing changes: controls, pacing sliders, host config, key management, engine room, playlist management, admin routes/assets, or operator feedback.
@@ -271,107 +220,10 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   5. Coordinated batches, release-manager queues, edge releases, and stable releases must pass both Player QA and Admin QA on the final candidate state before shipping.
   6. QA may be reused only when the later diff cannot affect that surface; link or name the reused QA result and explain why it remains valid.
   A single combined rushed QA run is still insufficient. Do not claim QA passed unless that exact QA scope ran or was explicitly reused under this rule.
-- **QA Impact (PR body / ship notes)**: every PR states its QA scope so the gate above is auditable:
-  ```md
-  ## QA Impact
-  Classification: Player / Admin / Both / None / Deferred to release candidate
-  Reason:
-  - Touched surfaces:
-  - Why this QA scope is sufficient:
-  QA performed:
-  - Player QA: run / reused / not applicable / deferred
-  - Admin QA: run / reused / not applicable / deferred
-  ```
+- **QA Impact**: every PR carries the `## QA Impact` block from the PR template so the gate above is auditable.
   For stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when the PR itself is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. The required engineering reviews still apply; this rule scopes only manual `/qa`.
-- **Coverage floors**: Coverage must stay above the committed minimums. Two layers enforce this:
-  - **Aggregate floor**: `fail_under` in `pyproject.toml` — the overall minimum.
-  - **Per-module floors**: `.coverage-floors.json` — every module has its own floor. A module-level regression fails CI even if the aggregate stays above threshold.
-- **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
-  - On PRs: `check` mode — fails if any module dropped below its floor.
-  - On main merge: `update` mode recomputes the floors and tries to commit and push
-    updates. A rejected push opens one `coverage-ratchet-stale` issue with the
-    computed diff and a link to the run's diagnostic; it does not infer the cause.
-    For a protected branch, run `make coverage-ratchet` locally and submit the
-    resulting changes through a PR. Verify the reported increases and link that PR
-    with `Fixes #<issue number>`; a later no-change run cannot prove an earlier
-    increase landed, so it leaves the issue open for that verification.
-    A failed/skipped computation or missing result opens a separate
-    `coverage-ratchet-broken` issue, closed when computation recovers even if the
-    push still fails. Cancelled workflows and obsolete main snapshots do not change
-    reports. Reporting API failures fail the job. Token permissions and
-    branch-protection rules are not bypassed.
-  - The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
-    pack provenance test reads generator inputs at the revision pinned in the
-    manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.
-- **Pi aarch64 smoke**: `.github/workflows/pi-smoke.yml` is an arm64 FFmpeg
-  7.x/8.x compatibility canary, not exact add-on package parity. It uses JVS as
-  primary and verifies the supported BtbN fallback against GitHub's digest.
-  The required `pi-smoke` check always reports; the ARM job itself runs on
-  every `main` push and on PRs that touch audio, scheduling, streamer,
-  startup/core configuration, launch-smoke, Python package/runtime/development
-  dependencies, radio/model configuration, the changed-lanes classifier, or
-  the shared Python CI setup.
-- **Explainer guards**: `.github/workflows/explainer.yml` runs the
-  `docs/explainer/` test suite (`npm test`), the production build
-  (`npm run build`), and the four-scenario funnel end-to-end in real Chromium
-  under emulated reduced motion (`npm run test:e2e`), on any PR touching
-  `docs/explainer/**` or the workflow itself. The suite carries the framing
-  guards that keep the page station-first plus scenario/build validation;
-  the funnel test drives an actual browser, so it does reach playback wiring
-  the string assertions cannot. What stays out of CI is audio judgement —
-  whether a cue lands on the beat is the manual step in
-  `docs/explainer/README.md`. The workflow is in its own path filter so a
-  change to the CI invocation is exercised by the job it changes.
-- **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
-- **Adding tests**: CI computes higher floors after merge. They become enforced only
-  after the updated floor files land; follow any ratchet issue to finish that step.
-- **Model registry watch** (`scripts/check_model_registry.py`): two questions about `model_registry.toml`, answered without provider keys. `--age` reads `[models].last_reviewed`, the day a maintainer last *decided* the pins (bump or hold; the comment beside it says which), and fails when the stamp is missing, malformed, in the future, or older than 45 days. The limit is a constant with no override on purpose: the honest escape is the stamp, refreshed only after reading the provider report. `--providers` reads the public Anthropic models overview and per-ID lifecycle table plus OpenAI's models and deprecations pages and classifies every catalog entry as `current`, `legacy`, `unlisted`, `deprecated(<date>)` or `retired`; `--gate drift` (default) fails on anything not current, `--gate liveness` only on deprecated or retired. Exit 2 means the docs could not be read or lost the anchors the parser relies on, so a broken scraper is never green. It runs as `scripts/pre-release-check.sh` section 11 (body in `scripts/model-registry-gate.sh`): review age PASS/FAIL; liveness PASS/FAIL, or WAIVED with the reason when the docs are unreachable or the checker fails. Because that script also runs in CI on any PR touching `pyproject.toml` (Dependabot included), in CI the section runs only when the diff against `origin/main` changes a version line and notes itself and skips otherwise; under `make pre-release` it always runs, and `MMR_MODEL_REGISTRY_GATE=always` forces it. It is deliberately **not** an every-PR calendar assertion: the normal pytest suite runs the gate's shell contract with committed fixtures, while only a release cut asks whether the real review stamp is still fresh. `--report` runs both checks unconditionally with one combined exit code, and `.github/workflows/model-registry-watch.yml` runs it every Monday: exit 0 closes any open `model-registry-watch` issue, exit 1 (a stale stamp, or a pin that is no longer current at its provider: legacy, unlisted, deprecated or retired) opens one or comments the week's report on it, and a run that could not read the docs, or crashed before rendering a report, does the same under a title and body naming the watcher rather than a pin, because a broken scraper that stays silent is the one outcome the check exists to prevent. Self-test: `bash tests/workflows/test_model_registry_watch.sh`. Agents never refresh the stamp to make a gate green. The cut-gate shell self-test (`tests/workflows/test_model_registry_gate.sh`) passes alternate registry and fixture paths explicitly to the sourced gate function; the production pre-release call ignores ambient overrides. Fixtures are trimmed real captures under `tests/scripts/fixtures/model_registry/`. Liveness at runtime is separate: a 404 on a retired model trips the provider backoff and the station keeps airing (PR #315).
-- **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on PRs that touch workflow/script paths, and on every push to `main`). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
-- **UI copy lint** (`scripts/check-ui-copy-lint.sh`): Principle #5 guard over human-facing
-  strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,
-  HA add-on option descriptions, and the streamer setup errors. Three rules: machine words on
-  a human screen (`tech_lingo`) and copy still phrased around picking a speaker or room
-  (`stale_speaker_copy`) always fail the lint. A stated failure with no next step
-  (`no_way_out`) fails the lint only for copy authored as a structured table row
-  (`WAY_OUT_BLOCKING_CONTEXTS`, matched on the context group, not as a string prefix) —
-  copy reviewed as a set rather than written inline at a call site. Two of those groups
-  give each failure its own `action` field; the other two are single authored sentences
-  carrying their own remedy. That every row passes is recomputed by
-  `test_every_blocking_context_row_carries_a_way_out`, not restated as a count.
-  In free-text toasts it never fails the lint, because a fixed verb list cannot enumerate
-  English imperatives and would flag correct copy — it is reported by `--audit`, which
-  labels every row blocking or advisory, and counted against `MAX_ADVISORY_VIOLATIONS`.
-  That ceiling does fail CI: free text is bounded, not unwatched. Raising it is the
-  deliberate edit that says the check misjudged a string, which keeps good copy out of
-  the baseline where it would look like a real violation.
-  Admin/addon/server copy is held to the same banned-word list as the listener — a warmer
-  register, not a shorter list.
-  - Known violations are grandfathered by fingerprint in `.config/ui-copy-baseline.json`;
-    CI fails on NEW ones. Refresh with `bash scripts/check-ui-copy-lint.sh --write-baseline`,
-    which prints every violation it newly accepts so a refresh cannot silently absorb a
-    regression. A baselined violation that no longer reproduces is also a failure — the
-    baseline may only shrink. `MAX_BASELINED_VIOLATIONS` and `MAX_ADVISORY_VIOLATIONS` in
-    `tests/repo/test_ui_copy_lint.py` pin both ceilings, so advisory findings cannot pile up
-    unwatched just because they do not fail the build.
-  - `MIN_STRINGS_PER_GROUP` is a coverage floor per context group. The lint scrapes copy out
-    of templates, so an extractor that stops matching after a reformat would otherwise
-    collect nothing, find no violations, and report "clean" — the floors make that a failure
-    instead. A group is one surface, enforced by
-    `test_each_surface_file_has_its_own_coverage_floor`: two files sharing a group would
-    share a floor, and the larger file's count alone would keep the smaller one's collapse
-    invisible. The two add-on translation files are the one allowed exception, since they
-    are copies of each other.
-  - Runs in `quality.yml` (`lint` job) beside the changelog and docs-safety lints.
-    Local: `bash scripts/check-ui-copy-lint.sh` (add `--audit` for the full report; every
-    flag is forwarded to `scripts/ui_copy_lint.py`).
-- **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) either required recovery asset (`continuity_1.mp3`, `emergency_tone.mp3`) missing, ≤1 KiB, or not recognized as audio by `ffprobe` — each checked independently, so validation never stops at the first playable asset — or any `generate_silence` reference in `producer.py`, (3) missing `_pick_canned_clip=None` test mock (empty-container / missing packaged recovery untested), (4) missing `session_stopped` test (post-restart silence untested). The manifest/hash boundary for those assets is no longer a per-asset call in this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py` run covers the whole packaged demo inventory (and, with `--browser-assets-root`, the browser narration pack) before the per-asset reachability check. Local: `bash scripts/check-release-invariants.sh`.
-- **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
-- **Advertised-version guard** (`scripts/check-advertised-version.sh`): asks GHCR whether the version `main` advertises to the HA Supervisor exists, for both arches, over the anonymous token endpoint (no scope needed). Home Assistant requires a prebuilt `image:` add-on's `version:` to name a real tag; when it does not, fresh installs fail and updates roll back.
-  - Verdicts: a definitive 404 fails (exit 1). An unreachable registry reports `UNKNOWN` and exits 0, since a DNS blip is not a broken release. The last output line is always `VERDICT: pass|unknown|fail` — callers that need the tri-state read that, not the exit code.
-  - Runs daily against `main` via `.github/workflows/advertised-version.yml`, which opens one `release-drift` issue while drift persists and closes it on a `pass`.
-  - `.github/workflows/dependabot-automerge.yml` reads the verdict on Dependabot PR events, config.yaml pushes to main, hourly, and on demand. `fail` disarms and labels affected PRs `cut-window-hold`; `pass` allows verified patch/minor PR events to arm; `unknown` leaves auto-merge unchanged. The sweep only disarms. Test: `bash tests/workflows/test_dependabot_automerge_gate.sh`.
-  - Kept out of `pre-release-check.sh` and `make pre-release` on purpose. `quality.yml` runs those on every version-file PR, so a `chore(release): cut X.Y.Z` PR names a version whose image is not built yet and could never go green.
-  - Self-test: `bash tests/workflows/test_advertised_version.sh`, hermetic via `MAMMAMIRADIO_TAG_PROBE` plus a `curl` PATH shim. Two cases guard the deadlock from coming back across the whole cut-PR gate closure. See `docs/release-process.md`.
+- **Model registry watch**: `scripts/check_model_registry.py` guards the review stamp and pin liveness (contract in docs/release-process.md). Agents never refresh the `last_reviewed` stamp to make a gate green.
+- Coverage floors and the ratchet, the Pi aarch64 smoke canary, and the UI copy lint are documented in `CONTRIBUTING.md`; the advertised-version guard in `docs/release-process.md`; release invariants, version sync, and the release cooldown in `docs/runbooks/ha-addon.md`; the shadow land queue in `docs/runbooks/parallel-workspaces.md`; the explainer guards in `docs/explainer/README.md`.
 
 ## Protected UI elements
 
