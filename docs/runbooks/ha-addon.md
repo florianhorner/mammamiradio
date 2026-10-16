@@ -843,8 +843,8 @@ Before merging ANY change that touches addon files:
    this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py`
    run covers the whole packaged demo inventory (and, with
    `--browser-assets-root`, the browser narration pack) before the per-asset
-   reachability check. `producer.py` must not call `generate_silence` in
-   recovery paths.
+   reachability check. `producer.py` must not mention `generate_silence`
+   anywhere; the check greps the whole file, not only recovery paths.
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
 5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist. The perf smoke skips its stream-byte probe only for a persisted operator stop confirmed independently by `503 stopped` from `/readyz` and `session_stopped: true` from `/public-status`; every other starting or ready state must still produce bytes.
