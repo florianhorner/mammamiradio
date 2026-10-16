@@ -863,7 +863,7 @@ def _banter_user_prompt(mock_cls) -> str:
 
 @pytest.mark.asyncio
 async def test_anthropic_creative_call_sends_configured_effort(config, state):
-    """Balanced creative (Sonnet 5) must pass medium effort via extra_body."""
+    """Balanced creative (Sonnet 5.5) must pass medium effort via extra_body."""
     config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps({"lines": [{"host": host_name, "text": "ciao"}], "new_joke": None})
