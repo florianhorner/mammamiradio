@@ -1511,7 +1511,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
 .producer-header .a-brand .wm { font-size: 30px; }
 .producer-header .a-brand .sub { color: var(--muted); }
 .producer-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-.producer-listener-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--cream); font-size: 13px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.producer-listener-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; color: var(--cream); font-family: var(--font-body); font-size: 13px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .producer-listener-link:hover { border-color: var(--sun); color: var(--sun); }
 .producer-listener-link:focus-visible { outline: 2px solid var(--sun); outline-offset: 3px; }
 .producer-clock {
@@ -2024,6 +2024,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
       </div>
       <div class="producer-header-actions">
         <button type="button" class="first-listen-station-controls" onclick="openFirstListenStation()">Station controls</button>
+        <button type="button" class="producer-listener-link" id="firstListenPlayerOpen" data-stopped-exempt aria-controls="firstListenPlayer" aria-expanded="false" onclick="setFirstListenPlayerVisible(true,{focus:true})" hidden>This device</button>
         <a class="producer-listener-link" id="listener-view-link" href="/listen" onclick="openListenerView(event)">Listener view</a>
       </div>
       <div class="producer-clock">
@@ -2953,9 +2954,12 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
     </div><!-- /mmr-tabpanels -->
 
     <section class="first-listen-player" id="firstListenPlayer" aria-label="Listening on this device" hidden>
-      <div class="first-listen-player-bar">
-        <div><strong>Mamma Mi Radio</strong><p id="firstListenPlayerStatus" role="status" aria-live="polite"></p></div>
-        <button type="button" class="btn btn-util" id="firstListenPlayerToggle" data-stopped-exempt onclick="toggleFirstListenStation()">Pause music</button>
+      <div class="first-listen-player-header">
+        <div class="first-listen-player-bar">
+          <div><strong>Mamma Mi Radio</strong><p id="firstListenPlayerStatus" role="status" aria-live="polite"></p></div>
+          <button type="button" class="btn btn-util" id="firstListenPlayerToggle" data-stopped-exempt onclick="toggleFirstListenStation()">Pause music</button>
+        </div>
+        <button type="button" class="btn btn-util first-listen-player-close" id="firstListenPlayerClose" data-stopped-exempt aria-label="Hide player" title="Hide player" onclick="setFirstListenPlayerVisible(false,{focus:true})"><span aria-hidden="true">×</span></button>
       </div>
       <div id="firstListenListenerRecovery" hidden>
         <p id="firstListenListenerRecoveryStatus" role="status" aria-live="polite"></p>
@@ -3097,6 +3101,9 @@ const _firstListenUi={
 };
 const _firstListenPlayback={intent:false,phase:'idle',epoch:0,context:null,source:null,gain:null,mixTask:null,mixReady:false,mixUnavailable:false,unrecoverable:false};
 const _firstListenHandoff={frame:null,binding:null,ready:false,timer:null,push:true,title:'',error:'',mediaSessionOwned:false};
+const FIRST_LISTEN_PLAYER_VISIBILITY_KEY=`mmr.admin.localPlayer:${_base||'/'}`;
+const _firstListenPlayerUi={dismissed:false,available:false};
+try{_firstListenPlayerUi.dismissed=sessionStorage.getItem(FIRST_LISTEN_PLAYER_VISIBILITY_KEY)==='hidden';}catch(_){}
 
 const FIRST_LISTEN_GUIDES={
   welcome:{file:'welcome.mp3',version:'de7e0d29bed8'},
@@ -6052,7 +6059,8 @@ function cancelFirstListenHandoff(message='',navigate=true){
   const button=document.getElementById('firstListenListenerBtn');
   button.textContent='Listen to the station';button.removeAttribute('aria-busy');
   document.getElementById('firstListenHandoffStatus').textContent=message;
-  renderFirstListenPlayer();
+  if(message)setFirstListenPlayerVisible(true);
+  else renderFirstListenPlayer();
   if(message)(button.getClientRects().length?button:document.getElementById('firstListenListenerRetry'))?.focus();
 }
 function openFirstListenListener(pushHistory=true){
@@ -6838,27 +6846,48 @@ async function ensureFirstListenMix(epoch){
   })();
   try{return await p.mixTask;}finally{p.mixTask=null;renderFirstListenPlayer();}
 }
+function setFirstListenPlayerVisible(visible,{focus=false}={}){
+  _firstListenPlayerUi.dismissed=!visible;
+  try{
+    if(visible)sessionStorage.removeItem(FIRST_LISTEN_PLAYER_VISIBILITY_KEY);
+    else sessionStorage.setItem(FIRST_LISTEN_PLAYER_VISIBILITY_KEY,'hidden');
+  }catch(_){}
+  renderFirstListenPlayer();
+  if(focus){
+    const recoveryOnly=document.querySelector('.first-listen-player-bar').hidden;
+    const target=visible?(recoveryOnly?'firstListenListenerRetry':'firstListenPlayerToggle'):'firstListenPlayerOpen';
+    document.getElementById(target)?.focus({preventScroll:visible});
+  }
+}
 function renderFirstListenPlayer(){
   const p=_firstListenPlayback,player=document.getElementById('firstListenPlayer');
   if(!player)return;
+  const wasHidden=player.hidden;
   const h=_firstListenHandoff,opening=Boolean(h.frame&&!h.ready);
   const recovery=document.getElementById('firstListenListenerRecovery');
   recovery.hidden=!document.getElementById('firstListenSuccess').hidden||!(h.error||opening);
   document.getElementById('firstListenListenerRecoveryStatus').textContent=opening?'Opening the listener…':h.error;
   document.getElementById('firstListenListenerRetry').textContent=opening?'Cancel opening':'Try listener again';
   const resumable=firstListenProjection().heard&&!_firstListenUi.restarting;
-  player.hidden=p.phase==='idle'&&!resumable&&recovery.hidden;
-  player.querySelector('.first-listen-player-bar').hidden=p.phase==='idle'&&!resumable;
-  document.getElementById('firstListenDestinations').hidden=p.phase==='idle'&&!resumable;
+  const available=p.phase!=='idle'||resumable||!recovery.hidden;
+  // Keep the entry point once offered, even while readiness is refreshed.
+  _firstListenPlayerUi.available||=available;
+  const open=document.getElementById('firstListenPlayerOpen');
+  open.hidden=!_firstListenPlayerUi.available;
+  player.hidden=_firstListenPlayerUi.dismissed||!_firstListenPlayerUi.available;
+  open.setAttribute('aria-expanded',player.hidden?'false':'true');
+  player.querySelector('.first-listen-player-bar').hidden=p.phase==='idle'&&!resumable&&!recovery.hidden;
+  document.getElementById('firstListenDestinations').hidden=player.querySelector('.first-listen-player-bar').hidden;
   document.body.dataset.localPlayer=player.hidden?'off':'on';
   const reload=p.unrecoverable||Boolean(p.source&&p.context?.state==='closed');
-  const messages={idle:'Your place is saved. The station is paused here.',starting:'Starting here…',playing:'Playing here',paused:'Paused here',interrupted:reload?'Sound was interrupted. Reload the player to reconnect.':'Sound was interrupted. Choose Continue music to reconnect.'};
+  const messages={idle:resumable?'Your place is saved. The station is paused here.':'Listen on this device. Choose Start my station when you’re ready.',starting:'Starting here…',playing:'Playing here',paused:'Paused here',interrupted:reload?'Sound was interrupted. Reload the player to reconnect.':'Sound was interrupted. Choose Continue music to reconnect.'};
   document.getElementById('firstListenPlayerStatus').textContent=messages[p.phase]||'';
-  document.getElementById('firstListenPlayerToggle').textContent=reload?'Reload player':p.phase==='idle'?'Resume station':p.intent&&p.phase!=='interrupted'?'Pause music':'Continue music';
+  document.getElementById('firstListenPlayerToggle').textContent=reload?'Reload player':p.phase==='idle'?(resumable?'Resume station':'Start my station'):p.intent&&p.phase!=='interrupted'?'Pause music':'Continue music';
   const address=firstListenShareAddress();
   const note=document.getElementById('firstListenStreamAddressNote');
   if(!note.dataset.copied)note.textContent=address?'Other players can use the stream address if they can reach this station.':'Use your station’s network address on other devices. This preview or Home Assistant address is only for the current browser.';
   document.getElementById('firstListenCopyStream').hidden=!address;
+  if(wasHidden!==player.hidden)document.documentElement.style.setProperty('--local-player-height',`${player.getBoundingClientRect().height}px`);
   publishFirstListenPlayback();
 }
 function firstListenShareAddress(){
@@ -6977,7 +7006,7 @@ async function startFirstListen(el){
   const audio=firstListenStationAudio();
   if(!audio)return;
   const p=_firstListenPlayback,epoch=++p.epoch;
-  p.intent=true;p.phase='starting';renderFirstListenPlayer();
+  p.intent=true;p.phase='starting';setFirstListenPlayerVisible(true);
   const mix=ensureFirstListenMix(epoch);
   _firstListenUi.busy=true;
   _firstListenUi.dispatch='starting';
