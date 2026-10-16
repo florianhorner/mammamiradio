@@ -493,7 +493,7 @@ exports it as the legacy `CLAUDE_MODEL` fast-role override while no
 `quality_profile` exists. A successful Supervisor-backed admin save removes the
 legacy field once `quality_profile` is present. The canonical model IDs, OpenAI
 TTS selection, and script-token prices live in the root `model_registry.toml`
-(see "Dynamic LLM routing" in the root `CLAUDE.md`).
+(see "Dynamic LLM routing" in `docs/architecture.md`).
 **To add or swap a model:** update the relevant registry catalog entry and its
 matching `[pricing.catalog.<provider>]` key in the same change—no code or schema
 change. Restamp `last_reviewed` in the same change and say why in the comment
@@ -838,7 +838,13 @@ Before merging ANY change that touches addon files:
    `emergency_tone.mp3` must ship under
    `mammamiradio/assets/demo/recovery/`, exceed 1 KiB, match their approved
    `spoken_assets.json` hashes, and contain an FFprobe-readable audio stream.
-   `producer.py` must not call `generate_silence` in recovery paths.
+   Each asset is checked independently, so validation never stops at the first
+   playable asset. The manifest/hash boundary is no longer a per-asset call in
+   this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py`
+   run covers the whole packaged demo inventory (and, with
+   `--browser-assets-root`, the browser narration pack) before the per-asset
+   reachability check. `producer.py` must not call `generate_silence` in
+   recovery paths.
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
 5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist. The perf smoke skips its stream-byte probe only for a persisted operator stop confirmed independently by `503 stopped` from `/readyz` and `session_stopped: true` from `/public-status`; every other starting or ready state must still produce bytes.
@@ -861,7 +867,7 @@ A 24-hour minimum gap is enforced between consecutive published releases. The ga
 - Block rule: `prior_release_time + 24h > now` => status check fails, release surfaces red.
 - Bypass: the PR that introduced the tagged commit carries the `hotfix` label. The workflow skips the cooldown check entirely. Intended for P0/P1 regressions the existing release just introduced.
 - Override: `MIN_COOLDOWN_HOURS=<n>` at workflow level (not set by default) tightens or relaxes the window.
-- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on PRs that touch `.github/`, `scripts/`, or `tests/workflows/`, and on every push to `main`.
+- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on the changed-lanes `workflows` lane (`scripts/ci-changed-lanes.sh`), and on every push to `main`, where every lane runs.
 
 **Trust model:** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. Acceptable for the current single-maintainer team; revisit if PR volume grows. Day 8 Go/No-Go uses `../stabilization-log.md` to evaluate whether the gate is working.
 

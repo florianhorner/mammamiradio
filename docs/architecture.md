@@ -370,6 +370,15 @@ on each hit, which reconciles the cached file to the music target on first play 
 stamps a `reconciled_lufs` marker into the norm sidecar so later hits skip both the
 re-encode and the measure. This self-heals files cached before reconciliation
 existed (which otherwise aired at their old, quieter level) one play at a time.
+The marker is written only when `_reconcile_lufs` confirms the level (it returns
+`True` on an in-tolerance skip or a successful re-encode, `False` when the measure
+or re-encode failed), so a transiently failed file stays unmarked and is retried on
+the next hit rather than permanently masked as fixed. The marker is content-specific:
+`save_track_metadata`, only ever called for a freshly (re)normalized file, drops any
+`reconciled_lufs` it finds in a leftover sidecar (eviction unlinks the `.mp3` but
+leaves the `.json`), so a regenerated file must re-earn its marker rather than
+inherit a stale one. Sidecar reads (`_load_sidecar`, `load_track_metadata`) return
+empty on non-UTF8, corrupt or non-dict content rather than raising into the audio path.
 
 ### Egress FX pipeline (the transmitter, applied last)
 
@@ -877,13 +886,13 @@ Two features create the illusion of a live radio studio:
 
 A clip expires after 24 hours and the provenance ledger prunes after `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`, so a moment worth keeping is deleted twice over by default. `POST /api/clip/keep` (admin auth) exports the airing voice segment to `{cache_dir}/keepsakes/{id}.mp3` with a `{id}.json` sidecar, and nothing in the system expires it.
 
-Durability is structural rather than a flag: `cleanup_old_clips` and the `CLIP_MAX_SAVED` cap operate on `clips/` alone, every cache pruner globs `cache_dir/*.mp3` without recursing, and `cleanup_old_clips` refuses outright when handed a directory named `keepsakes`. The add-on backup contract includes the directory, so a kept moment survives a restore.
+Durability is structural rather than a flag: `cleanup_old_clips` and the `CLIP_MAX_SAVED` cap operate on `clips/` alone, every cache pruner globs `cache_dir/*.mp3` without recursing, and `cleanup_old_clips` refuses outright when handed a directory named `keepsakes`; `test_cache_eviction_never_reaches_into_keepsakes` guards the non-recursive assumption the other modules provide. The add-on backup contract includes the directory, so a kept moment survives a restore.
 
 **Two eligibility gates, both failing closed** (`is_keepsake_eligible` in `scheduling/clip.py`): the segment type must be in `KEEPSAKE_SEGMENT_TYPES` (banter, ad, news_flash, station_id, sweeper, time_check), and the segment must not carry `has_music_tail`. `commit_music_handoff` crossfades the outgoing song's real master under the opening seconds of the next voice segment, so type alone is not proof of provenance; a tailed segment is refused rather than trimmed, because a keepsake never expires and is served without auth.
 
 **Provenance and byte ownership share one boundary.** The playback loop writes `app.state.clip_segment` (`{type, chunks, title, has_music_tail}`) at every segment boundary and counts the chunks that segment puts into the share ring; the route cuts exactly those chunks (`extract_segment_audio`) rather than deriving a byte length from wall-clock elapsed. The ring holds every voice segment back to back, since music never enters it, so a window one chunk too long would be the previous segment's audio labelled with this one's title and rights check. The same count sizes the `last_shareworthy_clip` lookback snapshot, written for all six keepable types, which lets an operator catch a break that has just ended; the lookback is consulted only when the airing segment is not a keepable type, so `too_early` and `music_tail` stay honest refusals about what is on air now.
 
-Bounds: `KEEPSAKE_MAX_SAVED` (200) and a `KEEPSAKE_MIN_FREE_MB` (256) free-space preflight, run together with the file publication under `_keepsake_write_lock` so two presses cannot both pass at the ceiling. At roughly 4 MB for a long segment a full shelf is about 800 MB on the same volume as the norm cache, and no evictor reclaims it. The write is `mkstemp` + `fsync` + `os.replace`, so a kill mid-write can never publish a truncated keepsake. The scratch such a kill leaves behind is swept at the next startup by `prune_stale_keepsake_tmp_files`, since nothing else in the cache recurses into this directory.
+Bounds: anything shorter than `KEEPSAKE_MIN_SECONDS` of actual audio is refused as `too_early`; `KEEPSAKE_MAX_SAVED` (200) and a `KEEPSAKE_MIN_FREE_MB` (256) free-space preflight run together with the file publication under `_keepsake_write_lock` so two presses cannot both pass at the ceiling. At roughly 4 MB for a long segment a full shelf is about 800 MB on the same volume as the norm cache, and no evictor reclaims it. The write is `mkstemp` + `fsync` + `os.replace`, so a kill mid-write can never publish a truncated keepsake. The leftover `.keepsake-*.tmp` scratch such a kill leaves behind is never listed, served, or counted toward the ceiling, sits in the add-on's `backup_exclude` via `*.tmp`, and is swept at the next startup by `prune_stale_keepsake_tmp_files` (6h age gate, so a write in flight is never the thing pruned), since nothing else in the cache recurses into this directory.
 
 Keepsakes reuse the `/clips/{id}.mp3` and `/clips/{id}` URLs and are checked after `clips/`, so an id can never resolve to a keepsake while a live clip of that id exists. `GET /api/clip/keep` and `DELETE /api/clip/keep/{id}` list and revoke them, surfaced as **Kept moments** in the admin Archivio tab; deleting the file is the whole revocation, since both public routes read from disk per request.
 

@@ -66,6 +66,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Add-on option labels                               | `ha-addon/mammamiradio/translations/en.yaml` |
 | Edge channel add-on (metadata only, same image)    | `ha-addon/mammamiradio-edge/` + `docs/runbooks/ha-addon.md` (Edge channel) |
 | Standalone container image (Python + FFmpeg)       | `Dockerfile`                                 |
+| HA add-on image (Alpine-based)                     | `ha-addon/mammamiradio/Dockerfile`           |
 | One-command run for non-HA users                   | `docker-compose.yml`                         |
 | Keep container builds clean                        | `.dockerignore`                              |
 | Multi-arch Docker build CI                         | `.github/workflows/docker.yml`               |

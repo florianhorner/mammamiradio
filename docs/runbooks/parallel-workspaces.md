@@ -361,6 +361,8 @@ reach a local run and a scheduled one alike. Only the literal `0` switches off:
 the planner, so it reports the switch rather than working while the queue is
 off; the human dashboard is unaffected.
 
+Self-test: `bash tests/workflows/test_land_queue.sh`.
+
 **It is not live, and cannot be flipped live from a feature seat.** Doing that
 needs a GitHub App installed on the repo with `contents:write` +
 `pull-requests:write`. `GITHUB_TOKEN` is specifically not enough: commits it
