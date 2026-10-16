@@ -33,7 +33,11 @@ body[data-local-player="on"] .undo-toast-btn { min-width: 44px; min-height: 44px
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
 }
 .first-listen-player[hidden], .first-listen-player [hidden] { display: none; }
-.first-listen-player-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+#firstListenPlayerOpen[hidden] { display: none; }
+.first-listen-player-header { display: flex; align-items: flex-start; gap: var(--space-2); }
+.first-listen-player-bar { display: flex; flex: 1; flex-wrap: wrap; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.first-listen-player-bar > div { flex: 1 1 180px; min-width: 0; }
+.first-listen-player .first-listen-player-close { display: inline-flex; align-items: center; justify-content: center; width: 44px; min-width: 44px; padding: 0; font-size: 24px; line-height: 1; }
 .first-listen-player p { margin: var(--space-2) 0; overflow-wrap: anywhere; }
 .first-listen-player-bar p { margin: 0; color: var(--cream-dk); }
 .first-listen-player :is(button, summary, a) { min-height: 44px; touch-action: manipulation; }

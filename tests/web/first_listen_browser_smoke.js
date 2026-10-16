@@ -655,12 +655,11 @@ async (page) => {
         firstListenStationAudio().load();
         document.body.dataset.firstListenEntry='required';
         _firstListenPlayback.phase='idle';
-        renderFirstListenPlayer();
         document.getElementById('firstListenDestinations').open=false;
         document.querySelector('.success-saved').open=false;
         document.getElementById('firstListenPlayer').scrollTop=0;
         Object.assign(_firstListenUi, {
-          projection: null,
+          projection,
           players: [],
           selectedEntityId: '',
           selectedName: '',
@@ -696,6 +695,9 @@ async (page) => {
           acknowledgedKeys: [],
           ...ui,
         });
+        _firstListenPlayerUi.dismissed=false;
+        _firstListenPlayerUi.available=false;
+        sessionStorage.removeItem(FIRST_LISTEN_PLAYER_VISIBILITY_KEY);
         _lastSetupJson = null;
         renderSetup(projection);
         if (firstListenProjection().privacyUnlocked && !firstListenProjection().privacyReviewed) showFirstListenConnection('home');
@@ -710,6 +712,17 @@ async (page) => {
         document.documentElement.style.fontSize = '';
       }, { projection: setup, ui: overrides });
     };
+
+    smokeStage='fresh-player-reset';
+    await resetUi(setupProjection({audio:true}));
+    await resetUi(setupProjection());
+    assert(await page.locator('#firstListenPlayer').isHidden(),'fresh fixture inherited the previous player');
+    assert(await page.locator('#firstListenPlayerOpen').isHidden(),'fresh fixture inherited the previous player entry point');
+    await page.evaluate(()=>{_firstListenHandoff.error='The listener could not open. Try again.';renderFirstListenPlayer();});
+    await page.locator('#firstListenPlayerClose').click();
+    await page.locator('#firstListenPlayerOpen').click();
+    assert(await page.evaluate(()=>document.activeElement.id==='firstListenListenerRetry'),'recovery-only reopen did not focus Retry');
+    await resetUi(setupProjection());
 
     smokeStage = 'home-compatibility';
     const oldHomeReceipt = setupProjection({audio:true,privacy:true,fresh:false,onboardingRequired:false});
@@ -2117,6 +2130,81 @@ async (page) => {
     assert(await page.evaluate(()=>firstListenProjection().heard&&!_firstListenUi.retestPending),'Resume reset durable sound proof');
     assert(JSON.stringify(reloadCounts)===JSON.stringify([verifyRequests.length,previewRequests.length,privacyRequests.length]),'Resume repeated confirmation or consent');
 
+    smokeStage='local-player-visibility';
+    await page.setViewportSize({width:1280,height:900});
+    await page.evaluate(()=>{showAdminTab('motore');document.getElementById('setupGroup').open=true;window.scrollTo(0,document.body.scrollHeight);});
+    assert(await page.locator('#firstListenPlayerOpen').evaluate(button=>button.getBoundingClientRect().bottom<0),'close-focus fixture did not scroll past the header');
+    const visibilityWrites=[resumeRequests.length,verifyRequests.length,previewRequests.length,privacyRequests.length];
+    const visibilityOwner=await stationMediaSnapshot();
+    const visibilityCheckpoint={src:visibilityOwner.src,requestCount:visibilityOwner.streamRequests.length,eventIndex:visibilityOwner.events.length};
+    await page.evaluate(()=>{window.__visibilityOwner={audio:firstListenStationAudio(),source:_firstListenPlayback.source,context:_firstListenPlayback.context};document.getElementById('firstListenPlayerClose').focus({preventScroll:true});});
+    await page.keyboard.press('Enter');
+    assert(await page.locator('#firstListenPlayer').isHidden(),'Hide player left its panel visible');
+    assert(await page.locator('#firstListenPlayerOpen').isVisible(),'Hide player stranded its reopen control');
+    assert(await page.locator('#firstListenPlayerOpen').getAttribute('aria-expanded')==='false','hidden player still reports expanded');
+    assert(await page.evaluate(()=>document.activeElement?.id==='firstListenPlayerOpen'),'Hide player lost keyboard focus');
+    assert(await page.locator('#firstListenPlayerOpen').evaluate(button=>{const r=button.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),'Hide player left keyboard focus outside the viewport');
+    assert(await page.evaluate(()=>document.body.dataset.localPlayer==='off'&&document.documentElement.style.getPropertyValue('--local-player-height')==='0px'),'hidden player retained page or toast clearance');
+    await page.evaluate(async()=>{await refreshFast();await refreshSlow();showAdminTab('motore');renderFirstListenPlayer();showAdminTab('scaletta');});
+    await page.evaluate(()=>{for(const event of ['waiting','ended','playing'])firstListenStationAudio().dispatchEvent(new Event(event));});
+    assert(await page.locator('#firstListenPlayer').isHidden(),'polling or admin navigation reopened a dismissed player');
+    await assertStationPreserved(visibilityCheckpoint,'Hide player and polling');
+    await page.locator('#firstListenPlayerOpen').click();
+    assert(await page.locator('#firstListenPlayer').isVisible(),'This device did not reopen the player');
+    assert(await page.locator('#firstListenPlayerOpen').getAttribute('aria-expanded')==='true','open player still reports collapsed');
+    assert(await page.evaluate(()=>document.activeElement?.id==='firstListenPlayerToggle'),'reopened player did not focus playback');
+    await assertStationPreserved(visibilityCheckpoint,'This device reopen');
+    assert(await page.evaluate(()=>firstListenStationAudio()===__visibilityOwner.audio&&_firstListenPlayback.source===__visibilityOwner.source&&_firstListenPlayback.context===__visibilityOwner.context),'panel visibility replaced its audio owner or graph');
+    assert(JSON.stringify(visibilityWrites)===JSON.stringify([resumeRequests.length,verifyRequests.length,previewRequests.length,privacyRequests.length]),'panel visibility changed station or saved choices');
+
+    await page.locator('#firstListenPlayerToggle').click();
+    const hiddenPaused=await stationMediaSnapshot();
+    const pausedCheckpoint={src:hiddenPaused.src,requestCount:hiddenPaused.streamRequests.length,eventIndex:hiddenPaused.events.length};
+    await page.locator('#firstListenPlayerClose').click();
+    await page.locator('#firstListenPlayerOpen').click();
+    await assertStationPreserved(pausedCheckpoint,'paused panel reopen',{playing:false});
+    await page.locator('#firstListenPlayerClose').click();
+    await page.reload();
+    await page.waitForFunction(()=>firstListenProjection().heard);
+    await page.evaluate(()=>(window.__firstListenSmokeIntervals||[]).forEach(({id})=>clearInterval(id)));
+    assert(await page.locator('#firstListenPlayer').isHidden(),'reload lost the dismissed player preference');
+    assert(await page.locator('#firstListenPlayerOpen').isVisible(),'reload hid the local player entry point');
+    const idleVisibility=await stationMediaSnapshot();
+    await page.locator('#firstListenPlayerOpen').click();
+    await assertStationPreserved({src:idleVisibility.src,requestCount:idleVisibility.streamRequests.length,eventIndex:idleVisibility.events.length},'idle panel reopen',{playing:false});
+    assert(await page.locator('#firstListenPlayerToggle').innerText()==='Resume station','idle panel lost its Resume action');
+    await page.evaluate(()=>{
+      const set=Storage.prototype.setItem,remove=Storage.prototype.removeItem;
+      try{
+        Storage.prototype.setItem=Storage.prototype.removeItem=()=>{throw new DOMException('Storage unavailable','SecurityError');};
+        setFirstListenPlayerVisible(false);
+        if(!document.getElementById('firstListenPlayer').hidden)throw new Error('unavailable storage prevented dismissal');
+        renderFirstListenPlayer();
+        if(!document.getElementById('firstListenPlayer').hidden)throw new Error('unavailable storage lost in-memory dismissal');
+        setFirstListenPlayerVisible(true);
+        if(document.getElementById('firstListenPlayer').hidden)throw new Error('unavailable storage prevented reopening');
+      }finally{Storage.prototype.setItem=set;Storage.prototype.removeItem=remove;}
+    });
+    await page.addInitScript(()=>{
+      if(location.hash!=='#player-storage-unavailable')return;
+      const get=Storage.prototype.getItem;
+      Storage.prototype.getItem=function(key){
+        if(location.hash==='#player-storage-unavailable'&&key.startsWith('mmr.admin.localPlayer:'))throw new DOMException('Storage unavailable','SecurityError');
+        return get.call(this,key);
+      };
+    });
+    await page.evaluate(()=>history.replaceState(history.state,'',`${location.pathname}#player-storage-unavailable`));
+    await page.reload();
+    await page.waitForFunction(()=>firstListenProjection().heard);
+    await page.evaluate(()=>(window.__firstListenSmokeIntervals||[]).forEach(({id})=>clearInterval(id)));
+    assert(await page.locator('#firstListenPlayer').isVisible(),'unavailable storage prevented player initialization');
+    await page.locator('#firstListenPlayerClose').click();
+    await page.locator('#firstListenPlayerOpen').click();
+    assert(!(await stationMediaSnapshot()).playing,'unavailable storage reopen started playback');
+    await page.evaluate(()=>history.replaceState(history.state,'',location.pathname));
+    await page.locator('#firstListenPlayerToggle').click();
+    await page.waitForFunction(()=>window.__firstListenStationMedia.playing);
+
     smokeStage='live-station-controls';
     const graph=await page.evaluate(()=>{window.__transportOwner={audio:firstListenStationAudio(),source:_firstListenPlayback.source,context:_firstListenPlayback.context};return true;});
     assert(graph,'media owner capture failed');
@@ -2309,6 +2397,13 @@ async (page) => {
     await assertStationPreserved(resumedCheckpoint,'Admin shortcut to listener');
     await page.evaluate(()=>openFirstListenStation());
     await assertStationPreserved(resumedCheckpoint,'repeated listener return');
+    await page.locator('#firstListenPlayerClose').click();
+    await page.locator('#listener-view-link').click();
+    await page.waitForFunction(()=>_firstListenHandoff.ready);
+    await page.frameLocator('#firstListenListenerFrame').locator('#admin-view-link').click();
+    assert(await page.locator('#firstListenPlayer').isHidden(),'listener round trip reopened a dismissed player');
+    assert(await page.locator('#firstListenPlayerOpen').isVisible(),'listener return lost the player entry point');
+    await assertStationPreserved(resumedCheckpoint,'dismissed listener round trip');
     await page.evaluate(()=>history.back());
     await page.waitForFunction(()=>_firstListenHandoff.ready);
     await page.evaluate(()=>{
@@ -2317,6 +2412,7 @@ async (page) => {
       renderFirstListenPlayer();
     });
     assert(await page.locator('#firstListenListenerRetry').isVisible(),'disconnected listener hid its recovery action');
+    assert(await page.locator('#firstListenPlayer').isVisible(),'listener failure left recovery inside a dismissed player');
     assert((await page.locator('#firstListenListenerRecoveryStatus').innerText()).includes('lost its controls'),'disconnected listener hid its explanation');
     assert(await page.evaluate(()=>!('mediaSession' in navigator)||navigator.mediaSession.metadata===null),'detached listener left stale track metadata');
     await page.locator('#firstListenListenerRetry').click();
@@ -2396,6 +2492,7 @@ async (page) => {
       setupStatusProjection=saved;
       await page.evaluate(saved=>{_lastSetupJson='';renderSetup(saved);openFirstListenStation();showAdminTab('motore');},saved);
       await page.evaluate(()=>{_firstListenUi.householdExample='coffee';_firstListenUi.householdExamplesHeard=['quiet','laundry','arrival','coffee'];});
+      await page.locator('#firstListenPlayerClose').click();
       const before=await stationMediaSnapshot(),writes=[resumeRequests.length,verifyRequests.length,privacyRequests.length,previewRequests.length];
       await page.locator('#firstListenRestartBtn').click();
       assert(await page.evaluate(()=>selectedFirstListenExample()==='quiet'&&_firstListenUi.householdExamplesHeard.length===0),'restart retained the example sequence from the earlier journey');
@@ -2409,6 +2506,8 @@ async (page) => {
       await assertStationPreserved({src:before.src,requestCount:before.streamRequests.length,eventIndex:before.events.length},'restart',{playing});
       await page.locator('#firstListenPlayBtn').click();
       await page.waitForFunction(()=>_firstListenUi.dispatch==='accepted'&&!_firstListenUi.busy);
+      assert(await page.locator('#firstListenPlayer').isVisible(),'explicit sound check kept a dismissed player hidden');
+      assert(await page.evaluate(()=>sessionStorage.getItem(FIRST_LISTEN_PLAYER_VISIBILITY_KEY)===null),'explicit sound check retained the saved dismissal');
       const replayed=await stationMediaSnapshot();
       assert(replayed.streamRequests.length===before.streamRequests.length+1&&replayed.src.endsWith('/stream?first_listen=1'),'explicit replay reused the old stream');
       assert(!(await page.locator('#firstListenVerifySummary').innerText()).includes('then the first song'),'returning sound check promised a fresh opening');
@@ -3001,12 +3100,18 @@ async (page) => {
     assert(await page.locator('#listener-view-link').isVisible(), 'standalone listener shortcut did not open Admin');
 
     smokeStage = 'ingress-guide-audio';
+    const rootPlayerKey=await page.evaluate(()=>{sessionStorage.setItem(FIRST_LISTEN_PLAYER_VISIBILITY_KEY,'hidden');return FIRST_LISTEN_PLAYER_VISIBILITY_KEY;});
     await page.route(`${baseUrl}${ingressPrefix}/admin`, async (route) => {
       const response = await route.fetch({ url: `${baseUrl}/admin` });
       await route.fulfill({ response });
     });
     await page.goto(`${baseUrl}${ingressPrefix}/admin`, { waitUntil: 'domcontentloaded', timeout: 10000 });
     await page.waitForFunction(() => typeof renderSetup === 'function' && typeof toggleFirstListenGuide === 'function');
+    assert(await page.evaluate(rootKey=>FIRST_LISTEN_PLAYER_VISIBILITY_KEY!==rootKey&&!_firstListenPlayerUi.dismissed&&sessionStorage.getItem(rootKey)==='hidden',rootPlayerKey),'root dismissal leaked into a distinct ingress path');
+    await page.evaluate(()=>setFirstListenPlayerVisible(false));
+    await page.reload();
+    await page.waitForFunction(() => typeof renderSetup === 'function' && typeof toggleFirstListenGuide === 'function');
+    assert(await page.evaluate(rootKey=>_firstListenPlayerUi.dismissed&&sessionStorage.getItem(rootKey)==='hidden',rootPlayerKey),'ingress reload lost its own or another path’s dismissal');
     await page.evaluate(() => {
       (window.__firstListenSmokeIntervals || []).forEach(({ id }) => clearInterval(id));
     });
