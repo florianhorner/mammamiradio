@@ -364,18 +364,7 @@ an operator-facing control changes something subtle or imperceptible, its UI cop
 must say so plainly (what it does, how subtle it is, where it's most noticeable) —
 an honest "you may not hear a difference" beats a confident label nobody can verify.
 
-### Sonic identity must translate beyond full-range speakers
-
-Keep a default station signature recognizable on phones, laptops, small smart
-speakers, and ordinary car systems. Bass may reinforce the cue on full-range
-equipment. It must not carry the identifying rhythm, contour, or answer by
-itself. Keep the identifying energy in the midrange. Test it on a small speaker
-as well as the Mac and target speaker.
-
-Modern Night Drive uses **Neon Relay** as its station signature. **Velvet
-Horizon** sets the atmosphere for separately authored transitions. Use it as a
-production style. Reserve the station signature for Neon Relay, and do not
-reuse the Velvet Horizon prototype as transition material.
+Sonic identity (a station signature must stay recognizable on small speakers, with the identifying energy in the midrange; Neon Relay is the signature, Velvet Horizon a transition style only) is a design-system rule: `docs/design/system.md` "Sonic identity".
 
 ## Skill routing
 
