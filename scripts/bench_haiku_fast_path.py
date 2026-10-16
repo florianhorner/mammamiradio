@@ -8,15 +8,22 @@ in ``core/config.py``), because Haiku 4.5 rejects ``output_config.effort`` with 
 400. The production path can therefore never try Haiku 5.5 at a chosen effort.
 This command calls the Anthropic SDK directly, bypassing ``resolve_model()`` /
 ``effort_for()`` and the scriptwriter's provider plumbing on purpose, and runs
-four arms over the same production-built prompts:
+six arms over the same production-built prompts:
 
     A  incumbent: the registry's fast-role model, no output_config (what production sends)
     B  claude-haiku-5-5, effort low
     C  claude-haiku-5-5, effort medium
     D  claude-haiku-5-5, default (no output_config; documented default effort is medium)
+    E  claude-haiku-5-5, thinking disabled (``thinking={"type": "disabled"}``), default effort
+    F  claude-haiku-5-5, effort low, transition budget raised from 100 to 300 output tokens
 
 Arms C and D are nominally the same server-side configuration, so their spread
-doubles as a repeatability estimate.
+doubles as a repeatability estimate. Arms E and F exist because Haiku 5.5 thinks
+by default and the thinking counts against ``max_tokens``: at the production
+transition budget of 100 tokens the model can spend the whole budget before it
+writes any text. E asks whether switching thinking off makes the model a drop-in;
+F asks whether the smallest effort plus budget headroom does. ``--arms A,E,F``
+runs a subset (A is always included as the incumbent).
 
 It is an online, paid operator command. It is not a CI gate, not runtime
 enforcement, and not a bump of ``model_registry.toml``. Always run the offline
@@ -76,6 +83,7 @@ SPOKEN_ASSETS = REPO_ROOT / "mammamiradio" / "assets" / "demo" / "spoken_assets.
 RECEIPT_SCHEMA_VERSION = 1
 PROMPTS_PER_TYPE = 50
 TRANSITION_MAX_TOKENS = 100  # scriptwriter.write_transition sends max_tokens=100
+CANDIDATE_TRANSITION_MAX_TOKENS = 300  # arm F: headroom for a thinking model at the production prompt
 TRANSITION_MAX_WORDS = 15  # the transition prompt's own "Max 15 words" rule
 TRANSITION_SUPER_ITALIAN_COUNT = 15
 MEMORY_PERSONA_NONE_COUNT = 20
@@ -203,6 +211,20 @@ class Arm:
     model: str
     effort: str | None
     description: str
+    # ``"disabled"`` sends ``thinking={"type": "disabled"}``; None sends no thinking block at all.
+    thinking: str | None = None
+    # Replaces the transition prompt's max_tokens; memory extraction keeps its own budget.
+    transition_max_tokens: int | None = None
+
+
+def arm_config(arm: Arm) -> str:
+    """One short phrase naming everything an arm changes on the request."""
+    parts = [f"effort {arm.effort}" if arm.effort else "default effort"]
+    if arm.thinking is not None:
+        parts.append(f"thinking {arm.thinking}")
+    if arm.transition_max_tokens is not None:
+        parts.append(f"transition max_tokens {arm.transition_max_tokens}")
+    return ", ".join(parts)
 
 
 @dataclass
@@ -705,7 +727,29 @@ def build_arms(incumbent: str, candidate: str = CANDIDATE_MODEL) -> list[Arm]:
             None,
             f"candidate, default (no output_config; documented default effort {CANDIDATE_DEFAULT_EFFORT})",
         ),
+        Arm(
+            "E",
+            candidate,
+            None,
+            "candidate, thinking disabled (accepted at effort high or below), default effort",
+            thinking="disabled",
+        ),
+        Arm(
+            "F",
+            candidate,
+            "low",
+            f"candidate, effort low, transition budget {CANDIDATE_TRANSITION_MAX_TOKENS} tokens"
+            f" instead of {TRANSITION_MAX_TOKENS}",
+            transition_max_tokens=CANDIDATE_TRANSITION_MAX_TOKENS,
+        ),
     ]
+
+
+def effective_max_tokens(arm: Arm, prompt: BenchPrompt) -> int:
+    """The budget actually sent: an arm may raise the transition budget, nothing else."""
+    if prompt.prompt_type == "transition" and arm.transition_max_tokens is not None:
+        return arm.transition_max_tokens
+    return prompt.max_tokens
 
 
 def detect_effort_mechanism() -> str:
@@ -852,10 +896,12 @@ def build_create_kwargs(arm: Arm, prompt: BenchPrompt, mechanism: str) -> dict[s
     """Mirror ``scriptwriter._generate_json_response``'s request shape."""
     kwargs: dict[str, Any] = {
         "model": arm.model,
-        "max_tokens": prompt.max_tokens,
+        "max_tokens": effective_max_tokens(arm, prompt),
         "system": prompt.system,
         "messages": [{"role": "user", "content": prompt.prompt}],
     }
+    if arm.thinking is not None:
+        kwargs["thinking"] = {"type": arm.thinking}
     if arm.effort is not None:
         if mechanism == "output_config":
             kwargs["output_config"] = {"effort": arm.effort}
@@ -962,6 +1008,8 @@ def receipt_row(
         "model": arm.model,
         "effort": arm.effort,
         "effort_mechanism": mechanism if arm.effort is not None else None,
+        "thinking": arm.thinking,
+        "max_tokens": effective_max_tokens(arm, prompt),
         "prompt_type": prompt.prompt_type,
         "prompt_id": prompt.prompt_id,
         "prompt_sha256": prompt.prompt_sha256,
@@ -1011,7 +1059,7 @@ async def run_live(
         handle.flush()
         for order_index, prompt, arm in plan:
             started_at = datetime.now(UTC).isoformat()
-            result = await call_arm(create, arm, prompt, mechanism, attempt_timeout(prompt.max_tokens))
+            result = await call_arm(create, arm, prompt, mechanism, attempt_timeout(effective_max_tokens(arm, prompt)))
             quality = (
                 evaluate_output(prompt.prompt_type, result.output_text, result.stop_reason)
                 if result.error is None
@@ -1150,11 +1198,14 @@ def render_markdown(summary: dict[str, Any], arms: Sequence[Arm], header: dict[s
         f"Latency statistics cover completed calls; the percentiles exclude {timeouts} timed-out",
         "call(s) and every other error row (errors are excluded from latency and counted as not usable).",
         "",
-        f"Arms C (effort `{CANDIDATE_DEFAULT_EFFORT}` sent explicitly) and D (no output_config, documented default",
-        f"effort `{documented_default}`) are nominally the same server-side configuration, so their spread",
-        "doubles as a repeatability estimate.",
-        "",
     ]
+    if {"C", "D"} <= {arm.label for arm in arms}:
+        lines += [
+            f"Arms C (effort `{CANDIDATE_DEFAULT_EFFORT}` sent explicitly) and D (no output_config, documented default",
+            f"effort `{documented_default}`) are nominally the same server-side configuration, so their spread",
+            "doubles as a repeatability estimate.",
+            "",
+        ]
     for prompt_type, stats in summary["per_type"].items():
         lines.append(f"## {prompt_type}")
         lines.append("")
@@ -1173,7 +1224,7 @@ def render_markdown(summary: dict[str, Any], arms: Sequence[Arm], header: dict[s
             else:
                 verdict_text = "FAIL: " + "; ".join(verdict["reasons"])
             lines.append(
-                f"| {arm.label} | `{arm.model}` | {arm.effort or 'default'} | {row['calls']} | {row['errors']} |"
+                f"| {arm.label} | `{arm.model}` | {arm_config(arm)} | {row['calls']} | {row['errors']} |"
                 f" {row['timeouts']} | {_fmt(row['p50_latency_s'])} | {_fmt(row['p95_latency_s'])} |"
                 f" {_fmt(row['mean_latency_s'])} | {_fmt(row['max_latency_s'])} | {row['not_usable']} |"
                 f" {row['too_long']} | {row['retried']} | {row['input_tokens']} | {row['output_tokens']} |"
@@ -1243,7 +1294,7 @@ def print_dry_run(
         print()
     print("Arms:")
     for arm in arms:
-        effort = f"effort={arm.effort} via {mechanism}" if arm.effort else "no output_config"
+        effort = arm_config(arm) + (f" via {mechanism}" if arm.effort else "")
         print(f"  {arm.label}  {arm.model:<28} {effort:<32} {arm.description}")
     print(f"Effort mechanism: {mechanism}")
     print()
@@ -1300,6 +1351,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="a fresh local capture of the Anthropic pricing page; an unparseable Haiku 5.5 row leaves it unpriced",
     )
     parser.add_argument("--pricing-capture-date", default=None, help="date label for --pricing-capture (default today)")
+    parser.add_argument(
+        "--arms",
+        default=None,
+        help="comma-separated arm labels to run, e.g. A,E,F (A is always included as the incumbent); default: all",
+    )
     return parser.parse_args(argv)
 
 
@@ -1328,6 +1384,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     arms = build_arms(incumbent)
+    if args.arms:
+        wanted = {label.strip().upper() for label in args.arms.split(",") if label.strip()} | {"A"}
+        known = [arm.label for arm in arms]
+        unknown = sorted(wanted - set(known))
+        if unknown:
+            print(f"--arms names unknown arm(s) {', '.join(unknown)}; known arms: {', '.join(known)}")
+            return 2
+        arms = [arm for arm in arms if arm.label in wanted]
     mechanism = detect_effort_mechanism()
     pricing = load_pricing(incumbent, args.pricing_capture, args.pricing_capture_date)
     started = datetime.now(UTC)
