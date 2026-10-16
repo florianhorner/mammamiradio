@@ -40,8 +40,8 @@ def test_direction_is_explicitly_creative(models: ModelsSection) -> None:
 
 def test_shipped_quality_profiles_keep_their_creative_contract(models: ModelsSection) -> None:
     expected_creative = {
-        "premium": {"anthropic": "claude-opus-5", "openai": "gpt-5.6-sol"},
-        "balanced": {"anthropic": "claude-sonnet-5", "openai": "gpt-5.6-terra"},
+        "premium": {"anthropic": "claude-opus-5-5", "openai": "gpt-5.6-sol"},
+        "balanced": {"anthropic": "claude-sonnet-5-5", "openai": "gpt-5.6-terra"},
         "economy": {"anthropic": "claude-haiku-4-5-20251001", "openai": "gpt-5.6-luna"},
     }
     creative_callers = ("banter", "news_flash", "ad", "direction")
@@ -305,8 +305,8 @@ def test_quality_env_ignores_unknown_profile(monkeypatch) -> None:
 def test_shipped_registry_parses_effort_for_creative_only(models: ModelsSection) -> None:
     assert models.effort["anthropic"] == {"opus": "medium", "sonnet": "medium"}
     assert "haiku" not in models.effort["anthropic"]
-    assert effort_for(models, "anthropic", "claude-opus-5", caller="banter", profile="premium") == "medium"
-    assert effort_for(models, "anthropic", "claude-sonnet-5", caller="banter") == "medium"
+    assert effort_for(models, "anthropic", "claude-opus-5-5", caller="banter", profile="premium") == "medium"
+    assert effort_for(models, "anthropic", "claude-sonnet-5-5", caller="banter") == "medium"
     assert effort_for(models, "anthropic", "claude-haiku-4-5-20251001", caller="transition") is None
     assert effort_for(models, "anthropic", "claude-fable-5-1", caller="banter") is None
     assert effort_for(models, "openai", "gpt-5.6-sol", caller="banter", profile="premium") is None
