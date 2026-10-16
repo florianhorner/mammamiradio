@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: florianhorner/gh-workflows/.github/workflows/body-lint.yml@fde64f42deb15511c2c71cb9798c2d6685379e38 # v1.5
+    uses: florianhorner/gh-workflows/.github/workflows/body-lint.yml@9085c9da024edbfd5fafbd8801d996776c4fdbcf # main after v1.5: ignores the cloud-session footer (gh-workflows#18)
     with:
       target: pr-body
       extra_patterns: scripts/lint-patterns.sh
