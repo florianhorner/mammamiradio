@@ -121,9 +121,11 @@ def _configure_http_logging() -> None:
     # Jamendo authenticates metadata requests with a query-string client_id.
     # httpx logs complete request URLs at INFO, so dependency logging must never
     # be made more verbose than WARNING even when a legacy override remains set.
+    # httpx2, the transport of the Anthropic and OpenAI SDKs, also logs full
+    # request URLs at INFO, so its loggers get the same clamp.
     level = max(level, logging.WARNING)
-    logging.getLogger("httpx").setLevel(level)
-    logging.getLogger("httpcore").setLevel(level)
+    for logger_name in ("httpx", "httpcore", "httpx2", "httpcore2"):
+        logging.getLogger(logger_name).setLevel(level)
 
 
 _configure_http_logging()
