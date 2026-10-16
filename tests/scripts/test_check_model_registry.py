@@ -285,6 +285,28 @@ def test_openai_deprecations_html_table_also_parses() -> None:
     assert shutdowns["gpt-3.5-turbo"].date == dt.date(2026, 10, 23)
 
 
+def test_openai_deprecations_tts_voice_rows_parse() -> None:
+    """The tts-1 shutdown rows that broke the 2026-10-05 watch read as dated shutdowns."""
+    shutdowns = watch.parse_openai_deprecations((SYNTHETIC / "openai-deprecations-tts1-shutdown.md").read_text())
+    assert shutdowns["tts-1"].date == dt.date(2027, 3, 2)
+    assert shutdowns["tts-1-hd"].date == dt.date(2027, 3, 2)
+    assert "gpt-4o-mini-tts" not in shutdowns
+
+
+def test_pinned_tts_model_stays_current_beside_a_tts1_shutdown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixtures = _fixture_dir(tmp_path, openai_deprecations=SYNTHETIC / "openai-deprecations-tts1-shutdown.md")
+    path = _registry(tmp_path, REGISTRY_ALL_CURRENT)
+    code, out = _run(
+        capsys, "--report", "--registry", str(path), "--fixture-dir", str(fixtures), "--today", "2026-09-08"
+    )
+    assert code == watch.EXIT_OK, out
+    assert code != watch.EXIT_SOURCE
+    lines = {line.split()[0]: line for line in out.splitlines() if line and not line.startswith(("FINDINGS", "OK"))}
+    assert "current" in lines["tts.openai"]
+
+
 def test_openai_deprecations_header_only_table_raises_no_rows() -> None:
     page = "| Model / system | Shutdown date |\n|---|---|\n"
     with pytest.raises(watch.SourceError, match="no model shutdown rows"):
@@ -331,7 +353,18 @@ def test_openai_deprecations_html_code_placeholder_is_a_source_error() -> None:
         watch.parse_openai_deprecations(page)
 
 
-@pytest.mark.parametrize("source_cell", ["`gpt-oss`", "`davinci`", "Videos API", "OpenAI-Beta: realtime=v1"])
+@pytest.mark.parametrize(
+    "source_cell",
+    [
+        "`gpt-oss`",
+        "`davinci`",
+        "`tts-1`",
+        "`tts-1-hd`",
+        "`omni-moderation-latest`",
+        "Videos API",
+        "OpenAI-Beta: realtime=v1",
+    ],
+)
 def test_openai_deprecations_accepts_supported_identifier_shapes(source_cell: str) -> None:
     page = f"| Model / system | Shutdown date |\n|---|---|\n| {source_cell} | Sep 1, 2026 |\n"
     assert watch.parse_openai_deprecations(page)
