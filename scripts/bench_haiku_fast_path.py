@@ -261,6 +261,14 @@ class CallResult:
     timed_out: bool = False
 
 
+def _error_label(exc: BaseException) -> str:
+    """Name a failed call for the receipt: class, HTTP status when present, and the start of the message."""
+    status = getattr(exc, "status_code", None)
+    label = type(exc).__name__ if status is None else f"{type(exc).__name__} {status}"
+    head = " ".join(str(exc).split())[:160]
+    return f"{label}: {head}" if head else label
+
+
 class CorpusError(RuntimeError):
     """The benchmark corpus failed validation before any provider call."""
 
@@ -890,15 +898,15 @@ async def call_arm(
             if exc.status_code in RETRY_STATUSES and attempts <= MAX_RETRIES_PER_CALL:
                 await asyncio.sleep(_retry_after_seconds(exc))
                 continue
-            return CallResult(latency, attempts, attempts > 1, None, 0, 0, "", type(exc).__name__)
+            return CallResult(latency, attempts, attempts > 1, None, 0, 0, "", _error_label(exc))
         except (TimeoutError, anthropic.APITimeoutError) as exc:
             # The production per-attempt wall clock (asyncio.wait_for) or the
             # SDK's own transport timeout: an error row, counted separately.
             latency = time.perf_counter() - started
-            return CallResult(latency, attempts, attempts > 1, None, 0, 0, "", type(exc).__name__, timed_out=True)
+            return CallResult(latency, attempts, attempts > 1, None, 0, 0, "", _error_label(exc), timed_out=True)
         except Exception as exc:
             latency = time.perf_counter() - started
-            return CallResult(latency, attempts, attempts > 1, None, 0, 0, "", type(exc).__name__)
+            return CallResult(latency, attempts, attempts > 1, None, 0, 0, "", _error_label(exc))
         latency = time.perf_counter() - started
         usage = getattr(resp, "usage", None)
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
