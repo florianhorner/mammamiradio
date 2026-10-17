@@ -6,6 +6,11 @@ updates:
       interval: weekly
       day: monday
     # Keep major upgrades standalone so they receive manual compatibility review.
+    # Dependabot rewrites only the pins it bumps in the hash-locked requirements.txt
+    # and never re-resolves transitive dependencies. pydantic pins an exact
+    # pydantic-core, so both ride in the pydantic group; when a grouped PR still
+    # leaves the lock incomplete, complete it with pip-compile as described in
+    # CONTRIBUTING.md under "Local setup" instead of editing pins by hand.
     groups:
       dev-tools:
         patterns: ["ruff", "mypy", "pytest*"]
@@ -16,11 +21,6 @@ updates:
       pydantic:
         patterns: ["pydantic", "pydantic-core", "pydantic-settings"]
         update-types: ["minor", "patch"]
-    ignore:
-      # pydantic pins an exact pydantic-core; bumping pydantic-core on its own makes
-      # the hash-locked requirements.txt unsatisfiable (the 2.47.0 vs 2.13.4 incident).
-      # Let pydantic-core move only when pydantic does.
-      - dependency-name: "pydantic-core"
     labels:
       - dependencies
     commit-message:

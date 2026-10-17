@@ -179,6 +179,30 @@ assigned write-set name them. No other active workspace may overlap that
 write-set. For Path B, feature workers leave a manifest note and the train
 integrator applies or rejects the shared-file change.
 
+## PR body and changelog lint mechanics
+
+The editorial boundary itself (what never goes into the public changelogs, PR
+bodies, or maintainer-authored issues) is the rule in the root agent guide,
+"Changelog editorial boundary". This section holds how it is enforced.
+
+**Enforcement — two pattern sets, unioned.**
+
+The *baseline* lives in `florianhorner/gh-workflows` and is shared by every repo. It matches the grammatical **shape** of a violation rather than a literal phrase — a review noun near a discovery verb, a review actor mid-action, a telemetry possessive, a numeric process tally, a review-artifact heading — so a paraphrase of a banned class does not walk through. A literal-phrase list cannot do this: the previous one held a pattern for `findings raised` and still passed "Findings from review". An em-dash rule ships alongside it and is now **blocking**, not advisory (since gh-workflows v1.5; `.github/workflows/pr-body-lint.yml` pins the exact revision in use). Two carve-outs keep it from contradicting the proof gate that runs on the same body in the same invocation: a line matching `n/a —` and any checkbox line (`- [ ]` / `- [x]`) are exempt, so a `## Proof` block never trips it. Only prose em-dashes fail. Since gh-workflows#18 the baseline also ignores the two-line footer a cloud agent session appends to the very end of a PR or issue body; the same words anywhere else in a body, and in every changelog, still fail.
+
+The *project* list is `scripts/lint-patterns.sh` here (`LINT_PATTERNS`), passed to the reusable workflow as `extra_patterns`. It holds only what is specific to mammamiradio: sprint labels, cathedral vocabulary, this repo's contributor archaeology. **Overlap with the baseline is deliberate and must not be tidied away.** The three local lints below source this file *alone*, so deleting a pattern because the baseline also covers it silently drops changelog and issue coverage for it.
+
+A repo may only ADD patterns. Suppressing a baseline pattern is a pull request to `gh-workflows`, not a local override.
+
+**What this cannot catch.** Regex reaches lexical tells, not meaning. Metaphor carrying no lexical signal is out of reach, and renaming a review section to a neutral label defeats the heading rule, which matches the label and never the content. A passing lint is a tripwire on habitual violations, never evidence that a body is clean.
+
+Three local lints consume `LINT_PATTERNS`:
+
+- `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
+- `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
+- `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml` on workflow/script PRs and on `main`).
+
+To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
+
 ## Write-set
 
 Assign paths per task. Do not maintain a standing directory ownership map.
@@ -336,6 +360,8 @@ reach a local run and a scheduled one alike. Only the literal `0` switches off:
 `LAND_QUEUE=false` reads as on. `scripts/pr-queue-status.sh --json` derives from
 the planner, so it reports the switch rather than working while the queue is
 off; the human dashboard is unaffected.
+
+Self-test: `bash tests/workflows/test_land_queue.sh`.
 
 **It is not live, and cannot be flipped live from a feature seat.** Doing that
 needs a GitHub App installed on the repo with `contents:write` +

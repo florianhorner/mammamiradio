@@ -103,8 +103,8 @@ grep -q "\[FAIL\] Model registry review age: the checker/source failed" <<<"$out
 grep -q "last_reviewed is missing, malformed, or older" <<<"$out" && die "malformed TOML was misreported as a review-stamp finding"
 passed "malformed TOML fails closed as a checker/source error"
 
-# Case 6: a fresh stamp plus the real captures passes both gates. The repo pins are a
-# generation behind (drift), but every one is alive, and the cut asks only about liveness.
+# Case 6: a fresh stamp plus the real captures passes both gates. The held Haiku pin is a
+# generation behind (drift), but every pin is alive, and the cut asks only about liveness.
 run_section "$TMP/fresh.toml" "$FIXTURES"
 grep -q "\[PASS\] Model registry review age" <<<"$out" || die "a fresh stamp should pass the review-age gate"
 grep -q "\[PASS\] Pinned models are alive" <<<"$out" || die "alive pins should pass the liveness gate"
