@@ -295,7 +295,8 @@ fi
 
 echo ""
 echo "11. Model registry (review age + pinned models alive)"
-# Body and contract: scripts/model-registry-gate.sh and CLAUDE.md, Quality gates, "Model registry watch".
+# Body: scripts/model-registry-gate.sh. Contract (env vars, CI-skip rationale):
+# docs/release-process.md, "Practical sequencing (soak hygiene)", the model registry bullet.
 model_registry_gate "$MEDIA_PYTHON" "$SCRIPT_DIR/check_model_registry.py"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
