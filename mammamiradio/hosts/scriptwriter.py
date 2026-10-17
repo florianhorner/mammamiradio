@@ -2122,7 +2122,7 @@ def _speech_texts_from_json(data: object, *, surface: str | None) -> list[str]:
     """Extract model-authored speech fields from script JSON for language checks."""
     if not isinstance(data, dict):
         return []
-    if surface == "banter":
+    if surface in ("banter", "banter_listener_truth_repair"):
         texts: list[str] = []
         raw_lines = data.get("lines")
         if isinstance(raw_lines, list):
