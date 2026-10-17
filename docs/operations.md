@@ -192,6 +192,73 @@ spoken-text `PASS`/`FAIL`/`N/A` states); provider or JSON failures use `floor: n
 remain separate from those checks. A completed default run is observational and exits `0`
 even when a receipt fails. Use unit tests—not a paid run—as CI enforcement.
 
+## Haiku fast-path benchmark
+
+`scripts/bench_haiku_fast_path.py` is a local operator command for comparing the
+**fast-role model** (transitions and post-air memory extraction) against its candidate
+successor: the registry's Haiku 4.5 pin as arm A, and Haiku 5.5 at effort `low`, effort
+`medium`, and default as arms B, C, and D, plus two arms that change the request shape:
+E sends `thinking={"type": "disabled"}` at the default effort, and F sends effort `low`
+with the transition budget raised from 100 to 300 output tokens (memory extraction keeps
+its 900). E and F exist because Haiku 5.5 thinks by default and the thinking counts
+against `max_tokens`, so at the production transition budget the model can spend the whole
+budget before it writes any text. `--arms A,E,F` runs a subset; arm A is always included
+because the gate compares against it. Rule: a change to the fast-role pin, its request
+shape, or its token budgets ships with a run of this benchmark on the current production
+prompts, and the registry decision quotes the run. Latency and output budgets measured on
+one model generation are not inherited by the next; the October 2026 run showed Haiku 5.5
+spending the whole 100-token transition budget on thinking at its default effort, which no
+reading of the model card would have predicted. It makes paid Anthropic calls and is not a CI
+gate, not runtime enforcement, and not a change to `model_registry.toml`. It bypasses the
+registry's Haiku effort guard **on purpose**: the registry loader drops any effort entry
+whose catalog model starts with `claude-haiku` (`EFFORT_UNSUPPORTED_MODEL_PREFIX` in
+`core/config.py`, mirrored by `scripts/validate-addon.sh`) because Haiku 4.5 rejects
+`output_config.effort`, so `effort_for()` never returns an effort for the fast role and the
+production path can never try the candidate at a chosen effort. The benchmark therefore
+calls the Anthropic SDK directly with the same request shape production sends (system
+prompt, `max_tokens`, `max_retries=0`, the production per-attempt timeout), one request in
+flight at a time. Haiku 5.5's documented default effort is `medium`, so arms C and D are
+nominally the same server-side configuration and their spread doubles as a repeatability
+estimate.
+
+Always inspect the no-network preview first:
+
+```bash
+.venv/bin/python scripts/bench_haiku_fast_path.py --dry-run
+```
+
+The preview builds the full corpus through the production prompt builders (50 transition
+prompts captured from `write_transition`, 50 memory-extraction prompts from
+`_build_prompt`), checks that every prompt is distinct, and prints prompt sizes, the
+selected arms, the effort mechanism the installed SDK offers, the planned calls, the timeout,
+the gate, the pricing rows with their source and capture date, and the receipt path. It
+needs no key, and the production config loader runs with every provider key hidden while
+the corpus is built, so neither the shell's key nor one kept in `.env` is read. A real run
+reads `MAMMAMIRADIO_BENCH_ANTHROPIC_API_KEY` first (a bench-specific name, so the benchmark's
+spend can run on its own key rather than the station's) and falls back to `ANTHROPIC_API_KEY`; it stops with exit `2`
+before any other work when neither is set. The command reads the shell environment only,
+not `.env`, so a key kept in `.env` is not seen:
+
+```bash
+MAMMAMIRADIO_BENCH_ANTHROPIC_API_KEY=... .venv/bin/python scripts/bench_haiku_fast_path.py
+MAMMAMIRADIO_BENCH_ANTHROPIC_API_KEY=... .venv/bin/python scripts/bench_haiku_fast_path.py --prompts-per-type 2
+MAMMAMIRADIO_BENCH_ANTHROPIC_API_KEY=... .venv/bin/python scripts/bench_haiku_fast_path.py --arms A,E,F
+```
+
+Each call appends one JSONL receipt row under `tmp/evals/` as it completes (latency,
+attempts, stop reason, tokens, output, usability flags computed with the production
+validators, a timed-out flag, cost); a `.summary.json` and a `.md` report land beside the
+receipts. The gate is latency only: a candidate arm passes a prompt type when its p95
+latency (nearest-rank, the `ceil(0.95*n)`-th sorted value) stays within +10 % of arm A and
+it produces no more unusable or too-long outputs than arm A. Error rows, including calls
+that hit the per-attempt timeout, are excluded from the latency percentiles and counted as
+not usable; the report carries a per-arm timeouts count and says how many timed-out calls
+the percentiles exclude. Cost is reported from the registry price for Haiku 4.5 and the
+documented list price for Haiku 5.5 (with the capture date; a `--pricing-capture` whose
+Haiku 5.5 row is not in the standard model-pricing table leaves the candidate unpriced),
+never gated. Exit `0` means every candidate arm passed both prompt types; `3` means at
+least one did not. A passing run is evidence for a registry proposal, not a bump.
+
 ## Runtime outputs
 
 - `tmp/` rendered segments and temp assets
