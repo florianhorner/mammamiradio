@@ -203,7 +203,8 @@ with the transition budget raised from 100 to 300 output tokens (memory extracti
 its 900). E and F exist because Haiku 5.5 thinks by default and the thinking counts
 against `max_tokens`, so at the production transition budget the model can spend the whole
 budget before it writes any text. `--arms A,E,F` runs a subset; arm A is always included
-because the gate compares against it. Rule: a change to the fast-role pin, its request
+because the gate compares against it, and a selection that names no candidate arm stops with
+exit `2`, since a run that compares nothing would read as a pass. Rule: a change to the fast-role pin, its request
 shape, or its token budgets ships with a run of this benchmark on the current production
 prompts, and the registry decision quotes the run. Latency and output budgets measured on
 one model generation are not inherited by the next; the October 2026 run showed Haiku 5.5
@@ -230,7 +231,7 @@ Always inspect the no-network preview first:
 The preview builds the full corpus through the production prompt builders (50 transition
 prompts captured from `write_transition`, 50 memory-extraction prompts from
 `_build_prompt`), checks that every prompt is distinct, and prints prompt sizes, the
-selected arms, the effort mechanism the installed SDK offers, the planned calls, the timeout,
+selected arms, the effort mechanism the installed SDK offers, the planned calls with the output budget each one sends, the timeout,
 the gate, the pricing rows with their source and capture date, and the receipt path. It
 needs no key, and the production config loader runs with every provider key hidden while
 the corpus is built, so neither the shell's key nor one kept in `.env` is read. A real run
