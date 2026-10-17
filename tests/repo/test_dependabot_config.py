@@ -1,5 +1,7 @@
 """Guards for the repository's Dependabot grouping policy."""
 
+import re
+from collections.abc import Iterable
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -7,6 +9,8 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPENDABOT_CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
+LOCKED_REQUIREMENTS = (REPO_ROOT / "requirements.txt", REPO_ROOT / "requirements-dev.txt")
+_REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
 
 
 def test_every_pip_group_excludes_major_updates() -> None:
@@ -58,15 +62,28 @@ def test_pydantic_group_carries_pydantic_and_its_core() -> None:
     )
 
 
-def _patterns_overlap(ignore_pattern: str, group_pattern: str) -> bool:
-    """True when either pattern, read as a literal name, matches the other.
+def _locked_dependency_names() -> frozenset[str]:
+    """Package names pinned in the two requirement files, lower-cased."""
+    names: set[str] = set()
+    for path in LOCKED_REQUIREMENTS:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = _REQUIREMENT_NAME.match(line)
+            if match:
+                names.add(match.group(1).lower())
+    return frozenset(names)
 
-    Dependabot accepts wildcards on both sides, so a one-way ``fnmatch`` misses an
-    ignore such as ``pydantic*`` against the literal group pattern ``pydantic``. Two
-    wildcards that overlap only through a third name (``pyd*`` and ``*core``) are
-    not detected.
+
+def _patterns_overlap(ignore_pattern: str, group_pattern: str, names: Iterable[str] = ()) -> bool:
+    """True when the two patterns can name the same package.
+
+    Dependabot accepts wildcards on both sides. Either pattern read as a literal
+    name may match the other (``pydantic*`` against ``pydantic``), or both may match
+    a third name (``*test`` and ``pytest*`` through ``pytest``), which only the
+    locked dependency names can reveal.
     """
-    return fnmatch(ignore_pattern, group_pattern) or fnmatch(group_pattern, ignore_pattern)
+    if fnmatch(ignore_pattern, group_pattern) or fnmatch(group_pattern, ignore_pattern):
+        return True
+    return any(fnmatch(name, ignore_pattern) and fnmatch(name, group_pattern) for name in names)
 
 
 def test_wildcard_ignore_overlaps_literal_group_pattern() -> None:
@@ -76,6 +93,15 @@ def test_wildcard_ignore_overlaps_literal_group_pattern() -> None:
     assert not _patterns_overlap("ruff", "pydantic*")
 
 
+def test_two_wildcards_overlap_through_a_locked_dependency_name() -> None:
+    assert not _patterns_overlap("*test", "pytest*")
+    assert _patterns_overlap("*test", "pytest*", names=("pytest",))
+    locked = _locked_dependency_names()
+    assert {"pydantic", "pydantic-core", "pytest", "ruff"} <= locked
+    assert _patterns_overlap("*test", "pytest*", names=locked)
+    assert not _patterns_overlap("*test", "pydantic*", names=locked)
+
+
 def test_ignored_dependencies_are_never_also_grouped() -> None:
     pip_update = _pip_update()
     ignored = pip_update.get("ignore") or []
@@ -83,6 +109,7 @@ def test_ignored_dependencies_are_never_also_grouped() -> None:
     groups = pip_update.get("groups") or {}
     assert isinstance(groups, dict), "groups must be a mapping when present"
 
+    locked = _locked_dependency_names()
     for entry in ignored:
         assert isinstance(entry, dict), "Every ignore entry must be a mapping"
         dependency_name = entry.get("dependency-name")
@@ -90,7 +117,7 @@ def test_ignored_dependencies_are_never_also_grouped() -> None:
         for group_name, group in groups.items():
             assert isinstance(group, dict), f"{group_name} must be a dependency-group mapping"
             for pattern in group.get("patterns") or []:
-                assert not _patterns_overlap(dependency_name, pattern), (
+                assert not _patterns_overlap(dependency_name, pattern, names=locked), (
                     f"{dependency_name} is ignored but also matches group {group_name!r} pattern {pattern!r}; "
                     "an ignored dependency can never move with its group, so its grouped siblings ship a stale pin"
                 )
