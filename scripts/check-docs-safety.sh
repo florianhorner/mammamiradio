@@ -45,6 +45,7 @@ DEFAULT_INSTALL_FILES=(
 
 DEFAULT_LINK_FILES=(
   README.md
+  CLAUDE.md
   ha-addon/README.md
   ha-addon/mammamiradio/README.md
   ha-addon/mammamiradio-edge/README.md

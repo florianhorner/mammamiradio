@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
-import httpx
+import httpx2
 import openai
 import pytest
 
@@ -136,8 +136,8 @@ def _anthropic_status_error(
     headers: dict[str, str] | None = None,
 ):
     """Build a real Anthropic SDK status exception with a real HTTP response."""
-    request = httpx.Request("POST", "https://api.anthropic.test/v1/messages")
-    response = httpx.Response(status_code, headers=headers, request=request)
+    request = httpx2.Request("POST", "https://api.anthropic.test/v1/messages")
+    response = httpx2.Response(status_code, headers=headers, request=request)
     return error_class(message, response=response, body={"error": {"type": error_type}})
 
 
@@ -863,7 +863,7 @@ def _banter_user_prompt(mock_cls) -> str:
 
 @pytest.mark.asyncio
 async def test_anthropic_creative_call_sends_configured_effort(config, state):
-    """Balanced creative (Sonnet 5) must pass medium effort via extra_body."""
+    """Balanced creative (Sonnet 5.5) must pass medium effort via extra_body."""
     config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps({"lines": [{"host": host_name, "text": "ciao"}], "new_joke": None})
@@ -877,7 +877,7 @@ async def test_anthropic_creative_call_sends_configured_effort(config, state):
 
     create = mock_cls.return_value.messages.create
     kwargs = create.call_args.kwargs
-    assert kwargs["model"] == "claude-sonnet-5"
+    assert kwargs["model"] == "claude-sonnet-5-5"
     assert kwargs["extra_body"] == {"output_config": {"effort": "medium"}}
 
 
@@ -904,7 +904,7 @@ async def test_anthropic_fast_path_omits_effort(config, state):
 async def test_anthropic_fast_override_matching_creative_model_omits_effort(config, state):
     """A fast override must not inherit effort from an equal creative model ID."""
     config.super_italian_mode = True
-    config.models.catalog["anthropic"]["__env_fast"] = "claude-sonnet-5"
+    config.models.catalog["anthropic"]["__env_fast"] = "claude-sonnet-5-5"
     for profile in config.models.profiles.values():
         profile.setdefault("anthropic", {})["fast"] = "__env_fast"
     response_json = json.dumps({"text": "next up"})
@@ -918,7 +918,7 @@ async def test_anthropic_fast_override_matching_creative_model_omits_effort(conf
 
     create = mock_cls.return_value.messages.create
     kwargs = create.call_args.kwargs
-    assert kwargs["model"] == "claude-sonnet-5"
+    assert kwargs["model"] == "claude-sonnet-5-5"
     assert "extra_body" not in kwargs
 
 
@@ -4044,8 +4044,8 @@ async def test_openai_script_breaker_blocks_retries_and_recovers(config, state, 
     config.anthropic_api_key = ""
     config.openai_api_key = "openai-key"
     state.openai_key_status = "valid"
-    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
-    response = httpx.Response(status_code, request=request)
+    request = httpx2.Request("POST", "https://api.openai.test/v1/chat/completions")
+    response = httpx2.Response(status_code, request=request)
     error = error_class("provider unavailable", response=response, body={})
     client = _mock_openai_response('{"ok": true}')
     client.chat.completions.create.side_effect = [error, _openai_completion('{"ok": true}')]
@@ -4073,8 +4073,8 @@ async def test_openai_script_breaker_blocks_retries_and_recovers(config, state, 
 async def test_openai_script_breaker_ignores_stale_key_failure(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = "old-key"
-    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
-    error = openai.AuthenticationError("bad key", response=httpx.Response(401, request=request), body={})
+    request = httpx2.Request("POST", "https://api.openai.test/v1/chat/completions")
+    error = openai.AuthenticationError("bad key", response=httpx2.Response(401, request=request), body={})
     client = _mock_openai_response('{"ok": true}')
 
     def old_key_call(**_kwargs):
@@ -4096,7 +4096,7 @@ async def test_openai_script_breaker_ignores_stale_key_failure(config, state):
 async def test_openai_script_breaker_classifies_other_provider_failures(config, state, failure):
     config.anthropic_api_key = ""
     config.openai_api_key = "openai-key"
-    request = httpx.Request("POST", "https://api.openai.test/v1/chat/completions")
+    request = httpx2.Request("POST", "https://api.openai.test/v1/chat/completions")
     if failure == "network":
         error = openai.APIConnectionError(request=request)
     elif failure == "timeout":
@@ -4107,9 +4107,9 @@ async def test_openai_script_breaker_classifies_other_provider_failures(config, 
             "unprocessable": (openai.UnprocessableEntityError, 422),
             "model": (openai.NotFoundError, 404),
         }[failure]
-        error = error_type("provider error", response=httpx.Response(status, request=request), body={})
+        error = error_type("provider error", response=httpx2.Response(status, request=request), body={})
     else:
-        error = openai.RateLimitError("insufficient_quota", response=httpx.Response(429, request=request), body={})
+        error = openai.RateLimitError("insufficient_quota", response=httpx2.Response(429, request=request), body={})
     client = _mock_openai_response('{"ok": true}')
     client.chat.completions.create.side_effect = error
     with patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=client):

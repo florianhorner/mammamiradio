@@ -25,6 +25,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "model_registry"
 SYNTHETIC = FIXTURES / "synthetic"
 REPO_REGISTRY = Path(__file__).resolve().parents[2] / "model_registry.toml"
 TODAY = dt.date(2026, 9, 8)
+# Pins the maintainer holds on purpose while they are alive; empty when every pin is
+# current. The hold reason belongs in the registry's decision comment, not here.
+HELD_LEGACY_PINS = frozenset({"anthropic.haiku"})
 
 REGISTRY_PINNED_2026 = """[models]
 default_profile = "balanced"
@@ -49,9 +52,9 @@ default_profile = "balanced"
 last_reviewed = "2026-09-08"
 
 [models.catalog.anthropic]
-opus = "claude-opus-5"
-sonnet = "claude-sonnet-5"
-haiku = "claude-haiku-4-5-20251001"
+opus = "claude-opus-5-5"
+sonnet = "claude-sonnet-5-5"
+haiku = "claude-haiku-5-5"
 
 [models.catalog.openai]
 large = "gpt-5.6-sol"
@@ -186,13 +189,21 @@ def test_age_missing_registry_file_fails(tmp_path: Path, capsys: pytest.CaptureF
 
 def test_anthropic_overview_capture_parses_current_and_legacy() -> None:
     current, legacy = watch.parse_anthropic_overview((FIXTURES / "anthropic-overview.md").read_text())
-    assert current == {"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"}
-    assert {"opus-4-8", "sonnet-4-6", "fable-5"} <= set(legacy)
+    assert current == {"claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"}
+    assert {"opus-5", "sonnet-5", "haiku-4-5", "opus-4-8", "sonnet-4-6", "fable-5"} <= set(legacy)
 
 
 def test_anthropic_deprecations_capture_parses_lifecycle_rows() -> None:
     rows = watch.parse_anthropic_deprecations((FIXTURES / "anthropic-deprecations.md").read_text())
-    for pin in ("claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"):
+    for pin in (
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+    ):
         assert rows[pin].state == "active", pin
     assert rows["claude-opus-4-1-20250805"].state == "retired"
     assert "October 15, 2026" in rows["claude-haiku-4-5-20251001"].retirement
@@ -285,6 +296,28 @@ def test_openai_deprecations_html_table_also_parses() -> None:
     assert shutdowns["gpt-3.5-turbo"].date == dt.date(2026, 10, 23)
 
 
+def test_openai_deprecations_tts_voice_rows_parse() -> None:
+    """The tts-1 shutdown rows that broke the 2026-10-05 watch read as dated shutdowns."""
+    shutdowns = watch.parse_openai_deprecations((SYNTHETIC / "openai-deprecations-tts1-shutdown.md").read_text())
+    assert shutdowns["tts-1"].date == dt.date(2027, 3, 2)
+    assert shutdowns["tts-1-hd"].date == dt.date(2027, 3, 2)
+    assert "gpt-4o-mini-tts" not in shutdowns
+
+
+def test_pinned_tts_model_stays_current_beside_a_tts1_shutdown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixtures = _fixture_dir(tmp_path, openai_deprecations=SYNTHETIC / "openai-deprecations-tts1-shutdown.md")
+    path = _registry(tmp_path, REGISTRY_ALL_CURRENT)
+    code, out = _run(
+        capsys, "--report", "--registry", str(path), "--fixture-dir", str(fixtures), "--today", "2026-09-08"
+    )
+    assert code == watch.EXIT_OK, out
+    assert code != watch.EXIT_SOURCE
+    lines = {line.split()[0]: line for line in out.splitlines() if line and not line.startswith(("FINDINGS", "OK"))}
+    assert "current" in lines["tts.openai"]
+
+
 def test_openai_deprecations_header_only_table_raises_no_rows() -> None:
     page = "| Model / system | Shutdown date |\n|---|---|\n"
     with pytest.raises(watch.SourceError, match="no model shutdown rows"):
@@ -331,7 +364,18 @@ def test_openai_deprecations_html_code_placeholder_is_a_source_error() -> None:
         watch.parse_openai_deprecations(page)
 
 
-@pytest.mark.parametrize("source_cell", ["`gpt-oss`", "`davinci`", "Videos API", "OpenAI-Beta: realtime=v1"])
+@pytest.mark.parametrize(
+    "source_cell",
+    [
+        "`gpt-oss`",
+        "`davinci`",
+        "`tts-1`",
+        "`tts-1-hd`",
+        "`omni-moderation-latest`",
+        "Videos API",
+        "OpenAI-Beta: realtime=v1",
+    ],
+)
 def test_openai_deprecations_accepts_supported_identifier_shapes(source_cell: str) -> None:
     page = f"| Model / system | Shutdown date |\n|---|---|\n| {source_cell} | Sep 1, 2026 |\n"
     assert watch.parse_openai_deprecations(page)
@@ -463,7 +507,7 @@ def test_anthropic_overview_reads_only_the_first_api_id_row() -> None:
     text = (FIXTURES / "anthropic-overview.md").read_text()
     text += "\n\n| Claude API ID | `claude-opus-4-8` | `claude-sonnet-4-6` |\n"
     current, _legacy = watch.parse_anthropic_overview(text)
-    assert "claude-opus-4-8" not in current and "claude-sonnet-5" in current
+    assert "claude-opus-4-8" not in current and "claude-sonnet-5-5" in current
 
 
 def test_openai_shutdowns_bind_columns_by_each_tables_header() -> None:
@@ -520,14 +564,14 @@ def test_pinned_registry_is_a_generation_behind_but_alive(tmp_path: Path, capsys
     )
     assert code == watch.EXIT_FINDING
     lines = {line.split()[0]: line for line in out.splitlines() if line and not line.startswith(("FINDINGS", "OK"))}
-    assert "legacy" in lines["anthropic.opus"] and "(current: claude-opus-5)" in lines["anthropic.opus"]
-    assert "legacy" in lines["anthropic.sonnet"] and "(current: claude-sonnet-5)" in lines["anthropic.sonnet"]
+    assert "legacy" in lines["anthropic.opus"] and "(current: claude-opus-5-5)" in lines["anthropic.opus"]
+    assert "legacy" in lines["anthropic.sonnet"] and "(current: claude-sonnet-5-5)" in lines["anthropic.sonnet"]
     assert "legacy" in lines["anthropic.fable"] and "(current: claude-fable-5-1)" in lines["anthropic.fable"]
-    assert "current" in lines["anthropic.haiku"]
+    assert "legacy" in lines["anthropic.haiku"] and "(current: claude-haiku-5-5)" in lines["anthropic.haiku"]
     assert "unlisted" in lines["openai.large"] and "gpt-5.6-sol" in lines["openai.large"]
     assert "unlisted" in lines["openai.small"]
     assert "current" in lines["tts.openai"]
-    assert "FINDINGS (drift): 5 of 7" in out
+    assert "FINDINGS (drift): 6 of 7" in out
 
     code, out = _run(
         capsys,
@@ -585,8 +629,13 @@ def test_all_current_registry_is_clean_under_drift(tmp_path: Path, capsys: pytes
     assert "OK (drift): all 7 pinned models are current" in out
 
 
-def test_real_registry_is_current_under_fixture_drift(capsys: pytest.CaptureFixture[str]) -> None:
-    """After the Claude 5 bump, the shipped registry must read as current against the captures."""
+def test_real_registry_matches_the_decision_under_fixture_drift(capsys: pytest.CaptureFixture[str]) -> None:
+    """The shipped registry reads as the documented decision against the captures.
+
+    Every pin is current, except the ones in HELD_LEGACY_PINS, which may read `legacy`
+    (alive, deliberately held) and never `unlisted`, `deprecated` or `retired`. A bump
+    that forgets to re-capture the provider docs still fails here as `unlisted`.
+    """
     code, out = _run(
         capsys,
         "--providers",
@@ -599,11 +648,33 @@ def test_real_registry_is_current_under_fixture_drift(capsys: pytest.CaptureFixt
         "--today",
         "2026-09-10",
     )
+    verdicts = {line.split()[0]: line for line in out.splitlines() if line and not line.startswith(("FINDINGS", "OK"))}
+    assert {"anthropic.opus", "anthropic.sonnet", "anthropic.fable", "anthropic.haiku"} <= verdicts.keys(), out
+    drifted = {label: line for label, line in verdicts.items() if line.split()[2] != "current"}
+    assert drifted.keys() == HELD_LEGACY_PINS, out
+    for line in drifted.values():
+        assert line.split()[2] == "legacy", line
+    if HELD_LEGACY_PINS:
+        assert code == watch.EXIT_FINDING, out
+        assert f"FINDINGS (drift): {len(HELD_LEGACY_PINS)} of {len(verdicts)} pinned models:" in out
+    else:
+        assert code == watch.EXIT_OK, out
+        assert "OK (drift):" in out
+
+    code, out = _run(
+        capsys,
+        "--providers",
+        "--gate",
+        "liveness",
+        "--registry",
+        str(REPO_REGISTRY),
+        "--fixture-dir",
+        str(FIXTURES),
+        "--today",
+        "2026-09-10",
+    )
     assert code == watch.EXIT_OK, out
-    assert "OK (drift):" in out
-    for label in ("anthropic.opus", "anthropic.sonnet", "anthropic.fable", "anthropic.haiku"):
-        line = next(line for line in out.splitlines() if line.startswith(label))
-        assert "current" in line, line
+    assert "OK (liveness):" in out
 
 
 def test_deprecated_anthropic_pin_fails_liveness(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -760,7 +831,7 @@ def test_one_transient_failure_is_retried_and_the_run_completes(
     path = _registry(tmp_path)
     code, out = _run(capsys, "--providers", "--registry", str(path), "--today", "2026-09-08")
     assert code == watch.EXIT_FINDING
-    assert "UNREADABLE" not in out and "FINDINGS (drift): 5 of 7" in out
+    assert "UNREADABLE" not in out and "FINDINGS (drift): 6 of 7" in out
     assert len(failed_once) == len(watch.SOURCES)
 
 

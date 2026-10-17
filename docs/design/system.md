@@ -703,6 +703,21 @@ Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URL
 
 `tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes the test file, which defines the banned string, and four generated audio-pack files: the committed `manifest.json` and `ATTRIBUTION.md`, their generator, and the test that pins their hashes. Three exact-line allowances defer corrections in one dated plan and one upstream-proposal document to dedicated docs changes. All other lines in those files remain covered. The suite rejects stale allowances. Changelogs and docs must describe the typo without repeating it.
 
+## Sonic identity
+
+The sonic identity must translate beyond full-range speakers.
+
+Keep a default station signature recognizable on phones, laptops, small smart
+speakers, and ordinary car systems. Bass may reinforce the cue on full-range
+equipment. It must not carry the identifying rhythm, contour, or answer by
+itself. Keep the identifying energy in the midrange. Test it on a small speaker
+as well as the Mac and target speaker.
+
+Modern Night Drive uses **Neon Relay** as its station signature. **Velvet
+Horizon** sets the atmosphere for separately authored transitions. Use it as a
+production style. Reserve the station signature for Neon Relay, and do not
+reuse the Velvet Horizon prototype as transition material.
+
 ## Rules and anti-patterns
 
 | Rule | Reason |
@@ -735,7 +750,10 @@ All semantic states must pair a color with a **shape**: checkmark (✓), triangl
 |-------|------|
 | Admin | `mammamiradio/web/templates/admin.html` |
 | Listener | `mammamiradio/web/templates/listener.html` |
-| Logo SVG | `mammamiradio/assets/logo.svg` |
+| Logo SVG | `mammamiradio/assets/logo.svg` (canonical vector source, variant G: classic radio with Italian flag stripe and sound waves) |
+| Favicon | `mammamiradio/web/static/favicon.svg` (byte-for-byte copy of the logo, enforced by `tests/web/test_route_smoke.py`; browser fallback route `/favicon.ico`) |
+| Hero banner / social card | `docs/banner.png` and `docs/social-card.png` (matching 1280×640 README hero and social preview) |
+| Hero composite template | `docs/hero-composite.html` (regeneration instructions in its comment header) |
 | HA add-on icon | `ha-addon/mammamiradio/icon.png` (256px) |
 | HA logo | `ha-addon/mammamiradio/logo.png` (512px) |
 | Design preview | `/tmp/design-preview-volare-refined.html` (local only, not committed) |
@@ -746,6 +764,8 @@ To regenerate HA add-on PNGs from SVG:
 cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/icon.png -W 256 -H 256
 cairosvg mammamiradio/assets/logo.svg -o ha-addon/mammamiradio/logo.png -W 512 -H 512
 ```
+
+The hero banner and social card composite a warm Home Assistant-native room background with Playfair italic typography and the "La Casa Ti Ascolta" overlay. The temporary background image (`banner-bg.png`) is generated externally and not committed to git.
 
 
 ## Decisions Log

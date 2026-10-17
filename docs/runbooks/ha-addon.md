@@ -493,7 +493,7 @@ exports it as the legacy `CLAUDE_MODEL` fast-role override while no
 `quality_profile` exists. A successful Supervisor-backed admin save removes the
 legacy field once `quality_profile` is present. The canonical model IDs, OpenAI
 TTS selection, and script-token prices live in the root `model_registry.toml`
-(see "Dynamic LLM routing" in the root `CLAUDE.md`).
+(see "Dynamic LLM routing" in `docs/architecture.md`).
 **To add or swap a model:** update the relevant registry catalog entry and its
 matching `[pricing.catalog.<provider>]` key in the same change—no code or schema
 change. Restamp `last_reviewed` in the same change and say why in the comment
@@ -773,8 +773,11 @@ rather than pared to what only a live host can show.
 
 ## Landing a PR (merge gate)
 
-Landing is mechanized — see the **Landing contract** in `CLAUDE.md` "Quality
-gates" (single source of truth). The short version:
+This section is the single source of truth; the root agent guide points here.
+
+**Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls.** The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until the maintainer's explicit merge signal. On the signal, `scripts/land-pr.sh <PR#>` (1) refuses a behind or conflicted branch without mutating the PR, directing its feature workspace to integrate `origin/main`, review any changed code, and push; (2) blocks unresolved current Major/Critical/P0/P1 bot threads and fails closed if thread data cannot be read, through `scripts/land-gates.sh` shared with the report-only shadow queue, without consulting receipts or local ledgers; (3) checks release-cut admission; and (4) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12); integrate the base in the owning workspace before landing. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. During a release cut, `scripts/check-advertised-version.sh` checks GHCR for the version advertised on `main`. Missing images make `dependabot-automerge.yml` disable auto-merge and add `cut-window-hold` to affected Dependabot PRs. The sweep only disarms. After publication, a fresh PR event with verified Dependabot metadata or the landing workflow can resume held PRs. Before arming, the workflow checks that the PR head matches the metadata and `main` matches the registry check. PR events can re-arm a PR you disarmed by hand. Before a cut, the release operator runs `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` to disable new runs, drain existing runs and disarm PRs. `land-pr.sh` requires verified freeze state for stable-version changes. Keep the human landing freeze through both architecture promotions, then resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`; see "The cut window" above for proof and recovery. GitHub Actions must not post Dependabot rebase or recreate commands. Handle behind branches through an authenticated maintainer. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`), which reads GitHub's effective rules for `main` rather than reimplementing ruleset pattern matching. Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and head matching does not eliminate non-conflicting staleness. The owning feature agent handles CI waits and review feedback; the landing seat reports `MERGED` only after confirming GitHub's state, never merely because arming succeeded.
+
+The short version:
 
 - `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
   review time) until the maintainer gives the merge signal.
@@ -835,7 +838,15 @@ Before merging ANY change that touches addon files:
    `emergency_tone.mp3` must ship under
    `mammamiradio/assets/demo/recovery/`, exceed 1 KiB, match their approved
    `spoken_assets.json` hashes, and contain an FFprobe-readable audio stream.
-   `producer.py` must not call `generate_silence` in recovery paths.
+   Each asset is checked independently, so validation never stops at the first
+   playable asset. The manifest/hash boundary is no longer a per-asset call in
+   this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py`
+   run with no arguments covers both the packaged demo inventory and the
+   browser narration pack before the per-asset reachability check;
+   `--browser-assets-root` is a separate mode that checks only the browser
+   pack under the full First Listen contract, which the release check runs
+   as its own step. `producer.py` must not mention `generate_silence`
+   anywhere; the check greps the whole file, not only recovery paths.
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
 5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist. The perf smoke skips its stream-byte probe only for a persisted operator stop confirmed independently by `503 stopped` from `/readyz` and `session_stopped: true` from `/public-status`; every other starting or ready state must still produce bytes.
@@ -858,7 +869,7 @@ A 24-hour minimum gap is enforced between consecutive published releases. The ga
 - Block rule: `prior_release_time + 24h > now` => status check fails, release surfaces red.
 - Bypass: the PR that introduced the tagged commit carries the `hotfix` label. The workflow skips the cooldown check entirely. Intended for P0/P1 regressions the existing release just introduced.
 - Override: `MIN_COOLDOWN_HOURS=<n>` at workflow level (not set by default) tightens or relaxes the window.
-- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on PRs that touch `.github/`, `scripts/`, or `tests/workflows/`, and on every push to `main`.
+- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on the changed-lanes `workflows` lane (`scripts/ci-changed-lanes.sh`), and on every push to `main`, where every lane runs.
 
 **Trust model:** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. Acceptable for the current single-maintainer team; revisit if PR volume grows. Day 8 Go/No-Go uses `../stabilization-log.md` to evaluate whether the gate is working.
 

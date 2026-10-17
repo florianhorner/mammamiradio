@@ -65,6 +65,21 @@ page: tune in, reveal at the cue, install button, retirement after the fourth
 moment. It runs under emulated reduced motion, which also exercises that
 contract on every run.
 
+`.github/workflows/explainer.yml` runs the
+`docs/explainer/` test suite (`npm test`), the production build
+(`npm run build`), and the four-scenario funnel end-to-end in real Chromium
+under emulated reduced motion (`npm run test:e2e`), on pushes and PRs to
+`main` that touch `docs/explainer/**`, the workflow itself, or
+`.github/workflows/explainer-pages.yml`; on a ref without
+`docs/explainer/package.json` the job skips the Node, install, test, build
+and funnel steps and passes with a notice. The suite carries the framing
+guards that keep the page station-first plus scenario/build validation;
+the funnel test drives an actual browser, so it does reach playback wiring
+the string assertions cannot. What stays out of CI is audio judgement —
+whether a cue lands on the beat is a manual listen after the clips are
+produced (see below). The workflow is in its own path filter so a
+change to the CI invocation is exercised by the job it changes.
+
 ## Producing the clips
 
 Two scripts, both operator commands rather than CI steps:
