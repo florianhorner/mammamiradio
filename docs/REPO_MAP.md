@@ -61,6 +61,15 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Demo MP3s / SFX / studio bleeds / logo             | `mammamiradio/assets/`                       |
 | HACS/Home Assistant integration                    | `custom_components/mammamiradio/`            |
 | Home Assistant add-on packaging                    | `ha-addon/mammamiradio/` + `ha-addon/mammamiradio-edge/` |
+| Add-on metadata, options schema, ingress config    | `ha-addon/mammamiradio/config.yaml`          |
+| Add-on entrypoint mapping Supervisor env vars      | `ha-addon/mammamiradio/rootfs/run.sh`        |
+| Add-on option labels                               | `ha-addon/mammamiradio/translations/en.yaml` |
+| Edge channel add-on (metadata only, same image)    | `ha-addon/mammamiradio-edge/` + `docs/runbooks/ha-addon.md` (Edge channel) |
+| Standalone container image (Python + FFmpeg)       | `Dockerfile`                                 |
+| HA add-on image (Alpine-based)                     | `ha-addon/mammamiradio/Dockerfile`           |
+| One-command run for non-HA users                   | `docker-compose.yml`                         |
+| Keep container builds clean                        | `.dockerignore`                              |
+| Multi-arch Docker build CI                         | `.github/workflows/docker.yml`               |
 | Apps store listing (blurb, intro, icon, logo)      | each app folder's `config.yaml` + `README.md` + `icon.png` / `logo.png` |
 | Disposable local HA + VLC speaker lab              | `scripts/first-listen-lab.sh`                |
 
@@ -90,6 +99,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Local setup, conventions         | `CONTRIBUTING.md`                |
 | Agent rules + leadership         | `CLAUDE.md`                      |
 | Release notes                    | `CHANGELOG.md`                   |
+| Frozen v1 integration surface + change ceremony | `CONTRACT.md`     |
 | Product and market status        | `docs/status-quo.md`             |
 | Runtime flow + API routes        | `docs/architecture.md`           |
 | Deploy / production reality      | `docs/operations.md`             |
@@ -106,6 +116,14 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
 | Parallel workspaces + landing    | `docs/runbooks/parallel-workspaces.md` |
 | Listener QS integration train    | `docs/listener-qs-train.md`      |
+| Release strategy (themes vs versions, cut-don't-open) | `docs/release-process.md` |
+| Refactor cuts: pre-flight checklist + lessons | `docs/runbooks/refactor-cuts.md` |
+| HA upstream early-warning watcher | `docs/runbooks/ha-upstream-watch.md` |
+| Agent-specific notes + integration points | `docs/agents.md`         |
+| Weekly fix-hours + emergency-patch counts | `docs/stabilization-log.md` |
+| Music sources + rights boundaries | `docs/music-sources.md`         |
+| Integration contract docs + sample payloads | `docs/integrations/`   |
+| Explainer page source + clip production | `docs/explainer/`          |
 
 ## Runtime ownership
 
