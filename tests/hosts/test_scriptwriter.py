@@ -863,7 +863,7 @@ def _banter_user_prompt(mock_cls) -> str:
 
 @pytest.mark.asyncio
 async def test_anthropic_creative_call_sends_configured_effort(config, state):
-    """Balanced creative (Sonnet 5) must pass medium effort via extra_body."""
+    """Balanced creative (Sonnet 5.5) must pass medium effort via extra_body."""
     config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps({"lines": [{"host": host_name, "text": "ciao"}], "new_joke": None})
@@ -877,7 +877,7 @@ async def test_anthropic_creative_call_sends_configured_effort(config, state):
 
     create = mock_cls.return_value.messages.create
     kwargs = create.call_args.kwargs
-    assert kwargs["model"] == "claude-sonnet-5"
+    assert kwargs["model"] == "claude-sonnet-5-5"
     assert kwargs["extra_body"] == {"output_config": {"effort": "medium"}}
 
 
@@ -904,7 +904,7 @@ async def test_anthropic_fast_path_omits_effort(config, state):
 async def test_anthropic_fast_override_matching_creative_model_omits_effort(config, state):
     """A fast override must not inherit effort from an equal creative model ID."""
     config.super_italian_mode = True
-    config.models.catalog["anthropic"]["__env_fast"] = "claude-sonnet-5"
+    config.models.catalog["anthropic"]["__env_fast"] = "claude-sonnet-5-5"
     for profile in config.models.profiles.values():
         profile.setdefault("anthropic", {})["fast"] = "__env_fast"
     response_json = json.dumps({"text": "next up"})
@@ -918,7 +918,7 @@ async def test_anthropic_fast_override_matching_creative_model_omits_effort(conf
 
     create = mock_cls.return_value.messages.create
     kwargs = create.call_args.kwargs
-    assert kwargs["model"] == "claude-sonnet-5"
+    assert kwargs["model"] == "claude-sonnet-5-5"
     assert "extra_body" not in kwargs
 
 

@@ -19,6 +19,11 @@ WF="$REPO_ROOT/.github/workflows/model-registry-watch.yml"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures/model_registry"
 REGISTRY="$REPO_ROOT/model_registry.toml"
 
+# Pins the maintainer holds on purpose while they are alive; empty when every pin is
+# current. The hold reason belongs in the registry's decision comment, not here.
+# Mirrors HELD_LEGACY_PINS in tests/scripts/test_check_model_registry.py.
+HELD_PINS="anthropic.haiku"
+
 fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
@@ -57,13 +62,30 @@ report() {
 # The checker's exit-code contract, against the real registry and real captures.
 # ---------------------------------------------------------------------------
 
-# Case 1: live registry against committed fixtures is clean => exit 0. This also
-# pins fixtures to pins: a bump that forgets to re-capture the provider docs goes
-# red here, not in the first weekly run.
-if ! report "$REGISTRY" "$FIXTURES"; then
-  fail "live registry against committed fixtures should exit 0, got: $(cat "$TMP/out")"
+# Case 1: live registry against committed fixtures reads as the documented decision.
+# With no held pin that is exit 0. With held pins it is exit 1 whose only drift
+# findings are the held pins, each alive and reading `legacy`. Either way this pins
+# fixtures to pins: a bump that forgets to re-capture the provider docs goes red here
+# (unlisted), not in the first weekly run.
+rc=0; report "$REGISTRY" "$FIXTURES" || rc=$?
+if [ -z "$HELD_PINS" ]; then
+  [ "$rc" = "0" ] || fail "live registry against committed fixtures should exit 0, got $rc: $(cat "$TMP/out")"
+  case1="live registry + committed fixtures exit 0 (the workflow's clean input is real)"
+else
+  [ "$rc" = "1" ] || fail "live registry with held pins should exit 1, got $rc: $(cat "$TMP/out")"
+  held_count="$(wc -w <<<"$HELD_PINS" | tr -d ' ')"
+  pinned_count="$(grep -cE '^[a-z0-9_]+\.[a-z0-9_]+[[:space:]]' "$TMP/out")"
+  expected="FINDINGS (drift): $held_count of $pinned_count pinned models: ${HELD_PINS// /, }"
+  grep -qF "$expected" "$TMP/out" || fail "expected '$expected', got: $(cat "$TMP/out")"
+  while read -r label _model status _rest; do
+    case " $HELD_PINS " in
+      *" $label "*) [ "$status" = "legacy" ] || fail "held pin $label must read legacy (alive), got: $status" ;;
+      *) [ "$status" = "current" ] || fail "unheld pin $label drifted: $status" ;;
+    esac
+  done < <(grep -E '^[a-z0-9_]+\.[a-z0-9_]+[[:space:]]' "$TMP/out")
+  case1="live registry + committed fixtures exit 1 with only the held pins drifting, each alive and legacy"
 fi
-pass "live registry + committed fixtures exit 0 (the workflow's clean input is real)"
+pass "$case1"
 
 # Case 2: a pin the provider does not list is a finding => exit 1.
 sed 's/^opus = ".*"/opus = "claude-opus-99-fake"/' "$REGISTRY" > "$TMP/drift.toml"
