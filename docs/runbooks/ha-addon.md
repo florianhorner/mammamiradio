@@ -841,9 +841,11 @@ Before merging ANY change that touches addon files:
    Each asset is checked independently, so validation never stops at the first
    playable asset. The manifest/hash boundary is no longer a per-asset call in
    this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py`
-   run covers the whole packaged demo inventory (and, with
-   `--browser-assets-root`, the browser narration pack) before the per-asset
-   reachability check. `producer.py` must not mention `generate_silence`
+   run with no arguments covers both the packaged demo inventory and the
+   browser narration pack before the per-asset reachability check;
+   `--browser-assets-root` is a separate mode that checks only the browser
+   pack under the full First Listen contract, which the release check runs
+   as its own step. `producer.py` must not mention `generate_silence`
    anywhere; the check greps the whole file, not only recovery paths.
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
