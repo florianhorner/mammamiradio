@@ -1301,7 +1301,10 @@ def print_dry_run(
     plan = planned_calls(prompts, arms)
     print(f"Planned calls: {len(plan)} (sequential, one in flight; arm order rotates with the prompt index)")
     for order_index, prompt, arm in [*plan[:8], *plan[-4:]]:
-        print(f"  #{order_index + 1:03d} {prompt.prompt_id:<14} arm {arm.label} max_tokens={prompt.max_tokens}")
+        print(
+            f"  #{order_index + 1:03d} {prompt.prompt_id:<14} arm {arm.label}"
+            f" max_tokens={effective_max_tokens(arm, prompt)}"
+        )
         if order_index == 7:
             print("  ...")
     print()
@@ -1392,6 +1395,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"--arms names unknown arm(s) {', '.join(unknown)}; known arms: {', '.join(known)}")
             return 2
         arms = [arm for arm in arms if arm.label in wanted]
+        if len(arms) < 2:
+            print("--arms must name at least one candidate arm besides the incumbent A")
+            return 2
     mechanism = detect_effort_mechanism()
     pricing = load_pricing(incumbent, args.pricing_capture, args.pricing_capture_date)
     started = datetime.now(UTC)
