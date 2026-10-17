@@ -96,7 +96,7 @@ _HTML_CODE = re.compile(r"<code\b[^>]*>(.*?)</code>", re.IGNORECASE | re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
 _CLAUDE_MODEL_ID = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9.\-]*")
 _OPENAI_MODEL_ID = re.compile(
-    r"(?:(?:gpt|chatgpt|ft|sora|whisper|dall-e|text|code|codex|computer-use)[-:]"
+    r"(?:(?:gpt|chatgpt|ft|sora|whisper|tts|omni-moderation|dall-e|text|code|codex|computer-use)[-:]"
     r"[A-Za-z0-9][A-Za-z0-9._:/=\-]*|o[1-9](?:-[A-Za-z0-9._:/=\-]+)?|"
     r"(?:ada|babbage|curie|davinci)(?:-[A-Za-z0-9._:/=\-]+)?)"
 )
