@@ -60,6 +60,14 @@ python -m piptools compile --generate-hashes --output-file=requirements.txt --st
 
 Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
 
+### Completing a Dependabot lock
+
+Dependabot rewrites only the pins it bumps in `requirements.txt` and never re-resolves the lock. CI installs with `--require-hashes` (`.github/actions/setup-python-ci/action.yml`), so a bump that adds or moves a transitive dependency fails at install time, not in a test.
+
+To complete such a PR, check out the Dependabot branch and merge `origin/main` if the branch is behind (merge, never rebase: the first commit must stay Dependabot's so the auto-merge metadata remains valid). Run the `piptools compile` command above with one `--upgrade-package PACKAGE==VERSION` per package the PR bumps; for the pydantic group pass `pydantic` and `pydantic-settings` only, because pip-compile selects the matching `pydantic-core`. Repeat the installation above, run `make check`, commit as `chore(deps): complete the lock for <package> <version>`, and push to the Dependabot branch. The pushed commit re-runs CI and keeps patch and minor PRs eligible for the guarded auto-merge. Majors land through a migration PR instead.
+
+When `ruff==` moves in `requirements-dev.txt`, set `rev:` under the `ruff-pre-commit` repo in `.pre-commit-config.yaml` to `v<version>` in the same commit (`tests/repo/test_repo_scripts.py` enforces the pair). Never bump `.pre-commit-config.yaml` alone.
+
 If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 
 Then fill in whatever `.env` values you need:
