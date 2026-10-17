@@ -102,7 +102,7 @@ add-on, has no Supervisor option, and returns to its configured startup value
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
-3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
+3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit. Two best-effort, symlink-checked scratch sweeps run alongside: `prune_stale_tmp_files` (`playlist/downloader.py`) removes `*.mp3` render scratch older than 6h from `tmp_dir` before the producer starts, so nothing is in flight; and `prune_stale_atomic_json_tmp_files` removes stale household JSON scratch for the four owned destinations (HA registry, entity policy, Moment Receipts, evening memory) — unique dotted scratch and the old fixed `*.json.tmp` form, only past a 6h age gate, never a symlinked or out-of-cache path, scanning at most 5000 dotted candidates plus the fixed legacy name and deleting at most 500 per destination per boot — before the Home writers start.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
 5. Restores an eligible persisted base selection without scanning local files; otherwise the hash-pinned attributed starter catalog is the offline base. A retired `jamendo://` source is rewritten, and add-on-external selections cannot restore extractor authority. Local discovery starts after audio and overlays future rotation. Mixed starter and local pools use weighted selection with a `2×` local lift, while starter-only pools keep bag order. The continuity bridge restricts recovery selection to starter media.
 6. Initializes the clip ring buffer for WTF clip sharing.
@@ -370,6 +370,15 @@ on each hit, which reconciles the cached file to the music target on first play 
 stamps a `reconciled_lufs` marker into the norm sidecar so later hits skip both the
 re-encode and the measure. This self-heals files cached before reconciliation
 existed (which otherwise aired at their old, quieter level) one play at a time.
+The marker is written only when `_reconcile_lufs` confirms the level (it returns
+`True` on an in-tolerance skip or a successful re-encode, `False` when the measure
+or re-encode failed), so a transiently failed file stays unmarked and is retried on
+the next hit rather than permanently masked as fixed. The marker is content-specific:
+`save_track_metadata`, only ever called for a freshly (re)normalized file, drops any
+`reconciled_lufs` it finds in a leftover sidecar (eviction unlinks the `.mp3` but
+leaves the `.json`), so a regenerated file must re-earn its marker rather than
+inherit a stale one. Sidecar reads (`_load_sidecar`, `load_track_metadata`) return
+empty on non-UTF8, corrupt or non-dict content rather than raising into the audio path.
 
 ### Egress FX pipeline (the transmitter, applied last)
 
@@ -482,6 +491,10 @@ priority over the selected root's `sfx/` directory. A resolved recipe uses its
 declared bed and no more than two cue files. A missing or corrupt recipe falls
 back without downloading or rendering source audio.
 
+Boundary carts are not loudness-reconciled at playback. The bundled manifest
+records approximately −16 LUFS (−16.07 to −15.89) against its −16 LUFS target;
+custom packs must be mastered to the station target before installation.
+
 The runtime reads recovery audio from `mammamiradio/assets/demo/` and honors the
 explicit `rescue` flag. Bridge and rescue fills still skip the egress pipeline.
 The optional FM broadcast chain is independent. When enabled,
@@ -496,6 +509,14 @@ the contract, not an oversight. Most segments commit in the `run_producer`
 main-loop epilogue (the `if segment:` block); bridges and the startup prewarm
 enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 `tests/scheduling/test_queue_commit_contract.py`.
+
+The operator air-next row is `_front_insert_queue_and_shadow`: a no-await
+drain → insert → repush that places the forced segment at the next priority
+position, keeps any already-queued urgent warning ahead, and drops the
+furthest-future eligible tail if the bounded queue would overflow. Only operator
+triggers (`operator_force_pending`) use it; the 60s-silence rescue and other
+internal forces append normally, and a second trigger while one is still pending
+is rejected with a way-out message.
 
 | Commit path | stopped discard | stale gate (playlist / chaos) | music eligibility gate | egress (FM) | queue op | up-next shadow row |
 |---|---|---|---|---|---|---|
@@ -865,13 +886,13 @@ Two features create the illusion of a live radio studio:
 
 A clip expires after 24 hours and the provenance ledger prunes after `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`, so a moment worth keeping is deleted twice over by default. `POST /api/clip/keep` (admin auth) exports the airing voice segment to `{cache_dir}/keepsakes/{id}.mp3` with a `{id}.json` sidecar, and nothing in the system expires it.
 
-Durability is structural rather than a flag: `cleanup_old_clips` and the `CLIP_MAX_SAVED` cap operate on `clips/` alone, every cache pruner globs `cache_dir/*.mp3` without recursing, and `cleanup_old_clips` refuses outright when handed a directory named `keepsakes`. The add-on backup contract includes the directory, so a kept moment survives a restore.
+Durability is structural rather than a flag: `cleanup_old_clips` and the `CLIP_MAX_SAVED` cap operate on `clips/` alone, every cache pruner globs `cache_dir/*.mp3` without recursing, and `cleanup_old_clips` refuses outright when handed a directory named `keepsakes`; `test_cache_eviction_never_reaches_into_keepsakes` guards the non-recursive assumption the other modules provide. The add-on backup contract includes the directory, so a kept moment survives a restore.
 
 **Two eligibility gates, both failing closed** (`is_keepsake_eligible` in `scheduling/clip.py`): the segment type must be in `KEEPSAKE_SEGMENT_TYPES` (banter, ad, news_flash, station_id, sweeper, time_check), and the segment must not carry `has_music_tail`. `commit_music_handoff` crossfades the outgoing song's real master under the opening seconds of the next voice segment, so type alone is not proof of provenance; a tailed segment is refused rather than trimmed, because a keepsake never expires and is served without auth.
 
 **Provenance and byte ownership share one boundary.** The playback loop writes `app.state.clip_segment` (`{type, chunks, title, has_music_tail}`) at every segment boundary and counts the chunks that segment puts into the share ring; the route cuts exactly those chunks (`extract_segment_audio`) rather than deriving a byte length from wall-clock elapsed. The ring holds every voice segment back to back, since music never enters it, so a window one chunk too long would be the previous segment's audio labelled with this one's title and rights check. The same count sizes the `last_shareworthy_clip` lookback snapshot, written for all six keepable types, which lets an operator catch a break that has just ended; the lookback is consulted only when the airing segment is not a keepable type, so `too_early` and `music_tail` stay honest refusals about what is on air now.
 
-Bounds: `KEEPSAKE_MAX_SAVED` (200) and a `KEEPSAKE_MIN_FREE_MB` (256) free-space preflight, run together with the file publication under `_keepsake_write_lock` so two presses cannot both pass at the ceiling. At roughly 4 MB for a long segment a full shelf is about 800 MB on the same volume as the norm cache, and no evictor reclaims it. The write is `mkstemp` + `fsync` + `os.replace`, so a kill mid-write can never publish a truncated keepsake. The scratch such a kill leaves behind is swept at the next startup by `prune_stale_keepsake_tmp_files`, since nothing else in the cache recurses into this directory.
+Bounds: anything shorter than `KEEPSAKE_MIN_SECONDS` of actual audio is refused as `too_early`; `KEEPSAKE_MAX_SAVED` (200) and a `KEEPSAKE_MIN_FREE_MB` (256) free-space preflight run together with the file publication under `_keepsake_write_lock` so two presses cannot both pass at the ceiling. At roughly 4 MB for a long segment a full shelf is about 800 MB on the same volume as the norm cache, and no evictor reclaims it. The write is `mkstemp` + `fsync` + `os.replace`, so a kill mid-write can never publish a truncated keepsake. The leftover `.keepsake-*.tmp` scratch such a kill leaves behind is never listed, served, or counted toward the ceiling, sits in the add-on's `backup_exclude` via `*.tmp`, and is swept at the next startup by `prune_stale_keepsake_tmp_files` (6h age gate, so a write in flight is never the thing pruned), since nothing else in the cache recurses into this directory.
 
 Keepsakes reuse the `/clips/{id}.mp3` and `/clips/{id}` URLs and are checked after `clips/`, so an id can never resolve to a keepsake while a live clip of that id exists. `GET /api/clip/keep` and `DELETE /api/clip/keep/{id}` list and revoke them, surfaced as **Kept moments** in the admin Archivio tab; deleting the file is the whole revocation, since both public routes read from disk per request.
 
@@ -1006,7 +1027,8 @@ Two optional expansions sit outside that base:
   is an optional override rather than part of the gate. It reads the API's streaming `audio`
   field with `audioformat=mp32`, admits only validated CC BY 3.0/4.0 candidates,
   and owns one in-memory lease plus one normalized partial/final artifact total.
-  At most one prepared track can follow every two local/starter tracks. Bytes and
+  At most one prepared track can follow every two local/starter tracks, and a
+  miss immediately falls back to base music. Bytes and
   lease metadata never enter cache, SQLite, rescue, handoff, clips, derivatives,
   or restart state, and the artifact is deleted after play or cancellation.
 - **Standalone `external-media`.** The optional package extra supplies `yt-dlp`
@@ -1169,7 +1191,7 @@ The hot `write_banter` contract does not write persona memory. Instead, `scriptw
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
 
-Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/First Listen/ads MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Banter rows also declare Normal vs Super Italian Mode, an optional exact predecessor starter id, and whether the clip is a rare fourth-wall special. Ad rows declare their mode, title, cast, and a `duration_seconds` inside 25 to 40 seconds that must match the measured audio, and carry no adjacency or special tier. The release boundary rejects missing, unlisted, changed, malformed, truth-unsafe, undecodable, off-loudness, or oversized inventory; runtime admission parses the policy-valid manifest snapshot and hashes only the selected file, keeping whole-bank I/O off first-byte and recovery paths. Exact-track banter requires both a matching starter queue tail at selection and the same actual listener-audible predecessor at playback. Forced, urgent, fallback, and uncertain paths use evergreen copy, fourth-wall specials are rare natural breaks, and long packaged banter does not repeat after its mode-safe bank is exhausted. Unmanifested directory discovery remains disabled.
+Packaged speech is a separate fail-closed boundary. `assets/demo/spoken_assets.json` declares each discoverable recovery/banter/First Listen/ads MP3 by relative path, SHA-256, kind, language, and reviewed transcript. Banter rows also declare Normal vs Super Italian Mode, an optional exact predecessor starter id, and whether the clip is a rare fourth-wall special. Ad rows declare their mode, title, cast, and a `duration_seconds` inside 25 to 40 seconds that must match the measured audio, and carry no adjacency or special tier. The release boundary rejects missing, unlisted, changed, malformed, truth-unsafe, undecodable, off-loudness, or oversized inventory; runtime admission parses the policy-valid manifest snapshot and hashes only the selected file, keeping whole-bank I/O off first-byte and recovery paths. Exact-track banter requires both a matching starter queue tail at selection and the same actual listener-audible predecessor at playback. Forced, urgent, fallback, and uncertain paths use evergreen copy, fourth-wall specials are rare natural breaks, and long packaged banter does not repeat after its mode-safe bank is exhausted. Unmanifested directory discovery remains disabled. With no LLM key configured (neither Anthropic nor OpenAI), Demo Radio draws without repetition from the 21 reviewed clips in `assets/demo/banter/` before its generated impossible-moment closer: selection stays inside Normal or Super Italian Mode, admits the three track-bound clips only behind a matching starter track verified again at playback, and keeps the three fourth-wall clips rare and natural-only. Pending listener requests use truthful request-aware stock copy and the same deferred queue-admission lifecycle as generated banter, so Demo Radio can acknowledge and settle them without inventing a catalogue failure.
 
 Packaged advertisements live directly under `assets/demo/ads/`: seven English
 Normal spots and four Italian Super Italian spots are required by the release
@@ -1235,7 +1257,10 @@ next update, not published 3.0.0.
   usable weather source, `weather.ambient`. Temperature is converted to Celsius
   and grouped into five-degree bands. It excludes household entities, generated
   labels, derived moods, event/ritual matching, timer interrupts, forecasts,
-  running gags, and household receipts.
+  running gags, and household receipts. Fresh installs fail closed to this
+  synthetic coarse daylight projection. `home/authorization.py` owns the
+  projection and `home/migration.py` owns the paired install-origin/provenance
+  witnesses; cache and timeout fallbacks never cross authorization modes.
 - Hard mutes remain independent of verification and consent. An unlocking door
   never establishes who arrived.
 
@@ -1646,6 +1671,15 @@ the `pinned_track_revision` / `force_next_revision` bumps that the guarded clear
 perform, leaving every handoff and pending request that recorded a revision
 unable to clear the slot it owns.
 
+The four admin routes (`/api/playlist/load`, `/api/playlist/enrich`,
+`/api/heading`, `/api/direction`) also return `resume_required: true` when the
+reason was a paused station, which is the narrower half of `metadata_only` (a
+mid-flight epoch move sets `metadata_only` without it); the external/listener
+download commit reports plain status strings instead. The admin reads the flag
+to say the change is saved but nothing new airs until Start, so an operator is
+never told a deferred change landed on air. The normal producer replenishes
+audio after a valid Resume.
+
 **Music admission reservations follow the segment, not the crate.** Every queued
 *rotation* music segment owns a `music_admission_reservations` entry (norm-cache
 rescue, continuity-cache fills, the emergency tone and restart-handoff music are
@@ -1703,6 +1737,7 @@ This repo is biased toward "keep the station on air."
 - Jamendo discovery, license, URL, network, normalization, timeout, race,
   cancellation, or restart failures destroy the single-use artifact/lease and
   immediately continue with local/starter music
+- natural optional speech yields to music when real queued audio is below the producer runway floor while queue capacity remains; packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, never ephemeral scratch
 - missing Home Assistant context is ignored
 - missing ad brands disables live ads; an approved active-mode packaged bank can still fill the break
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing

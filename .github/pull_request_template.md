@@ -6,6 +6,16 @@
 
 <!-- How was this tested? -->
 
+## QA Impact
+
+Classification: Player / Admin / Both / None / Deferred to release candidate
+Reason:
+- Touched surfaces:
+- Why this QA scope is sufficient:
+QA performed:
+- Player QA: run / reused / not applicable / deferred
+- Admin QA: run / reused / not applicable / deferred
+
 ---
 
 ## Admin Panel Standards

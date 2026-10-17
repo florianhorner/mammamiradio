@@ -389,6 +389,27 @@ def test_pre_lint_is_registered_for_pre_push_and_matches_ci_ruff() -> None:
     assert "stages: [pre-push]" in config
 
 
+def test_pre_commit_autoupdate_leaves_the_ruff_rev_to_requirements_dev() -> None:
+    """The weekly autoupdate must not move the ruff hook rev on its own.
+
+    The rev follows the ``ruff==`` pin in requirements-dev.txt (the test above
+    enforces the pair), so the scheduled job may refresh only the gitleaks hook,
+    and its commit title must satisfy the repository's commit rules.
+    """
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "pre-commit-autoupdate.yml").read_text())
+    steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
+
+    autoupdate = [step for step in steps if step.get("name") == "Run pre-commit autoupdate"]
+    assert len(autoupdate) == 1, "expected exactly one 'Run pre-commit autoupdate' step"
+    run = autoupdate[0]["run"]
+    assert "--repo https://github.com/gitleaks/gitleaks" in run, "autoupdate must be limited to the gitleaks hook"
+    assert "ruff" not in run, "autoupdate must never touch the ruff hook rev"
+
+    create_pr = [step for step in steps if str(step.get("uses", "")).startswith("peter-evans/create-pull-request")]
+    assert len(create_pr) == 1, "expected exactly one create-pull-request step"
+    assert create_pr[0]["with"]["commit-message"].startswith("chore("), "the autoupdate commit must use a chore scope"
+
+
 def test_pre_lint_is_non_mutating_and_keeps_expensive_tests_out() -> None:
     script = PRE_LINT.read_text()
 
