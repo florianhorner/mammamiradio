@@ -22,8 +22,10 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
+      # The ruff hook rev follows the ruff== pin in requirements-dev.txt (guarded by
+      # tests/repo/test_repo_scripts.py), so this job refreshes only the gitleaks hook.
       - name: Run pre-commit autoupdate
-        run: pre-commit autoupdate
+        run: pre-commit autoupdate --repo https://github.com/gitleaks/gitleaks
 
       - name: Check for changes
         id: diff
@@ -35,8 +37,8 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: auto/pre-commit-autoupdate
-          commit-message: "deps: update pre-commit hooks"
-          title: "deps: update pre-commit hooks"
+          commit-message: "chore(pre-commit): update the gitleaks hook"
+          title: "chore(pre-commit): update the gitleaks hook"
           body: |
             Automated pre-commit hook version update via `pre-commit autoupdate`.
           labels: dependencies
