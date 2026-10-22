@@ -5399,3 +5399,20 @@ async def test_unpatched_edge_render_stays_offline_in_tests(tmp_path):
 
     assert isinstance(exc_info.value.__cause__, ConnectionError)
     assert "offline in tests" in str(exc_info.value.__cause__)
+
+
+def test_real_edge_communicate_still_accepts_our_call_shapes():
+    """The offline stand-in takes any arguments, so pin the real library's API here.
+
+    A signature change in edge-tts would otherwise pass every test and break every
+    free voice on air.
+    """
+    import inspect
+
+    from edge_tts.communicate import Communicate
+
+    signature = inspect.signature(Communicate)
+    signature.bind("Ciao", "it-IT-IsabellaNeural", rate="+0%", pitch="+0Hz")
+    signature.bind("Ciao", "it-IT-IsabellaNeural", rate="+0%", pitch="+0Hz", connector=None)
+    assert inspect.iscoroutinefunction(Communicate.save)
+    inspect.signature(Communicate.save).bind(object(), "out.mp3")
