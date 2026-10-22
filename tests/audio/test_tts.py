@@ -5387,3 +5387,15 @@ def test_unprobeable_sized_tempo_output_is_accepted(_mock_all, tmp_path):
 
     assert _normalize_tolerating_tempo(raw, out, False, DISCLAIMER_TEMPO) == out
     _mock_all["normalize"].assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_unpatched_edge_render_stays_offline_in_tests(tmp_path):
+    """tests/conftest.py keeps every test off the real Edge service unless it patches Communicate."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
+
+    with pytest.raises(TTSUnavailableError) as exc_info:
+        await synthesize("Ciao", "it-IT-IsabellaNeural", tmp_path / "out.mp3")
+
+    assert isinstance(exc_info.value.__cause__, ConnectionError)
+    assert "offline in tests" in str(exc_info.value.__cause__)
