@@ -112,6 +112,25 @@ def _write_release_check_repo(
     _write(tmp_path / "scripts/media-proof.py", "#!/usr/bin/env python3\nraise SystemExit(0)\n")
 
 
+def _run_release_check(tmp_path: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run scripts/pre-release-check.sh on the fixture as CI runs it on a PR that is not a cut.
+
+    Section 11 reads the real model_registry.toml and the providers' live docs, so a
+    local run would pass or fail by today's date and the network. Off a cut, CI skips
+    it by design (scripts/model-registry-gate.sh), so the fixture commits its tree and
+    points origin/main at that commit: no version line changes. Section 11 keeps its
+    own self-test, tests/workflows/test_model_registry_gate.sh.
+    """
+    _init_git_repo(tmp_path)
+    assert _run(["git", "add", "."], cwd=tmp_path).returncode == 0
+    assert _run(["git", "commit", "-q", "-m", "release check fixture"], cwd=tmp_path).returncode == 0
+    assert _run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmp_path).returncode == 0
+    run_env = dict(os.environ if env is None else env)
+    run_env["GITHUB_ACTIONS"] = "true"
+    run_env.pop("MMR_MODEL_REGISTRY_GATE", None)
+    return _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=run_env)
+
+
 @pytest.fixture
 def fake_ffprobe_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep repository-script tests independent of host multimedia packages."""
@@ -626,12 +645,14 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(
 ) -> None:
     _write_release_check_repo(tmp_path)
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode == 0
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "browser narration assets and admin metadata match the release manifest" in result.stdout
+    # The fixture stays off the calendar and the network: section 11 skips as off a cut.
+    assert "[NOTE] not a release cut" in result.stdout
 
 
 def test_model_registry_gate_workflow_contract() -> None:
@@ -648,7 +669,7 @@ def test_pre_release_check_fails_on_manifest_version_mismatch(
     # The HACS integration manifest must ride the release number (docs/release-process.md).
     _write_release_check_repo(tmp_path, version="1.1.0", manifest_version="1.0.0")
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "manifest.json version is '1.0.0' but config.yaml is 1.1.0" in result.stdout
@@ -663,7 +684,7 @@ def test_pre_release_check_fails_cleanly_on_unreadable_manifest(
     _write_release_check_repo(tmp_path, manifest_version=None)
     _write(tmp_path / "custom_components/mammamiradio/manifest.json", "{ not valid json ")
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
@@ -680,7 +701,7 @@ def test_pre_release_check_accepts_dated_addon_changelog_heading(
         addon_changelog="# Changelog\n\n## Unreleased\n\n## 1.1.0 - 2026-06-21\n",
     )
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode == 0
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
@@ -702,7 +723,7 @@ def test_pre_release_check_rejects_stale_root_changelog_heading(
         root_changelog="# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n",
     )
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "root CHANGELOG latest version is ## 1.0.0 but config.yaml is 1.1.0" in result.stdout
@@ -718,7 +739,7 @@ def test_pre_release_check_accepts_bracketed_root_changelog_heading(
         root_changelog="# Changelog\n\n## [Unreleased]\n\n## [1.1.0] - 2026-06-21\n",
     )
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode == 0
     assert "root CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
@@ -731,7 +752,7 @@ def test_pre_release_check_requires_each_recovery_asset(
     _write_release_check_repo(tmp_path)
     (tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3").unlink()
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "emergency_tone.mp3" in result.stdout
@@ -745,7 +766,7 @@ def test_pre_release_check_rejects_recovery_asset_hash_drift(
     asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
     asset.write_bytes(asset.read_bytes() + b"tampered")
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
@@ -766,7 +787,7 @@ def test_pre_release_check_rejects_manifest_approved_non_audio(
     entry["sha256"] = hashlib.sha256(payload).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "emergency_tone.mp3 is not ffprobe-readable audio" in result.stdout
@@ -787,7 +808,7 @@ def test_pre_release_check_rejects_manifest_approved_unsafe_transcript(
     entry["transcript"] = "Bentornato, ti stavamo aspettando."
     manifest_path.write_text(json.dumps(manifest))
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
@@ -802,7 +823,7 @@ def test_pre_release_check_rejects_browser_narration_hash_drift(
     asset = tmp_path / "mammamiradio/web/static/audio/first_listen/welcome.mp3"
     asset.write_bytes(asset.read_bytes() + b"tampered")
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+    result = _run_release_check(tmp_path)
 
     assert result.returncode != 0
     assert "browser narration asset/admin manifest validation failed" in result.stdout
@@ -859,7 +880,7 @@ def test_pre_release_check_validates_spoken_assets_through_resolved_interpreter(
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
 
-    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=env)
+    result = _run_release_check(tmp_path, env=env)
 
     assert "bare python3 was invoked" not in result.stderr
     if changed_asset == "packaged":
