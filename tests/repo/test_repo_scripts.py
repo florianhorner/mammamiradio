@@ -128,7 +128,10 @@ def _run_release_check(tmp_path: Path, *, env: dict[str, str] | None = None) -> 
     run_env = dict(os.environ if env is None else env)
     run_env["GITHUB_ACTIONS"] = "true"
     run_env.pop("MMR_MODEL_REGISTRY_GATE", None)
-    return _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=run_env)
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=run_env)
+    # The gate falls through to running when its git diff fails, so prove every run skipped.
+    assert "[NOTE] not a release cut" in result.stdout, result.stdout + result.stderr
+    return result
 
 
 @pytest.fixture
