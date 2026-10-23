@@ -110,13 +110,14 @@ Environment:
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` — required for any non-loopback bind in standalone mode; optional for the HA add-on, which trusts its own LAN (see **Admin access model**)
 - `ANTHROPIC_API_KEY`
-- `OPENAI_API_KEY` (optional, used for TTS and as script generation fallback)
+- `OPENAI_API_KEY` (optional, script generation fallback)
+- `ELEVENLABS_API_KEY` (optional, the one premium-voice key for the shipped cast)
 - `HA_TOKEN` if Home Assistant integration is enabled
 
 Static config:
 
 - `radio.toml`
-- `model_registry.toml` — AI model IDs, task routing, OpenAI TTS model, and per-model pricing. Must sit beside `radio.toml`. If missing, the station boots and plays music but degrades to stock host copy and Edge voices until it is restored.
+- `model_registry.toml` — AI model IDs, task routing, an optional OpenAI speech model (none pinned), and per-model pricing. Must sit beside `radio.toml`. If missing, the station boots and plays music but degrades to stock host copy and Edge voices until it is restored.
 
 ### Environment variables (full catalog)
 
@@ -129,9 +130,9 @@ Every variable the station reads, with its default and fallback. Model selection
 - `MAMMAMIRADIO_HTTP_LOG_LEVEL`: log level applied to the HTTP client loggers `httpx`, `httpcore` and the SDK transport loggers `httpx2`, `httpcore2` (default `WARNING`). Levels below `WARNING` are clamped to `WARNING` because Jamendo sends its client id in query strings; `ERROR` or `CRITICAL` raise the threshold; invalid values fall back to `WARNING`.
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_TOKEN`: admin auth
 - `ANTHROPIC_API_KEY`: Claude banter/ad generation
-- `OPENAI_API_KEY`: OpenAI voice synthesis through the TTS model configured in `model_registry.toml`; also enables script generation fallback through the active quality profile when Anthropic is unavailable
-- `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`: Azure Speech TTS for host/sweeper/ad voices routed to `engine = "azure"`. Both required together; if either is absent the voice falls back to its per-voice Edge fallback (never silence). Listeners never see the downgrade.
-- `ELEVENLABS_API_KEY`: ElevenLabs TTS for voices routed to `engine = "elevenlabs"`. Absent key falls back to the per-voice Edge fallback.
+- `OPENAI_API_KEY`: script generation fallback through the active quality profile when Anthropic is unavailable. It also voices custom `engine = "openai"` voices, but only with a speech model pinned under `[tts.openai]` in `model_registry.toml`; none ships pinned, so those voices air on their Edge double
+- `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`: Azure Speech TTS for custom host/sweeper/ad voices routed to `engine = "azure"`; the shipped cast uses none. Both required together; if either is absent the voice falls back to its per-voice Edge fallback (never silence). Listeners never see the downgrade.
+- `ELEVENLABS_API_KEY`: ElevenLabs TTS for voices routed to `engine = "elevenlabs"`, the only paid speech key the shipped cast uses (hosts and ElevenLabs ad characters; the ident and two ad voices are free Edge voices). Absent key falls back to the per-voice Edge fallback. The one-key cast is an interim decision with a review date; see `docs/release-process.md`.
 - `HA_TOKEN`: Home Assistant API token
 - `HA_URL`: Home Assistant API base URL (auto-set by the HA add-on to `http://supervisor/core`; direct Core installs normally use `http://host:8123`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
@@ -279,7 +280,7 @@ hardware, so a small cache makes listeners wait more often.
 add-on defaults to 1500 MB and exposes the **Music cache size (MB)** option
 (`norm_cache_mb`). Explicit environment values outside 200-8000 are clamped; a
 malformed environment value uses the applicable default. Either correction logs
-a warning so config loading can complete. Supervisor validates the add-on option
+a warning so config loading can complete. Supervisor validates the add-on setting
 as an integer in that range before the container starts. If unsupported
 non-positive add-on input nevertheless reaches an internal ingestion path, both
 `run.sh` and the direct fallback silently use the 1500 MB add-on default.

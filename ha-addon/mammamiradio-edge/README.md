@@ -22,8 +22,8 @@ stock lines can use Edge TTS, which needs no key but does go online.
 
 **With an AI key:** Anthropic or OpenAI writes banter, news flashes and ad
 breaks on the fly, billed to your own account, with a running estimate in the
-control room. ElevenLabs gives Marco and Giulia the cast voices from the public
-demos; OpenAI or Azure Speech offer alternatives.
+control room. One ElevenLabs key gives Marco, Giulia and most ad characters the voices from the public
+demos; without it, every voice uses a free voice.
 
 **Your home:** on a new install the house stays off the air until you preview
 what the hosts would get and say yes. Today that is daylight and the weather.

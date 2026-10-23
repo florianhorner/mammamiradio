@@ -94,10 +94,10 @@ admin writes the key to `/config/secrets.env`, applies it live, and checks the
 provider without interrupting audio. First audio never needs it.
 
 AI-host and premium-voice readiness are separate. Anthropic or OpenAI completes
-the AI-host step; OpenAI also provides a premium voice path. Azure Speech and
-ElevenLabs are voice-only and leave AI hosts optional. Azure is ready only when
-both its key and region are present; one without the other is reported as
-incomplete rather than ready.
+the AI-host step. `ELEVENLABS_API_KEY` is the one premium-voice key the shipped
+cast uses; without it every voice uses a free voice. Voice keys leave AI hosts
+optional. Azure, for custom voices, is ready only when both its key and region
+are present; one without the other is reported as incomplete rather than ready.
 
 When Home context is enabled, casual host breaks use at most one safe rotating
 cue, while room-presence is a separate default-off **personal on-air moment**
@@ -111,9 +111,9 @@ Premium voice keys are optional and separate from the first AI-host unlock.
 The Home Assistant controls are separate too. **Enable Home Assistant Integration** is the master connection for entity publishing, optional host context, and timer interrupts. **Host home context** controls the filtered state and timer polling used for host programming; keep it off to retain the integration and entity publishing while suspending Home-state reads, timer interrupts, and Home-derived host work. The integration defaults on. On a fresh add-on install, Home context has no declared default and stays off until first audio is confirmed and the explicit First Listen choice is recorded; the prompt-context refresh interval defaults to 300 seconds once enabled.
 
 The admin stores provider credentials in `/config/secrets.env` inside the add-on config folder. Supported keys are
-`ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter, ads, and OpenAI
-TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
-`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). AI/TTS provider fields no
+`ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter and ads), `ELEVENLABS_API_KEY`
+(the premium voices of the shipped cast), and `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION`
+(custom Azure voices configured in `radio.toml`). AI/TTS provider fields no
 longer appear in the add-on Configuration tab; keys saved there by older versions are recovered from
 the add-on's stored settings and moved into `/config/secrets.env` automatically the first time the
 updated add-on starts.

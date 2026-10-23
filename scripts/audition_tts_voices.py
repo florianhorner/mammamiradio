@@ -775,7 +775,13 @@ async def _synthesize_target(target: VoiceAuditionTarget, output_path: Path) -> 
             delivery_cue=target.delivery_cue,
             delivery_profile=target.delivery_profile,
         )
-    return await tts_module.synthesize(
+    # On air, a failed Edge voice falls back to the house voice; here that would
+    # file the house voice's audio under the requested voice. Fail instead.
+    coerced = tts_module._coerce_edge_voice(target.voice, edge_fallback_voice=target.edge_fallback_voice)
+    if coerced != target.voice:
+        raise RuntimeError(f"{target.voice} is not an Edge voice; the station would air {coerced} instead")
+    tts_module._failed_edge_voices.discard(target.voice)
+    rendered = await tts_module.synthesize(
         target.text,
         target.voice,
         output_path,
@@ -784,6 +790,10 @@ async def _synthesize_target(target: VoiceAuditionTarget, output_path: Path) -> 
         engine="edge",
         edge_fallback_voice=target.edge_fallback_voice,
     )
+    if target.voice in tts_module._failed_edge_voices:
+        rendered.unlink(missing_ok=True)
+        raise RuntimeError(f"Edge voice {target.voice} failed to render; the clip held a fallback voice")
+    return rendered
 
 
 def _result_for_target(

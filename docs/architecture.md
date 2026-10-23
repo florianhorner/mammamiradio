@@ -1095,14 +1095,18 @@ Each host declares a TTS engine in `radio.toml`: `engine = "edge"` (default), `e
 **Edge TTS** (Microsoft): free, no API key. Each host maps to an Azure Neural voice (e.g., `it-IT-GiuseppeNeural`). SSML prosody tags (rate, pitch) are derived from the host's personality axes for voice differentiation.
 
 **OpenAI TTS**: requires `OPENAI_API_KEY` and uses the separately configured
-`[tts.openai]` registry entry. Each host maps to an OpenAI voice (e.g., `onyx`).
+`[tts.openai]` registry entry. The entry is optional, and none ships: a registry
+without it is valid, and every OpenAI voice then renders on its Edge double, key
+or no key. The shipped cast uses no OpenAI or Azure voice; its one paid speech
+key is ElevenLabs (see the speech cast note above `[[ads.voices]]` in `radio.toml`).
+A custom host can map to an OpenAI voice (e.g., `onyx`).
 Personality-aware delivery instructions are generated from the host's energy,
 warmth, and chaos axes — the model interprets these as acting direction, not
 just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 
-**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) is the default for ads, sweepers, guest bits, and every host. The expressive `eleven_v3` delivery path (with a code-owned `delivery_profile`) is present in the code but disabled by default: Marco and Giulia currently ship on V2 after their V3 host-performance audition was rejected. When a host opts into `eleven_v3`, V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
+**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) is the default for the ElevenLabs ad characters, guest bits, and every host; the shipped station ident and two ad voices are free Edge voices. The expressive `eleven_v3` delivery path (with a code-owned `delivery_profile`) is present in the code but disabled by default: Marco and Giulia currently ship on V2 after their V3 host-performance audition was rejected. When a host opts into `eleven_v3`, V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
 
 For selected normal host banter on a V3 host, the script carries one semantic
 cue beside — never inside — the clean spoken text. Marco may be `energetic`, `curious`, or

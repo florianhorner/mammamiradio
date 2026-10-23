@@ -469,9 +469,10 @@ migration marker and remains disabled after migration. `ADMIN_TOKEN` remains a S
 storage, not Home Assistant `/config/secrets.yaml`; anyone with host/add-on config access can read it.
 
 Setup treats AI-host and premium-voice readiness separately. Anthropic or
-OpenAI completes the AI-host step; OpenAI can also supply voices. Azure Speech
-and ElevenLabs are voice-only and do not unlock generated host writing. Azure
-is ready only with both its key and region; a partial pair is shown as
+OpenAI completes the AI-host step. `ELEVENLABS_API_KEY` is the one premium-voice
+key the shipped cast uses, and setup asks only for the voice keys the configured
+voices need. Voice keys do not unlock generated host writing. Azure, for custom
+voices, is ready only with both its key and region; a partial pair is shown as
 incomplete.
 
 `secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,

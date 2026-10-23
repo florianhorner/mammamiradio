@@ -64,22 +64,42 @@ def _music_bed_side_effect(output_path, mood, duration):
     return output_path
 
 
+TEST_OPENAI_TTS_MODEL = "test-openai-tts"
+
+
 @pytest.fixture(autouse=True)
 def _reset_openai_tts_model():
-    """Keep the module-level OpenAI TTS model selection out of cross-test state.
+    """Give every test the same OpenAI TTS model, independent of the shipped registry.
 
     The selection is a process global; without this reset a test that configures
-    it (even to None, which now marks the station as explicitly configured) would
-    change what a later, unconfigured test resolves — order-dependent under
-    pytest-randomly.
+    it (even to None, which marks the station as explicitly configured) would
+    change what a later test resolves — order-dependent under pytest-randomly.
+    The shipped registry may pin no speech model at all, so OpenAI render tests
+    must not borrow one from it. Tests of the unconfigured path reset the flag
+    themselves.
     """
     import mammamiradio.audio.tts as tts_mod
 
-    tts_mod._openai_tts_model = None
-    tts_mod._openai_tts_model_configured = False
+    tts_mod._openai_tts_model = TEST_OPENAI_TTS_MODEL
+    tts_mod._openai_tts_model_configured = True
     yield
     tts_mod._openai_tts_model = None
     tts_mod._openai_tts_model_configured = False
+
+
+def _registry_in_working_directory(directory: Path, speech_model: str | None) -> None:
+    """Write a complete registry into ``directory``, pinning ``speech_model`` or none.
+
+    The packaged registry supplies the script routes; only its speech table is
+    replaced, so the unconfigured-path tests do not depend on what it pins.
+    """
+    import re
+
+    packaged = (Path(__file__).resolve().parents[2] / "model_registry.toml").read_text(encoding="utf-8")
+    text = re.sub(r"(?ms)^\[tts\.openai\]\n.*?(?=^\[|\Z)", "", packaged)
+    if speech_model is not None:
+        text = text.rstrip("\n") + f'\n\n[tts.openai]\nmodel = "{speech_model}"\n'
+    (directory / "model_registry.toml").write_text(text, encoding="utf-8")
 
 
 @pytest.fixture
@@ -384,13 +404,15 @@ async def test_synthesize_openai_falls_back_to_edge_when_tts_model_unavailable(_
 async def test_configured_none_does_not_read_cwd_registry(_mock_all, tmp_path, monkeypatch):
     """Explicit startup config of None must win over a real CWD registry model.
 
-    The repo-root model_registry.toml (the process CWD in tests) DOES carry an
-    OpenAI TTS model. Once the station is explicitly configured to None, that
-    decision is authoritative: synthesize() must land on Edge and never call
-    OpenAI with the unrelated CWD registry's model.
+    The working directory holds a registry that DOES pin an OpenAI TTS model.
+    Once the station is explicitly configured to None, that decision is
+    authoritative: synthesize() must land on Edge and never call OpenAI with the
+    unrelated CWD registry's model.
     """
     from mammamiradio.audio.tts import _configured_openai_tts_model, configure_openai_tts_model, synthesize
 
+    _registry_in_working_directory(tmp_path, "cwd-registry-tts")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
     configure_openai_tts_model(None)
 
@@ -406,6 +428,144 @@ async def test_configured_none_does_not_read_cwd_registry(_mock_all, tmp_path, m
     mock_get_client.assert_not_called()
     openai_client.audio.speech.create.assert_not_called()
     _mock_all["Communicate"].assert_called_once()
+
+
+def test_unconfigured_caller_reads_the_working_directory_registry(tmp_path, monkeypatch):
+    """A test/CLI caller that never configured the station reads the CWD registry's pin."""
+    from mammamiradio.audio import tts as tts_mod
+
+    _registry_in_working_directory(tmp_path, "cwd-registry-tts")
+    monkeypatch.chdir(tmp_path)
+    tts_mod._openai_tts_model_configured = False
+
+    assert tts_mod._configured_openai_tts_model() == "cwd-registry-tts"
+
+
+@pytest.mark.asyncio
+async def test_registry_without_speech_model_keeps_openai_voices_on_edge(_mock_all, tmp_path, monkeypatch):
+    """A registry that pins no speech model sends an OpenAI voice to its Edge double.
+
+    The key is present, so only the missing pin can keep the render off OpenAI:
+    no client is built, nothing is billed, and the voice's declared Edge double
+    covers the line.
+    """
+    from mammamiradio.audio import tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    _registry_in_working_directory(tmp_path, None)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    tts_mod._openai_tts_model_configured = False
+    assert tts_mod._configured_openai_tts_model() is None
+
+    openai_client = MagicMock()
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=openai_client) as mock_get_client:
+        output = tmp_path / "no_pin.mp3"
+        result = await synthesize(
+            "Ciao mondo",
+            "coral",
+            output,
+            engine="openai",
+            edge_fallback_voice="it-IT-ElsaNeural",
+        )
+
+    assert result == output
+    mock_get_client.assert_not_called()
+    openai_client.audio.speech.create.assert_not_called()
+    assert [call.args[1] for call in _mock_all["Communicate"].call_args_list] == ["it-IT-ElsaNeural"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("radio_toml", ["radio.toml", "ha-addon/mammamiradio/radio.toml"])
+async def test_keyless_shipped_cast_renders_every_voice_on_its_declared_edge_double(
+    _mock_all, tmp_path, monkeypatch, radio_toml
+):
+    """With no speech key at all, every on-air ad voice and the ident lands on its own Edge double.
+
+    One key covers the paid cast, so a missing or exhausted key moves every one of
+    those voices at once. Each must still sound like its character, never the
+    house voice, and no cloud client may be built.
+    """
+    from mammamiradio.audio import tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+    from mammamiradio.core.config import load_config
+
+    for key in ("ELEVENLABS_API_KEY", "OPENAI_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"):
+        monkeypatch.delenv(key, raising=False)
+    config = load_config(str(Path(__file__).resolve().parents[2] / radio_toml))
+    sonic = config.sonic_brand
+    routes = [
+        (voice.name, voice.voice, voice.engine, voice.edge_fallback_voice)
+        for voice in config.ads.voices
+        if voice.airtime_approved
+    ]
+    routes.append(("the station ident", sonic.sweeper_voice, sonic.sweeper_engine, sonic.sweeper_edge_fallback_voice))
+    cloud_clients = {
+        name: MagicMock() for name in ("_get_openai_client", "_get_azure_client", "_get_elevenlabs_client")
+    }
+    for name, client in cloud_clients.items():
+        monkeypatch.setattr(tts_mod, name, client)
+
+    for index, (name, voice, engine, double) in enumerate(routes):
+        _mock_all["Communicate"].reset_mock()
+        await synthesize("Ciao", voice, tmp_path / f"keyless-{index}.mp3", engine=engine, edge_fallback_voice=double)
+        expected = voice if (engine or "edge") == "edge" else double
+        assert [call.args[1] for call in _mock_all["Communicate"].call_args_list] == [expected], name
+
+    for client in cloud_clients.values():
+        client.assert_not_called()
+
+
+def _shipped_airtime_ad_voices(radio_toml: str):
+    from mammamiradio.core.config import load_config
+
+    config = load_config(str(Path(__file__).resolve().parents[2] / radio_toml))
+    return [voice for voice in config.ads.voices if voice.airtime_approved]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("radio_toml", ["radio.toml", "ha-addon/mammamiradio/radio.toml"])
+async def test_keyless_ad_break_airs_every_shipped_voice_on_its_edge_double(
+    _mock_all, tmp_path, monkeypatch, radio_toml
+):
+    """A whole keyless spot assembles, with each character's line on that character's double.
+
+    The per-voice test proves the router; this proves the assembled ad. Parts
+    render concurrently, so the check is which voice spoke each line and that
+    no line is missing from the concatenated spot, not the order of the calls.
+    """
+    from mammamiradio.audio import tts as tts_mod
+    from mammamiradio.audio.tts import synthesize_ad
+
+    for key in ("ELEVENLABS_API_KEY", "OPENAI_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"):
+        monkeypatch.delenv(key, raising=False)
+    cloud_clients = {
+        name: MagicMock() for name in ("_get_openai_client", "_get_azure_client", "_get_elevenlabs_client")
+    }
+    for name, client in cloud_clients.items():
+        monkeypatch.setattr(tts_mod, name, client)
+
+    cast = _shipped_airtime_ad_voices(radio_toml)
+    voices = {f"part{index}": voice for index, voice in enumerate(cast)}
+    script = AdScript(
+        brand="Prova",
+        parts=[AdPart(type="voice", text=f"Riga {index}", role=role) for index, role in enumerate(voices)],
+        mood="lounge",
+    )
+
+    result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    spoken = {call.args[0]: call.args[1] for call in _mock_all["Communicate"].call_args_list}
+    expected = {
+        f"Riga {index}": voice.voice if (voice.engine or "edge") == "edge" else voice.edge_fallback_voice
+        for index, voice in enumerate(cast)
+    }
+    assert spoken == expected
+    assembled = [path for call in _mock_all["concat_files"].call_args_list for path in call.args[0]]
+    assert len([path for path in assembled if path.name.startswith("adpart_")]) == len(cast)
+    for client in cloud_clients.values():
+        client.assert_not_called()
 
 
 @pytest.mark.asyncio
