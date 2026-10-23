@@ -89,6 +89,33 @@ def _reset_tts_voice_memoization():
     reset_voice_failures()
 
 
+class _OfflineEdgeCommunicate:
+    """Stands in for ``edge_tts.Communicate``: every render fails at once.
+
+    Edge needs no key, so nothing else stops a test from reaching the real
+    service. A real render makes the suite slow and network-dependent, and its
+    result depends on whether Microsoft accepts today's handshake.
+    """
+
+    def __init__(self, text: str, voice: str, *args: object, **kwargs: object) -> None:
+        self.voice = voice
+
+    async def save(self, *args: object, **kwargs: object) -> None:
+        raise ConnectionError(f"Edge TTS is offline in tests ({self.voice}); patch edge_tts.Communicate to render")
+
+
+@pytest.fixture(autouse=True)
+def _offline_edge_tts(monkeypatch):
+    """Keep every test off the real Edge TTS service.
+
+    A test that renders patches ``edge_tts.Communicate`` itself; its patch is
+    applied after this one, so it wins.
+    """
+    import edge_tts
+
+    monkeypatch.setattr(edge_tts, "Communicate", _OfflineEdgeCommunicate)
+
+
 @pytest.fixture(autouse=True)
 def _reset_rejected_cache_denylist():
     """Clear the session-scoped rejected-download denylist between tests so
