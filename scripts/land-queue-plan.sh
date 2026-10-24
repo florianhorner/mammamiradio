@@ -5,15 +5,13 @@
 #
 # Computes what an auto-land controller WOULD do right now — which PR it would
 # integrate or arm next, and why every other open PR is not that PR — and prints
-# it. It does not push, comment, arm, merge, or move edge. Nothing here writes.
+# it. It may fetch local Git objects/refs, but never writes to GitHub.
 #
 # The queue is advisory. It reports next to scripts/land-pr.sh and acts on
 # nothing until going live is separately authorized.
 #
-# It reaches its verdict through the SAME predicates scripts/land-pr.sh arms on
-# (scripts/land-gates.sh) and the SAME selection scripts/cut-edge-release.sh cuts
-# on (scripts/edge-select.sh). A shadow that reasons from its own copy of the
-# gates would prove nothing about the thing it shadows.
+# Uses the same verify_head checks as land-pr.sh (scripts/land-gates.sh) and
+# the same Edge selection as cut-edge-release.sh (scripts/edge-select.sh).
 #
 # Fail-closed everywhere: a gh error, a git error, or a state
 # GitHub has not finished computing is reported as BLOCKED/CI_PENDING and the
@@ -94,7 +92,7 @@ EDGE_SELECT_LIB="$SCRIPT_DIR/edge-select.sh"
 # in practice and replace the one actionable reason ("2 unresolved Major
 # threads, here is the first") with "waiting on something".
 classify_pr() {
-  local pr="$1" head="$2" base="$3" merge_state="$4" is_draft="$5" held="$6" skipped="$7"
+  local pr="$1" head="$2" merge_state="$3" is_draft="$4" held="$5" skipped="$6"
   local gate_out
 
   if [ "$is_draft" = "true" ]; then
@@ -109,12 +107,11 @@ classify_pr() {
   if [ "$merge_state" = "DIRTY" ]; then
     printf 'BLOCKED_CONFLICT\tmerge conflict with base — the owning workspace resolves it\n'; return
   fi
-  # Keep landed-base/head availability checks aligned with the landing wrapper.
-  refresh_landed_ref "$base"
+  # Hydrate the exact head before evaluating the shared verify_head gate.
   if ! ensure_head_local "$pr" "$head"; then
     printf 'BLOCKED_HEAD\thead object could not be fetched — gates cannot be evaluated against it\n'; return
   fi
-  if ! gate_out="$(thread_check "$pr" 2>&1)"; then
+  if ! gate_out="$(verify_head "$pr" 2>&1)"; then
     printf 'BLOCKED_BOT\t%s\n' "$(printf '%s' "$gate_out" | head -1)"; return
   fi
   # UNSTABLE means only non-required checks are failing, so the PR is landable.
@@ -129,11 +126,13 @@ classify_pr() {
 
 # --- gather -------------------------------------------------------------------
 PR_JSON="$(gh pr list --state open --limit 50 \
-  --json number,title,headRefName,headRefOid,baseRefOid,mergeStateStatus,isDraft,labels,createdAt,url,author \
+  --json number,title,headRefName,headRefOid,baseRefName,mergeStateStatus,isDraft,labels,createdAt,url,author \
   2>/dev/null)" \
   || die "could not list open PRs. Check gh auth and repository context."
 printf '%s' "$PR_JSON" | jq -e 'type == "array"' >/dev/null 2>&1 \
   || die "gh returned invalid PR JSON — refusing to plan against unverifiable state."
+printf '%s' "$PR_JSON" | jq -e "$LAND_BASE_JQ"' all(.[]; land_base != "unknown")' >/dev/null 2>&1 \
+  || die "a PR has an unknown base branch — refusing to plan against unverifiable targets."
 
 # FIFO key. The ideal key, ready_at (first entry into READY), needs a persisted
 # ledger, which shadow mode has no write path for; createdAt is the honest
@@ -154,9 +153,9 @@ FIFO_KEY_SOURCE="createdAt (proxy for ready_at; shadow mode has no write path)"
 # lane and stall the whole queue. US is not IFS whitespace, so empty fields
 # survive; newlines are scrubbed because `read` would end the record on one.
 GATHER_SEP=$'\037'
-GATHER="$(printf '%s' "$PR_JSON" | jq -r 'sort_by(.createdAt)[]
+GATHER="$(printf '%s' "$PR_JSON" | jq -r "$LAND_BASE_JQ"' sort_by(.createdAt)[]
   | (.labels | map(.name)) as $l
-  | [ .number, .headRefOid, .baseRefOid, .mergeStateStatus, .isDraft,
+  | [ .number, .headRefOid, (land_base == "main"), .mergeStateStatus, .isDraft,
       (($l | index("hold")) != null or ($l | index("manual-land")) != null),
       (($l | index("skip-queue")) != null),
       (.author.login // ""), (.author.is_bot // false),
@@ -177,7 +176,7 @@ DECISION_WHY="no feature PR is actionable"
 HEAD_DECIDED=0
 RESULTS=""
 
-while IFS="$GATHER_SEP" read -r number head base merge_state is_draft held skipped \
+while IFS="$GATHER_SEP" read -r number head is_main merge_state is_draft held skipped \
                         author is_bot branch created url title; do
   [ -n "$number" ] || continue
 
@@ -196,9 +195,12 @@ while IFS="$GATHER_SEP" read -r number head base merge_state is_draft held skipp
     edge-release/*) lane="edge" ;;
   esac
 
-  if [ "$lane" = "feature" ]; then
+  if [ "$is_main" != "true" ]; then
+    state="SKIPPED"
+    reason="PR target is not main; skipped"
+  elif [ "$lane" = "feature" ]; then
     IFS=$'\t' read -r state reason \
-      <<<"$(classify_pr "$number" "$head" "$base" "$merge_state" "$is_draft" "$held" "$skipped")"
+      <<<"$(classify_pr "$number" "$head" "$merge_state" "$is_draft" "$held" "$skipped")"
   else
     state="EXEMPT"
     reason="$lane lane — keeps its own merge path, never queues behind feature work"
@@ -232,14 +234,17 @@ done <<<"$GATHER"
 # one-liners and must not sit behind feature FIFO.
 EDGE_TARGET=""
 EDGE_RC=0
-if ! git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+if ! git fetch -q --no-tags origin '+refs/heads/main:refs/remotes/origin/main' 2>/dev/null; then
+  EDGE_STATE="blocked"
+  EDGE_WHY="could not refresh origin/main — refusing to name an edge target from stale state"
+elif ! EDGE_MAIN="$(git rev-parse --verify 'origin/main^{commit}' 2>/dev/null)"; then
   EDGE_STATE="blocked"
   EDGE_WHY="origin/main is not resolvable locally — refusing to name an edge target"
 else
   # Capture the status directly, NOT via `elif ! cmd`: inside a negated
   # condition `$?` is the status of the negation, which is always 0 on the
   # branch taken, so rc 2 would be read as rc 0.
-  EDGE_TARGET="$(eligible_edge_sha origin/main 2>/dev/null)" || EDGE_RC=$?
+  EDGE_TARGET="$(eligible_edge_sha "$EDGE_MAIN" 2>/dev/null)" || EDGE_RC=$?
   if [ "$EDGE_RC" -eq 2 ]; then
     # rc 2 (the build query itself failed) must not read as rc 1 (queried fine,
     # nothing eligible). Collapsing them reports a calm "nothing to do" for a
@@ -252,7 +257,7 @@ else
     EDGE_TARGET=""
     EDGE_WHY="no eligible built commit right now — edge stays where it is"
   else
-    EDGE_CURRENT="$(edge_pinned_version origin/main)"
+    EDGE_CURRENT="$(edge_pinned_version "$EDGE_MAIN")"
     if [ "$EDGE_CURRENT" = "$EDGE_TARGET" ]; then
       EDGE_STATE="noop"
       EDGE_WHY="edge already pinned to $EDGE_TARGET — the newest eligible built commit"

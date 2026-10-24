@@ -1,162 +1,55 @@
-# Parallel workspaces: admission, ship path, and landing
+# Worktrees, merge checks and queue reports
 
-Use this runbook to operate several Conductor workspaces with one human-owned
-integration path. Worktrees isolate coding. GitHub PRs and the maintainer
-integrate it.
+This runbook describes worktree safety, merge checks and queue reports.
 
 Related:
 
 - Human and feature landing gate: `scripts/land-pr.sh`
 - Queue dashboard: `scripts/pr-queue-status.sh` (advisory, not a gate)
 - Workspace lifecycle: [`docs/conductor.md`](../conductor.md)
-- Listener QS train (Path B only): [`docs/listener-qs-train.md`](../listener-qs-train.md)
 - Agent rules: [`docs/agents.md`](../agents.md)
 
 Dependabot patch and minor updates use their own guarded auto-merge workflow.
 See [Dependabot](#dependabot).
 
-## Do this now (session 0)
+## Inspect checkouts and landing state
 
-Use Conductor and the landing scripts already in the repo.
+From a clean checkout, inspect the current queue and local worktrees:
 
-1. From any clean checkout of this repo:
-
-   ```bash
-   git fetch origin
-   bash scripts/pr-queue-status.sh
-   git worktree list
-   ```
-
-2. In Conductor, count every active workspace for this repo, including an
-   active train. Exclude archived workspaces. The hard cap is three active
-   workspaces. If you have more, stop creating work and apply the table below
-   until three remain.
-
-3. Give each open workspace one state and action:
-
-   | State | Action now |
-   |-------|------------|
-   | PR open, recommendation `land now` | Run `scripts/land-pr.sh <PR#>`. Archive only after GitHub reports `MERGED` |
-   | PR open, `wait/checks` or `update + test` | Leave it. Do not start a sibling workspace to help |
-   | PR open, `draft` | Return it to the owning workspace until the handoff is complete |
-   | PR open, `conflict/manual` | Follow [Conflict ownership](#conflict-ownership); do not spawn a fixer workspace |
-   | PR open, `commit dirty work` | Return to that workspace and reconcile its tracked changes before landing |
-   | PR open, `inspect/no local worktree` or `inspect (...)` | Inspect the PR and branch before creating any replacement workspace |
-   | PR merged, workspace still open | Confirm GitHub state `MERGED`, then archive |
-   | No PR, work is independent and almost done | Finish, run `/ship`, and use Path A |
-   | No PR, work needs an active Listener QS train | Use Path B only after the maintainer activates the train |
-   | No PR, stale or overlapping work | Archive or reject it. Do not rescue it with another agent |
-   | Dependabot PR | Do not count it as a workspace; follow the Dependabot batch rules |
-
-4. Do not create an orchestrator workspace, a `safe-merge.sh`, persistent
-   `.agents/eng-*` slots, or a board under `.context/`. Use
-   `pr-queue-status.sh` and the Conductor workspace list as the dashboard.
-
-5. Create the next workspace only when the total active workspace count is
-   below three. Assign its path and write-set first. See
-   [Admission](#admission-wip-cap).
-
-## Roles
-
-| Role | Who | Allowed | Forbidden |
-|------|-----|---------|-----------|
-| Planner | Maintainer, optional | Split the task, assign the write-set and base SHA, choose Path A or B, create an admitted workspace | Writing product code or merging during planning |
-| Worker | One agent per feature workspace | Implement inside the assigned write-set and fill the handoff | Merging, spawning workspaces, or opening extra PRs to fix conflicts |
-| Integrator | Maintainer | Choose merge order, integrate one slice, run `land-pr.sh`, confirm merge state, archive | Starting new feature work during the integration pass |
-
-Agents do not create workspaces or train branches unless the current user
-message assigns that role.
-
-## Admission (WIP cap)
-
-- The hard limit is three active workspaces for this repo. A fourth waits.
-- The issue backlog does not change the cap.
-- An active Listener QS train consumes one slot, leaving at most two feature
-  workspaces until the train is archived.
-
-Workspace lifecycle:
-
-```text
-active -> ready for handoff -> merged -> archived
+```bash
+git fetch origin
+bash scripts/pr-queue-status.sh
+git worktree list
 ```
 
+Use one writer per worktree and avoid concurrent changes to overlapping files.
+Resolve branch conflicts and validate the result in the checkout that owns the
+branch.
+
 `scripts/land-pr.sh` arms auto-merge and can return before GitHub merges the PR.
-Before archiving a Path A workspace or the completed train, run:
+Confirm the PR state before retiring the source checkout:
 
 ```bash
 gh pr view <PR#> --json state --jq .state
 ```
 
-Archive only when the command prints `MERGED`.
-
 The committed `.conductor/settings.toml` routes archive events to
-`scripts/conductor-archive.sh`. Repository-local `settings.local.toml` values
-have higher precedence. Remove copied lifecycle hooks from that local file
-after the shared settings reach `main`, or the local copy will continue to run.
+`scripts/conductor-archive.sh`. Repository-local `settings.local.toml` has higher
+precedence; inspect it if the effective hooks differ from the committed settings.
 
-## Shipping paths
+<a id="activate-a-train-maintainer-only"></a>
 
-Pick one path per unit of work.
+## Integration branches
 
-### Path A: direct to `main`
-
-Use Path A for independent fixes, features, docs, and CI or lifecycle work with
-an exclusive write-set.
-
-```text
-workspace -> branch -> /ship PR to main -> soak
-          -> scripts/land-pr.sh <PR#> -> confirm MERGED -> archive
-```
-
-### Path B: temporary train for coupled slices
-
-Use Path B only when several slices share types, APIs, config, or one behavior
-that must land together. The current train name is `train/listener-qs`.
-
-Path B is dormant unless the maintainer has created both the branch and its
-dedicated Conductor workspace. Do not assign Path B work against a missing
-train.
-
-#### Activate a train (maintainer only)
-
-1. Fetch `origin` in a clean, dedicated Conductor workspace created from the
-   latest `origin/main`.
-2. Create `train/listener-qs` at that exact commit and push the branch to
-   `origin`.
-3. Confirm the workspace is clean, its branch is `train/listener-qs`, and its
-   `HEAD` equals the recorded train starting SHA.
-4. Confirm the remote ref exists:
-
-   ```bash
-   git ls-remote --exit-code --heads origin refs/heads/train/listener-qs
-   ```
-
-5. Announce the train as active before assigning a Path B slice. Agents do not
-   activate or retire a train without explicit authority in the current user
-   message.
-
-The train flow is:
-
-```text
-feature workspace -> clean merge into train/<name> -> local slice checks
-                  -> repeat one slice at a time
-                  -> one /ship PR from train to main
-                  -> scripts/land-pr.sh -> confirm MERGED
-                  -> archive train and recreate it from current origin/main next time
-```
-
-Direct pushes and merges into `train/**` do not trigger `quality.yml` or
-`pi-smoke.yml`. Those workflows run for the final PR to `main`; they also run
-for a PR whose base is `train/**`, although this runbook does not require
-per-slice PRs. Run the assigned local checks after every train intake.
-
-Feature slices targeting this train follow
-[`docs/listener-qs-train.md`](../listener-qs-train.md). Do not open a Path A PR
-and keep the same commits on a train.
+Use a feature branch and a PR to main for independent changes. Coupled changes
+can use a temporary integration branch followed by one PR to main. Direct
+pushes and merges into `train/**` do not trigger `quality.yml` or `pi-smoke.yml`;
+those workflows run for PRs targeting main or `train/**`. Run affected local
+checks after each integration.
 
 ## Shared-file ownership
 
-Release metadata stays with the release cut or train integrator:
+Release metadata changes have one owner during the release:
 
 - `pyproject.toml`
 - `CHANGELOG.md`
@@ -164,7 +57,7 @@ Release metadata stays with the release cut or train integrator:
 - `ha-addon/mammamiradio/config.yaml` when changing the version
 - `custom_components/mammamiradio/manifest.json` when changing the version
 
-Feature slices do not bump versions. See `docs/release-process.md`.
+Feature changes do not bump versions. See `docs/release-process.md`.
 
 The following files require one exclusive owner because they affect every
 workspace:
@@ -174,10 +67,8 @@ workspace:
 - `scripts/land-pr.sh`, `scripts/land-gates.sh`, `scripts/edge-select.sh`, `scripts/land-queue-plan.sh`, `scripts/pr-queue-status.sh`, `scripts/check-merge-gate.sh`
 - `.conductor/settings.toml`
 
-For Path A, a dedicated workspace may own these files when its objective and
-assigned write-set name them. No other active workspace may overlap that
-write-set. For Path B, feature workers leave a manifest note and the train
-integrator applies or rejects the shared-file change.
+Avoid concurrent changes to these shared files. Assign one owner and report
+shared dependencies before editing them.
 
 ## PR body and changelog lint mechanics
 
@@ -198,91 +89,25 @@ A repo may only ADD patterns. Suppressing a baseline pattern is a pull request t
 Three local lints consume `LINT_PATTERNS`:
 
 - `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
-- `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
-- `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml` on workflow/script PRs and on `main`).
+- `scripts/check-pr-body-lint.sh` checks PR text in `pr-body-lint.yml`.
+- `scripts/check-issue-body-lint.sh` checks maintainer-authored issue bodies in
+  `issue-body-lint.yml`; it does not check outside contributors' issues.
 
 To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
 
-## Write-set
+## Check the write-set
 
-Assign paths per task. Do not maintain a standing directory ownership map.
-
-At assignment, record an immutable base SHA:
-
-- Path A: the `origin/main` commit from which the workspace starts.
-- Path B: the train `HEAD` assigned to that slice.
-
-At handoff, verify that base and list only the slice's changes:
+Record the immutable starting commit and compare the completed change against it:
 
 ```bash
 git merge-base --is-ancestor <base-sha> HEAD
 git diff --name-only <base-sha>...HEAD
 ```
 
-Reject extra paths outside the write-set. A Path B shared-file change also
-requires a manifest note. Return the slice to its existing workspace; do not
-create a fixer workspace.
-
-Do not admit overlapping write-sets in two active feature workspaces.
-
-## Handoff
-
-The worker fills this template. The integrator rejects incomplete handoffs.
-
-```text
-Path: A (PR to main) | B (train/listener-qs)
-Workspace: <Conductor name>
-Branch: <name>
-Base SHA (assigned, immutable): <full>
-Head SHA: <full>
-Objective: <one line>
-
-Write-set (assigned):
-- <glob or path>
-
-Diff vs assigned base (actual):
-- <paste git diff --name-only <base-sha>...HEAD>
-
-Shared-file manifest:
-- none | changelog bullet: ... | dependency: ... | lifecycle/config: ...
-
-Validation:
-- <command> - <result>
-
-Conflicts / residual risk:
-- none | ...
-
-Next action:
-- Path A: PR #<n> ready for land-pr.sh | still soaking
-- Path B: cleanly merge this head into train/listener-qs
-```
-
-## Integrator loop
-
-Run at the start of the session and after each confirmed merge:
-
-```bash
-bash scripts/pr-queue-status.sh
-```
-
-The shadow land queue below computes the same ordering automatically and writes
-it to a job summary every 30 minutes. It is advisory in exactly the way this
-dashboard is — you still land.
-
-Then:
-
-1. Pick one ready Path A PR or one train intake.
-2. For Path A, run `scripts/land-pr.sh <PR#>`. Confirm GitHub state `MERGED`
-   before archiving the workspace.
-3. For Path B, merge one feature branch into `train/listener-qs`. Run the
-   slice's checks. When the batch is coherent, run `/ship` for the train PR,
-   land it with `scripts/land-pr.sh`, and confirm state `MERGED`.
-4. Archive a source feature workspace after the train owner confirms its head
-   is in the train and its validation passed.
-5. Re-run `pr-queue-status.sh`.
-
-Integrate foundation changes before consumers when a dependency requires that
-order.
+Keep changes within the agreed files and report any shared-file dependencies.
+Describe the resulting behavior and its validation in the PR. Keep workspace
+inventories, agent assignments and private handoff records outside public Git
+history.
 
 ## Shadow land queue (report-only)
 
@@ -294,10 +119,7 @@ no edge move. The workflow requests `contents: read`, `pull-requests: read` and
 `actions: read` — the last one because the edge lane asks `gh run list` which
 add-on builds went green. It holds no write permission at all.
 
-It exists to be compared. Before any of this is automated, its choices need to
-sit next to the landing seat's actual `scripts/land-pr.sh` choices for long
-enough to trust them. Review receipts are retired from admission; this queue
-remains report-only and does not gain merge authority.
+The queue reports recommendations for maintainer review. It cannot merge PRs.
 
 Read it yourself any time:
 
@@ -308,31 +130,30 @@ bash scripts/land-queue-plan.sh --json-out F   # both, from one query (what CI r
 bash scripts/pr-queue-status.sh --json         # the same states, plus local worktrees
 ```
 
-It reaches its verdict through the same predicates the landing seat arms on
-(`scripts/land-gates.sh`, shared with `land-pr.sh`) and the same selection the
-edge cut uses (`scripts/edge-select.sh`, shared with `cut-edge-release.sh`). A
-shadow reasoning from its own copy of the gates would prove nothing about the
-thing it shadows, so a test asserts the queue evaluates every gate `land-pr`
-arms on.
+The queue and `land-pr.sh` both use `verify_head` from `scripts/land-gates.sh`.
+A regression test verifies that a refusal from `verify_head` blocks the queue
+recommendation. The merge script also checks release-cut restrictions before
+enabling auto-merge; the queue does not establish those release conditions.
+
+Non-main targets are skipped in all lanes, and an unknown base stops planning.
+Edge selection refreshes `origin/main` once per run, independently of PR
+classification, and uses one resolved commit for eligibility and the advertised
+pin. A failed refresh blocks the Edge verdict.
 
 Lanes are keyed on what the automation itself emits — the bot flag, and the
 `edge-release/*` branch `cut-edge-release.sh` pushes, and the Dependabot author
-login — never on the PR title. A lane assignment is a total exemption from every
-gate, and a title is free text a human can retype.
+login — never on the PR title. Non-feature lanes use their own merge paths and
+are exempt from the shared feature-head gates.
 
-**How it orders PRs.** Oldest first, by creation time. That is a stand-in: the
-design orders by when a PR first became `READY`, which needs a persisted ledger
-the shadow has no write path for. Creation time is the honest read-only proxy
-and carries the property that actually matters — a PR that bounces and comes
-back keeps its place — because it never changes. The JSON labels it
-`fifo_key_source` so a month of shadow data stays interpretable after the swap.
+PRs are ordered by creation time. The JSON field `fifo_key_source` identifies
+this ordering.
 
 A blocked head *stalls* the queue rather than being reordered around — that is
 what keeps the ordering fair to whoever has been waiting longest. When a head is blocked on something
 only its owner can fix (a conflict, usually), the `skip-queue` label drops it
 out of head contention so one stuck PR cannot hold every other fix hostage.
 `hold` or `manual-land` is the other direction: it takes a PR out of the queue's
-hands entirely and stalls the head, for when you mean to land that one by seat.
+hands entirely and stalls the head, for when you mean to merge it through the maintainer's explicit command.
 
 **What each state means:**
 
@@ -345,13 +166,13 @@ hands entirely and stalls the head, for when you mean to land that one by seat.
 | `BLOCKED_CONFLICT` | Merge conflict — the owning workspace resolves it |
 | `BLOCKED_YOU` | `hold` or `manual-land` label |
 | `BLOCKED_HEAD` | Head object could not be fetched; gates cannot be evaluated |
-| `SKIPPED` | `skip-queue` label — out of head contention |
+| `SKIPPED` | `skip-queue` label or non-main base — out of head contention |
 | `EXEMPT` | Bot, Dependabot or edge lane; keeps its own merge path |
 | `OPEN` | Draft |
 
 **Turning it off.** Delete `.github/land-queue.enabled` (a one-line PR, with an
 audit trail), or set the repository variable `LAND_QUEUE=0`. Either one stops
-it. Two switches because the file works from any seat that can open a PR and
+it. Two switches because the file works through a PR and
 the variable works without one. Both are enforced inside
 `scripts/land-queue-plan.sh`, not only in the workflow, so "off" means off from
 a local run too — the switch belongs to the controller, not to one caller. The
@@ -363,25 +184,11 @@ off; the human dashboard is unaffected.
 
 Self-test: `bash tests/workflows/test_land_queue.sh`.
 
-**It is not live, and cannot be flipped live from a feature seat.** Doing that
-needs a GitHub App installed on the repo with `contents:write` +
-`pull-requests:write`. `GITHUB_TOKEN` is specifically not enough: commits it
-pushes do not trigger `push`/`pull_request` workflows, so an integrate commit
-pushed with it would land with no CI and the queue would arm a head that no
-check ever ran against. The header comment in `land-queue.yml` lists the full
-set of preconditions.
 
 ## Conflict ownership
 
-- Path A: the source workspace resolves conflicts with `main`, reruns its
-  checks, and re-reviews changed code after conflict resolution. The owning
-  agent handles waits and feedback; ordinary PRs need no review-receipt refresh.
-- Path B: the train owner stops the intake and returns semantic conflicts to
-  the source workspace with the current train SHA. The worker resolves against
-  that SHA, records it as the new base, reruns checks, and submits a new
-  handoff. The train owner verifies and integrates the clean result.
-
-Do not resolve either path from a third workspace.
+Resolve conflicts in the source checkout. Rerun affected checks and review the
+resulting diff.
 
 ## Dependabot
 
@@ -398,25 +205,4 @@ disarm PRs. Stable-version changes require that verified freeze at landing.
 Keep human landings paused through both architecture promotions and resume
 explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`. The report-only queue covers merge state,
 labels and unresolved bot threads; its READY result does not establish cut admission. See
-`docs/runbooks/ha-addon.md`, "The cut window". Do not attach Dependabot branches
-to Conductor feature slots.
-
-## Explicitly out of scope
-
-- A second human merge script that rebases and pushes `main`
-- GitHub merge queue, until ready-to-merge PRs become the bottleneck
-- An agent that judges integration conflicts
-- Persistent worktree slots under `.agents/` beside Conductor workspaces
-- A `.context/workspaces.md` source-of-truth board
-
-`quality.yml` has no `merge_group` trigger. Adding one belongs in a separate CI
-change.
-
-## Weekly rhythm
-
-| When | Action |
-|------|--------|
-| Start of session | Run `pr-queue-status.sh`, archive confirmed merges, count feature slots |
-| New task | Admit only below the cap; record write-set, base SHA, and shipping path |
-| Feature done | Handoff to the maintainer; archive after the path-specific merge condition |
-| Train PR merged | Confirm `MERGED`, archive the train, recreate a fresh train from current `origin/main` for the next batch |
+`docs/runbooks/ha-addon.md`, "The cut window".

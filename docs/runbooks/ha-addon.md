@@ -32,7 +32,7 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 **The cut window.** Between the cut merge and the second `promote` job, `main` advertises a version whose image is not published yet. A fresh install of the stable add-on fails and rolls back, and an update fails to download. A station already playing keeps playing, because the Supervisor pulls the new image before it stops the old container.
 
-The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). For recovery, prepare `git revert --no-commit <cut-sha>`, then commit and land the complete revert before debugging. See "Cutting a stable release" below for the commands.
+Keep the cut window short. For recovery, prepare `git revert --no-commit <cut-sha>`, then commit and land the complete revert before debugging. See "Cutting a stable release" below for the commands.
 
 To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily. `dependabot-automerge.yml` reads current `main` on Dependabot PR events, config.yaml pushes to main, hourly, and on demand. A missing image disables auto-merge on eligible Dependabot PRs and adds `cut-window-hold`; a failed label write fails the run. An unreachable registry leaves auto-merge unchanged. Arming requires verified patch/minor metadata, a matching PR head, a current `main` check, and an active workflow. The sweep only disarms. After publication, request `@dependabot rebase` from a maintainer account to trigger a fresh PR event, or use the landing workflow. Major updates need manual landing. Label events can re-arm a PR you disarmed by hand.
 
@@ -237,10 +237,7 @@ Prolonged-silence detection cannot catch this either, because listeners fail bef
 they are ever counted as listeners.
 
 **The cut: 4 steps, after edge validation.** Land the cut PR only when you can
-finish the tag and the QA in the same sitting: the window opens at the merge, and every
-hour it stays open leaves new installs broken. The 3.0.0 cut of 2026-09-02 merged in
-the evening with QA deferred to "the stable image", which cannot exist before the tag; it
-had to be reverted the same night.
+finish the tag and the QA in the same sitting: the window opens at the merge.
 
 1. **Land one `chore(release): cut X.Y.Z` PR** via `/ship`:
    - `pyproject.toml`, `ha-addon/mammamiradio/config.yaml`,
@@ -761,8 +758,8 @@ half — that a valid archive actually brings a station back up, settings and
 provider keys and station memory intact, generated audio rebuilding. Run it when
 a disposable instance is available. It needs Supervisor, so the plain container
 image cannot stand in. Absent that instance, the round trip is unverified and
-the release carries that gap knowingly; record it in
-`../stabilization-log.md` rather than letting it pass silently.
+the release carries that gap knowingly; record it with the release acceptance
+evidence rather than letting it pass silently.
 
 **Retired from this gate, and why.** Archive member inspection and the
 `secrets.env` digest comparison were per-release steps until 2026-08-04. Both
@@ -775,16 +772,31 @@ rather than pared to what only a live host can show.
 
 This section is the single source of truth; the root agent guide points here.
 
-**Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls.** The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until the maintainer's explicit merge signal. On the signal, `scripts/land-pr.sh <PR#>` (1) refuses a behind or conflicted branch without mutating the PR, directing its feature workspace to integrate `origin/main`, review any changed code, and push; (2) blocks unresolved current Major/Critical/P0/P1 bot threads and fails closed if thread data cannot be read, through `scripts/land-gates.sh` shared with the report-only shadow queue, without consulting receipts or local ledgers; (3) checks release-cut admission; and (4) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12); integrate the base in the owning workspace before landing. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. During a release cut, `scripts/check-advertised-version.sh` checks GHCR for the version advertised on `main`. Missing images make `dependabot-automerge.yml` disable auto-merge and add `cut-window-hold` to affected Dependabot PRs. The sweep only disarms. After publication, a fresh PR event with verified Dependabot metadata or the landing workflow can resume held PRs. Before arming, the workflow checks that the PR head matches the metadata and `main` matches the registry check. PR events can re-arm a PR you disarmed by hand. Before a cut, the release operator runs `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh freeze` to disable new runs, drain existing runs and disarm PRs. `land-pr.sh` requires verified freeze state for stable-version changes. Keep the human landing freeze through both architecture promotions, then resume explicitly with `GH_REPO=florianhorner/mammamiradio scripts/dependabot-window-hold.sh thaw <release-run-id>`; see "The cut window" above for proof and recovery. GitHub Actions must not post Dependabot rebase or recreate commands. Handle behind branches through an authenticated maintainer. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`), which reads GitHub's effective rules for `main` rather than reimplementing ruleset pattern matching. Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and head matching does not eliminate non-conflicting staleness. The owning feature agent handles CI waits and review feedback; the landing seat reports `MERGED` only after confirming GitHub's state, never merely because arming succeeded.
+Human and feature PRs merge through `scripts/land-pr.sh <PR#>` after the
+maintainer authorizes the merge. The wrapper accepts only PRs with a verified
+main target; it refuses missing or other targets before fetching the PR commit
+or querying review threads. It rejects behind/conflicted branches, blocks
+unresolved current Major/Critical/P0/P1 bot threads, and stops when thread data
+cannot be read. It checks release-cut restrictions before requesting squash
+auto-merge for the exact verified head. GitHub still requires an up-to-date
+branch and successful required checks. A later push requires checking the new
+head again. Confirm that GitHub reports MERGED; enabling auto-merge does not
+establish that a merge occurred.
+
+Eligible Dependabot patch/minor updates use their separate workflow. During a
+release cut, verified freeze state is required for stable-version changes.
+Keep merging paused through both architecture promotions; see "The cut window"
+for freeze, resume and recovery commands. The local merge hook is a guard,
+not a security boundary, and matching the head does not eliminate non-conflicting
+staleness.
 
 The short version:
 
-- `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
-  review time) until the maintainer gives the merge signal.
+- `/ship` opens the PR. The maintainer authorizes merging after review.
 - On the signal, run `scripts/land-pr.sh <PR#>`. No review receipt or local review ledger is required. It blocks
   unresolved current Major/Critical/P0/P1 bot threads and fails closed when
-  thread data cannot be read. A behind branch is not changed from the landing
-  seat: return to its feature workspace, merge `origin/main` and push, then
+  thread data cannot be read. For a behind branch, return to the source checkout, integrate the current
+  main branch and push, then
   retry after CI and re-review of changed code. For an up-to-date head it arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified. Stable-version changes also require the
@@ -801,8 +813,8 @@ The short version:
   authenticated maintainer handles that specific PR. If Dependabot still owns
   the branch, request its rebase as the maintainer; if the branch was edited,
   use `@dependabot recreate` and re-review the new head. Human-authored PRs land
-  through `scripts/land-pr.sh <PR#>`; a behind branch returns to its feature
-  workspace to integrate and push.
+  through `scripts/land-pr.sh <PR#>`; a behind branch returns to its source
+  checkout to integrate and push.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
   `allow_auto_merge`, required contexts, and that the main-branch ruleset
@@ -862,7 +874,7 @@ recovery assets and a target-scoped release-beat check:
 manifest's channel/semver match the release being cut when the manifest is
 enabled).
 
-## Release cooldown (stabilization run, 2026-04-17 onward)
+## Release cooldown
 
 A 24-hour minimum gap is enforced between consecutive published releases. The gate is `.github/workflows/release-cooldown.yml`; it runs on every `v*` tag push and queries GitHub Releases for the prior published (non-draft, non-prerelease) release's `publishedAt`.
 
@@ -871,7 +883,7 @@ A 24-hour minimum gap is enforced between consecutive published releases. The ga
 - Override: `MIN_COOLDOWN_HOURS=<n>` at workflow level (not set by default) tightens or relaxes the window.
 - Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on the changed-lanes `workflows` lane (`scripts/ci-changed-lanes.sh`), and on every push to `main`, where every lane runs.
 
-**Trust model:** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. Acceptable for the current single-maintainer team; revisit if PR volume grows. Day 8 Go/No-Go uses `../stabilization-log.md` to evaluate whether the gate is working.
+**Trust model:** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. Review label permissions when changing the release access model.
 
 ## Post-merge verification
 
@@ -907,7 +919,7 @@ Use these to tell intentional degradation from a real regression during post-mer
 
 **Healthy startup**: boot summary line, one `Producing MUSIC:` within a few seconds, no repeated `queue empty` warnings.
 
-**Anthropic auth suspended (intentional)**: one `Anthropic auth failed — suspending for 10 minutes` followed by OpenAI script generation. If you see this line repeating every few seconds, the WS3-A cooldown broke.
+**Anthropic auth suspended (intentional)**: one `Anthropic auth failed — suspending for 10 minutes` followed by OpenAI script generation. If you see this line repeating every few seconds, the provider cooldown broke.
 
 **TTS voice substituted (intentional)**: one `Invalid voice 'X' for backend edge; falling back to it-IT-DiegoNeural` at boot. Zero per-segment `Invalid voice` lines. Engine Room → Voices shows the engine state.
 

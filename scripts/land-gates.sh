@@ -67,6 +67,13 @@ fi
 # shellcheck source=scripts/review-threads.sh
 . "$LAND_GATES_DIR/review-threads.sh"
 
+# Only PRs targeting main are eligible. `land_base` classifies baseRefName as
+# "main", "other" (another branch) or "unknown" (missing, empty
+# or not a string). Unknown is unverifiable, so callers fail closed on it.
+# Callers prefix their jq program with the definition: jq "$LAND_BASE_JQ land_base".
+# shellcheck disable=SC2034  # consumed by sourcing scripts (land-pr.sh, land-queue-plan.sh)
+LAND_BASE_JQ='def land_base: .baseRefName | if type != "string" or . == "" then "unknown" elif . == "main" then "main" else "other" end;'
+
 thread_check() {
   local pr="$1" slug owner repo response blocked line
   if [ "${MMR_LAND_SKIP_THREAD_CHECK:-0}" = "1" ]; then
@@ -121,31 +128,6 @@ verify_head() {
   local pr="$1"
   # Review ledgers and pre-ship receipts are never admission gates.
   thread_check "$pr" || return 1
-}
-
-# refresh_landed_ref <base-sha> -> always 0. Need-driven `git fetch origin main`.
-#
-# ensure_head_local fetches the PR head's OBJECTS, which carries the base commit
-# into the object store, but it never moves the origin/main REF. This keeps a
-# local origin/main from lagging GitHub's real base. No landing gate reads
-# origin/main; the queue's edge lane compares its candidates against it.
-#
-# It fetches only when a resolvable local origin/main does NOT already contain
-# the base, so a seat with complete history never touches the network, and a
-# seat with no origin/main at all is left alone. Fetch failure is tolerated:
-# the refresh can never be the thing that accepts.
-# MMR_LAND_SKIP_FETCH=1 keeps self-tests offline.
-refresh_landed_ref() {
-  local base="$1"
-  if [ "${MMR_LAND_SKIP_FETCH:-0}" = "1" ]; then
-    return 0
-  fi
-  git rev-parse --verify --quiet origin/main >/dev/null 2>&1 || return 0
-  if git merge-base --is-ancestor "$base" origin/main 2>/dev/null; then
-    return 0
-  fi
-  git fetch -q origin main 2>/dev/null || true
-  return 0
 }
 
 # ensure_head_local <pr> <head-sha> -> 0 when the head object is present locally.

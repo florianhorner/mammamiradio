@@ -101,8 +101,8 @@ case "$1 $2" in
     if [ -z "$commits" ]; then
       commits="[{\"committedDate\":\"${GH_MOCK_COMMIT_DATE:?}\"}]"
     fi
-    printf '{"state":"%s","headRefOid":"%s","baseRefOid":"%s","mergeStateStatus":"%s","commits":%s}\n' \
-      "${GH_MOCK_STATE:-OPEN}" "$head" "${GH_MOCK_BASE:?}" "$merge_state" "$commits"
+    printf '{"state":"%s","headRefOid":"%s","baseRefOid":"%s","baseRefName":%s,"mergeStateStatus":"%s","commits":%s}\n' \
+      "${GH_MOCK_STATE:-OPEN}" "$head" "${GH_MOCK_BASE:?}" "${GH_MOCK_BASE_NAME_JSON:-\"main\"}" "$merge_state" "$commits"
     ;;
   "pr merge") : ;;
   "repo view")
@@ -165,7 +165,6 @@ run_land() {
       GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
       GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" GH_MOCK_COMMENT_JSON="$EMPTY_COMMENTS" \
       MMR_LAND_REVIEW_READER="$reader" \
-      MMR_LAND_SKIP_FETCH="${MMR_LAND_SKIP_FETCH:-1}" \
       MMR_LAND_SKIP_EVIDENCE_CHECK="${MMR_LAND_SKIP_EVIDENCE_CHECK:-1}" \
       MMR_LAND_SKIP_THREAD_CHECK="${MMR_LAND_SKIP_THREAD_CHECK:-1}" \
       "$@" bash "$LAND" 7 2>&1)" || RUN_RC=$?
@@ -199,7 +198,7 @@ never_merged || fail "missing head-pin support must never merge"
 printf '%s' "$RUN_OUT" | grep -q 'Upgrade gh' || fail "old CLI needs upgrade guidance"
 pass "missing head-pin support remains fail-closed"
 
-# Case 1: CLEAN PR + fresh squad entry at HEAD => arms with pinned real head
+# Case 1: CLEAN PR arms with pinned real head; legacy inputs are ignored.
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
 [ "$RUN_RC" -eq 0 ] || fail "clean PR should arm auto-merge pinned to head (exit code)"
 merged_with "$HEAD_FULL" || fail "clean PR should arm auto-merge pinned to head"
@@ -361,12 +360,12 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
 never_merged || fail "page-2 blocking comment must never merge"
 pass "paginated comment scan finds blocking bot debt"
 
-# Case 20: no local ledger, committed v2 evidence covers head => arm
+# Case 20: receipt presence cannot restore retired admission checks.
 run_land "$(empty_reader)" \
   MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
   MMR_LAND_EVIDENCE_CHECKER="$PASSING_EVIDENCE_CHECKER"
-[ "$RUN_RC" -eq 0 ] || fail "v2-only landing should arm when ledger is absent (exit code)"
-merged_with "$HEAD_FULL" || fail "v2-only landing should arm auto-merge"
+[ "$RUN_RC" -eq 0 ] || fail "receipt presence must not affect landing (exit code)"
+merged_with "$HEAD_FULL" || fail "receipt presence must not affect pinned arming"
 ! printf '%s' "$RUN_OUT" | grep -q "committed v2 evidence covers" \
   || fail "landing must not claim it checked retired evidence"
 pass "receipt presence does not re-enable admission checks"
@@ -382,12 +381,7 @@ run_land "$TMPDIR_T/nonexistent-reader" MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRA
 never_merged || fail "unavailable review data must never arm"
 pass "review data failure remains fail-closed without a ledger"
 
-# =============================================================================
-# The landed-ref refresh. The merge witness trusts a base only if it is landed in
-# origin/main; a landing seat that has not fetched since main advanced would
-# refuse GitHub's real base. The wrapper must refresh the ref before it verifies,
-# and the refresh must never be the thing that fails the landing.
-# =============================================================================
+# Existing exact objects do not require origin/main or a refresh.
 GIT_SHIM_DIR="$TMPDIR_T/gitshim"; mkdir -p "$GIT_SHIM_DIR"
 GIT_SHIM_LOG="$TMPDIR_T/git-shim.log"; : > "$GIT_SHIM_LOG"
 REAL_GIT="$(command -v git)"
@@ -395,44 +389,34 @@ cat > "$GIT_SHIM_DIR/git" <<GITEOF
 #!/usr/bin/env bash
 if [ "\$1" = "fetch" ]; then
   printf '%s\\n' "\$*" >> "$GIT_SHIM_LOG"
-  [ "\${GIT_SHIM_FETCH_FAIL:-0}" = "1" ] && exit 128
-  exit 0
+  exit 128
 fi
 exec "$REAL_GIT" "\$@"
 GITEOF
 chmod +x "$GIT_SHIM_DIR/git"
+EMPTY_READER="$(empty_reader)"
+for ref_state in stale missing; do
+  [ "$ref_state" != missing ] || git update-ref -d refs/remotes/origin/main
+  PATH="$GIT_SHIM_DIR:$PATH" run_land "$EMPTY_READER" GH_MOCK_BASE="$BEHIND_BASE_FULL"
+  [ "$RUN_RC" -eq 0 ] || fail "present exact objects should arm with $ref_state ref: $RUN_OUT"
+  [ ! -s "$GIT_SHIM_LOG" ] || fail "present exact objects must not fetch"
+  merged_with "$HEAD_FULL" || fail "exact objects must retain head-pinned arming"
+done
+pass "present exact objects need no main-ref refresh"
 
-READER_OK="$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
-: > "$GIT_SHIM_LOG"
-# The base must be one the local origin/main does NOT cover, or nothing fetches.
-# The fixture's HEAD~1 is origin/main; BEHIND_BASE_FULL is a divergent sibling.
-PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL"
-[ "$RUN_RC" -eq 0 ] || fail "clean PR should still arm with the fetch enabled: $RUN_OUT"
-grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "wrapper must refresh origin/main before verifying"
-merged_with "$HEAD_FULL" || fail "arming must still happen after the refresh"
-pass "wrapper refreshes origin/main before verifying the base"
-
-: > "$GIT_SHIM_LOG"
-PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL" GIT_SHIM_FETCH_FAIL=1
-[ "$RUN_RC" -eq 0 ] || fail "a failed refresh must not itself fail the landing (the remaining gates decide): $RUN_OUT"
-grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "refresh must still be attempted"
-merged_with "$HEAD_FULL" || fail "with remaining gates passing, a failed refresh must not block the arm"
-pass "a failed refresh is tolerated; the remaining gates decide"
+# Reject every non-main/unknown base before object hydration or thread queries.
+for base_name in '"release"' null '""' 42 false '{}' '[]'; do
+  PATH="$GIT_SHIM_DIR:$PATH" run_land "$EMPTY_READER" GH_MOCK_BASE_NAME_JSON="$base_name" \
+    GH_MOCK_HEAD=0000000000000000000000000000000000000000 MMR_LAND_SKIP_THREAD_CHECK=0
+  [ "$RUN_RC" -ne 0 ] || fail "base $base_name must refuse"
+  never_merged || fail "base $base_name must never merge"
+  [ ! -s "$GIT_SHIM_LOG" ] || fail "base rejection must precede object fetch"
+  ! grep -q 'api graphql' "$GH_MOCK_LOG" || fail "base rejection must precede review queries"
+done
+pass "non-main and unverifiable bases fail before gates or merge"
 
 ! grep -q -- '--unshallow' "$LAND" || fail "landing must not fetch full history"
 pass "landing does not request a full-history fetch"
-
-# Complete history: a base the local origin/main already covers must not fetch.
-# This mirrors the invariant tests/workflows/test_dependabot_automerge_gate.sh
-# holds against this same wrapper, so the property lives with its owner too.
-: > "$GIT_SHIM_LOG"
-if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
-  COVERED_BASE="$(git rev-parse origin/main)"
-  PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$COVERED_BASE"
-  [ "$(grep -c '^fetch -q origin main' "$GIT_SHIM_LOG")" = "0" ] \
-    || fail "a base already covered by local origin/main must not trigger a fetch"
-  pass "complete history never fetches (base already covered by origin/main)"
-fi
 
 [ ! -e "$RETIRED_READER_CALLS" ] || fail "retired receipt/ledger reader was invoked"
 pass "landing never invokes retired receipt or ledger readers"
@@ -440,9 +424,24 @@ pass "landing never invokes retired receipt or ledger readers"
 # The sentinel only fires when a retired knob is read by name; a retired reader
 # called by its default path would slip past it. No landing script may name one.
 RETIRED_NAMES='read-preship-ledger|check-preship-evidence|gstack-review-read|MMR_LAND_REVIEW_READER|MMR_LAND_EVIDENCE_CHECKER|squad_check|evidence_check'
-! grep -nE "$RETIRED_NAMES" "$REPO_ROOT/scripts/land-gates.sh" "$LAND" "$REPO_ROOT/scripts/land-queue-plan.sh" \
-  || fail "a landing script names a retired review reader or gate"
-pass "no landing script names a retired review reader or gate"
+assert_no_retired_names() {
+  local rc=0
+  grep -nE "$RETIRED_NAMES" "$@" || rc=$?
+  case "$rc" in
+    1) return 0 ;;
+    0) echo "retired review reader or gate found" >&2 ;;
+    *) echo "retired-name scan failed (exit $rc)" >&2 ;;
+  esac
+  return 1
+}
+assert_no_retired_names "$REPO_ROOT/scripts/land-gates.sh" "$LAND" "$REPO_ROOT/scripts/land-queue-plan.sh" \
+  || fail "landing script retirement guard failed"
+printf '%s\n' 'thread_check' > "$TMPDIR_T/scan-clean"
+printf '%s\n' 'squad_check' > "$TMPDIR_T/scan-retired"
+assert_no_retired_names "$TMPDIR_T/scan-clean" || fail "clean scan should pass"
+if assert_no_retired_names "$TMPDIR_T/scan-retired" >/dev/null 2>&1; then fail "retired name must fail"; fi
+if assert_no_retired_names "$TMPDIR_T/missing" >/dev/null 2>&1; then fail "grep error must fail"; fi
+pass "retired-name guard rejects matches and scan errors"
 
 echo
 echo "All $PASS_COUNT land-pr cases passed."

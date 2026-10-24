@@ -157,7 +157,7 @@ Every variable the station reads, with its default and fallback. Model selection
 - `MAMMAMIRADIO_FESTIVAL_MODE`: enable Festival Mode (`true`/`1`/`yes`; default off). Hosts become theatrical music competition MCs — fictional Italian-regional delegations, dramatic scoring, drinking game triggers. Toggleable live from the admin panel without a restart; persisted to `.env` in standalone mode and Supervisor's stored `festival_mode` option in HA add-on mode.
 - `MAMMAMIRADIO_GUEST_HOST`: keep the rotating guest host on the roster (`true`/`1`/`yes` | `false`/`0`/`no`; default **on**). An explicit falsy value drops the guest (`GUEST_HOST_NAME` in `core/config.py`, currently "Hans Günther") from `config.hosts` at load time — so the system prompt, the prompt cache key, and voice validation are all clean with no per-call gating. `config.py` owns the canonical name; `scriptwriter.py` imports it so the roster gate and prompt logic can't drift on the spelling. The HA add-on exposes it as the **Guest host** option (mapped in `run.sh`); applied at the next (add-on) restart, not a live admin toggle.
 - `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`: pacing overrides read at config load (env > `radio.toml [pacing]`), each clamped to the same bounds as `_validate()` / `PATCH /api/pacing` (banter 2-60, ads 1-60, ad spots 1-5) so a stale value degrades to the clamp instead of failing boot (INSTANT AUDIO). These are how a live admin pacing-slider save survives a restart: `PATCH /api/pacing` persists every present key in one atomic operation — `.env` in standalone mode (`_save_dotenv`), one complete Supervisor option transaction in HA add-on mode (`_save_addon_option_batch`) — persist-first / mutate-second like the Super Italian and On-Air Sound toggles, so a failed write returns 500 and leaves both live and durable config untouched. The HA add-on exposes them as the **Songs between host breaks** / **Songs between ad breaks** / **Ads per break** options (mapped in `run.sh`), and each records an `operator_action` ledger row on change.
-- `MAMMAMIRADIO_BROADCAST_CHAIN`: enable/disable the FM on-air colouring pass (`true`/`1`/`yes` | `false`/`0`/`no`; default `false` — studio-clean; the colour is deliberately subtle and often imperceptible on good speakers, and the "what should the station sound like" strategy is being revisited). Overrides `[audio] broadcast_chain` in `radio.toml` (env > toml). The HA add-on exposes it as the **On-Air Sound** option (mapped in `run.sh`); standalone operators set it in `.env` or pass it as a container env var. Off = studio-clean output. Operator-toggleable **live** from the admin Engine Room On-Air Sound dial (`POST /api/broadcast-chain`): re-arms the egress chain on the next produced segment with no restart and no queue purge (so an operator can A/B the FM colouring against studio-clean on the live stream), and persists to `.env` in standalone mode or Supervisor's stored `broadcast_chain` option in HA add-on mode.
+- `MAMMAMIRADIO_BROADCAST_CHAIN`: enable/disable the FM on-air colouring pass (`true`/`1`/`yes` | `false`/`0`/`no`; default `false` — studio-clean; the colour is deliberately subtle and often imperceptible on good speakers). Overrides `[audio] broadcast_chain` in `radio.toml` (env > toml). The HA add-on exposes it as the **On-Air Sound** option (mapped in `run.sh`); standalone operators set it in `.env` or pass it as a container env var. Off = studio-clean output. Operator-toggleable **live** from the admin Engine Room On-Air Sound dial (`POST /api/broadcast-chain`): re-arms the egress chain on the next produced segment with no restart and no queue purge (so an operator can A/B the FM colouring against studio-clean on the live stream), and persists to `.env` in standalone mode or Supervisor's stored `broadcast_chain` option in HA add-on mode.
 - `MAMMAMIRADIO_BOUNDARY_IMAGING`: enable/disable the short packaged station sounds between songs and talk (`true`/`1`/`yes` | `false`/`0`/`no`; default **on**). Overrides `[audio] boundary_imaging` in `radio.toml` (env > toml). An unrecognised value logs a warning and forces the dial on, even when TOML sets it off. The playback loop may broadcast one packaged file (`stingers/music_to_speech.mp3`, `stingers/speech_to_music.mp3`, `bumpers/ad_in.mp3`, or `bumpers/ad_out.mp3`) before the next programme file; a missing or unusable file is a clean cut. The two stingers cover song/talk seams, including locally produced talk; ad-in/ad-out carts apply only to packaged spots because live breaks already contain their own bumpers. Producer rendering does not bake boundary stings into programme files. The cart is not a queue item. Operator-toggleable **live** from the admin Engine Room Transitions dial (`POST /api/boundary-imaging`, recorded as an `operator_action`): the next seam follows the dial, the cart already playing finishes, and the queue is not purged. Standalone persists the value to `.env` before the runtime changes. The HA add-on does not write `.env` or a Supervisor option; the dial returns to its startup setting (on by default) after a restart.
 - `MAMMAMIRADIO_LEDGER_ENABLED`: enable the provenance ledger / Show Memory (`true`/`1`/`yes`; default **off** in standalone, **on** in HA addon via `run.sh`). When on, a best-effort daemon thread records how each aired moment was made — the raw LLM attempts (Tier 1), the final spoken script (Tier 2), and the true aired outcome (Tier 3) — as daily-rotated JSONL under `cache_dir/ledger` (dir `0700`, files `0600`). Station-wide operator toggles (Super Italian, Chaos, Festival, AI quality, On-Air Sound, Transitions) are also recorded as `operator_action` rows (`{action, old_value, new_value, source}`) via `_record_operator_action` in `web/streamer.py`, so a debrief can see what the operator changed and when — FastAPI runs with `--no-access-log`, so without this the toggle POST leaves no trace. Best-effort like every other row (a ledger failure never affects whether the toggle applied). Off by default in standalone because the rows include home + listener context written locally in plaintext. A banter Tier-2 row also carries `line_accounting` (`{authored, aired, dropped_empty, dropped_malformed, dropped_guest_host, dropped_duplicate}`) whenever individual written lines were dropped before air, so a short exchange is distinguishable from a full one without re-parsing the raw model output — `final_script` only ever carries the survivors. The field is absent when nothing was lost. Never raises into the audio path; a saturated queue drops the oldest row and surfaces a `ledger_heartbeat`. The ledger directory is always derived from `MAMMAMIRADIO_CACHE_DIR`, so when set it inherits the addon (`/data/cache`) vs standalone (`./cache`) resolution. **HA addon:** enabled in `run.sh` (operator's own system, data stays local at `/data/cache/ledger/`). Not exposed in the addon options UI — not a user-facing toggle.
 - `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`: days of provenance history to keep before a day-rollover gzips and prunes older files (positive integer; default `14`). The deque cap (`ledger_queue_max`, default `2000` rows) is config-only in `StationConfig` with no env override.
@@ -280,15 +280,15 @@ add-on defaults to 1500 MB and exposes the **Music cache size (MB)** option
 (`norm_cache_mb`). Explicit environment values outside 200-8000 are clamped; a
 malformed environment value uses the applicable default. Either correction logs
 a warning so config loading can complete. Supervisor validates the add-on option
-as an integer in that range before the container starts. If unsupported
+value as an integer in that range before the container starts. If unsupported
 non-positive add-on input nevertheless reaches an internal ingestion path, both
 `run.sh` and the direct fallback silently use the 1500 MB add-on default.
 
-Size the cache for the rotation. A 200-track Jamendo rotation needs about 1 GB.
-Below that, LRU eviction can remove tracks before the rotation returns, which
-causes repeated cold renders. If a few songs repeat while others rarely play,
-increase the cache. **On-Air Sound** roughly doubles the per-track footprint
-because each song keeps a normalized file and a coloured bake.
+Size the cache for the cache-backed music rotation. If LRU eviction removes
+tracks before the rotation returns, a larger cache can avoid repeated cold
+renders. Jamendo transient expansion bypasses this cache: each prepared file is
+deleted after its single use. **On-Air Sound** roughly doubles the per-track
+footprint because each song keeps a normalized file and a coloured bake.
 
 At startup, the station combines free space, reclaimable cache bytes, and a 512 MB
 reserve to choose the effective ceiling. It writes that value back to the config
@@ -532,7 +532,7 @@ them, `X-Forwarded-For` and `X-Real-IP` are ignored and the direct peer address
 is the rate-limit identity. This narrow listener-request trust boundary is
 separate from the `/admin` private-network access model below.
 
-Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
+Admin (access follows the [Admin access model](#admin-access-model) below):
 
 - `GET /admin`, `GET /dashboard`
 - `GET /status`, `GET /api/capabilities`
@@ -1176,10 +1176,8 @@ sensors keep flowing either way.
 
 **Publishing health (admin-only diagnostics):** the admin-authorized `GET /status`
 response carries `runtime_health.ha_publish`, an operator-safe summary of the
-heartbeat above. ("Admin-authorized" per `require_admin_access`: loopback and,
-in add-on mode, the HA Supervisor network are trusted outright; everyone else
-needs the configured token or password.) It is never present on
-`/public-status`, `/healthz`, or `/readyz`. Shape:
+heartbeat above. Access follows the [Admin access model](#admin-access-model).
+It is never present on `/public-status`, `/healthz`, or `/readyz`. Shape:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -1282,5 +1280,5 @@ main-only deploy gate and the path filter, and runs on every pull request.
 
 - no systemd unit
 - no launchd plist
-- no nginx or Caddy config
-- no Fly/Render/Netlify config (public preview deployment is a future idea — blocked on cost and music copyright)
+- no production nginx or Caddy config (`start.sh` generates a temporary Caddy config for local development)
+- no Fly/Render/Netlify config

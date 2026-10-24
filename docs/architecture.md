@@ -1605,14 +1605,7 @@ responses are accepted only for the query generation that started them.
 
 ### Auth rules
 
-Admin access is granted by one of:
-
-- localhost access, unless `ADMIN_PASSWORD` is configured
-- HTTP Basic auth via `ADMIN_USERNAME` and `ADMIN_PASSWORD`
-- token auth via `X-Radio-Admin-Token` header for non-local requests when only `ADMIN_TOKEN` is configured
-- private-network trust (LAN, Tailscale, HA Supervisor) when no credential is configured — reads allowed, writes CSRF-checked; public IPs are always rejected
-
-In standalone mode, a non-loopback bind without a credential is rejected during config validation. The HA add-on is exempt: it boots on `0.0.0.0` with no credential and trusts its own LAN. The full matrix is the single source of truth in [operations.md](operations.md) ("Admin access model").
+`_validate` in `mammamiradio/core/config.py` decides whether the process may boot on its bind address, and `require_admin_access` in `mammamiradio/web/auth.py` authorizes each admin request. Both follow the tables in [operations.md, "Admin access model"](operations.md#admin-access-model), the single source of truth.
 
 ### CSRF protection
 
@@ -1770,7 +1763,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup; keepsake eligibility gates, exact-segment extraction, durable keepsake save |
 | `mammamiradio/release_campaign.py` | Packaged release-beat manifest loading and bounded on-air campaign state (`cache/release_campaign_ledger.json`) |
 | `mammamiradio/restart_handoff.py` | Post-restart music continuity spool: producer writes safe recent segments, startup admits them into the queue (`cache/restart_handoff/`) |
-| `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
+| `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy |
 | `mammamiradio/hosts/prompt_world.py` | Prompt-fiction data: expression banks, host fingerprints, exchange-shape/lore banks, style directives, Chaos/Festival mode blocks |
 | `mammamiradio/hosts/relationship.py` | Roster-aware exchange-shape/lore selection and in-memory recency rotation |
 | `mammamiradio/hosts/transitions.py` | Transition rewrite openers + anti-repeat stem/massage helpers |
@@ -1791,7 +1784,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/home/context_value.py` | Privacy-safe classification of a detached preview as useful, ambient-only, or empty |
 | `mammamiradio/home/catalog.py` | Generated device-label catalog: curated overrides, Anthropic-backed generation, four-tier resolver |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
-| `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout |
 | `mammamiradio/web/status_payload.py` | Shared admin/listener status payload serializers re-exported by `streamer.py` |
 | `mammamiradio/web/auth.py` | Request-layer admin auth: `require_admin_access`, CSRF enforcement, trusted-network classification |
 | `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |

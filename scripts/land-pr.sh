@@ -64,8 +64,10 @@ land_one() {
 
   case "$pr" in (*[!0-9]*|'') die "PR number must be numeric, got: $pr" ;; esac
 
-  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,mergeStateStatus 2>/dev/null)" \
+  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,baseRefName,mergeStateStatus 2>/dev/null)" \
     || die "could not read PR #$pr. Check the number and your gh auth, then re-run."
+  [ "$(printf '%s' "$view" | jq -r "$LAND_BASE_JQ land_base" 2>/dev/null)" = main ] \
+    || die "PR #$pr must have a verified main base — refusing non-main or unknown targets."
   state="$(printf '%s' "$view" | jq -r '.state')"
   head="$(printf '%s' "$view" | jq -r '.headRefOid')"
   base="$(printf '%s' "$view" | jq -r '.baseRefOid')"
@@ -91,10 +93,8 @@ land_one() {
     return 1
   fi
 
-  # The base is only trusted if it is landed in origin/main; a stale local ref
-  # would refuse GitHub's real base. Refresh only if the local ref does not
-  # already cover it — a seat with complete history never fetches.
-  refresh_landed_ref "$base"
+  # Hydrate the exact objects reported by GitHub; admission does not depend on
+  # the freshness of this checkout's remote-tracking ref.
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
   if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then

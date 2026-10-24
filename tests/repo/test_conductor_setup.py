@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import shutil
 import subprocess
+from itertools import groupby
 from pathlib import Path
 
 import pytest
@@ -108,8 +111,118 @@ def test_setup_keeps_local_workspaces_on_shared_bootstrap(tmp_path: Path, shell_
 
 @pytest.mark.parametrize("script", [SETUP, CLOUD_BOOTSTRAP], ids=lambda path: path.name)
 def test_setup_wrappers_never_install_packages_themselves(script: Path) -> None:
-    # Any install shape counts, not only the activate-then-pip form the stubs observe.
-    assert "pip install" not in script.read_text()
+    assert not _direct_package_install(script.read_text())
+
+
+def _direct_package_install(source: str) -> bool:
+    """Check literal installer commands; runtime tests separately prove delegation."""
+    # Keep quotes until command boundaries are identified; quoted operators are data.
+    quoted = r"\x27[^\x27]*\x27|\"(?:\\.|[^\"\\])*\"|\\."
+    tokens = re.findall(r"#[^\n]*|[;&|()\n]+|(?:" + quoted + r"|[^\s;&|()\x27\"\\])+", source.replace("\\\n", ""))
+    separators = ";&|()\n"
+    for separator, group in groupby(tokens, lambda token: token.startswith("#") or all(c in separators for c in token)):
+        if separator:
+            continue
+        raw_words = list(group)
+        for word in raw_words:
+            for part in re.findall(quoted + r"|[^\x27\"\\]+", word):
+                if not part.startswith(("'", "\\")):
+                    for command in re.findall(r"(?<!\\)\$\(([^()]*)\)", part):
+                        if _direct_package_install(command):
+                            return True
+        words = [shlex.split(word)[0] for word in raw_words]
+        while words and (
+            words[0] in {"if", "then", "elif", "while", "until", "do", "!", "exec", "command", "env"} or "=" in words[0]
+        ):
+            prefix = words.pop(0)
+            if prefix == "env":
+                while words and words[0] in {"-i", "--ignore-environment", "--"}:
+                    words.pop(0)
+        if not words:
+            continue
+        executable, rest = Path(words[0]).name, words[1:]
+        if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", executable) and "-m" in rest:
+            words = rest[rest.index("-m") + 1 :]
+            executable, rest = (words[0], words[1:]) if words else ("", [])
+        if re.fullmatch(r"pip(?:\d+(?:\.\d+)*)?", executable) and "install" in rest:
+            return True
+        if executable == "uv" and ("install" in rest or "sync" in rest):
+            return True
+        if executable == "eval" and _direct_package_install(" ".join(rest)):
+            return True
+        if executable in {"sh", "bash", "dash", "zsh"}:
+            for index, flag in enumerate(rest[:-1]):
+                if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", flag) and _direct_package_install(rest[index + 1]):
+                    return True
+    return False
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "pip install -r requirements.txt",
+        'sh -c "pip install package"',
+        "bash -c 'pip install package'",
+        'eval "pip install package"',
+        'sh -c "pip3 install package"',
+        'bash -c "uv sync"',
+        'eval "uv pip sync requirements.txt"',
+        'sh -c "python -m pip --quiet install package"',
+        "[ $# -gt 0 ] && pip install package",
+        "n=${#args[@]}; uv sync",
+        "n=${value#prefix}; uv sync",
+        "printf %s foo#bar; pip install package",
+        'echo "# status"; uv sync',
+        "pip3\tinstall package",
+        "pip3.11 --quiet install package",
+        '"/path with spaces/bin/pip" install package',
+        "python3 -m pip --disable-pip-version-check install package",
+        "python -m pip \\\n  install package",
+        "uv pip install package",
+        "uv pip sync requirements.txt",
+        "uv --directory project sync",
+        "uv sync; echo ready",
+        "uv sync||exit 1",
+        'sh -c "printf ready\\n\npip install package"',
+        "echo ready # setup\n\npip install package",
+        "if uv sync; then echo ready; fi",
+        "env FOO=bar pip install package",
+        "env -i FOO=bar pip install package",
+        "env --ignore-environment pip install package",
+        "env -- pip install package",
+        'bash -ec "pip install package"',
+        'bash -lc "uv sync"',
+        'echo "$(pip install package)"',
+    ],
+)
+def test_wrapper_install_guard_detects_alternate_forms(source: str) -> None:
+    assert _direct_package_install(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "# pip3 install package",
+        '"$ROOT/scripts/bootstrap-conductor.sh" # uv sync belongs in the shared bootstrap',
+        "python3 -c 'import sys'",
+        "uv --version; echo sync",
+        "[ $# -gt 0 ] # uv sync remains a comment",
+        "printf %s foo#bar # pip install remains a comment",
+        r"printf %s \# # uv sync remains a comment",
+        'echo "It\'s ready"',
+        'printf "%s\\n" "Run uv sync in the shared bootstrap"',
+        'echo "Workspace\'s environment is ready\nRun the app next"',
+        "uv --version # status\nsync",
+        "uv --version\n\nsync",
+        "printf '%s' uv sync",
+        "printf '%s' ';' pip install package",
+        "printf '%s' '\n' uv sync",
+        "printf '%s' '|' uv sync",
+        "echo '$(pip install package)'",
+    ],
+)
+def test_wrapper_install_guard_allows_delegation_and_comments(source: str) -> None:
+    assert not _direct_package_install(source)
 
 
 def test_cloud_bootstrap_selects_first_supported_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:

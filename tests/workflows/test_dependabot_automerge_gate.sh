@@ -120,7 +120,7 @@ def runs():
 if a[:2] == ['pr', 'view']:
     fail('view')
     if 'baseRefOid' in ' '.join(a):
-        output({'state': e.get('PR_STATE', 'OPEN'), 'headRefOid': e['LAND_HEAD'], 'baseRefOid': e['LAND_BASE'],
+        output({'state': e.get('PR_STATE', 'OPEN'), 'headRefOid': e['LAND_HEAD'], 'baseRefOid': e['LAND_BASE'], 'baseRefName': 'main',
                 'mergeStateStatus': e.get('MERGE_STATE', 'CLEAN'), 'commits': [{'committedDate': '2026-09-06T12:00:00Z'}]})
     armed = 'false' if a[2] in s['disarmed'] else e.get('ARMED', 'true')
     if s.get('late_armed') and a[2] not in s['disarmed']:
@@ -403,7 +403,7 @@ bash "$REPO_ROOT/scripts/check-advertised-version.sh" --config >/dev/null 2>&1 &
 pass "thaw validates current release proof, blocks pending cuts and reports ambiguous enable without claiming success"
 
 # Exercise the actual landing wrapper against immutable version fixtures.
-# Only GitHub, the evidence checker and the ledger reader are mocked.
+# GitHub calls are mocked; retired evidence inputs must remain unused.
 FIXTURE="$TMP/landing"
 mkdir -p "$FIXTURE/ha-addon/mammamiradio"
 git -C "$FIXTURE" init -q

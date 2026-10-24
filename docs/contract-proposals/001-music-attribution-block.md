@@ -1,6 +1,6 @@
 # 001: additive music_attribution block on v1 now-playing
 
-Status: approved-retroactively pending window.
+Status: implemented in v3.0.0; retained as the additive-field record.
 
 ## Field
 
@@ -17,7 +17,7 @@ Shape (`MusicAttributionBlock` in `mammamiradio/integrations/schema.py`):
 - `modified: bool`
 - `basis: "bundled_manifest" | "provider_reported"`
 
-Wiring, exactly as implemented on this branch:
+Implementation:
 
 - `mammamiradio/integrations/schema.py`: `MusicAttributionBlock` TypedDict plus
   the optional `music_attribution` field on `NowPlayingBlock` (`total=False`).
@@ -32,44 +32,30 @@ Wiring, exactly as implemented on this branch:
   matching `license_id` (CC-BY-3.0 or CC-BY-4.0); provider/basis pairs are
   restricted to `incompetech` + `bundled_manifest` (incompetech.com hosts,
   `/music/royalty-free/` path, optional `isrc=` query) and `jamendo` +
-  `provider_reported` (jamendo.com hosts, `/track/` path, no query). Any
+  `provider_reported` or `bundled_manifest` (jamendo.com hosts, `/track/` path, no query). Any
   malformed input drops the whole block instead of airing a bad link.
 - `schema_version` stays `"1"`. The `/api/integrations/v1/now-playing` route
   path, ETag/304 semantics, and headers are unchanged.
 
 ## Why
 
-MA-provider era attribution on the wire. The station now plays rights-aware
-bundled starter music and explicitly transient Jamendo tracks, both of which
+The station plays bundled starter music and transient Jamendo tracks, both of which
 carry license obligations (CC BY credit, source and license links, modification
 notice). A Music Assistant provider or any other v1 consumer rendering
 now-playing needs those credits from the same payload it already reads, so the
 attribution the listener UI shows can appear wherever the stream is surfaced —
 without scraping or a second endpoint.
 
-## Additive proof
+## Compatibility
 
-New optional key only. No removals, no renames, no type changes, no meaning
-changes to existing fields. The key is absent unless a validated attribution
-exists, so every existing consumer sees byte-identical payloads for every
-segment it saw before; a consumer that ignores unknown keys is untouched.
-`schema_version` is unchanged and the frozen pytest contract tests still hold
-the route path, ETag/304, and header behavior. The new serializer tests in
-`tests/integrations/` cover presence, omission, and rejection of malformed
-attribution input.
+Existing fields retain their meaning and types. Payloads without validated
+attribution omit the optional key; attributed music segments include it.
+Consumers must tolerate this additive field. The schema version stays unchanged.
+Contract tests cover the route path, ETag/304 semantics and headers. Serializer
+tests cover presence, omission and malformed attribution.
 
-## Fixture diffs (pre-drafted, both repos)
+The existing golden scenario has no attribution metadata and therefore omits
+the optional field.
 
-- Addon: no diff. `tests/integrations/golden/v1_now_playing.json` is untouched
-  — the golden scenario carries no attribution metadata, and an absent input
-  yields an absent key, so the rendered payload is byte-identical (verified:
-  `git diff` of the fixture against the merge base is empty, and the
-  contract-drift render on the PR shows no payload drift).
-- Music Assistant provider: no diff to
-  `tests/providers/mammamiradio/fixtures/v1_now_playing.json` for the same
-  reason. A provider-side fixture exercising the new key becomes part of the
-  provider-first release described in `CONTRACT.md` once the window opens.
-
-A proposal is not a change; per the release-ordering rule this lands provider
-side first, addon second, inside an open contract window with the
-`Contract-Change:` trailer.
+Future contract changes must follow the window, release ordering, and
+`Contract-Change:` requirements in `CONTRACT.md`.

@@ -25,11 +25,6 @@ verifying the shared values are active.
 
 ## Workspace and writing contracts
 
-The shared general prompt assigns the seat first. Names containing `lander` or
-`integration-manager` are landing conductors; every other workspace defaults to
-a feature worker. It then applies the Path A/Path B, immutable base SHA,
-write-set, shared-file ownership, single-writer, and escalation rules from the
-parallel-workspace runbook.
 
 `.conductor/settings.toml` also mirrors the repository's current GitHub writing
 rules into Conductor's general, create-PR, code-review, and branch-rename
@@ -62,19 +57,11 @@ local hooks or GitHub Actions.
 
 Runtime artifacts created by these scripts land under `.context/` which is gitignored. Do not commit anything from `.context/`.
 
-## Parallel workspaces and integration trains
+## Merge and queue commands
 
-Default ship path is a feature workspace, a PR to `main`,
-`scripts/land-pr.sh`, confirmation that GitHub reports `MERGED`, and then
-archive. Admission, write-sets, and Path A vs Path B are in
-[`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md).
-
-A train workspace is Path B only: tightly coupled slices that must land
-together. `Train/Listener QS` uses branch `train/listener-qs` when the
-maintainer activates it. Until that branch and its dedicated Conductor
-workspace exist, Path B is dormant. The activation check, intake, merge gate,
-and handoff live in [`docs/listener-qs-train.md`](listener-qs-train.md). Do not
-use a train and a direct-to-`main` PR for the same work.
+See the [merge and queue runbook](runbooks/parallel-workspaces.md) for merge
+checks, queue reports, shared-file constraints and worktree safety. Confirm
+that a PR has merged before retiring its source checkout.
 
 ## Shared credentials
 
