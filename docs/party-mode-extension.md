@@ -159,7 +159,7 @@ Add idempotence, auth, and stacking (music_quiz + chaos simultaneously) tests. S
 ### 9. Update docs
 
 - Add the new theme to `docs/festival-mode.md` or create a dedicated `docs/music_quiz-mode.md`
-- Add the env var to `CLAUDE.md` Environment section
+- Add the env var to `docs/operations.md` "Environment variables (full catalog)"
 - Add the route to `docs/architecture.md` if any new routes are added
 - Add a CHANGELOG entry
 
@@ -176,7 +176,7 @@ Add idempotence, auth, and stacking (music_quiz + chaos simultaneously) tests. S
 | `ha-addon/mammamiradio/config.yaml` | Addon option |
 | `ha-addon/mammamiradio/translations/en.yaml` | Option label |
 | `ha-addon/mammamiradio/rootfs/run.sh` | Env var mapping |
-| `CLAUDE.md` | Environment section |
+| `docs/operations.md` | Environment variables (full catalog) |
 | `docs/architecture.md` | Route table (if new routes) |
 | `CHANGELOG.md` | Release note |
 | `tests/web/test_<theme>_mode.py` | 3 mandatory scenarios + coverage |

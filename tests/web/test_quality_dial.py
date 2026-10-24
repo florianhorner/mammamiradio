@@ -102,7 +102,7 @@ async def test_post_quality_switch_changes_the_next_creative_model(monkeypatch):
     app = _make_test_app(is_addon=False)
     monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
     models = app.state.config.models
-    assert resolve_model(models, "banter", "anthropic") == "claude-sonnet-5"
+    assert resolve_model(models, "banter", "anthropic") == "claude-sonnet-5-5"
     assert resolve_model(models, "banter", "openai") == "gpt-5.6-terra"
 
     with patch("mammamiradio.web.streamer._save_dotenv"):
@@ -112,7 +112,7 @@ async def test_post_quality_switch_changes_the_next_creative_model(monkeypatch):
             response = await client.post("/api/quality", json={"quality_profile": "premium"})
 
     assert response.status_code == 200
-    assert resolve_model(models, "banter", "anthropic") == "claude-opus-5"
+    assert resolve_model(models, "banter", "anthropic") == "claude-opus-5-5"
     assert resolve_model(models, "banter", "openai") == "gpt-5.6-sol"
 
 
@@ -205,13 +205,13 @@ async def test_quality_requires_admin_for_public_ip():
 def test_cost_counter_prices_each_model():
     state = StationState(playlist=[])
     state.api_tokens_by_model = {
-        "claude-opus-5": {"input": 1_000_000, "output": 1_000_000},  # 5 + 25 = 30
+        "claude-opus-5-5": {"input": 1_000_000, "output": 1_000_000},  # 4 + 20 = 24
         "gpt-5.6-sol": {"input": 1_000_000, "output": 1_000_000},  # 4 + 20 = 24 (premium creative fallback)
         "gpt-5.6-luna": {"input": 1_000_000, "output": 1_000_000},  # 0.20 + 1.20 = 1.40
     }
     cost, unpriced = _estimate_api_cost(state)
     assert unpriced is False
-    assert cost == pytest.approx(55.40, abs=0.01)
+    assert cost == pytest.approx(49.40, abs=0.01)
 
 
 def test_cost_counter_unpriced_model_flags_and_uses_conservative_default():
@@ -249,7 +249,7 @@ def test_cost_breakdown_registries_cover_all_llm_categories():
 
 def test_cost_breakdown_prices_model_aware_categories_and_reconciles_units():
     state = StationState(playlist=[])
-    state.record_llm_usage("script_banter", "claude-opus-5", 1_000_000, 1_000_000)
+    state.record_llm_usage("script_banter", "claude-opus-5-5", 1_000_000, 1_000_000)
     state.record_llm_usage("script_banter", "gpt-5.6-luna", 1_000_000, 1_000_000)
     state.record_llm_usage("script_transition", "gpt-5.6-luna", 10_000, 10_000)
     state.record_llm_usage("script_ads", "gpt-5.6-sol", 100_000, 100_000)
@@ -262,7 +262,7 @@ def test_cost_breakdown_prices_model_aware_categories_and_reconciles_units():
 
     assert breakdown["available"] is True
     assert breakdown["total_usd"] == payload["api_cost_estimate_usd"]
-    assert cats["script_banter"]["raw_cost_usd"] == pytest.approx(31.40, abs=0.0001)
+    assert cats["script_banter"]["raw_cost_usd"] == pytest.approx(25.40, abs=0.0001)
     assert cats["tts"]["raw_cost_usd"] == pytest.approx(1.0, abs=0.0001)
     assert sum(cat["calls"] for cat in cats.values()) == state.api_calls
     assert sum(cat["input_tokens"] for cat in cats.values()) == state.api_input_tokens

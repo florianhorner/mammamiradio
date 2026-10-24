@@ -31,6 +31,8 @@ NoDerivatives or ShareAlike term can enter the bundle, and NoDerivatives is the
 clause that disqualifies otherwise-suitable tracks: every bundled derivative is
 normalized to a fixed loudness and re-encoded, which ND forbids distributing.
 
+That boundary is enforced by name in three places: `_require_attribution_only_license` in `mammamiradio/media/starter.py`, `_require_jamendo_attribution_license` in the acquire tool (`scripts/starter-catalog.py acquire`), and the manifest gate in `scripts/starter-catalog.py check`. A catalog row's `provider` field selects the acquisition path (`jamendo`, or Incompetech when absent); Incompetech is keyless, while Jamendo needs a client ID because its API is the only place the licence is published. Maintainers change the manifest, source evidence, human audition record, and media proof together and never substitute unverified demo or fallback music. The exact crate is additionally pinned by `LOCKED_TRACKS` in `tests/media/test_starter.py`, so swapping a track is a deliberate test change and can never happen silently.
+
 The single authority is
 `mammamiradio/assets/starter/catalog.json`. It records the source page, exact
 source and derivative hashes, ISRC, duration, license, attribution, acquisition
