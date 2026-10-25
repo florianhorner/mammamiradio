@@ -72,6 +72,8 @@ async def test_provider_check_classifies_anthropic_auth_and_openai_success(monke
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "anthropic-secret"
     config.openai_api_key = "openai-secret"
+    # The speech probe needs a pinned model; the shipped registry may pin none.
+    config.models.tts_models["openai"] = "test-openai-tts"
     config.azure_speech_key = ""
     config.azure_speech_region = ""
     config.elevenlabs_api_key = ""

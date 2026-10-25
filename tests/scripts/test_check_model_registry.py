@@ -620,6 +620,37 @@ def test_registry_without_models_is_a_finding(tmp_path: Path, capsys: pytest.Cap
     assert "names no models under [models.catalog] or [tts]" in out
 
 
+def test_registry_without_speech_model_checks_only_its_catalog(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = REGISTRY_ALL_CURRENT.replace('[tts.openai]\nmodel = "gpt-4o-mini-tts"\n', "")
+    assert "[tts" not in text
+    path = _registry(tmp_path, text)
+    assert all(not entry.label.startswith("tts.") for entry in watch.registry_entries(watch.load_registry(path)))
+    code, out = _run(
+        capsys, "--providers", "--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", "2026-09-08"
+    )
+    assert code == watch.EXIT_OK
+    assert "OK (drift): all 6 pinned models are current" in out
+
+
+@pytest.mark.parametrize(
+    "speech",
+    ['tts = "gpt-4o-mini-tts"\n', '[tts]\nopenai = "gpt-4o-mini-tts"\n', '[tts.openai]\nmodel = ""\n'],
+    ids=["not-a-table", "provider-not-a-table", "empty-model"],
+)
+def test_malformed_speech_table_is_still_a_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], speech: str
+) -> None:
+    base = REGISTRY_ALL_CURRENT.replace('[tts.openai]\nmodel = "gpt-4o-mini-tts"\n', "")
+    # A top-level key must precede the first table header to stay top-level.
+    text = speech + base if speech.startswith("tts =") else base + speech
+    path = _registry(tmp_path, text)
+    code, out = _run(capsys, "--providers", "--registry", str(path), "--fixture-dir", str(FIXTURES))
+    assert code == watch.EXIT_FINDING
+    assert out.startswith("FAIL: model_registry.toml [tts")
+
+
 def test_all_current_registry_is_clean_under_drift(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _registry(tmp_path, REGISTRY_ALL_CURRENT)
     code, out = _run(
@@ -1000,13 +1031,12 @@ def test_partially_malformed_registry_entries_fail_closed(
     assert out.startswith("FAIL: model_registry.toml")
 
 
+# A missing [tts] table is valid (no pinned speech model); see
+# test_registry_without_speech_model_checks_only_its_catalog.
 @pytest.mark.parametrize(
     "text",
-    [
-        '[models]\nlast_reviewed = "2026-09-08"\n\n[tts.openai]\nmodel = "gpt-4o-mini-tts"\n',
-        REGISTRY_PINNED_2026.split("[tts.openai]", 1)[0],
-    ],
-    ids=["missing-catalog", "missing-tts"],
+    ['[models]\nlast_reviewed = "2026-09-08"\n\n[tts.openai]\nmodel = "gpt-4o-mini-tts"\n'],
+    ids=["missing-catalog"],
 )
 def test_missing_required_registry_model_sections_fail_closed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str

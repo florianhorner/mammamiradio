@@ -54,11 +54,11 @@ live in `/config/secrets.env` inside the add-on config folder. Without an AI
 key, the hosts use stock copy and fallback voices. Save one AI host key during
 First Listen or under **Motore → Setup** with **Add new host conversations**,
 which writes the file for you.
-`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` unlocks generated hosts. OpenAI also
-provides premium voices; Azure Speech and ElevenLabs are voice-only options and
-do not complete the AI-host step by themselves. Azure is ready only when both
-`AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` are present; a partial pair is
-shown as incomplete. Keys saved through the old Configuration-tab fields
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` unlocks generated hosts.
+`ELEVENLABS_API_KEY` is the one premium-voice key for the shipped cast and does
+not complete the AI-host step by itself. Azure, for custom voices, is ready
+only when both `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` are present; a
+partial pair is shown as incomplete. Keys saved through the old Configuration-tab fields
 by earlier versions move into the secrets file automatically the first time the
 updated add-on starts; non-empty file values win per key.
 

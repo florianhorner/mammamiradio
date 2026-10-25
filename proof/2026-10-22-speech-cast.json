@@ -1,0 +1,435 @@
+{
+  "candidates": [
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 29.112,
+      "audio_sha256": "764871787611d848787ce3960df002cb17c02a5baf1109a4be1813ae25149159",
+      "candidate_id": "audition-9cbe4ee64b063e53ae116c46b456a8398be59fd4f592fd02f5c9cb58ba97d916",
+      "candidate_name": "Ident Paolo",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_profile_mismatch",
+      "text_sha256": "8ff1bad2aaffdf6c52ac0e79bc7dadacd1345f1662a7dbe05edd0a29a3eadc46"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 30.72,
+      "audio_sha256": "40acfd722a35d2646aa8118cf4824eea7329ef216255661c1f76a720a1c8be2c",
+      "candidate_id": "audition-33f4397f22d130ca202d79492b42c87a2dcf347dafe0726f5d4ddc6757f4e1d0",
+      "candidate_name": "Ident Alessandra",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_clear_natural_delivery",
+      "text_sha256": "d40af8cef65b2f64f057a6660e3c98693983e6cce839d77dca2e35f30dc36ed8"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 29.088,
+      "audio_sha256": "97cabb6ee326bd73cee3de3eca18072298532415714b626ef694b0fb42d7c32e",
+      "candidate_id": "audition-014d860ae5033f554ea105f44c3c29d128df2e566b6653ea5a4808d43d90d720",
+      "candidate_name": "Ident Edge Isabella",
+      "profile": {
+        "engine": "edge",
+        "model": "edge_read_aloud",
+        "voice_settings": {}
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "f1b78ac825088833503a6ae9f64469244ad4b250e40357388136987bf1b88820"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 31.44,
+      "audio_sha256": "9fbd39d963b8d8d52e5e754c8e166e944834f19b8584a7bf14e83d3415bfb7f5",
+      "candidate_id": "audition-4632b55d8cfe378715a76f29bfeec78fcc8cec25ded34bf021150f0e37a6d854",
+      "candidate_name": "Ident Violetta",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "f958a0ea110ae802ae42b55cae8e58a1c9894fece000e3fe49d68591ac4a55e7"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 29.928,
+      "audio_sha256": "b1cc953469ed80ab8e7fb2551d39e00c4179c555982ef854618e4dcf23e607b4",
+      "candidate_id": "audition-8b59762b36694b425e8b91ea726c59a5e82e7c3c49e2a0a332bd8de3ed3f1f0c",
+      "candidate_name": "Roberto Tommy",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "d45cb023d2b0818f45f59495a4e479a70c1872c5bbff33d9de1ddf3bdd2c500b"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 24.264,
+      "audio_sha256": "6644de6b98b67e43fa4b7ae60b52fe82233c326998227822c91b416808c36284",
+      "candidate_id": "audition-b7f2b6b1c258c06dfe7d4a64a37c81bd67bb3add56c24d7a82db245b9164138c",
+      "candidate_name": "Roberto Brando",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_profile_mismatch",
+      "text_sha256": "69f69827e6b5d4d7617b67733d719d028a08aaff854581b4b0224672f82930d2"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 30.648,
+      "audio_sha256": "34191ef89020e2ee23e76b87041f7ddcb672e2dc05f3da7dc201b0c34418d9be",
+      "candidate_id": "audition-262051317025947eaf6499b5593221c1faf6b34ea0b5c634ef1b8c3e1561fb51",
+      "candidate_name": "Roberto Criss",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_clear_natural_delivery",
+      "text_sha256": "9b94a2fa67ee4e06a0b18ff8c93cb7f0ff7db02e394f4850b0289b20cca57db3"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 28.104,
+      "audio_sha256": "915df1ebf7baeeb7939f8d6c57a7780a36017e524d53581b45659b0e4327f3c6",
+      "candidate_id": "audition-94eeb6bca3eca76b865a059a13b37bd7e5277d653955383afb152b56477e2ea4",
+      "candidate_name": "Fiamma Manuela",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_unconvincing_character",
+      "text_sha256": "fbac3fb2ade4cdd92a2aede95d72154a5ce5c7e997ae0063f2fb5943333f5ded"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 28.224,
+      "audio_sha256": "1d1fd0693e5cd6c95a0cf427b9780aa30b7a4a77d0a5a9aaf16b24d29a9ebce3",
+      "candidate_id": "audition-5f5f5d75d239a01b0d25d49d2f85420466f45daf8ca0eb4f8c3f9c94bd23d144",
+      "candidate_name": "Fiamma Roberta",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_unintelligible_delivery",
+      "text_sha256": "db1be42cbbdb4d2a93b0c39bf355d57de76d958f720efdb9880c875c759de30b"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 25.272,
+      "audio_sha256": "8f19f111c079d45bbba23edb25ecf9a641f7de2abfbf83fc077088a1ed90f417",
+      "candidate_id": "audition-876cc9b5ef5bc9b4d0c476acb404631b16ac28373ee0adb8a8a2dc91166e3bcd",
+      "candidate_name": "Fiamma Giulia",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_clear_natural_delivery",
+      "text_sha256": "97cc4dbdb4fd0e4d63db0313edc84c323719adfed0b478dbe84f21f86e50a81d"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 27.72,
+      "audio_sha256": "fe0fa9fce991e7c81240f59985b15c793f59311dd9859d3d87a24bf9b04ca3d5",
+      "candidate_id": "audition-b2105032d7d8f012d690bb736ec290b75bb2b48d1f1cca16bb9f3d4a8b7233f3",
+      "candidate_name": "Testimonia Rossana",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_balanced_brand_fit",
+      "text_sha256": "ca51deeb56f80c15f5991d565f815947ae0f97c390b76ac1d748b20626473a7c"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 30.696,
+      "audio_sha256": "896dc43966333087fbdad58cfe25ebc14c61b9321a8447a9d94b3a522f92a73c",
+      "candidate_id": "audition-96ac5016e14078d4d3833173cd651cbfd368fdfdd4a2a13a161091c5f1b3c95a",
+      "candidate_name": "Testimonia Giusy",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_unintelligible_delivery",
+      "text_sha256": "dc7452a73a0a3253d6cd1e0a16c10c7fccf92bcc321e901f388a158ef8619c9c"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 35.64,
+      "audio_sha256": "f0faecb7a432ed6227eee424166a462922aae592f94a4fbbb93ff237b040c9be",
+      "candidate_id": "audition-997d738d7fd80460f3b2419efe4b8d93092d66d35b8900c55700cb09adc0a783",
+      "candidate_name": "Testimonia Anna",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_unintelligible_delivery",
+      "text_sha256": "1ba05b0b4d9f1c7f29adfe6b2d07bd30e80b196dfcf738d950fbee0d2a935ebd"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 29.04,
+      "audio_sha256": "4141af9489924af1ea13a1d4f4174a76087ac4942312c8c9bf7305be918f13c2",
+      "candidate_id": "audition-b74d6a56698c1e9effbea9c19d800caf6496afe0fb63f2096eeae20cea6dc964",
+      "candidate_name": "Rinaldo",
+      "profile": {
+        "engine": "edge",
+        "model": "edge_read_aloud",
+        "voice_settings": {}
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "84348476d86608ad8397e3c8c9271f8f836a1259a2120f572fdabb57c2955b10"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 29.904,
+      "audio_sha256": "224cd8ad0c208329b8bc8435ecbe4f58af4ba728ebe0673503d46618518b6e38",
+      "candidate_id": "audition-d6366cccc814f40ce8a6d986d4ad689e78200d1ff0c79096a6f248b8794b9077",
+      "candidate_name": "L'Annunciatore",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "b6f4677369d9a79397f7c2a1f665ce363bf6e130bdf2224bd2e1a9045a8ef2b2"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 28.344,
+      "audio_sha256": "a1d209163d65f19be6d51bb86eb3e876dfe977b2097bcf4d8c3dcb7e05177957",
+      "candidate_id": "audition-cfc3a7aeeb796f4a835facc1743378dffb3700af1f1c028aa08808d1378d97f9",
+      "candidate_name": "Don Carmelo",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "b6ae269c5102ca2a1d5b534737eb15c223dfb7f4207ecc5d5455a27086ca12aa"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 35.88,
+      "audio_sha256": "c00c4612036d8e392d631b7922d9f70807ddd10f56bcfd3fb172394c0759497f",
+      "candidate_id": "audition-72a5ca4e45f61af047013482c3af5980bb81cbb426045fa4625c315701747de5",
+      "candidate_name": "Nonno Aldo",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "d925f9f4d754b0b79e9301ede9ccca53bf6e50990d4941fcc6dff809e811750a"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 32.904,
+      "audio_sha256": "81dd9d5da231542a54b1670b80cd58d7a6176ee2ff6cb03c152887e67a50cbb4",
+      "candidate_id": "audition-869cf92162e63d06dd5986d0e448c745ffb355e311fdb102bc5824b5b75b16b4",
+      "candidate_name": "Lo Straniero",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_unintelligible_delivery",
+      "text_sha256": "bd05c54872372b560e55d741270e49722c7355340b41595db62a12d9fb409f8d"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 31.632,
+      "audio_sha256": "370d9c2e8fd56da327eca427be6ac081aeee0a33f580d31f388feef3184c5a65",
+      "candidate_id": "audition-be73977dc37a45ef15b4419adf3a87233e903f6375d98ddcdf1d9dfe8a528f55",
+      "candidate_name": "Palmira",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_distinct_character",
+      "text_sha256": "63e55f37c8b7801d275a3cd431e61ca4220a61c0ac1e53daf5ed6ce66b6becba"
+    },
+    {
+      "approval_status": "accepted",
+      "audio_duration_seconds": 30.552,
+      "audio_sha256": "d2e6d804db45407835b4e43f99a64213945eed26767b8c8fc41407c10046d841",
+      "candidate_id": "audition-a03f8b11e55e9077b1491507686678ddecc504d678dfef7be33e34f45341461a",
+      "candidate_name": "Straniero Dade",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "accepted_clear_natural_delivery",
+      "text_sha256": "0805872a35be9b0c2642465b1f19be9e1b9270dd6ce5c8ee843186470a5845df"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 24.768,
+      "audio_sha256": "c3427b8689a49e26f29d7bc9a2710c0202395760461893e7f31dbe003ef28199",
+      "candidate_id": "audition-a2e310a5ae375007047193d40110550034c27b041c7be97d37cb2532cb505e24",
+      "candidate_name": "Straniero Gus",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_unintelligible_delivery",
+      "text_sha256": "4ebecdf7ed63ae885e995ad25d74ef2be2cf02dc5526c8a2cbc1b96d57968a24"
+    },
+    {
+      "approval_status": "rejected",
+      "audio_duration_seconds": 31.968,
+      "audio_sha256": "5ee17fe0b7c09533df485c414a42e9a9141e032008950a78092ff0969d2818e3",
+      "candidate_id": "audition-fe9985170fc32647ddd6d0d24e352e0132821d1a3d31e615dab03b91906a1feb",
+      "candidate_name": "Straniero Brando",
+      "profile": {
+        "engine": "elevenlabs",
+        "model": "eleven_multilingual_v2",
+        "voice_settings": {
+          "similarity_boost": 0.78,
+          "stability": 0.42,
+          "style": 0.45,
+          "use_speaker_boost": true
+        }
+      },
+      "provider_result": "generated",
+      "rationale": "rejected_unconvincing_character",
+      "text_sha256": "b082de2a73a05525cc72100d9fd30a5b06eb2968a0aa329e5e547d0b01656610"
+    }
+  ],
+  "schema_version": 1
+}

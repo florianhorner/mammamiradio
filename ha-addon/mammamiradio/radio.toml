@@ -25,10 +25,10 @@ sweepers = [
 ]
 # Rhodes motif: C5 → E5 → G5 → C6 (ascending major arpeggio)
 motif_notes = [523, 659, 784, 1047]
-# Sweeper voice — uses a host voice for station idents
-sweeper_voice = "it-IT-Isabella:DragonHDLatestNeural"
-sweeper_engine = "azure"
-sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+# Station ident voice: its own voice, not a host's premium one. Edge Isabella is free
+# and needs no key (see the speech cast note above [[ads.voices]]).
+sweeper_voice = "it-IT-IsabellaNeural"
+sweeper_engine = "edge"
 
 # ────────────────────────────────────────────────────────────────────────
 # [brand] — what the LISTENER reads on the public page. Separate from
@@ -617,11 +617,21 @@ format_pool = ["duo_scene"]
 spokesperson = "maniac"
 escalation_rule = "Ad ogni spot il frigo inventa una scusa più assurda per mangiare ancora."
 
-# Ad-voice pool. Several roles carry more than one voice (an ElevenLabs
-# character plus the original OpenAI/Azure voice); the caster picks one at
+# Ad-voice pool. Most roles carry two voices and the caster picks one at
 # random per spot, so ad breaks vary instead of always using the same timbre.
 # The role drives the script direction (see SPEAKER_ROLES in
 # hosts/ad_creative.py); the style line documents the intended performance.
+#
+# Speech cast, decided 2026-10-22, review by 2027-04-14 or sooner if a better
+# engine passes the same listening test. The shipped cast needs one optional
+# paid speech key, ElevenLabs; every other voice is a free Edge voice, and with
+# no key every voice airs on its Edge double. Until the review
+# (scripts/check_speech_cast.py holds the dates):
+#   - the Azure and OpenAI adapters stay in code for custom voices;
+#   - every cloud voice declares an explicit edge_fallback_voice;
+#   - no ad voice airs, and neither does the ident, without an accepted row
+#     in proof/2026-10-22-speech-cast.json. The Edge doubles a keyless
+#     install airs are not gated by that receipt.
 [[ads.voices]]
 name = "L'Annunciatore"
 voice = "QttbagfgqUCm9K0VgUyT"
@@ -649,8 +659,8 @@ airtime_approved = true
 
 [[ads.voices]]
 name = "Fiamma"
-voice = "coral"
-engine = "openai"
+voice = "uC9VI5XrTxXRNlCzGSKR"
+engine = "elevenlabs"
 edge_fallback_voice = "it-IT-ElsaNeural"
 style = "overly enthusiastic infomercial host, everything is INCREDIBILE"
 role = "maniac"
@@ -667,19 +677,18 @@ airtime_approved = true
 
 [[ads.voices]]
 name = "Lo Straniero"
-voice = "rj347nCpioEmxiJbdf70"
+voice = "crp9JXf4ooIgqN7mGOp9"
 engine = "elevenlabs"
 edge_fallback_voice = "it-IT-DiegoNeural"
 style = "mysterious guest voice that nobody can quite place, delivers ads as if he wandered into the studio by accident and just started reading, oddly compelling"
 role = "witness"
 airtime_approved = true
 
-# Original OpenAI/Azure ad voices — kept alongside the ElevenLabs characters so
-# each role rotates between two timbres. Variety per ad break.
+# The second voice for each role.
 [[ads.voices]]
 name = "Roberto"
-voice = "it-IT-Alessio:DragonHDLatestNeural"
-engine = "azure"
+voice = "m89dRj4KHNccJf6fsDYV"
+engine = "elevenlabs"
 edge_fallback_voice = "it-IT-DiegoNeural"
 style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
 role = "hammer"
@@ -697,16 +706,15 @@ airtime_approved = true
 [[ads.voices]]
 name = "Dottore Marzio"
 voice = "it-IT-DiegoNeural"
-engine = "azure"
-edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+engine = "edge"
 style = "dry official government notice voice, reads absurd regulations with total sincerity"
 role = "bureaucrat"
 airtime_approved = true
 
 [[ads.voices]]
 name = "Signora Testimonia"
-voice = "marin"
-engine = "openai"
+voice = "MuTiG4dbrEGYEy3XP4iP"
+engine = "elevenlabs"
 edge_fallback_voice = "it-IT-ElsaNeural"
 style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
 role = "witness"
