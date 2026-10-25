@@ -50,8 +50,12 @@ openai = { creative = "mid", fast = "small" }
 anthropic = { creative = "haiku", fast = "haiku" }
 openai = { creative = "small", fast = "small" }
 
-[tts.openai]
-model = "gpt-4o-mini-tts"
+# No OpenAI speech model is pinned. Since 2026-10-22 the shipped cast uses no
+# OpenAI voice, and OpenAI retires its Speech API models on 2027-01-06. A custom
+# engine = "openai" voice renders on its Edge double until a model is pinned
+# again, only one the provider still lists as current:
+#   [tts.openai]
+#   model = "<speech model id>"
 
 [pricing]
 # Used only when a model is deliberately unpriced. It keeps the admin estimate

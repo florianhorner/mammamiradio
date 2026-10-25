@@ -197,6 +197,45 @@ def test_tts_typo_keeps_script_routing_and_pricing(tmp_path) -> None:
     assert models.price_for_model("anthropic-creative")[2] is False  # pricing still parsed
 
 
+def test_registry_without_speech_model_is_a_quiet_choice(tmp_path, caplog) -> None:
+    """No pinned speech model is deliberate: routing and pricing load, nothing logs an error."""
+    import logging
+
+    registry_path = _write_registry(tmp_path)
+    pinned = registry_path.read_text(encoding="utf-8")
+    assert '[tts.openai]\nmodel = "openai-tts"\n' in pinned
+    registry_path.write_text(pinned.replace('[tts.openai]\nmodel = "openai-tts"\n', ""), encoding="utf-8")
+
+    with caplog.at_level(logging.INFO):
+        models = _load_model_registry(registry_path)
+
+    assert resolve_model(models, "banter", "anthropic") == "anthropic-creative"
+    assert models.tts_model("openai") is None  # OpenAI voices use their Edge fallback
+    assert models.price_for_model("anthropic-creative")[2] is False
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert any("pins no OpenAI speech model" in record.message for record in caplog.records)
+
+
+def test_malformed_speech_table_still_logs_an_error(tmp_path, caplog) -> None:
+    import logging
+
+    registry_path = _write_registry(tmp_path)
+    pinned = registry_path.read_text(encoding="utf-8")
+    registry_path.write_text(
+        'tts = "openai-tts"\n' + pinned.replace('[tts.openai]\nmodel = "openai-tts"\n', ""), encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.INFO):
+        models = _load_model_registry(registry_path)
+
+    assert resolve_model(models, "banter", "anthropic") == "anthropic-creative"
+    assert models.tts_model("openai") is None
+    assert any(
+        record.levelno == logging.ERROR and "Registry TTS selection unavailable" in record.message
+        for record in caplog.records
+    )
+
+
 def test_pricing_typo_keeps_script_routing(tmp_path) -> None:
     """A malformed pricing field must not strip routing; cost falls back + flags."""
     # Valid TOML (a quoted string) that is not a float — fails inside pricing
@@ -268,7 +307,7 @@ def test_runtime_source_and_eval_defaults_do_not_embed_registry_model_ids() -> N
         model_id
         for provider_catalog in registry["models"]["catalog"].values()
         for model_id in provider_catalog.values()
-    ] + [registry["tts"]["openai"]["model"]]
+    ] + [section["model"] for section in registry.get("tts", {}).values()]
     source_paths = [*sorted((root / "mammamiradio").rglob("*.py")), root / "scripts" / "eval_openai_script_model.py"]
     for source_path in source_paths:
         text = source_path.read_text(encoding="utf-8")

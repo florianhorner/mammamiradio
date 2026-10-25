@@ -427,6 +427,8 @@ check the post-air extractor path separately:
 
 If a host configured with `engine = "openai"` sounds like a different voice, OpenAI TTS likely failed and the host fell back to Edge TTS.
 
+No OpenAI speech model ships pinned in `model_registry.toml`, so every `engine = "openai"` voice airs on its Edge double until you pin one under `[tts.openai]`. Until you do, with an OpenAI key set, the admin says those voices are switched off and how to bring them back, rather than that a key is missing.
+
 Check:
 
 - `OPENAI_API_KEY` is set in `.env`, or in add-on mode `/config/secrets.env` (legacy add-on option fallback still works)

@@ -156,6 +156,57 @@ def _llm_key_status(config: StationConfig, provider_health: dict | None = None) 
     return "degraded"
 
 
+# The order setup asks for speech keys. ElevenLabs voices the shipped cast; the
+# others matter only when a voice in the cast is routed to them.
+_SPEECH_KEY_STEPS: tuple[tuple[str, str], ...] = (
+    ("elevenlabs", "ELEVENLABS_API_KEY"),
+    ("azure", "AZURE_SPEECH_KEY plus AZURE_SPEECH_REGION"),
+    ("openai", "OPENAI_API_KEY"),
+)
+
+
+def cast_cloud_speech_engines(config: StationConfig) -> list[str]:
+    """Return the cloud speech engines the on-air cast uses, sorted.
+
+    Counts the hosts, the airtime-approved ad voices and the station ident.
+    Staged ad candidates never air, so their engines do not count.
+    """
+    engines = {(host.engine or "edge").strip().lower() for host in config.hosts}
+    engines.update((voice.engine or "edge").strip().lower() for voice in config.ads.voices if voice.airtime_approved)
+    if config.sonic_brand.sweeper_voice:
+        engines.add((config.sonic_brand.sweeper_engine or "edge").strip().lower())
+    return sorted(engine for engine in engines if engine != "edge")
+
+
+def cloud_speech_engine_ready(config: StationConfig, engine: str) -> bool:
+    """Whether ``engine`` can render: its credentials, plus a pinned model for OpenAI.
+
+    Without a registry-pinned OpenAI speech model, OpenAI voices use their Edge
+    doubles even when the key is present.
+    """
+    if engine == "openai":
+        return bool(config.openai_api_key and config.models.tts_model("openai"))
+    if engine == "azure":
+        return bool(config.azure_speech_key and config.azure_speech_region)
+    if engine == "elevenlabs":
+        return bool(config.elevenlabs_api_key)
+    return False
+
+
+def _speech_key_next_action(config: StationConfig, speech_engines: list[str]) -> str:
+    """Name the keys this cast can use, ElevenLabs first."""
+    steps = [
+        hint
+        for engine, hint in _SPEECH_KEY_STEPS
+        if engine in speech_engines and (engine != "openai" or config.models.tts_model("openai"))
+    ]
+    if not steps:
+        return "This cast uses only the free voices, so no voice key is needed."
+    if len(steps) == 1:
+        return f"Add {steps[0]} for the premium voices."
+    return f"Add {steps[0]} for the premium voices, then {' and '.join(steps[1:])} for the rest of the cast."
+
+
 def _stream_status(config: StationConfig, state: StationState, golden_path: dict | None = None) -> str:
     # Setup is configuration truth, not a projection of transient playback.
     # The golden-path source probe is authoritative when available; runtime
@@ -752,8 +803,8 @@ def build_setup_status(
     station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist)
     identity = identity_status(config)
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
-    has_azure_tts = bool(config.azure_speech_key and config.azure_speech_region)
-    has_cloud_tts = bool(config.openai_api_key or has_azure_tts or config.elevenlabs_api_key)
+    speech_engines = cast_cloud_speech_engines(config)
+    has_cloud_tts = any(cloud_speech_engine_ready(config, engine) for engine in speech_engines)
     guided_setup = build_guided_setup(
         config,
         state,
@@ -813,14 +864,11 @@ def build_setup_status(
             "required_label": "Optional for premium voices",
             "status": "configured" if has_cloud_tts else "missing",
             "summary": (
-                "At least one cloud TTS provider is configured for premium voices."
+                "Premium voices are connected. Any voice without its key uses a free voice."
                 if has_cloud_tts
-                else "No premium TTS key found. The station still runs with Edge voice fallbacks."
+                else "No premium voice key for this cast yet. The station runs on the free voices until you add one."
             ),
-            "next_action": (
-                "Add OPENAI_API_KEY, AZURE_SPEECH_KEY plus AZURE_SPEECH_REGION, "
-                "or ELEVENLABS_API_KEY for expanded voices."
-            ),
+            "next_action": _speech_key_next_action(config, speech_engines),
             "skip_outcome": "If you skip this, configured cloud voices fall back to Edge voices.",
             "where": {
                 "ha_addon": "/config/secrets.env in the add-on config folder",
@@ -828,14 +876,14 @@ def build_setup_status(
                 "macos": "the generated .env file behind the Mac launcher",
                 "local": ".env in the project root",
             },
-            "accepted_keys": ["OPENAI_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "ELEVENLABS_API_KEY"],
+            "accepted_keys": ["ELEVENLABS_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "OPENAI_API_KEY"],
             "configured_keys": [
                 key
                 for key, configured in [
-                    ("OPENAI_API_KEY", bool(config.openai_api_key)),
+                    ("ELEVENLABS_API_KEY", bool(config.elevenlabs_api_key)),
                     ("AZURE_SPEECH_KEY", bool(config.azure_speech_key)),
                     ("AZURE_SPEECH_REGION", bool(config.azure_speech_region)),
-                    ("ELEVENLABS_API_KEY", bool(config.elevenlabs_api_key)),
+                    ("OPENAI_API_KEY", bool(config.openai_api_key)),
                 ]
                 if configured
             ],

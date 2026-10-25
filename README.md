@@ -187,14 +187,14 @@ stay where they are.
 |---------|------------------|
 | Nothing | Twelve packaged, credited tracks, station imaging, the 15-second First Listen opening, 21 prerecorded Demo Radio breaks, and 11 finished fictional ads. Those assets make no provider call; other stock copy can use keyless online Edge TTS |
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Written-on-the-fly banter, news flashes, and ad breaks for forty fictional brands. Billed to you; the control room shows a running estimate |
-| ElevenLabs voice credentials | The cast Marco and Giulia voices used in the public demos, with keyless online Edge TTS as the fallback |
-| OpenAI or Azure Speech credentials | Alternative cloud voices where you explicitly select them |
+| `ELEVENLABS_API_KEY` | The premium cast on one key: Marco, Giulia, and most ad characters. Without it, every voice uses its free Edge double |
+| OpenAI or Azure Speech credentials | Cloud voices for custom voices you configure yourself; the shipped cast uses neither |
 | An AI key plus approved, filtered Home context | Household-aware banter on existing home-aware stations. Today's guided opt-in on fresh installs is limited to coarse daylight and weather |
 
-The same OpenAI API key can cover both writing and OpenAI TTS when you select
-OpenAI for each. Provider usage is charged to the API account behind your key;
-OpenAI API billing is separate from ChatGPT subscriptions. Azure Speech and
-ElevenLabs change only the voices.
+Provider usage is charged to the API account behind your key; OpenAI API
+billing is separate from ChatGPT subscriptions. ElevenLabs changes only the
+voices. An OpenAI voice you configure yourself also needs a speech model
+pinned in `model_registry.toml`; none ships pinned.
 
 ## Privacy
 

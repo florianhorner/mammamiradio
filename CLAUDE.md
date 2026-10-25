@@ -130,6 +130,7 @@ Always read `docs/design/system.md` before making any visual or UI decision; all
   A single combined rushed QA run is still insufficient. Do not claim QA passed unless that exact QA scope ran or was explicitly reused under this rule.
 - **QA Impact**: every PR carries the `## QA Impact` block from the PR template so the gate above is auditable. Stacked PRs and release-manager queues: rebase/fix/green each PR, run only the PR-specific QA surface when that PR is risky, stage the queue into a release candidate, then run full Player QA + Admin QA once on the final candidate and ship only if both pass. Engineering reviews still apply; this rule scopes only manual `/qa`.
 - **Model registry watch**: `scripts/check_model_registry.py` guards the review stamp and pin liveness (contract in docs/release-process.md). Agents never refresh the `last_reviewed` stamp to make a gate green.
+- **Speech cast gate**: `scripts/check_speech_cast.py` ties every airtime ad voice and the ident to an accepted listening row, and holds the one-key interim's review date (contract in docs/release-process.md). Agents never move that date to make a gate green.
 - Coverage floors and ratchet, Pi aarch64 smoke canary, UI copy lint: `CONTRIBUTING.md`; advertised-version guard: `docs/release-process.md`; release invariants, version sync, release cooldown: `docs/runbooks/ha-addon.md`; shadow land queue: `docs/runbooks/parallel-workspaces.md`; explainer guards: `docs/explainer/README.md`.
 
 ## Protected UI elements

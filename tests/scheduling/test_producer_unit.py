@@ -1293,6 +1293,232 @@ async def test_recovery_sweeper_segment_renders_tts_with_sting(tmp_path):
     mock_mix.assert_called_once()
 
 
+_ELEVENLABS_IDENT_VOICE = "ident-voice-id"
+_IDENT_EDGE_DOUBLE = "it-IT-IsabellaNeural"
+_HOST_TTS_FIELDS = frozenset({"voice_settings", "elevenlabs_model", "delivery_profile", "host_name"})
+
+
+def _elevenlabs_ident_config(tmp_path: Path):
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.sonic_brand.sweeper_voice = _ELEVENLABS_IDENT_VOICE
+    config.sonic_brand.sweeper_engine = "elevenlabs"
+    config.sonic_brand.sweeper_edge_fallback_voice = _IDENT_EDGE_DOUBLE
+    return config
+
+
+@pytest.fixture
+def _keyless_edge_speech(monkeypatch):
+    """Run the real TTS router with no ElevenLabs key, recording Edge renders.
+
+    A cloud client must never be built: without the key the ident goes
+    straight to its declared Edge double.
+    """
+    import mammamiradio.audio.tts as tts_mod
+
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.setattr(tts_mod, "_HEAVY_SEM", asyncio.Semaphore(2))
+    tts_mod.reset_voice_failures()
+    edge_voices: list[str] = []
+
+    def _communicate(_text, voice, **_kwargs):
+        edge_voices.append(voice)
+        communicate = MagicMock()
+
+        async def _save(path: str) -> None:
+            Path(path).write_bytes(b"\x00" * 2048)
+
+        communicate.save = _save
+        return communicate
+
+    def _normalize(_raw, output_path, *_args, **_kwargs):
+        Path(output_path).write_bytes(b"\x00" * 2048)
+        return output_path
+
+    # The router turns a cloud failure into an Edge render, so a raising stub
+    # would be swallowed; the tests assert this client was never built.
+    cloud_client = MagicMock()
+    monkeypatch.setattr(tts_mod.edge_tts, "Communicate", _communicate)
+    monkeypatch.setattr(tts_mod, "normalize", _normalize)
+    monkeypatch.setattr(tts_mod, "_get_elevenlabs_client", cloud_client)
+    yield SimpleNamespace(edge_voices=edge_voices, cloud_client=cloud_client)
+    tts_mod.reset_voice_failures()
+
+
+def _write_last_path(*paths: Path) -> Path:
+    """Stand in for a sting pick or a voice-over-sting mix: write the output path."""
+    paths[-1].write_bytes(b"\x00" * 2048)
+    return paths[-1]
+
+
+def _write_station_bed(output_path: Path, _duration: float) -> Path:
+    output_path.write_bytes(b"\x00" * 2048)
+    return output_path
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_ident_renders_on_v2_without_host_settings(tmp_path):
+    """Normal: a configured ElevenLabs ident is its own V2 route, not a host's voice."""
+    import inspect
+
+    from mammamiradio.audio import tts
+
+    state = _make_state()
+    config = _elevenlabs_ident_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _fake_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert queue.get_nowait().type == SegmentType.STATION_ID
+    assert mock_synthesize.call_args.args[1] == _ELEVENLABS_IDENT_VOICE
+    kwargs = mock_synthesize.call_args.kwargs
+    assert kwargs["engine"] == "elevenlabs"
+    assert kwargs["edge_fallback_voice"] == _IDENT_EDGE_DOUBLE
+    assert _HOST_TTS_FIELDS.isdisjoint(kwargs)
+    # With no model passed, the router renders ElevenLabs V2 and its house settings.
+    assert inspect.signature(tts.synthesize).parameters["elevenlabs_model"].default == "eleven_multilingual_v2"
+
+
+@pytest.mark.asyncio
+async def test_keyless_elevenlabs_ident_rescue_airs_its_edge_double_inside_the_cap(tmp_path, _keyless_edge_speech):
+    """No key: the 3-second rescue sweeper still airs, on the ident's Edge double."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _elevenlabs_ident_config(tmp_path)
+    imaging = MagicMock()
+    imaging.pick_sweeper_sting.side_effect = _write_last_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_write_last_path),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+    ):
+        segment = await asyncio.wait_for(
+            producer._build_recovery_sweeper_segment(config, state),
+            timeout=producer.RECOVERY_SWEEPER_TIMEOUT_SECONDS,
+        )
+
+    assert segment.type == SegmentType.SWEEPER
+    assert segment.path.exists()
+    assert _keyless_edge_speech.edge_voices == [_IDENT_EDGE_DOUBLE]
+    _keyless_edge_speech.cloud_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_keyless_elevenlabs_ident_airs_after_restart_from_a_stopped_session(tmp_path, _keyless_edge_speech):
+    """Post-restart: a session restored as stopped resumes, and its first ident airs on the Edge double."""
+    state = _make_state()
+    state.session_stopped = True
+    config = _elevenlabs_ident_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _write_station_bed
+    produced: list[Segment] = []
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_write_last_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            state.session_stopped = False
+            async with asyncio.timeout(5.0):
+                while not any(item.type == SegmentType.STATION_ID for item in produced):
+                    while not queue.empty():
+                        produced.append(queue.get_nowait())
+                    await asyncio.sleep(0.02)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    ident = next(item for item in produced if item.type == SegmentType.STATION_ID)
+    assert ident.path.exists()
+    assert _IDENT_EDGE_DOUBLE in _keyless_edge_speech.edge_voices
+    _keyless_edge_speech.cloud_client.assert_not_called()
+
+
+def _shipped_ident_config(tmp_path: Path):
+    """The test config with the shipped radio.toml's ident route: free Edge, no double."""
+    shipped = load_config(str(Path(__file__).resolve().parents[2] / "radio.toml")).sonic_brand
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.sonic_brand.sweeper_voice = shipped.sweeper_voice
+    config.sonic_brand.sweeper_engine = shipped.sweeper_engine
+    config.sonic_brand.sweeper_edge_fallback_voice = shipped.sweeper_edge_fallback_voice
+    return config
+
+
+async def _rescue_sweeper(config, state) -> Segment:
+    from mammamiradio.scheduling import producer
+
+    imaging = MagicMock()
+    imaging.pick_sweeper_sting.side_effect = _write_last_path
+    with (
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_write_last_path),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+    ):
+        return await asyncio.wait_for(
+            producer._build_recovery_sweeper_segment(config, state),
+            timeout=producer.RECOVERY_SWEEPER_TIMEOUT_SECONDS,
+        )
+
+
+@pytest.mark.asyncio
+async def test_shipped_edge_ident_rescue_airs_isabella_inside_the_cap(tmp_path, _keyless_edge_speech):
+    """The shipped ident needs no key: the rescue sweeper airs Edge Isabella and builds no cloud client."""
+    config = _shipped_ident_config(tmp_path)
+    assert config.sonic_brand.sweeper_engine == "edge"
+
+    segment = await _rescue_sweeper(config, _make_state())
+
+    assert segment.type == SegmentType.SWEEPER
+    assert segment.path.exists()
+    assert _keyless_edge_speech.edge_voices == ["it-IT-IsabellaNeural"]
+    _keyless_edge_speech.cloud_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shipped_edge_ident_airs_the_house_voice_when_isabella_fails(tmp_path, _keyless_edge_speech, monkeypatch):
+    """Isabella failing is not dead air: the ident still airs, on the house voice, inside the cap."""
+    import mammamiradio.audio.tts as tts_mod
+
+    record = tts_mod.edge_tts.Communicate
+
+    def _isabella_down(text, voice, **kwargs):
+        communicate = record(text, voice, **kwargs)
+        if voice == "it-IT-IsabellaNeural":
+            communicate.save = AsyncMock(side_effect=ConnectionError("Isabella is down"))
+        return communicate
+
+    monkeypatch.setattr(tts_mod.edge_tts, "Communicate", _isabella_down)
+
+    segment = await _rescue_sweeper(_shipped_ident_config(tmp_path), _make_state())
+
+    assert segment.path.exists()
+    assert _keyless_edge_speech.edge_voices == ["it-IT-IsabellaNeural", tts_mod._EDGE_DEFAULT_FALLBACK_VOICE]
+    _keyless_edge_speech.cloud_client.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_time_check_uses_host_engine_for_tts():
     state = _make_state()

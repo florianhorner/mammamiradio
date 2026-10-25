@@ -208,9 +208,10 @@ def registry_entries(raw: dict) -> list[Entry]:
             if not isinstance(model_id, str) or not model_id.strip():
                 raise RegistryError(f"model_registry.toml [models.catalog.{provider}].{key} must be a non-empty string")
             entries.append(Entry(f"{provider}.{key}", str(provider), model_id.strip()))
-    tts = raw.get("tts")
-    if not isinstance(tts, dict) or not tts:
-        raise RegistryError("model_registry.toml [tts] must be a non-empty table")
+    # No pinned speech model is valid: OpenAI voices then use their Edge fallback.
+    tts = raw.get("tts", {})
+    if not isinstance(tts, dict):
+        raise RegistryError("model_registry.toml [tts] must be a table")
     for provider, section in tts.items():
         if not isinstance(section, dict):
             raise RegistryError(f"model_registry.toml [tts.{provider}] must be a table")

@@ -133,6 +133,22 @@ there is a real discipline on top of it:
   - The pre-release section (body in `scripts/model-registry-gate.sh`) reports review age as PASS or FAIL, where a checker failure is a FAIL that blocks the cut, and liveness as PASS, FAIL, or WAIVED with the reason when the provider docs are unreachable or the liveness checker fails. Because `scripts/pre-release-check.sh` also runs in CI on any PR touching `pyproject.toml` (Dependabot included), in CI the section runs only when the diff against `origin/main` changes a version line and notes itself and skips otherwise; under `make pre-release` it always runs, and `MMR_MODEL_REGISTRY_GATE=always` forces it. It is deliberately **not** an every-PR calendar assertion: the normal pytest suite runs the gate's shell contract with committed fixtures, while only a release cut asks whether the real review stamp is still fresh.
   - The Monday watcher: exit 0 closes any open `model-registry-watch` issue, exit 1 (a stale stamp, or a pin that is no longer current at its provider: legacy, unlisted, deprecated or retired) opens one or comments the week's report on it, and a run that could not read the docs, or crashed before rendering a report, does the same under a title and body naming the watcher rather than a pin, because a broken scraper that stays silent is the one outcome the check exists to prevent.
   - Self-tests: `bash tests/workflows/test_model_registry_watch.sh`, and the cut-gate shell self-test `tests/workflows/test_model_registry_gate.sh`, which passes alternate registry and fixture paths explicitly to the sourced gate function; the production pre-release call ignores ambient overrides. Fixtures are trimmed real captures under `tests/scripts/fixtures/model_registry/`. Agents never refresh the stamp to make a gate green. Liveness at runtime is separate: a 404 on a retired model trips the provider backoff and the station keeps airing (PR #315).
+- **The cut asks whether the one-key speech cast is still in date.** The shipped
+  cast needs one optional paid speech key, ElevenLabs. That is an interim decision
+  from 2026-10-22, due for review by 2027-04-14. `scripts/pre-release-check.sh`
+  section 12 runs `scripts/check_speech_cast.py --release`. It fails after the
+  review date, or when the review date sits more than 183 days after the decision.
+  Like section 11, it runs in CI only when a PR changes a version line, and always
+  under `make pre-release`. The way past the date is a new listening pass:
+  re-audition the cast, commit a new receipt, then set a new decision and review
+  date in the script. Agents never move the date to make the gate green.
+  - The binding half runs in the test suite on every change.
+    `tests/scripts/test_check_speech_cast.py` requires an accepted row in the
+    committed selection receipt for every airtime-approved ad voice and the
+    station ident. Rows match by the audition tool's candidate ID: provider, voice
+    and render settings. A changed voice or setting therefore needs a new
+    listening row before it can air. Hosts carry their own receipts. The Edge
+    doubles a keyless install airs are not gated by this receipt.
 
 ### Advertised-version guard
 
