@@ -117,13 +117,23 @@ def test_setup_wrappers_never_install_packages_themselves(script: Path) -> None:
 def _direct_package_install(source: str) -> bool:
     """Check literal installer commands; runtime tests separately prove delegation."""
     # Keep quotes until command boundaries are identified; quoted operators are data.
-    quoted = r"\x27[^\x27]*\x27|\"(?:\\.|[^\"\\])*\"|\\."
-    tokens = re.findall(r"#[^\n]*|[;&|()\n]+|(?:" + quoted + r"|[^\s;&|()\x27\"\\])+", source.replace("\\\n", ""))
+    quoted = r"\x27[^\x27]*\x27|\"(?:\\[\s\S]|[^\"\\])*\"|\\."
+    tokens = re.findall(r"#[^\n]*|[;&|()\n]+|(?:" + quoted + r"|\\\n|[^\s;&|()\x27\"\\])+", source)
     separators = ";&|()\n"
     for separator, group in groupby(tokens, lambda token: token.startswith("#") or all(c in separators for c in token)):
         if separator:
             continue
-        raw_words = list(group)
+        # Remove continuations only after comments have been separated. Single
+        # quotes preserve them; elsewhere they join words without adding spaces.
+        raw_words = [
+            re.sub(
+                quoted + r"|\\\n",
+                lambda match: match[0] if match[0].startswith("'") else match[0].replace("\\\n", ""),
+                word,
+            )
+            for word in group
+        ]
+        raw_words = [word for word in raw_words if word]
         for word in raw_words:
             for part in re.findall(quoted + r"|[^\x27\"\\]+", word):
                 if not part.startswith(("'", "\\")):
@@ -132,16 +142,45 @@ def _direct_package_install(source: str) -> bool:
                             return True
         words = [shlex.split(word)[0] for word in raw_words]
         while words and (
-            words[0] in {"if", "then", "elif", "while", "until", "do", "!", "exec", "command", "env"} or "=" in words[0]
+            words[0]
+            in {
+                "if",
+                "then",
+                "elif",
+                "else",
+                "while",
+                "until",
+                "do",
+                "!",
+                "time",
+                "sudo",
+                "nohup",
+                "exec",
+                "command",
+                "env",
+            }
+            or raw_words[0] == "{"
+            or "=" in words[0]
         ):
             prefix = words.pop(0)
+            raw_words.pop(0)
             if prefix == "env":
-                while words and words[0] in {"-i", "--ignore-environment", "--"}:
-                    words.pop(0)
+                while words:
+                    if words[0] in {"-i", "--ignore-environment", "--"}:
+                        count = 1
+                    elif words[0] == "-u" and len(words) > 1:
+                        count = 2
+                    else:
+                        break
+                    del words[:count]
+                    del raw_words[:count]
         if not words:
             continue
         executable, rest = Path(words[0]).name, words[1:]
-        if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", executable) and "-m" in rest:
+        if (
+            re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", executable)
+            or raw_words[0] in {"$PYTHON_BIN", "${PYTHON_BIN}", '"$PYTHON_BIN"', '"${PYTHON_BIN}"'}
+        ) and "-m" in rest:
             words = rest[rest.index("-m") + 1 :]
             executable, rest = (words[0], words[1:]) if words else ("", [])
         if re.fullmatch(r"pip(?:\d+(?:\.\d+)*)?", executable) and "install" in rest:
@@ -178,6 +217,10 @@ def _direct_package_install(source: str) -> bool:
         '"/path with spaces/bin/pip" install package',
         "python3 -m pip --disable-pip-version-check install package",
         "python -m pip \\\n  install package",
+        "# note \\\npip install package",
+        "pi\\\np install package",
+        "uv\\\n sync",
+        '"pi\\\np" install package',
         "uv pip install package",
         "uv pip sync requirements.txt",
         "uv --directory project sync",
@@ -186,10 +229,19 @@ def _direct_package_install(source: str) -> bool:
         'sh -c "printf ready\\n\npip install package"',
         "echo ready # setup\n\npip install package",
         "if uv sync; then echo ready; fi",
+        "if true; then :; else pip install package; fi",
+        "{ pip install package; }",
+        "time pip install package",
+        "sudo pip install package",
+        "nohup pip install package",
         "env FOO=bar pip install package",
         "env -i FOO=bar pip install package",
         "env --ignore-environment pip install package",
         "env -- pip install package",
+        "env -u NAME pip install package",
+        "env -i -u NAME FOO=bar pip install package",
+        '"$PYTHON_BIN" -m pip install package',
+        "${PYTHON_BIN} -m pip install package",
         'bash -ec "pip install package"',
         'bash -lc "uv sync"',
         'echo "$(pip install package)"',
@@ -219,6 +271,15 @@ def test_wrapper_install_guard_detects_alternate_forms(source: str) -> None:
         "printf '%s' '\n' uv sync",
         "printf '%s' '|' uv sync",
         "echo '$(pip install package)'",
+        r"\{ pip install package",
+        r"env -i \{ pip install package",
+        '"{" pip install package',
+        "uv\\\nsync",
+        "'pi\\\np' install package",
+        '"$UNRELATED_BIN" -m pip install package',
+        "${UNRELATED_BIN} -m pip install package",
+        "'$PYTHON_BIN' -m pip install package",
+        r"\$PYTHON_BIN -m pip install package",
     ],
 )
 def test_wrapper_install_guard_allows_delegation_and_comments(source: str) -> None:

@@ -778,8 +778,11 @@ maintainer authorizes the merge. The wrapper accepts only PRs with a verified
 main target; it refuses missing or other targets before fetching the PR commit
 or querying review threads. It rejects behind/conflicted branches, blocks
 unresolved current Major/Critical/P0/P1 bot threads, and stops when thread data
-cannot be read. It checks release-cut restrictions before requesting squash
-auto-merge for the exact verified head. GitHub still requires an up-to-date
+cannot be read. After checking release-cut restrictions, it re-reads the PR
+immediately before arming: the PR must remain open, target main, and retain
+the checked head and base commits. Changed or unreadable state requires
+rerunning the checks; this read is not an atomic target lock. It then requests
+squash auto-merge for the exact verified head. GitHub still requires an up-to-date
 branch and successful required checks. A later push requires checking the new
 head again. Confirm that GitHub reports MERGED; enabling auto-merge does not
 establish that a merge occurred.

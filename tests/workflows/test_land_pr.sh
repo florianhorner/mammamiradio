@@ -95,6 +95,13 @@ echo "$*" >> "$GH_MOCK_LOG"
 case "$1 $2" in
   "pr view")
     [[ "$*" != *"commits"* ]] || exit 64
+    if [ "$(grep -c '^pr view ' "$GH_MOCK_LOG")" -gt 1 ]; then
+      [[ "${GH_MOCK_FINAL_FAIL:-0}" != 1 ]] || exit 1
+      if [ "${GH_MOCK_FINAL_JSON+x}" = x ]; then
+        printf '%s\n' "$GH_MOCK_FINAL_JSON"
+        exit 0
+      fi
+    fi
     head="${GH_MOCK_HEAD:?}"
     merge_state="${GH_MOCK_MERGE_STATE:-CLEAN}"
     commits="${GH_MOCK_COMMITS_JSON:-}"
@@ -414,6 +421,37 @@ for base_name in '"release"' null '""' 42 false '{}' '[]'; do
   ! grep -q 'api graphql' "$GH_MOCK_LOG" || fail "base rejection must precede review queries"
 done
 pass "non-main and unverifiable bases fail before gates or merge"
+
+# State can change while object hydration and review/release checks run.
+FINAL_VIEW="$(jq -n --arg head "$HEAD_FULL" --arg base "$ANC_FULL" \
+  '{state:"OPEN", headRefOid:$head, baseRefOid:$base, baseRefName:"main", mergeStateStatus:"CLEAN"}')"
+for change in '.baseRefName = "train/test"' '.baseRefName = null' \
+  '.headRefOid = "different"' '.baseRefOid = "different"' \
+  '.state = "CLOSED"' '.state = "MERGED"' \
+  '.mergeStateStatus = "BEHIND"' '.mergeStateStatus = "DIRTY"'; do
+  run_land "$EMPTY_READER" GH_MOCK_FINAL_JSON="$(printf '%s' "$FINAL_VIEW" | jq "$change")"
+  [ "$RUN_RC" -ne 0 ] || fail "changed final snapshot must refuse: $change"
+  never_merged || fail "changed final snapshot must never merge: $change"
+done
+pass "changed target, commits, state or mergeability prevent arming"
+
+for invalid_view in '' '{' '{}' 'null' '[]'; do
+  run_land "$EMPTY_READER" GH_MOCK_FINAL_JSON="$invalid_view"
+  [ "$RUN_RC" -ne 0 ] || fail "invalid final snapshot must refuse: $invalid_view"
+  never_merged || fail "invalid final snapshot must never merge"
+done
+run_land "$EMPTY_READER" GH_MOCK_FINAL_FAIL=1
+[ "$RUN_RC" -ne 0 ] || fail "failed final read must refuse"
+never_merged || fail "failed final read must never merge"
+pass "unavailable final PR state fails closed"
+
+run_land "$EMPTY_READER" GH_MOCK_FINAL_JSON="$FINAL_VIEW"
+[ "$RUN_RC" -eq 0 ] || fail "unchanged final snapshot should arm: $RUN_OUT"
+merged_with "$HEAD_FULL" || fail "unchanged snapshot must retain head pin"
+[ "$(grep -c '^pr view ' "$GH_MOCK_LOG")" -eq 2 ] || fail "must read initial and final PR state"
+tail -n 2 "$GH_MOCK_LOG" | head -n 1 | grep -q '^pr view ' \
+  || fail "final state read must immediately precede merge"
+pass "unchanged snapshot is rechecked immediately before pinned arming"
 
 ! grep -q -- '--unshallow' "$LAND" || fail "landing must not fetch full history"
 pass "landing does not request a full-history fetch"

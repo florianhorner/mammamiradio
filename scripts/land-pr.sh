@@ -109,6 +109,16 @@ land_one() {
   # This is read-only admission; freeze/thaw remain explicit release actions.
   GH_REPO="$LAND_REPO" bash "$SCRIPT_DIR/dependabot-window-hold.sh" check-cut "$base" "$head" || return 1
 
+  # Gates can take time. Refuse changes to the checked target or commits before
+  # arming; this read is not an atomic lock against later retargeting.
+  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,baseRefName,mergeStateStatus 2>/dev/null)" \
+    || die "could not re-read PR #$pr before arming — refusing to merge; retry."
+  printf '%s' "$view" | jq -e --arg head "$head" --arg base "$base" \
+    "$LAND_BASE_JQ "'type == "object" and .state == "OPEN" and
+      land_base == "main" and .headRefOid == $head and .baseRefOid == $base and
+      .mergeStateStatus != "BEHIND" and .mergeStateStatus != "DIRTY"' >/dev/null 2>&1 \
+    || die "PR #$pr changed or its state could not be verified before arming — rerun landing checks."
+
   # Pin the merge to the exact head verified above. If anything pushes to the
   # branch after this, GitHub refuses the merge instead of landing unseen code.
   gh pr merge "$pr" --squash --auto --match-head-commit "$head" --delete-branch --repo "$LAND_REPO" \

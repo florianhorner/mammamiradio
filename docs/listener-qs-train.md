@@ -4,11 +4,12 @@
 slices. Independent work uses Path A and goes direct to `main`.
 
 The train is dormant unless the maintainer has created both the
-`train/listener-qs` branch and its dedicated Conductor workspace. Use the
-maintainer-only activation procedure in
-[`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md#activate-a-train-maintainer-only)
-before assigning work. Do not open a Path A PR for commits assigned to this
-train.
+`train/listener-qs` branch and its dedicated Conductor workspace. Before
+activating the train, the maintainer verifies that the clean checkout and remote
+branch point to the same recorded starting commit from `origin/main`.
+See [integration branches](runbooks/parallel-workspaces.md#integration-branches)
+for CI coverage and local-check requirements. Do not open a Path A PR for
+commits assigned to this train.
 
 ## Contract
 

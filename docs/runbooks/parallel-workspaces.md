@@ -37,8 +37,6 @@ The committed `.conductor/settings.toml` routes archive events to
 `scripts/conductor-archive.sh`. Repository-local `settings.local.toml` has higher
 precedence; inspect it if the effective hooks differ from the committed settings.
 
-<a id="activate-a-train-maintainer-only"></a>
-
 ## Integration branches
 
 Use a feature branch and a PR to main for independent changes. Coupled changes
@@ -134,6 +132,11 @@ The queue and `land-pr.sh` both use `verify_head` from `scripts/land-gates.sh`.
 A regression test verifies that a refusal from `verify_head` blocks the queue
 recommendation. The merge script also checks release-cut restrictions before
 enabling auto-merge; the queue does not establish those release conditions.
+
+Immediately before arming, the merge script rechecks that the PR is open,
+still targets main, and retains the checked head and base commits. A changed
+or unreadable snapshot requires another landing attempt. This final read
+reduces the window for concurrent changes; it is not an atomic target lock.
 
 Non-main targets are skipped in all lanes, and an unknown base stops planning.
 Edge selection refreshes `origin/main` once per run, independently of PR
