@@ -16,6 +16,7 @@ from mammamiradio.core.setup_status import (
     build_guided_setup,
     build_setup_status,
     classify_station_mode,
+    cloud_speech_engine_ready,
     detect_run_mode,
     first_listen_continuity_available,
     first_listen_onboarding_active,
@@ -1327,3 +1328,15 @@ def test_openai_key_without_a_pinned_speech_model_is_not_a_premium_voice():
 
     config.models.tts_models = {"openai": "test-openai-tts"}
     assert _voice_keys(config)["status"] == "configured"
+
+
+@pytest.mark.parametrize("engine", ["edge", "unsupported"])
+def test_free_or_unknown_engine_is_not_premium_ready_with_cloud_keys(engine):
+    config = load_config()
+    config.openai_api_key = "openai-key"
+    config.models.tts_models = {"openai": "test-openai-tts"}
+    config.azure_speech_key = "azure-key"
+    config.azure_speech_region = "westeurope"
+    config.elevenlabs_api_key = "eleven-key"
+
+    assert not cloud_speech_engine_ready(config, engine)
