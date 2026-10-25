@@ -119,6 +119,13 @@ Static config:
 - `radio.toml`
 - `model_registry.toml` — AI model IDs, task routing, an optional OpenAI speech model (none pinned), and per-model pricing. Must sit beside `radio.toml`. If missing, the station boots and plays music but degrades to stock host copy and Edge voices until it is restored.
 
+For cast review, `scripts/audition_tts_voices.py --identity-recalibration` uses the
+configured station announcer route, including Edge, and refuses substituted voices.
+Rebuilding a frozen audio pack still requires that pack's approved provider routes;
+a new identity audition does not recast or reapprove existing packs.
+The speech-cast binding check rejects duplicate ad names involving an airtime voice;
+give those voices unique names so each listening row can be attributed correctly.
+
 ### Environment variables (full catalog)
 
 Every variable the station reads, with its default and fallback. Model selection lives in `model_registry.toml` (see [Dynamic LLM routing](architecture.md#dynamic-llm-routing-which-model-voices-each-task)); secrets stay in `.env`.

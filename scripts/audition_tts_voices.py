@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -498,20 +499,26 @@ def _identity_host(config: StationConfig, name: str) -> HostPersonality:
 
 
 def build_identity_recalibration_targets(config: StationConfig) -> list[VoiceAuditionTarget]:
-    """Return the three canonical, direct-cloud casting checks.
+    """Return the configured announcer and two canonical host casting checks.
 
     This is deliberately narrower than a normal voice audition. The station
     announcer, Marco, and Giulia are the identities the listener must recognize;
     every route is validated before any provider receives copy.
     """
     sonic = config.sonic_brand
-    announcer_provider = _canonical_provider(sonic.sweeper_engine or "")
-    if announcer_provider != "azure":
-        raise ValueError("Identity announcer must use the configured Azure route")
+    if "sonic_brand.sweeper_voice" in config.tts_degraded_voices:
+        raise ValueError("Identity announcer was substituted while loading config; correct its configured route")
+    announcer_provider = _canonical_provider(sonic.sweeper_engine or "edge")
+    if announcer_provider not in PROVIDERS:
+        raise ValueError("Identity announcer must use a supported provider")
     if not sonic.sweeper_voice.strip():
-        raise ValueError("Identity announcer requires a configured Azure voice")
-    if sonic.sweeper_voice != IDENTITY_EXPECTED_VOICE_IDS["Isabella"]:
-        raise ValueError("Identity announcer no longer uses the canonical Isabella voice")
+        raise ValueError("Identity announcer requires a configured voice")
+    if (
+        announcer_provider == "edge"
+        and tts_module._coerce_edge_voice(sonic.sweeper_voice, edge_fallback_voice=sonic.sweeper_edge_fallback_voice)
+        != sonic.sweeper_voice
+    ):
+        raise ValueError("Identity announcer must use an Edge voice without substitution")
     if config.super_italian_mode:
         raise ValueError("Identity recalibration is fixed to the active Normal Mode wrapper inventory")
     configured_ident = sonic.full_ident.strip()
@@ -530,13 +537,16 @@ def build_identity_recalibration_targets(config: StationConfig) -> list[VoiceAud
             raise ValueError(f"Identity host {name} requires a configured ElevenLabs voice")
         if host.voice != IDENTITY_EXPECTED_VOICE_IDS[name]:
             raise ValueError(f"Identity host {name} no longer uses the canonical voice ID")
+        if announcer_provider == "elevenlabs" and sonic.sweeper_voice == host.voice:
+            raise ValueError("Identity announcer must have a voice distinct from the hosts")
 
     marco = hosts["Marco"]
     giulia = hosts["Giulia"]
     return [
         VoiceAuditionTarget(
-            provider="azure",
+            provider=announcer_provider,
             voice=sonic.sweeper_voice,
+            # Keep the evidence ID used by existing sonic/cadence receipt readers.
             label="identity-isabella",
             source="identity-recalibration",
             used_by=("sonic_brand:full_ident",),
@@ -992,7 +1002,7 @@ async def _render_identity_targets_fail_fast(
     run_dir: Path,
     config: StationConfig,
 ) -> tuple[list[VoiceAuditionResult], dict[str, dict[str, object]]]:
-    """Render direct-cloud identity clips, stopping at the first failed call."""
+    """Render identity clips on their exact routes, stopping at the first failed call."""
     results: list[VoiceAuditionResult] = []
     formats: dict[str, dict[str, object]] = {}
     for index, target in enumerate(targets, start=1):
@@ -1280,7 +1290,7 @@ async def render_identity_recalibration(
     receipt_path: Path = HOST_PERFORMANCE_RECEIPT_PATH,
     casting_proof_path: Path = HOST_CASTING_PROOF_PATH,
 ) -> tuple[Path, dict[str, object]]:
-    """Render and publish the direct-cloud three-voice gate without fallback."""
+    """Render and publish the three-voice gate on configured routes without fallback."""
     timestamp = _timestamp(timestamp)
     canonical_sources = (
         (config_path, DEFAULT_CONFIG_PATH, "config"),
@@ -1293,7 +1303,7 @@ async def render_identity_recalibration(
     config_path = config_path.resolve()
     receipt_path = receipt_path.resolve()
     casting_proof_path = casting_proof_path.resolve()
-    config = load_config(str(config_path))
+    config = _load_identity_config(config_path)
     targets = build_identity_recalibration_targets(config)
     host_receipt_sha256, casting_proof_sha256 = _require_accepted_identity_hosts(
         targets,
@@ -1360,6 +1370,18 @@ def _identity_exact_fields(value: Mapping[str, object], expected: set[str], fiel
     if set(value) != expected:
         detail = sorted(expected.symmetric_difference(value))
         raise ValueError(f"{field} has an invalid field set: {', '.join(detail)}")
+
+
+def _load_identity_config(config_path: Path) -> StationConfig:
+    # Runtime can recover an unknown engine as Edge without recording a voice
+    # substitution. Audition must retain the requested route instead.
+    raw_sonic = tomllib.loads(config_path.read_text(encoding="utf-8")).get("sonic_brand", {})
+    raw_engine = raw_sonic.get("sweeper_engine")
+    if raw_engine is not None and (
+        not isinstance(raw_engine, str) or (raw_engine or "edge").strip().lower() not in PROVIDERS
+    ):
+        raise ValueError("Identity announcer must use a supported provider without substitution")
+    return load_config(str(config_path))
 
 
 def _identity_source_evidence(
@@ -1542,7 +1564,7 @@ def _validate_identity_board(
     )
     if casting_proof_path.resolve() != HOST_CASTING_PROOF_PATH.resolve():
         raise ValueError("Identity manifest does not bind the canonical host casting proof")
-    config = load_config(str(config_path))
+    config = _load_identity_config(config_path)
     targets = build_identity_recalibration_targets(config)
     accepted_hash, profile_hash = _require_accepted_identity_hosts(targets, receipt_path, casting_proof_path)
     if accepted_hash != host_receipt_sha256 or profile_hash != casting_proof_sha256:

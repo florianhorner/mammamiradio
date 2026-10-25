@@ -14,6 +14,7 @@ from mammamiradio.core.config import (
     SonicBrandSection,
     StationConfig,
     StationSection,
+    load_config,
 )
 from mammamiradio.core.models import HostPersonality
 from scripts import audition_tts_voices as audition
@@ -144,13 +145,66 @@ def test_identity_targets_match_production_routes_and_normal_mode_copy() -> None
 
 
 @pytest.mark.parametrize(
+    "config_path",
+    [audition.DEFAULT_CONFIG_PATH, audition.REPO_ROOT / "ha-addon" / "mammamiradio" / "radio.toml"],
+)
+def test_identity_announcer_follows_the_shipped_route(config_path: Path) -> None:
+    config = load_config(str(config_path))
+
+    announcer, *_ = audition.build_identity_recalibration_targets(config)
+
+    assert (announcer.provider, announcer.voice) == ("edge", "it-IT-IsabellaNeural")
+    assert announcer.edge_fallback_voice == config.sonic_brand.sweeper_edge_fallback_voice
+    assert announcer.text == config.sonic_brand.full_ident.strip()
+    # Existing sonic/cadence receipts address this stable evidence identifier.
+    assert announcer.label == "identity-isabella"
+
+
+@pytest.mark.parametrize(
+    ("engine", "voice"),
+    [("edge", "it-IT-IsabellaNeural"), ("elevenlabs", "announcer-candidate"), ("openai", "coral")],
+)
+def test_identity_announcer_uses_the_configured_provider_and_voice(engine: str, voice: str) -> None:
+    config = _identity_config()
+    config.sonic_brand.sweeper_engine = engine
+    config.sonic_brand.sweeper_voice = voice
+
+    announcer, *_ = audition.build_identity_recalibration_targets(config)
+
+    assert (announcer.provider, announcer.voice) == (engine, voice)
+
+
+@pytest.mark.parametrize("host_index", [0, 1])
+def test_identity_announcer_cannot_reuse_a_host_voice(host_index: int) -> None:
+    config = _identity_config()
+    config.sonic_brand.sweeper_engine = "elevenlabs"
+    config.sonic_brand.sweeper_voice = config.hosts[host_index].voice
+
+    with pytest.raises(ValueError, match="distinct from the hosts"):
+        audition.build_identity_recalibration_targets(config)
+
+
+@pytest.mark.parametrize(
     "scenario",
-    ["announcer-edge", "marco-openai", "giulia-v3", "missing-marco", "super-italian"],
+    [
+        "announcer-edge",
+        "announcer-unknown",
+        "announcer-empty",
+        "marco-openai",
+        "giulia-v3",
+        "missing-marco",
+        "super-italian",
+    ],
 )
 def test_identity_targets_reject_noncanonical_route_before_synthesis(scenario: str) -> None:
     config = _identity_config()
     if scenario == "announcer-edge":
         config.sonic_brand.sweeper_engine = "edge"
+        config.sonic_brand.sweeper_voice = "coral"
+    elif scenario == "announcer-unknown":
+        config.sonic_brand.sweeper_engine = "unsupported"
+    elif scenario == "announcer-empty":
+        config.sonic_brand.sweeper_voice = ""
     elif scenario == "marco-openai":
         config.hosts[0].engine = "openai"
     elif scenario == "giulia-v3":
@@ -162,6 +216,98 @@ def test_identity_targets_reject_noncanonical_route_before_synthesis(scenario: s
 
     with pytest.raises(ValueError):
         audition.build_identity_recalibration_targets(config)
+
+
+@pytest.mark.asyncio
+async def test_shipped_identity_board_round_trips_without_azure_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-elevenlabs-key")
+    _patch_audio_evidence(monkeypatch)
+    calls: list[tuple[str, str]] = []
+
+    async def fake_synthesize(target: audition.VoiceAuditionTarget, output_path: Path) -> Path:
+        calls.append((target.provider, target.voice))
+        output_path.write_bytes(f"audio:{target.label}".encode())
+        return output_path
+
+    monkeypatch.setattr(audition, "_synthesize_target", fake_synthesize)
+
+    run_dir, manifest = await audition.render_identity_recalibration(
+        tmp_path / "boards", config_path=audition.DEFAULT_CONFIG_PATH, timestamp="20261025T180000Z"
+    )
+
+    assert calls[0] == ("edge", "it-IT-IsabellaNeural")
+    assert [provider for provider, _ in calls] == ["edge", "elevenlabs", "elevenlabs"]
+    stored, paths = audition._validate_identity_board(run_dir / "manifest.json")
+    assert stored["pack_digest"] == manifest["pack_digest"]
+    assert len(paths) == 3
+    clips = manifest["clips"]
+    assert isinstance(clips, list)
+    assert clips[0]["route"]["requested"]["provider"] == "edge"
+    assert clips[0]["route"]["fallback_used"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('sweeper_engine = "edge"', 'sweeper_engine = "unsupported"'),
+        ('sweeper_engine = "edge"', "sweeper_engine = 0"),
+        ('sweeper_voice = "it-IT-IsabellaNeural"', 'sweeper_voice = "not-an-edge-voice"'),
+    ],
+    ids=["unknown-engine", "invalid-engine-type", "substituted-voice"],
+)
+async def test_identity_loading_rejects_normalized_routes_before_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old: str, new: str
+) -> None:
+    source = audition.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+    assert old in source
+    config_path = tmp_path / "radio.toml"
+    config_path.write_text(source.replace(old, new, 1), encoding="utf-8")
+    monkeypatch.setattr(audition, "DEFAULT_CONFIG_PATH", config_path)
+    calls = 0
+
+    async def fake_synthesize(_target: audition.VoiceAuditionTarget, _output_path: Path) -> Path:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("a substituted route must never reach synthesis")
+
+    monkeypatch.setattr(audition, "_synthesize_target", fake_synthesize)
+    output_root = tmp_path / "boards"
+
+    with pytest.raises(ValueError, match="substitut"):
+        await audition.render_identity_recalibration(output_root, config_path=config_path, timestamp="20261025T180001Z")
+
+    assert calls == 0
+    assert not output_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_identity_board_revalidation_rejects_an_engine_normalized_to_its_original_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = audition.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+    config_path = tmp_path / "radio.toml"
+    config_path.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(audition, "DEFAULT_CONFIG_PATH", config_path)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-elevenlabs-key")
+    _patch_audio_evidence(monkeypatch)
+
+    async def fake_synthesize(target: audition.VoiceAuditionTarget, output_path: Path) -> Path:
+        output_path.write_bytes(f"audio:{target.label}".encode())
+        return output_path
+
+    monkeypatch.setattr(audition, "_synthesize_target", fake_synthesize)
+    run_dir, _ = await audition.render_identity_recalibration(
+        tmp_path / "boards", config_path=config_path, timestamp="20261025T180002Z"
+    )
+    config_path.write_text(source.replace('sweeper_engine = "edge"', 'sweeper_engine = "unsupported"', 1))
+
+    with pytest.raises(ValueError, match="supported provider without substitution"):
+        audition._validate_identity_board(run_dir / "manifest.json")
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,48 @@ def test_binding_passes_when_every_route_is_accepted():
     receipt = _receipt(gate.cast_routes(config))
 
     assert gate.binding_findings(config, receipt) == []
+
+
+@pytest.mark.parametrize("duplicate_first", [True, False])
+@pytest.mark.parametrize("same_route", [True, False])
+@pytest.mark.parametrize("duplicate_airs", [True, False])
+def test_duplicate_ad_names_cannot_hide_an_unheard_route(duplicate_first, same_route, duplicate_airs):
+    config = load_config(str(RADIO_TOML))
+    receipt = audition.load_selection_receipt(gate.DEFAULT_RECEIPT)
+    voice = next(voice for voice in config.ads.voices if voice.airtime_approved)
+    duplicate = deepcopy(voice)
+    duplicate.airtime_approved = duplicate_airs
+    if not same_route:
+        duplicate.voice = "unheard-voice-id"
+    if duplicate_first:
+        config.ads.voices.insert(0, duplicate)
+    else:
+        config.ads.voices.append(duplicate)
+
+    findings = gate.binding_findings(config, receipt)
+
+    assert len(findings) == 1
+    assert voice.name in findings[0] and "duplicate" in findings[0]
+    with pytest.raises(ValueError, match="duplicate"):
+        gate.cast_routes(config)
+
+
+def test_duplicate_staged_names_do_not_hold_the_airtime_cast():
+    config = load_config(str(RADIO_TOML))
+    staged = next(voice for voice in config.ads.voices if not voice.airtime_approved)
+    config.ads.voices.append(deepcopy(staged))
+
+    assert gate.binding_findings(config, audition.load_selection_receipt(gate.DEFAULT_RECEIPT)) == []
+
+
+def test_cli_reports_duplicate_ad_names_as_a_finding(monkeypatch, capsys):
+    config = load_config(str(RADIO_TOML))
+    voice = next(voice for voice in config.ads.voices if voice.airtime_approved)
+    config.ads.voices.append(deepcopy(voice))
+    monkeypatch.setattr("mammamiradio.core.config.load_config", lambda _path: config)
+
+    assert gate.main(["--binding"]) == gate.EXIT_FINDING
+    assert "FAIL:" in capsys.readouterr().out
 
 
 def test_a_route_without_a_row_is_named():

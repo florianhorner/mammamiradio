@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -96,6 +97,17 @@ def cast_routes(config: StationConfig) -> list[CastRoute]:
     computed exactly as the receipt writer computed it.
     """
     audition = _audition_module()
+    # Staged voices also enter the audition index, so they must not shadow an
+    # airtime voice sharing the same name, even when their routes differ.
+    name_counts = Counter(voice.name for voice in config.ads.voices)
+    duplicate_names = sorted(
+        {voice.name for voice in config.ads.voices if voice.airtime_approved and name_counts[voice.name] > 1}
+    )
+    if duplicate_names:
+        raise ValueError(
+            f"duplicate ad voice names involve an airtime voice: {', '.join(duplicate_names)}; "
+            "give these voices unique names before checking their listening rows"
+        )
     targets_by_use = {use: target for target in audition.collect_configured_targets(config) for use in target.used_by}
 
     def route(label: str, use: str) -> CastRoute:
@@ -118,13 +130,17 @@ def cast_routes(config: StationConfig) -> list[CastRoute]:
 
 def binding_findings(config: StationConfig, receipt: dict[str, object]) -> list[str]:
     """Return every gated route without an accepted listening row."""
+    try:
+        routes = cast_routes(config)
+    except ValueError as exc:
+        return [str(exc)]
     # A validated receipt holds a list of rows with unique candidate IDs.
     rows = cast(list[dict[str, object]], receipt["candidates"])
     statuses = {str(row["candidate_id"]): str(row["approval_status"]) for row in rows}
     findings: list[str] = []
     if not config.sonic_brand.sweeper_voice.strip():
         findings.append(f"{IDENT_LABEL} has no voice of its own; set [sonic_brand] sweeper_voice and audition it")
-    for cast_route in cast_routes(config):
+    for cast_route in routes:
         status = statuses.get(cast_route.candidate_id)
         if status == "accepted":
             continue
