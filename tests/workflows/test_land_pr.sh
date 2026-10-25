@@ -72,7 +72,7 @@ mkdir -p "$MOCK_BIN"
 cat > "$MOCK_BIN/gh" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "${GH_MOCK_GUARD:-0}" == "1" && "$1 $2" == "pr merge" ]]; then
-  [[ " $* " == *" --delete-branch "* && " $* " == *" --repo test-owner/test-repo "* ]] || {
+  [[ ( " $* " == *" --delete-branch "* || " $* " == *" --disable-auto "* ) && " $* " == *" --repo test-owner/test-repo "* ]] || {
     echo 'guard: explicit repository and branch cleanup required' >&2
     exit 1
   }
@@ -95,6 +95,12 @@ echo "$*" >> "$GH_MOCK_LOG"
 case "$1 $2" in
   "pr view")
     [[ "$*" != *"commits"* ]] || exit 64
+    if [[ "$*" == *"--json baseRefName"* ]]; then
+      [[ "${GH_MOCK_AFTER_FAIL:-0}" != 1 ]] || exit 1
+      after_json='{"baseRefName":"main"}'
+      printf '%s\n' "${GH_MOCK_AFTER_JSON-$after_json}"
+      exit 0
+    fi
     if [ "$(grep -c '^pr view ' "$GH_MOCK_LOG")" -gt 1 ]; then
       [[ "${GH_MOCK_FINAL_FAIL:-0}" != 1 ]] || exit 1
       if [ "${GH_MOCK_FINAL_JSON+x}" = x ]; then
@@ -111,7 +117,12 @@ case "$1 $2" in
     printf '{"state":"%s","headRefOid":"%s","baseRefOid":"%s","baseRefName":%s,"mergeStateStatus":"%s","commits":%s}\n' \
       "${GH_MOCK_STATE:-OPEN}" "$head" "${GH_MOCK_BASE:?}" "${GH_MOCK_BASE_NAME_JSON:-\"main\"}" "$merge_state" "$commits"
     ;;
-  "pr merge") : ;;
+  "pr merge")
+    if [[ "$*" == *"--disable-auto"* ]]; then
+      exit "${GH_MOCK_DISABLE_RC:-0}"
+    fi
+    exit "${GH_MOCK_ARM_RC:-0}"
+    ;;
   "repo view")
     printf '%s\n' 'test-owner/test-repo'
     ;;
@@ -448,10 +459,38 @@ pass "unavailable final PR state fails closed"
 run_land "$EMPTY_READER" GH_MOCK_FINAL_JSON="$FINAL_VIEW"
 [ "$RUN_RC" -eq 0 ] || fail "unchanged final snapshot should arm: $RUN_OUT"
 merged_with "$HEAD_FULL" || fail "unchanged snapshot must retain head pin"
-[ "$(grep -c '^pr view ' "$GH_MOCK_LOG")" -eq 2 ] || fail "must read initial and final PR state"
-tail -n 2 "$GH_MOCK_LOG" | head -n 1 | grep -q '^pr view ' \
+[ "$(grep -c '^pr view ' "$GH_MOCK_LOG")" -eq 3 ] || fail "must read PR state before and after arming"
+tail -n 3 "$GH_MOCK_LOG" | head -n 1 | grep -q '^pr view ' \
   || fail "final state read must immediately precede merge"
+! grep -q -- '--disable-auto' "$GH_MOCK_LOG" || fail "main target must retain auto-merge"
 pass "unchanged snapshot is rechecked immediately before pinned arming"
+
+for after_view in '{"baseRefName":"release"}' '{"baseRefName":null}' '{"baseRefName":42}' '' '{' '{}' 'null' '[]'; do
+  run_land "$EMPTY_READER" GH_MOCK_AFTER_JSON="$after_view" GH_MOCK_GUARD=1
+  [ "$RUN_RC" -ne 0 ] || fail "changed or unknown target after arming must fail"
+  merged_with "$HEAD_FULL" || fail "fixture must arm before target changes"
+  tail -n 1 "$GH_MOCK_LOG" | grep -q '^pr merge 7 --disable-auto --repo test-owner/test-repo$' \
+    || fail "unverified target must trigger explicit-repo cancellation"
+done
+pass "changed or invalid target after arming triggers cancellation"
+
+for disable_rc in 0 1; do
+  run_land "$EMPTY_READER" GH_MOCK_AFTER_FAIL=1 GH_MOCK_DISABLE_RC="$disable_rc"
+  [ "$RUN_RC" -ne 0 ] || fail "failed post-arm read must fail"
+  grep -q -- '--disable-auto' "$GH_MOCK_LOG" || fail "read failure must attempt cancellation"
+  if [ "$disable_rc" -eq 0 ]; then
+    printf '%s' "$RUN_OUT" | grep -q 'Auto-merge disabled' || fail "report successful cancellation"
+  else
+    ! printf '%s' "$RUN_OUT" | grep -q 'Auto-merge disabled' || fail "must not claim failed cancellation succeeded"
+    printf '%s' "$RUN_OUT" | grep -q 'could not disable' || fail "report cancellation failure"
+  fi
+done
+pass "failed post-arm read cancels and reports cancellation failures honestly"
+
+run_land "$EMPTY_READER" GH_MOCK_ARM_RC=1
+[ "$RUN_RC" -ne 0 ] || fail "failed arming must fail"
+! grep -q -- '--json baseRefName' "$GH_MOCK_LOG" || fail "failed arming must not report post-arm success"
+pass "failed arming stops before post-arm validation"
 
 ! grep -q -- '--unshallow' "$LAND" || fail "landing must not fetch full history"
 pass "landing does not request a full-history fetch"

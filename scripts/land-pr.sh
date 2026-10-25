@@ -123,7 +123,17 @@ land_one() {
   # branch after this, GitHub refuses the merge instead of landing unseen code.
   gh pr merge "$pr" --squash --auto --match-head-commit "$head" --delete-branch --repo "$LAND_REPO" \
     || die "arming auto-merge for PR #$pr failed — see gh output above, fix, and re-run."
-  say "land-pr: PR #$pr armed — GitHub merges it once required checks pass on head ${head:0:12}."
+  # Cancellation is best-effort: GitHub may already have merged the PR.
+  if ! view="$(gh pr view "$pr" --json baseRefName --repo "$LAND_REPO" 2>/dev/null)" \
+    || ! printf '%s' "$view" | jq -e "$LAND_BASE_JQ "'type == "object" and land_base == "main"' >/dev/null 2>&1; then
+    if gh pr merge "$pr" --disable-auto --repo "$LAND_REPO"; then
+      say "land-pr: Auto-merge disabled for PR #$pr."
+    else
+      say "land-pr: could not disable auto-merge for PR #$pr — inspect it on GitHub immediately."
+    fi
+    die "PR #$pr target changed or could not be verified after arming; inspect its target and merge state before retrying. Cancellation cannot undo a completed merge."
+  fi
+  say "land-pr: PR #$pr auto-merge request accepted for head ${head:0:12}; confirm its merge state on GitHub."
   say "         If the head changes before then, the merge will not fire; re-run this script."
 }
 

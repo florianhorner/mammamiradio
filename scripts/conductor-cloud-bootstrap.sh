@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cloud Conductor workspace bootstrap (Amazon Linux / CONDUCTOR_IS_LOCAL=0).
-# Selects a supported interpreter, then delegates the install to bootstrap-conductor.sh.
+# Machine install provides a supported Python interpreter; this script builds .venv.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -782,7 +782,10 @@ cannot be read. After checking release-cut restrictions, it re-reads the PR
 immediately before arming: the PR must remain open, target main, and retain
 the checked head and base commits. Changed or unreadable state requires
 rerunning the checks; this read is not an atomic target lock. It then requests
-squash auto-merge for the exact verified head. GitHub still requires an up-to-date
+squash auto-merge for the exact verified head and checks the target again. If
+the target changed or cannot be read, it attempts to disable auto-merge and
+stops. Cancellation cannot undo an immediate merge or prevent later retargeting.
+GitHub still requires an up-to-date
 branch and successful required checks. A later push requires checking the new
 head again. Confirm that GitHub reports MERGED; enabling auto-merge does not
 establish that a merge occurred.

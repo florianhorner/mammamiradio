@@ -135,8 +135,10 @@ enabling auto-merge; the queue does not establish those release conditions.
 
 Immediately before arming, the merge script rechecks that the PR is open,
 still targets main, and retains the checked head and base commits. A changed
-or unreadable snapshot requires another landing attempt. This final read
-reduces the window for concurrent changes; it is not an atomic target lock.
+or unreadable snapshot requires another landing attempt. After requesting
+auto-merge, it checks the target again and attempts to disable auto-merge if
+the target changed or cannot be verified. These reads are not an atomic target
+lock; cancellation cannot undo an immediate merge or prevent later retargeting.
 
 Non-main targets are skipped in all lanes, and an unknown base stops planning.
 Edge selection refreshes `origin/main` once per run, independently of PR

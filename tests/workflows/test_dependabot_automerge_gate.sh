@@ -119,6 +119,8 @@ def runs():
 
 if a[:2] == ['pr', 'view']:
     fail('view')
+    if a[a.index('--json') + 1] == 'baseRefName':
+        output({'baseRefName': 'main'})
     if 'baseRefOid' in ' '.join(a):
         output({'state': e.get('PR_STATE', 'OPEN'), 'headRefOid': e['LAND_HEAD'], 'baseRefOid': e['LAND_BASE'], 'baseRefName': 'main',
                 'mergeStateStatus': e.get('MERGE_STATE', 'CLEAN'), 'commits': [{'committedDate': '2026-09-06T12:00:00Z'}]})
