@@ -182,11 +182,9 @@ Italian headlines and station-feel words).
 
 ## QA requirement
 
-Before merging any admin panel PR:
-1. Run `/qa` on `/admin` (operator-facing: controls, sliders, host config, engine room, playlist)
-2. Run `/qa` on `/` (listener-facing: stream playback, now-playing, up-next, responsive layout)
-
-Both must pass. A single combined run is insufficient.
+Follow the [risk-scoped QA gates](../../CLAUDE.md#quality-gates) and record the
+scope, results, any justified reuse, and any exemption in the PR's **QA Impact**
+block.
 
 ## PR checklist (copy into PR body)
 
@@ -198,6 +196,5 @@ Both must pass. A single combined run is insufficient.
 - [ ] `<span class="mi">` present in `<h1>` in every modified HTML file
 - [ ] Tricolor div present below `<h1>` in every modified HTML file (`.tricolor-stripe` on admin, `.tricolor-band` on listener)
 - [ ] No green used for any success/connected state (colorblind safety)
-- [ ] Player QA run passed on `/`
-- [ ] Admin QA run passed on `/admin`
+- [ ] QA Impact records the required Player/Admin QA results, justified reuse, or why a surface is unaffected
 ```

@@ -358,7 +358,7 @@ Golden with three-layer glow. Blue when playing.
 
 ### Status system — canonical, 5 states × 3 visual forms
 
-**One status system. Five states. Three visual forms.** Every state declaration pairs color with a unique SHAPE — color alone is never sufficient. Red-green colorblindness rules: `--ok` is blue, never green; `--warning` is amber, not orange; `--error` is red with ✗ shape.
+**One status system. Five states. Three visual forms.** Every state declaration pairs color with a unique SHAPE — color alone is never sufficient. Status accessibility rules: `--ok` is blue, never green; `--warning` is amber, not orange; `--error` is red with ✗ shape.
 
 Lives in `static/base.css`. Replaces the ad-hoc Engine Room green-button-vs-blue-check inconsistency, the admin sidebar `.pipeline-dot` class family, and any per-surface status chips.
 
@@ -701,7 +701,7 @@ Swappable listener strings live in `mammamiradio/web/ui_copy.py` (single source 
 
 Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URLs, file paths, package names, environment variables, entity IDs, and container names. Earlier First Listen recovery copy used the joined spelling.
 
-`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes the test file, which defines the banned string, and four generated audio-pack files: the committed `manifest.json` and `ATTRIBUTION.md`, their generator, and the test that pins their hashes. Three exact-line allowances defer corrections in one dated plan and one upstream-proposal document to dedicated docs changes. All other lines in those files remain covered. The suite rejects stale allowances. Changelogs and docs must describe the typo without repeating it.
+`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes the test file, which defines the banned string, and four generated audio-pack files: the committed `manifest.json` and `ATTRIBUTION.md`, their generator, and the test that pins their hashes. The suite rejects stale exclusions. Changelogs and docs must describe the typo without repeating it.
 
 ## Sonic identity
 
@@ -724,7 +724,7 @@ reuse the Velvet Horizon prototype as transition material.
 |------|--------|
 | Never semi-transparent card backgrounds | Warm bg bleeds through, causes blur |
 | Never multiple radial glow blobs on body | Same blur effect — use single directional glow |
-| Never green for success / connected / playing | Red-green colorblind. Use `--ok` (#2563EB) |
+| Never green for success / connected / playing | Keep success distinct from errors. Use `--ok` (#2563EB) |
 | Never cold grey or charcoal as the dominant background | The warmth of #14110F is the Italian identity |
 | Never Inter/Roboto/Arial for body text | Use Outfit. Inter is the old system. |
 | Never Outfit for the station name | Always Playfair Display italic |
@@ -735,7 +735,7 @@ reuse the Velvet Horizon prototype as transition material.
 
 ## Colorblind accessibility
 
-This design system is built for **red-green colorblind accessibility**. This affects all UI work:
+Every semantic state must remain distinguishable by shape and label when red and green hues appear alike. This affects all UI work:
 
 - Success / connected / active: `#2563EB` (blue), never green
 - Error: `#c44a4a` (red — only for errors, not active states)
@@ -756,7 +756,6 @@ All semantic states must pair a color with a **shape**: checkmark (✓), triangl
 | Hero composite template | `docs/hero-composite.html` (regeneration instructions in its comment header) |
 | HA add-on icon | `ha-addon/mammamiradio/icon.png` (256px) |
 | HA logo | `ha-addon/mammamiradio/logo.png` (512px) |
-| Design preview | `/tmp/design-preview-volare-refined.html` (local only, not committed) |
 
 To regenerate HA add-on PNGs from SVG:
 
