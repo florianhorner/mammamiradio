@@ -3,7 +3,7 @@
 #
 #   scripts/land-pr.sh <pr-number> [<pr-number>...]
 #
-# Landing contract (CLAUDE.md "Quality gates" → "Landing contract"): human and feature PRs are
+# Landing contract (docs/runbooks/ha-addon.md "Landing a PR"): human and feature PRs are
 # opened by /ship and never armed for auto-merge. On the operator's explicit
 # merge signal, this wrapper:
 #
