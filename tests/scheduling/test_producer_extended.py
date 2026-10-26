@@ -43,6 +43,7 @@ from mammamiradio.scheduling.producer import (
     RenderedMusicTrack,
     _home_context_ready_for_first_moment,
     _maybe_arm_first_home_context_moment,
+    _packaged_ad_segment,
     run_producer,
 )
 from tests.home_fixtures import SYNTHETIC_BINDINGS
@@ -1458,7 +1459,8 @@ async def test_banter_after_session_resume_uses_expected_duration_context(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_ad_quality_reject_preserves_owed_break_and_continues(tmp_path, live_ad_config):
+@pytest.mark.parametrize("packaged_available", [False, True])
+async def test_ad_quality_reject_preserves_owed_break_and_continues(tmp_path, live_ad_config, packaged_available):
     state = _make_state()
     state.songs_since_ad = 9
     config = live_ad_config
@@ -1466,6 +1468,10 @@ async def test_ad_quality_reject_preserves_owed_break_and_continues(tmp_path, li
     config.ads.voices = [AdVoice(name="VoiceGuy", voice="it-IT-DiegoNeural", style="energetic")]
     config.pacing.ad_spots_per_break = 1
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    fallback = await _packaged_ad_segment(config, state) if packaged_available else None
+    if packaged_available:
+        assert fallback and fallback.path.is_file() and fallback.playback_start_callback()
+    rejected_paths = []
 
     fake_script = AdScript(
         brand="TestBrand",
@@ -1484,11 +1490,13 @@ async def test_ad_quality_reject_preserves_owed_break_and_continues(tmp_path, li
 
     def _quality_side_effect(path, seg_type):
         if seg_type == SegmentType.AD:
-            raise AudioQualityError("silent ad break")
+            path.write_bytes(b"rejected fixture")
+            rejected_paths.append(path)
+            raise AudioQualityError("ad has a long silent gap (2.79s > 2.50s)")
         return None
 
     with (
-        patch(f"{MODULE}._packaged_ad_segment", AsyncMock(return_value=None)),
+        patch(f"{MODULE}._packaged_ad_segment", AsyncMock(return_value=fallback)),
         patch(f"{MODULE}._producer_error_recovery_segment", AsyncMock(return_value=None)),
         patch(f"{MODULE}.next_segment_type", side_effect=_seg_type),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
@@ -1505,8 +1513,13 @@ async def test_ad_quality_reject_preserves_owed_break_and_continues(tmp_path, li
         await _run_until_queued(queue, state, config)
 
     seg = queue.get_nowait()
-    assert seg.type == SegmentType.MUSIC
-    assert state.songs_since_ad == 10, "the unheard ad stays owed after the next song"
+    assert rejected_paths and all(not path.exists() for path in rejected_paths)
+    if packaged_available:
+        assert seg is fallback
+        assert state.songs_since_ad == 9, "the packaged replacement is still owed until playback"
+    else:
+        assert seg.type == SegmentType.MUSIC
+        assert state.songs_since_ad == 10, "the unheard ad stays owed after the next song"
 
 
 # ---------------------------------------------------------------------------
