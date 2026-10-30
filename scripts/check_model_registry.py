@@ -657,6 +657,8 @@ def accepted_holds(raw: dict, verdicts: list[Verdict], today: dt.date) -> set[st
         if verdict.status == hold["status"]:
             accepted.add(label)
             messages.append(f"HELD: {label} {verdict.entry.model_id} ({verdict.status}) until {due}: {hold['reason']}")
+        elif verdict.status == "current":
+            messages.append(f"HOLD INACTIVE: {label} is current; decision still due {due}: {hold['reason']}")
     for message in messages:
         print(message)
     return accepted

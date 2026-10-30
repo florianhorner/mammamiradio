@@ -1198,3 +1198,16 @@ def test_stale_global_review_cannot_be_waived_by_fresh_holds(tmp_path, capsys):
     assert code == watch.EXIT_FINDING
     assert "HELD: anthropic.haiku" in out and "OK (watch)" in out
     assert "FAIL: model_registry.toml last_reviewed=2026-07-01" in out
+
+
+def test_provider_restoring_current_status_needs_no_drift_decision(tmp_path, capsys, monkeypatch):
+    path = _held_registry(tmp_path)
+    docs = watch.load_docs(FIXTURES)
+    docs = replace(docs, anthropic_current=docs.anthropic_current | {"claude-haiku-4-5-20251001"})
+    monkeypatch.setattr(watch, "load_docs", lambda _: docs)
+    code, out = _run(capsys, "--report", "--registry", str(path), "--today", "2026-09-08")
+    assert code == watch.EXIT_OK
+    assert "HOLD INACTIVE: anthropic.haiku is current; decision still due 2026-10-23" in out
+    assert "Measure the fast path first." in out
+    assert "HELD:" not in out
+    assert "FINDINGS" not in out
