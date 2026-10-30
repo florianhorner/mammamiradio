@@ -19,11 +19,6 @@ WF="$REPO_ROOT/.github/workflows/model-registry-watch.yml"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures/model_registry"
 REGISTRY="$REPO_ROOT/model_registry.toml"
 
-# Pins the maintainer holds on purpose while they are alive; empty when every pin is
-# current. The hold reason belongs in the registry's decision comment, not here.
-# Mirrors HELD_LEGACY_PINS in tests/scripts/test_check_model_registry.py.
-HELD_PINS="anthropic.haiku"
-
 fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
@@ -62,30 +57,12 @@ report() {
 # The checker's exit-code contract, against the real registry and real captures.
 # ---------------------------------------------------------------------------
 
-# Case 1: live registry against committed fixtures reads as the documented decision.
-# With no held pin that is exit 0. With held pins it is exit 1 whose only drift
-# findings are the held pins, each alive and reading `legacy`. Either way this pins
-# fixtures to pins: a bump that forgets to re-capture the provider docs goes red here
-# (unlisted), not in the first weekly run.
+# Case 1: the dated decision is accepted, while raw status stays visible.
 rc=0; report "$REGISTRY" "$FIXTURES" || rc=$?
-if [ -z "$HELD_PINS" ]; then
-  [ "$rc" = "0" ] || fail "live registry against committed fixtures should exit 0, got $rc: $(cat "$TMP/out")"
-  case1="live registry + committed fixtures exit 0 (the workflow's clean input is real)"
-else
-  [ "$rc" = "1" ] || fail "live registry with held pins should exit 1, got $rc: $(cat "$TMP/out")"
-  held_count="$(wc -w <<<"$HELD_PINS" | tr -d ' ')"
-  pinned_count="$(grep -cE '^[a-z0-9_]+\.[a-z0-9_]+[[:space:]]' "$TMP/out")"
-  expected="FINDINGS (drift): $held_count of $pinned_count pinned models: ${HELD_PINS// /, }"
-  grep -qF "$expected" "$TMP/out" || fail "expected '$expected', got: $(cat "$TMP/out")"
-  while read -r label _model status _rest; do
-    case " $HELD_PINS " in
-      *" $label "*) [ "$status" = "legacy" ] || fail "held pin $label must read legacy (alive), got: $status" ;;
-      *) [ "$status" = "current" ] || fail "unheld pin $label drifted: $status" ;;
-    esac
-  done < <(grep -E '^[a-z0-9_]+\.[a-z0-9_]+[[:space:]]' "$TMP/out")
-  case1="live registry + committed fixtures exit 1 with only the held pins drifting, each alive and legacy"
-fi
-pass "$case1"
+[ "$rc" = "0" ] || fail "documented holds should exit 0, got $rc: $(cat "$TMP/out")"
+grep -q 'HELD: anthropic.haiku' "$TMP/out" || fail "held pin and reason must remain visible"
+pass "live registry + committed fixtures honor the documented hold"
+
 
 # Case 2: a pin the provider does not list is a finding => exit 1.
 sed 's/^opus = ".*"/opus = "claude-opus-99-fake"/' "$REGISTRY" > "$TMP/drift.toml"
@@ -217,8 +194,9 @@ if [ "$1 $2" = "${GH_FAIL_ACTION:-}" ]; then
 fi
 case "$1 $2" in
   "issue list")   printf '%s' "${GH_EXISTING:-}"; exit 0 ;;
+  "issue view")   cat "${GH_PREVIOUS_BODY:-/dev/null}"; exit 0 ;;
   "label create") exit "${GH_LABEL_RC:-0}" ;;
-  "issue create"|"issue comment"|"issue close") echo "https://example.invalid/issues/${GH_EXISTING:-99}"; exit 0 ;;
+  "issue create"|"issue comment"|"issue close"|"issue edit") echo "https://example.invalid/issues/${GH_EXISTING:-99}"; exit 0 ;;
 esac
 echo "gh mock: unexpected call: $*" >&2
 exit 1
@@ -230,7 +208,7 @@ BODY_FILE="$TMP/rt/model-registry-watch.md"
 run_issue() { # run_issue <verdict> <existing> [GH_LABEL_RC]
   : > "$TMP/gh.log"; rm -f "$BODY_FILE"
   (cd "$REPO_ROOT" && PATH="$TMP/bin:$PATH" GH_TOKEN=x GH_MOCK_LOG="$TMP/gh.log" GH_EXISTING="$2" \
-     GH_LABEL_RC="${3:-0}" RUNNER_TEMP="$TMP/rt" VERDICT="$1" DETAIL="$DETAIL_TEXT" \
+     GH_PREVIOUS_BODY="${GH_PREVIOUS_BODY:-/dev/null}" GH_LABEL_RC="${3:-0}" RUNNER_TEMP="$TMP/rt" VERDICT="$1" DETAIL="$DETAIL_TEXT" \
      LABEL="model-registry-watch" \
      bash -e "$TMP/steps/issue.sh" >/dev/null) || fail "issue step aborted for verdict=$1 existing='$2'"
 }
@@ -264,7 +242,36 @@ run_issue fail 42
 grep -q '^issue comment 42 --body-file' "$TMP/gh.log" || fail "fail with an open issue must comment on it"
 { [ "$(calls 'issue create')" = 0 ] && [ "$(calls 'issue close')" = 0 ]; } || fail "fail with an open issue must not create or close"
 grep -qF 'claude-opus-99-fake unlisted' "$BODY_FILE" || fail "comment body must include this week's report"
-pass "fail + open issue: comment with the report, no duplicate"
+[ "$(calls 'issue edit 42')" = 1 ] || fail "changed report must update the stale issue body and title"
+pass "fail + open issue: notify and update the current report"
+
+cp "$BODY_FILE" "$TMP/previous.md"
+export GH_PREVIOUS_BODY="$TMP/previous.md"
+run_issue fail 42
+{ [ "$(calls 'issue comment')" = 0 ] && [ "$(calls 'issue edit')" = 0 ]; } || fail "identical findings must not notify again"
+pass "identical findings produce no mutation"
+
+DETAIL_TEXT=$'== Review age ==\nOK: model_registry.toml last_reviewed=2026-10-22 is 4 days old (max 45).\n== Providers (watch) ==\nopenai.large gpt-5.6-sol unlisted'
+run_issue fail 42
+cp "$BODY_FILE" "$TMP/previous.md"
+DETAIL_TEXT="${DETAIL_TEXT/is 4 days old/is 11 days old}"
+run_issue fail 42
+[ "$(calls 'issue comment')" = 0 ] || fail "running review age alone must not notify"
+DETAIL_TEXT="${DETAIL_TEXT/OK:/FAIL:}"
+run_issue fail 42
+[ "$(calls 'issue comment')" = 1 ] || fail "an overdue review must notify"
+cp "$BODY_FILE" "$TMP/previous.md"
+DETAIL_TEXT="${DETAIL_TEXT/unlisted/deprecated shuts down 2026-12-01}"
+run_issue fail 42
+[ "$(calls 'issue comment')" = 1 ] || fail "a new deprecation must notify"
+cp "$BODY_FILE" "$TMP/previous.md"
+DETAIL_TEXT="${DETAIL_TEXT/2026-12-01/2026-11-01}"
+run_issue fail 42
+[ "$(calls 'issue comment')" = 1 ] || fail "a changed shutdown date must notify"
+pass "age-only changes deduplicate; overdue reviews, deprecation and changed shutdown dates notify"
+unset GH_PREVIOUS_BODY
+DETAIL_TEXT=$'== Providers (drift) ==\nanthropic.opus claude-opus-99-fake unlisted (current: claude-opus-5)'
+
 
 run_issue broken ""
 [ "$(calls 'issue create')" = 1 ] || fail "broken must open an issue (a silent dead watcher is the failure this exists to catch)"
@@ -294,7 +301,7 @@ pass "a real label-create failure aborts loudly before the issue is filed"
 
 # Any GitHub error must fail the run and stop further issue actions. Exercise
 # the same error on finding/broken paths, because both must remain visible.
-for tc in "list:fail:" "list:pass:42" "create:fail:" "create:broken:" "comment:fail:42" "comment:broken:42" "close:pass:42"; do
+for tc in "list:fail:" "list:pass:42" "create:fail:" "create:broken:" "comment:fail:42" "comment:broken:42" "view:fail:42" "edit:fail:42" "close:pass:42"; do
   IFS=: read -r action verdict existing <<<"$tc"
   : > "$TMP/gh.log"; rm -f "$BODY_FILE"
   rc=0
@@ -309,7 +316,7 @@ for tc in "list:fail:" "list:pass:42" "create:fail:" "create:broken:" "comment:f
     *) fail "no further GitHub action may follow a failed issue $action" ;;
   esac
 done
-pass "list/create/comment/close errors fail the run without follow-up actions (7 scenarios)"
+pass "list/view/create/comment/edit/close errors fail the run without follow-up actions (9 scenarios)"
 
 # Case 8: --report stays out of every PR and cut path. The checker's own contract:
 # a calendar gate on unrelated PRs gets bumped reflexively. Match invocations, not
