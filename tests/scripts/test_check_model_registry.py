@@ -26,9 +26,6 @@ FIXTURES = Path(__file__).parent / "fixtures" / "model_registry"
 SYNTHETIC = FIXTURES / "synthetic"
 REPO_REGISTRY = Path(__file__).resolve().parents[2] / "model_registry.toml"
 TODAY = dt.date(2026, 9, 8)
-# Pins the maintainer holds on purpose while they are alive; empty when every pin is
-# current. The hold reason belongs in the registry's decision comment, not here.
-HELD_LEGACY_PINS = frozenset({"anthropic.haiku"})
 
 REGISTRY_PINNED_2026 = """[models]
 default_profile = "balanced"
@@ -664,10 +661,11 @@ def test_all_current_registry_is_clean_under_drift(tmp_path: Path, capsys: pytes
 def test_real_registry_matches_the_decision_under_fixture_drift(capsys: pytest.CaptureFixture[str]) -> None:
     """The shipped registry reads as the documented decision against the captures.
 
-    Every pin is current, except the ones in HELD_LEGACY_PINS, which may read `legacy`
-    (alive, deliberately held) and never `unlisted`, `deprecated` or `retired`. A bump
-    that forgets to re-capture the provider docs still fails here as `unlisted`.
+    Non-current pins must match explicit holds, without duplicating a permanent
+    hold inventory in test code. Ending a hold after a model upgrade is valid.
     """
+    raw = watch.load_registry(REPO_REGISTRY)
+    holds = raw.get("model_watch", {}).get("holds", {})
     code, out = _run(
         capsys,
         "--providers",
@@ -683,12 +681,14 @@ def test_real_registry_matches_the_decision_under_fixture_drift(capsys: pytest.C
     verdicts = {line.split()[0]: line for line in out.splitlines() if line and not line.startswith(("FINDINGS", "OK"))}
     assert {"anthropic.opus", "anthropic.sonnet", "anthropic.fable", "anthropic.haiku"} <= verdicts.keys(), out
     drifted = {label: line for label, line in verdicts.items() if line.split()[2] != "current"}
-    assert drifted.keys() == HELD_LEGACY_PINS, out
-    for line in drifted.values():
-        assert line.split()[2] == "legacy", line
-    if HELD_LEGACY_PINS:
+    for label, line in drifted.items():
+        assert label in holds, line
+        assert line.split()[1] == holds[label]["model_id"], line
+        assert line.split()[2] == holds[label]["status"], line
+        assert line.split()[2] in {"legacy", "unlisted"}, line
+    if drifted:
         assert code == watch.EXIT_FINDING, out
-        assert f"FINDINGS (drift): {len(HELD_LEGACY_PINS)} of {len(verdicts)} pinned models:" in out
+        assert f"FINDINGS (drift): {len(drifted)} of {len(verdicts)} pinned models:" in out
     else:
         assert code == watch.EXIT_OK, out
         assert "OK (drift):" in out
@@ -1174,8 +1174,18 @@ def test_holds_do_not_hide_source_failure_or_unheld_drift(tmp_path, capsys):
     assert "FINDINGS (watch): 1" in out and "anthropic.opus" in out
 
 
-def test_documented_four_holds_resolve_original_watch_finding(capsys, monkeypatch):
-    raw = watch.load_registry(REPO_REGISTRY)
+def test_documented_four_holds_resolve_original_watch_finding(tmp_path, capsys, monkeypatch):
+    # Freeze the original scenario in a synthetic registry so future legitimate
+    # pin upgrades and hold removal do not invalidate this regression.
+    raw = watch.load_registry(_held_registry(tmp_path))
+    for key, model_id in raw["models"]["catalog"]["openai"].items():
+        raw["model_watch"]["holds"][f"openai.{key}"] = {
+            "model_id": model_id,
+            "status": "unlisted",
+            "reviewed_on": "2026-09-08",
+            "review_by": "2026-10-23",
+            "reason": "Benchmark the alternatives first.",
+        }
     docs = watch.load_docs(FIXTURES)
     # Replay the October watch situation: Haiku legacy, the OpenAI ladder unlisted.
     docs = replace(docs, openai_models=docs.openai_models - set(raw["models"]["catalog"]["openai"].values()))

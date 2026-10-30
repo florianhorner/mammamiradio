@@ -57,10 +57,10 @@ report() {
 # The checker's exit-code contract, against the real registry and real captures.
 # ---------------------------------------------------------------------------
 
-# Case 1: the dated decision is accepted, while raw status stays visible.
+# Case 1: the current registry decision is accepted. Synthetic Python tests
+# cover hold visibility without requiring any particular production hold to stay.
 rc=0; report "$REGISTRY" "$FIXTURES" || rc=$?
 [ "$rc" = "0" ] || fail "documented holds should exit 0, got $rc: $(cat "$TMP/out")"
-grep -q 'HELD: anthropic.haiku' "$TMP/out" || fail "held pin and reason must remain visible"
 pass "live registry + committed fixtures honor the documented hold"
 
 
