@@ -1290,3 +1290,17 @@ main-only deploy gate and the path filter, and runs on every pull request.
 - no launchd plist
 - no production nginx or Caddy config (`start.sh` generates a temporary Caddy config for local development)
 - no Fly/Render/Netlify config
+
+
+## Model registry decisions
+
+The weekly model watch honors explicit, dated legacy/unlisted holds in
+`model_registry.toml` under `[model_watch.holds."provider.key"]`. Each decision
+binds an exact model ID and status to a reason and a review deadline of at most
+45 days. `python3 scripts/check_model_registry.py --report` shows accepted holds
+alongside new findings; `--providers` still shows all raw drift. Deprecation,
+retirement, unreadable sources and overdue reviews remain visible. Repeated
+unchanged findings do not add weekly issue comments. The release gate still
+checks review age and pin liveness separately. See [the release
+contract](release-process.md#practical-sequencing-soak-hygiene) for the fields
+and renewal rules.
