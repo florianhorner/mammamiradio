@@ -159,9 +159,14 @@ def clear_rejected_cache_keys() -> None:
     _REJECTED_CACHE_KEYS.clear()
 
 
-def validate_download(filepath: Path, *, background: bool = False) -> tuple[bool, str]:
-    """Quickly reject partial/corrupt downloads before expensive normalization."""
-    min_size_bytes = 500 * 1024
+def validate_download(
+    filepath: Path, *, background: bool = False, min_size_bytes: int = 500 * 1024
+) -> tuple[bool, str]:
+    """Reject corrupt or short audio before normalization.
+
+    Originals retain the acquisition-size floor. Processed callers may lower
+    that floor for a different bitrate; probing and the duration floor remain.
+    """
     try:
         size = filepath.stat().st_size
     except OSError as exc:
