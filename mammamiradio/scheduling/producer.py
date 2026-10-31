@@ -26,7 +26,11 @@ import httpx
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary, reserve_unique_recipe_foreground_sources
-from mammamiradio.audio.norm_cache import is_listener_reserved_cache_file, select_norm_cache_rescue
+from mammamiradio.audio.norm_cache import (
+    is_listener_reserved_cache_file,
+    norm_cache_origin_is_eligible,
+    select_norm_cache_rescue,
+)
 from mammamiradio.audio.normalizer import (
     apply_broadcast_chain,
     broadcast_chain_version,
@@ -36,6 +40,7 @@ from mammamiradio.audio.normalizer import (
     generate_station_id_bed,  # noqa: F401  test seam — station-id tests patch this name
     generate_tone,  # noqa: F401  test seam — recovery tests patch this name
     humanize_norm_filename,
+    load_track_cache_source,
     load_track_metadata,
     mix_oneshot_sfx,
     mix_quiet_bleed,
@@ -133,6 +138,8 @@ from mammamiradio.hosts.ad_creative import (
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
+    VALIDATION_PROBE_START_FAILURE_PREFIX,
+    VALIDATION_PROBE_TIMEOUT_REASON,
     accept_recovered_download,
     download_track,
     evict_cache_lru,
@@ -354,6 +361,16 @@ def _select_safe_ad_spot(
 # fixtures.  The producer's live path uses _fetch_home_context_outcome above.
 _LEGACY_FETCH_HOME_CONTEXT = fetch_home_context
 _REAL_ASYNCIO_SLEEP = asyncio.sleep
+
+
+class _UnverifiedMusicCacheError(AudioToolError):
+    """Keep an unverified derivative out of this attempt's recovery audio."""
+
+    def __init__(self, path: Path, reason: str) -> None:
+        super().__init__(reason)
+        self.path = path
+
+
 CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS = 0.5
 CHAOS_AUDIO_FAILURE_LIMIT = 5
 
@@ -1035,6 +1052,7 @@ async def _render_music_track(
     playlist: list[Track] | None = None,
     timing_state: StationState | None = None,
     source_readiness: SourceReadinessEvidence | None = None,
+    _reuse_normalized: bool = True,
 ) -> RenderedMusicTrack | None:
     """Download, validate, normalize, and cache one music track."""
     if track.source == "starter":
@@ -1067,65 +1085,95 @@ async def _render_music_track(
         track_key = track.cache_key
         envelope_playlist = [candidate for candidate in playlist or () if candidate.cache_key != track_key]
         longform_threshold_sec = build_music_admission_envelope(envelope_playlist, config.pacing).longform_threshold_sec
-    try:
-        audio_path = await download_track(
-            track,
-            config.cache_dir,
-            music_dir=config.music_dir,
-            background=background,
-            longform_threshold_sec=longform_threshold_sec,
-        )
-    except Exception:
-        if readiness is not None:
-            readiness.mark_failure(track.source, "A source candidate could not be prepared")
-        raise
     loop = asyncio.get_running_loop()
-    validate_fn = partial(validate_download, audio_path, background=background)
-    ok, reason = await loop.run_in_executor(None, validate_fn)
-    if not ok:
-        reject_cached_download(config.cache_dir, track.cache_key, reason)
-        if readiness is not None:
-            readiness.mark_failure(track.source, "A source candidate could not be prepared")
-        logger.warning("Skipping %s track due to invalid download (%s): %s", context, track.display, reason)
-        return None
+    norm_cached = _normalized_cache_path(track, config)
+    cached_audio = False
+    # Originals are evicted before processed audio. A finished, source-admitted
+    # copy must not depend on downloading its original again. Unknown/retired
+    # origins and session-rejected media still require ordinary source admission.
+    allow_external = external_media_enabled(config.allow_ytdlp)
+    if (
+        _reuse_normalized
+        and norm_cached.is_file()
+        and not is_rejected_cache_key(track.cache_key)
+        and load_track_cache_source(norm_cached) == track.source
+        and norm_cache_origin_is_eligible(norm_cached, allow_external_media=allow_external)
+        and (not youtube_candidate or allow_external)
+    ):
+        validate_fn = partial(validate_download, norm_cached, background=background, min_size_bytes=1)
+        cached_audio, reason = await loop.run_in_executor(None, validate_fn)
+        if not cached_audio:
+            if reason == VALIDATION_PROBE_TIMEOUT_REASON or reason.startswith(VALIDATION_PROBE_START_FAILURE_PREFIX):
+                # A missing or busy probe cannot establish corruption. Refuse
+                # admission while retaining prepared bytes for a later retry.
+                raise _UnverifiedMusicCacheError(norm_cached, reason)
+            # A damaged derivative can be rebuilt from a good original. Do not
+            # denylist the whole recording before that source gets its chance.
+            logger.warning("Removing invalid normalized cache (%s): %s", reason, norm_cached.name)
+            norm_cached.unlink(missing_ok=True)
 
-    try:
-        should_probe_actual = audio_path.exists()
-    except OSError:
-        should_probe_actual = False
-    actual_duration_ms: int | None = None
-    if should_probe_actual and youtube_candidate:
-        actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
-        if actual_duration_sec > 0:
-            actual_duration_ms = round(actual_duration_sec * 1000)
-        # Enrichment can change the rotation while the download is in flight.
-        envelope_playlist = [candidate for candidate in playlist or () if candidate.cache_key != track_key]
-        verdict = classify_youtube_candidate(
-            track,
-            envelope_playlist,
-            config.pacing,
-            actual_duration_sec=actual_duration_sec if actual_duration_sec > 0 else None,
-        )
-        if not verdict.accepted:
-            reject_cached_download(config.cache_dir, track.cache_key, verdict.reason)
-            if readiness is not None:
-                readiness.mark_failure(track.source, "A source candidate did not pass audio checks")
-            logger.warning(
-                "Skipping %s track held out of rotation (%s): %s",
-                context,
-                verdict.reason,
-                track.display,
+    with _timed_render_stage(timing_state if not _reuse_normalized else None, "source"):
+        if cached_audio:
+            audio_path = norm_cached
+        else:
+            try:
+                audio_path = await download_track(
+                    track,
+                    config.cache_dir,
+                    music_dir=config.music_dir,
+                    background=background,
+                    longform_threshold_sec=longform_threshold_sec,
+                )
+            except Exception:
+                if readiness is not None:
+                    readiness.mark_failure(track.source, "A source candidate could not be prepared")
+                raise
+            validate_fn = partial(validate_download, audio_path, background=background)
+            ok, reason = await loop.run_in_executor(None, validate_fn)
+            if not ok:
+                reject_cached_download(config.cache_dir, track.cache_key, reason)
+                if readiness is not None:
+                    readiness.mark_failure(track.source, "A source candidate could not be prepared")
+                logger.warning("Skipping %s track due to invalid download (%s): %s", context, track.display, reason)
+                return None
+
+        try:
+            should_probe_actual = audio_path.exists()
+        except OSError:
+            should_probe_actual = False
+        actual_duration_ms: int | None = None
+        if should_probe_actual and youtube_candidate:
+            actual_duration_sec = await loop.run_in_executor(None, _probe_segment_duration, audio_path)
+            if actual_duration_sec > 0:
+                actual_duration_ms = round(actual_duration_sec * 1000)
+            # Enrichment can change the rotation while the download is in flight.
+            envelope_playlist = [candidate for candidate in playlist or () if candidate.cache_key != track_key]
+            verdict = classify_youtube_candidate(
+                track,
+                envelope_playlist,
+                config.pacing,
+                actual_duration_sec=actual_duration_sec if actual_duration_sec > 0 else None,
             )
-            return None
-        if actual_duration_ms is not None:
-            track.duration_ms = actual_duration_ms
+            if not verdict.accepted:
+                reject_cached_download(config.cache_dir, track.cache_key, verdict.reason)
+                if readiness is not None:
+                    readiness.mark_failure(track.source, "A source candidate did not pass audio checks")
+                logger.warning(
+                    "Skipping %s track held out of rotation (%s): %s",
+                    context,
+                    verdict.reason,
+                    track.display,
+                )
+                return None
+            if actual_duration_ms is not None:
+                track.duration_ms = actual_duration_ms
 
-    # A concrete local/cache fallback is allowed through the selection gate
-    # while still session-denied, then clears that denial only after the full
-    # source admission above succeeds. This avoids retry loops yet lets a newly
-    # synced recovery file heal a transient source failure without a restart.
-    if is_rejected_cache_key(track.cache_key):
-        accept_recovered_download(config.cache_dir, track.cache_key)
+        # A concrete local/cache fallback is allowed through the selection gate
+        # while still session-denied, then clears that denial only after the full
+        # source admission above succeeds. This avoids retry loops yet lets a newly
+        # synced recovery file heal a transient source failure without a restart.
+        if is_rejected_cache_key(track.cache_key):
+            accept_recovered_download(config.cache_dir, track.cache_key)
 
     # The producer's existing ``finding`` phase owns source/download timing.
     # Close it before normalization so a slow Pi encode cannot be misreported as
@@ -1134,8 +1182,7 @@ async def _render_music_track(
         timing_state.end_gen(ok=True)
 
     with _timed_render_stage(timing_state, "normalize"):
-        norm_cached = _normalized_cache_path(track, config)
-        if norm_cached.exists():
+        if cached_audio and norm_cached.exists():
             logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
             # A cache hit skips normalize() + its reconcile pass, so a file produced
             # before reconciliation existed would air at its old level. Reconcile it on
@@ -1154,46 +1201,66 @@ async def _render_music_track(
                     source_kind=track.source,
                 ),
             )
-            return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
+            if norm_cached.is_file():
+                return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
-        norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
-        _norm_fn = partial(
-            normalize,
-            audio_path,
-            norm_path,
-            config,
-            loudnorm=True,
-            music_eq=True,
-            background=background,
-        )
-        await loop.run_in_executor(None, _norm_fn)
-        try:
-            await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
-        except OSError as exc:
-            logger.warning(
-                "Normalization cache write failed%s %s -> %s: %s",
-                f" ({context})" if context else "",
+        if not cached_audio:
+            # Source admission succeeded; the old derivative must not survive an encode failure.
+            norm_cached.unlink(missing_ok=True)
+            norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
+            _norm_fn = partial(
+                normalize,
+                audio_path,
                 norm_path,
-                norm_cached,
-                exc,
+                config,
+                loudnorm=True,
+                music_eq=True,
+                background=background,
             )
-            # copy2 can leave a partial norm_cached behind. Remove it on every
-            # failure so a corrupt file can never be selected for recovery or
-            # continuity playback, not only on the cache-required path.
-            with contextlib.suppress(OSError):
-                norm_cached.unlink(missing_ok=True)
-            if cache_write_required:
-                norm_path.unlink(missing_ok=True)
-                raise
-        else:
-            save_track_metadata(
-                norm_cached,
-                track.title,
-                track.artist,
-                duration_ms=track.duration_ms,
-                source_kind=track.source,
-            )
-        return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
+            await loop.run_in_executor(None, _norm_fn)
+            try:
+                await loop.run_in_executor(None, shutil.copy2, str(norm_path), str(norm_cached))
+            except OSError as exc:
+                logger.warning(
+                    "Normalization cache write failed%s %s -> %s: %s",
+                    f" ({context})" if context else "",
+                    norm_path,
+                    norm_cached,
+                    exc,
+                )
+                # copy2 can leave a partial norm_cached behind. Remove it on every
+                # failure so a corrupt file can never be selected for recovery or
+                # continuity playback, not only on the cache-required path.
+                with contextlib.suppress(OSError):
+                    norm_cached.unlink(missing_ok=True)
+                if cache_write_required:
+                    norm_path.unlink(missing_ok=True)
+                    raise
+            else:
+                save_track_metadata(
+                    norm_cached,
+                    track.title,
+                    track.artist,
+                    duration_ms=track.duration_ms,
+                    source_kind=track.source,
+                )
+            return RenderedMusicTrack(track=track, path=norm_path, cache_path=norm_cached, cache_hit=False)
+
+    # Eviction can race either validation or reconciliation. Retry the
+    # original once, with this shortcut disabled, rather than normalize
+    # the vanished derivative or loop on another cache arrival.
+    return await _render_music_track(
+        track,
+        config,
+        temp_prefix=temp_prefix,
+        context=context,
+        cache_write_required=cache_write_required,
+        background=background,
+        playlist=playlist,
+        timing_state=timing_state,
+        source_readiness=readiness,
+        _reuse_normalized=False,
+    )
 
 
 _RECOVERY_CLIP_SUBDIRS = ("recovery",)
@@ -1716,7 +1783,9 @@ async def _queue_starter_catalog_bridge_segment(
     return True
 
 
-async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
+async def _producer_error_recovery_segment(
+    state: StationState, config: StationConfig, *, excluded_paths: tuple[Path, ...] = ()
+) -> Segment | None:
     """Build the best non-silent segment for broad producer exception recovery."""
     fallback_path = _pick_recovery_clip(state)
     if fallback_path:
@@ -1749,6 +1818,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
         allow_recent_repeat=True,
         require_known_origin=True,
         allow_external_media=external_media_enabled(config.allow_ytdlp),
+        excluded_paths=excluded_paths,
     )
     if norm_path:
         metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
@@ -1763,6 +1833,8 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
         )
 
     last_good_payload = _blocklist_safe_last_music(state, purpose="error recovery")
+    if last_good_payload is not None and last_good_payload.path in excluded_paths:
+        last_good_payload = None
     last_good = last_good_payload.path if last_good_payload is not None else None
     last_good_title = ""
     last_good_artist = ""
@@ -9156,7 +9228,10 @@ async def _run_producer_inner(
                         consecutive,
                         post_failure_backoff,
                     )
-                segment = await _producer_error_recovery_segment(state, config)
+                if isinstance(e, _UnverifiedMusicCacheError):
+                    segment = await _producer_error_recovery_segment(state, config, excluded_paths=(e.path,))
+                else:
+                    segment = await _producer_error_recovery_segment(state, config)
                 if segment is None:
                     state.take_runtime_provider_observations(generation_provider_token)
                     await asyncio.sleep(0.5)

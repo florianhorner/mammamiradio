@@ -1048,6 +1048,25 @@ Once playback is running, protected recovery uses only admitted non-transient
 media, packaged recovery audio, the emergency tone, or forced banter. Jamendo is
 never eligible for rescue, and silent audio is never queued intentionally.
 
+Ordinary music preparation also reuses a normalized copy before reacquiring its
+original, which cache eviction may already have removed. This shortcut requires
+a recorded source matching the selected track and the same effective origin
+gate as recovery: local media or enabled standalone external media. Unknown,
+retired, and session-rejected origins still require ordinary source admission.
+An ineligible derivative is replaced from the admitted original, never reused
+merely because its old path still exists.
+Cached bytes pass format and applicable current duration admission before
+loudness reconciliation; the producer and prewarm retain their audio-quality
+gates. A damaged normalized copy is removed and rebuilt from its original when
+available, without denying the whole recording merely for a broken derivative.
+Prepared copies do not inherit the original download’s fixed byte-size floor,
+so lower-bitrate output remains reusable. If eviction removes the copy during
+validation or reconciliation, preparation retries the original source once.
+A timed-out or unavailable probe refuses admission but preserves the prepared
+copy for a later retry; inability to inspect it does not prove corruption.
+That recovery attempt excludes the unverified path from cache and last-known-good
+music, trying another eligible song or the bounded sweeper/tone fallback instead.
+
 ### Operator song blocklist
 
 Base sources are reconstructed on startup, so an in-memory "remove" could

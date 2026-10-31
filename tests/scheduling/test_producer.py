@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import HostPersonality, Segment, SegmentType, StationState, Track
 from mammamiradio.scheduling.producer import RenderedMusicTrack, run_producer
@@ -387,10 +388,11 @@ async def test_render_music_cache_hit_reconciles_loudness(tmp_path, background):
     old, quieter level ("some songs are just quieter"). Guards producer.py wiring."""
     from mammamiradio.scheduling.producer import _normalized_cache_path, _render_music_track
 
-    track = Track(title="Bye Bye Bye", artist="NSYNC", duration_ms=200_000, spotify_id="bb1", source="classic")
+    track = Track(title="Bye Bye Bye", artist="NSYNC", duration_ms=200_000, spotify_id="bb1", source="local")
     config = _make_config(tmp_path)
     norm_cached = _normalized_cache_path(track, config)
     norm_cached.write_bytes(b"pre-reconcile norm audio")  # the cache hit
+    save_track_metadata(norm_cached, track.title, track.artist, source_kind=track.source)
 
     with (
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "dl.mp3"),
@@ -405,12 +407,15 @@ async def test_render_music_cache_hit_reconciles_loudness(tmp_path, background):
 
 
 @pytest.mark.asyncio
-async def test_render_music_cache_hit_refreshes_actual_youtube_duration_without_clearing_reconcile(tmp_path):
+async def test_render_music_cache_hit_refreshes_actual_youtube_duration_without_clearing_reconcile(
+    tmp_path, external_media_installed
+):
     from mammamiradio.scheduling.producer import _normalized_cache_path, _render_music_track
 
     track = Track(title="Metadata Says Long", artist="Artist", duration_ms=7_200_000, youtube_id="dQw4w9WgXcQ")
     sibling = Track(title="Normal", artist="Artist", duration_ms=200_000, youtube_id="normal00001")
     config = _make_config(tmp_path)
+    config.allow_ytdlp = True
     raw_path = tmp_path / f"{track.cache_key}.mp3"
     raw_path.write_bytes(b"downloaded audio")
     norm_cached = _normalized_cache_path(track, config)
@@ -422,6 +427,7 @@ async def test_render_music_cache_hit_refreshes_actual_youtube_duration_without_
                 "artist": "Old artist",
                 "duration_ms": 7_200_000,
                 "reconciled_lufs": -16.0,
+                "source_kind": track.source,
             }
         )
     )

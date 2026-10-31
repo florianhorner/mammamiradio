@@ -26,6 +26,9 @@ from mammamiradio.playlist.music_admission import REFERENCE_SINGLE_TRACK_SEC
 
 logger = logging.getLogger(__name__)
 
+VALIDATION_PROBE_TIMEOUT_REASON = "ffprobe timed out"
+VALIDATION_PROBE_START_FAILURE_PREFIX = "ffprobe failed to start:"
+
 # Files that must never be evicted from the cache directory
 _CACHE_PROTECTED = {
     "mammamiradio.db",
@@ -159,9 +162,14 @@ def clear_rejected_cache_keys() -> None:
     _REJECTED_CACHE_KEYS.clear()
 
 
-def validate_download(filepath: Path, *, background: bool = False) -> tuple[bool, str]:
-    """Quickly reject partial/corrupt downloads before expensive normalization."""
-    min_size_bytes = 500 * 1024
+def validate_download(
+    filepath: Path, *, background: bool = False, min_size_bytes: int = 500 * 1024
+) -> tuple[bool, str]:
+    """Reject corrupt or short audio before normalization.
+
+    Originals retain the acquisition-size floor. Processed callers may lower
+    that floor for a different bitrate; probing and the duration floor remain.
+    """
     try:
         size = filepath.stat().st_size
     except OSError as exc:
@@ -175,9 +183,9 @@ def validate_download(filepath: Path, *, background: bool = False) -> tuple[bool
         with ffmpeg_slot(background=background):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
-        return False, "ffprobe timed out"
+        return False, VALIDATION_PROBE_TIMEOUT_REASON
     except OSError as exc:
-        return False, f"ffprobe failed to start: {exc}"
+        return False, f"{VALIDATION_PROBE_START_FAILURE_PREFIX} {exc}"
     if result.returncode != 0:
         return False, "ffprobe failed"
 
