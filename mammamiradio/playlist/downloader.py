@@ -26,6 +26,9 @@ from mammamiradio.playlist.music_admission import REFERENCE_SINGLE_TRACK_SEC
 
 logger = logging.getLogger(__name__)
 
+VALIDATION_PROBE_TIMEOUT_REASON = "ffprobe timed out"
+VALIDATION_PROBE_START_FAILURE_PREFIX = "ffprobe failed to start:"
+
 # Files that must never be evicted from the cache directory
 _CACHE_PROTECTED = {
     "mammamiradio.db",
@@ -180,9 +183,9 @@ def validate_download(
         with ffmpeg_slot(background=background):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
-        return False, "ffprobe timed out"
+        return False, VALIDATION_PROBE_TIMEOUT_REASON
     except OSError as exc:
-        return False, f"ffprobe failed to start: {exc}"
+        return False, f"{VALIDATION_PROBE_START_FAILURE_PREFIX} {exc}"
     if result.returncode != 0:
         return False, "ffprobe failed"
 

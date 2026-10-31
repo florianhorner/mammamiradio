@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -380,12 +381,17 @@ async def test_local_identity_with_youtube_id_cannot_bypass_external_gate(music_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reason", ["ffprobe timed out", "ffprobe failed to start: unavailable"])
-async def test_probe_infrastructure_failure_preserves_prepared_copy(music_cache, monkeypatch, reason):
+@pytest.mark.parametrize(
+    "probe_error",
+    [subprocess.TimeoutExpired("ffprobe", 30), FileNotFoundError("missing probe")],
+    ids=["timeout", "unavailable"],
+)
+async def test_probe_infrastructure_failure_preserves_prepared_copy(music_cache, monkeypatch, probe_error):
     config, track, normalized = music_cache
     download = AsyncMock(side_effect=RuntimeError("original unavailable"))
     monkeypatch.setattr(producer, "download_track", download)
-    monkeypatch.setattr(producer, "validate_download", Mock(return_value=(False, reason)))
+    monkeypatch.setattr(producer, "validate_download", downloader.validate_download)
+    monkeypatch.setattr(downloader.subprocess, "run", Mock(side_effect=probe_error))
     with pytest.raises(AudioToolError):
         await producer._render_music_track(track, config, temp_prefix="music", context="music")
     assert normalized.exists()
@@ -437,4 +443,206 @@ async def test_eviction_retry_keeps_source_outside_normalization_timing(music_ca
         track, config, temp_prefix="music", context="music", timing_state=state
     )
     assert rendered is not None and rendered.path.exists()
+    assert len(state.gen_recent) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate", ["unknown", "mismatched", "retired", "disabled", "missing", "retry"])
+@pytest.mark.parametrize("encode_failure", [False, True])
+async def test_admitted_original_replaces_ineligible_derivative(
+    music_cache, monkeypatch, external_media_installed, gate, encode_failure
+):
+    config, track, normalized = music_cache
+    if gate in {"disabled", "missing"}:
+        normalized = _set_source(config, track, normalized, "youtube")
+        config.allow_ytdlp = gate == "missing"
+        if gate == "missing":
+            monkeypatch.setitem(sys.modules, "yt_dlp", None)
+    elif gate == "unknown":
+        normalized.with_suffix(".mp3.json").unlink()
+    elif gate in {"mismatched", "retired"}:
+        save_track_metadata(
+            normalized, track.title, track.artist, source_kind="jamendo" if gate == "retired" else "youtube"
+        )
+    original = config.music_dir / "replacement.mp3"
+    original.write_bytes(b"o" * 700_000)
+    monkeypatch.setattr(producer, "download_track", AsyncMock(return_value=original))
+    normalize = Mock(side_effect=lambda source, destination, *_a, **_k: destination.write_bytes(b"replacement audio"))
+    monkeypatch.setattr(producer, "normalize", normalize)
+    if encode_failure:
+        normalize.side_effect = RuntimeError("encode failed")
+    with pytest.raises(RuntimeError, match="encode failed") if encode_failure else contextlib.nullcontext():
+        rendered = await producer._render_music_track(
+            track, config, temp_prefix="music", context="music", _reuse_normalized=gate != "retry"
+        )
+    if encode_failure:
+        assert not normalized.exists()
+        return
+    assert rendered is not None and not rendered.cache_hit
+    assert normalized.read_bytes() == b"replacement audio"
+    assert producer.load_track_cache_source(normalized) == track.source
+    assert normalize.call_args.args[0] == original
+    producer.reconcile_cached_music.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe_failure", [None, "ffprobe timed out", "ffprobe failed to start: unavailable"])
+@pytest.mark.parametrize("sweeper_ready", [True, False])
+async def test_producer_recovers_without_reusing_unverified_audio(
+    music_cache, monkeypatch, probe_failure, sweeper_ready
+):
+    config, track, normalized = music_cache
+    config.pacing.lookahead_segments = 1
+    state = StationState(playlist=[track], listeners_active=1, last_music_file=normalized)
+    state.set_force_next(SegmentType.MUSIC)
+    if probe_failure is None:
+        normalized.unlink()
+    else:
+        monkeypatch.setattr(producer, "validate_download", Mock(return_value=(False, probe_failure)))
+    download = AsyncMock(side_effect=RuntimeError("original unavailable"))
+    monkeypatch.setattr(producer, "download_track", download)
+    monkeypatch.setattr(producer, "broadcast_chain_version", lambda: None)
+    monkeypatch.setattr(producer, "RUNWAY_FLOOR_SECONDS", 0)
+    monkeypatch.setattr(producer, "_prefetch_next", AsyncMock())
+    monkeypatch.setattr(producer, "RECOVERY_SWEEPER_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(producer, "RECOVERY_SWEEPER_LINES", producer.RECOVERY_SWEEPER_LINES[:1])
+    speech = config.tmp_dir / "recovery.mp3"
+    speech.write_bytes(b"speech" * 1024)
+
+    async def render_sweeper(*_args, **_kwargs):
+        if not sweeper_ready:
+            await asyncio.Event().wait()
+        return speech
+
+    render = AsyncMock(side_effect=render_sweeper)
+    monkeypatch.setattr(producer, "_render_sweeper_audio", render)
+    if sweeper_ready:
+        empty_assets = config.tmp_dir / "empty-assets"
+        empty_assets.mkdir()
+        monkeypatch.setattr(producer, "_DEMO_ASSETS_DIR", empty_assets)
+        monkeypatch.setattr(producer, "_canned_clip_cache", {})
+    else:
+        monkeypatch.setattr(producer, "_pick_recovery_clip", lambda _state: None)
+    queue = asyncio.Queue(maxsize=1)
+    task = asyncio.create_task(producer.run_producer(queue, state, config))
+    try:
+        segment = await asyncio.wait_for(queue.get(), timeout=2)
+        assert segment.path != normalized and state.failed_segments == 1
+        render.assert_awaited_once()
+        assert config.display_station_name in render.await_args.args[0]
+        if sweeper_ready:
+            assert segment.type is SegmentType.SWEEPER and segment.metadata["rescue"]
+        else:
+            assert segment.metadata["audio_source"] == "emergency_tone"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    if probe_failure is not None:
+        assert normalized.exists() and not downloader.is_rejected_cache_key(track.cache_key)
+        monkeypatch.setattr(producer, "validate_download", Mock(return_value=(True, "ok")))
+        retried = await producer._render_music_track(track, config, temp_prefix="music", context="retry")
+        assert retried is not None and retried.cache_hit
+        download.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_probe_recovery_can_select_another_verified_cache_entry(music_cache, monkeypatch):
+    config, track, normalized = music_cache
+    state = StationState(playlist=[track], last_music_file=normalized)
+    other = config.cache_dir / "norm_other_local_192k.mp3"
+    other.write_bytes(b"o" * 700_000)
+    save_track_metadata(other, "Other song", "Test artist", source_kind="local", duration_ms=180_000)
+    monkeypatch.setattr(producer, "_pick_recovery_clip", lambda _state: None)
+    segment = await producer._producer_error_recovery_segment(state, config, excluded_paths=(normalized,))
+    assert segment is not None and segment.path == other
+    assert normalized.exists() and not downloader.is_rejected_cache_key(track.cache_key)
+
+
+@pytest.mark.asyncio
+async def test_prepared_music_reaches_listener_after_stopped_restart(music_cache, monkeypatch):
+    from mammamiradio.web import streamer
+
+    config, track, normalized = music_cache
+    config.pacing.lookahead_segments = 1
+    streamer._persist_session_stopped(config, True)
+    state = StationState(playlist=[track], session_stopped=streamer._session_stopped_flag(config).exists())
+    state.set_force_next(SegmentType.MUSIC)
+    parked = asyncio.Event()
+
+    class ObservedResume(asyncio.Event):
+        async def wait(self):
+            parked.set()
+            return await super().wait()
+
+    state.resume_event = ObservedResume()
+    download = AsyncMock(side_effect=RuntimeError("original unavailable"))
+    monkeypatch.setattr(producer, "download_track", download)
+    monkeypatch.setattr(producer, "broadcast_chain_version", lambda: None)
+    monkeypatch.setattr(producer, "_prefetch_next", AsyncMock())
+    queue = asyncio.Queue(maxsize=1)
+    hub = streamer.LiveStreamHub()
+    hub.bind_state(state)
+    app = SimpleNamespace(state=SimpleNamespace(station_state=state, config=config, queue=queue, stream_hub=hub))
+    app.state.skip_event = asyncio.Event()
+    request = Mock(app=app, is_disconnected=AsyncMock(return_value=False))
+    stream = streamer._audio_generator(request, prelude=False)
+    first_chunk = asyncio.create_task(anext(stream))
+    producing = asyncio.create_task(producer.run_producer(queue, state, config))
+    tasks = [first_chunk, producing]
+    try:
+        await asyncio.wait_for(parked.wait(), timeout=2)
+        assert queue.empty() and not first_chunk.done()
+        assert await streamer.resume_session(request) == {"ok": True, "recovering": False}
+        assert not state.session_stopped and not streamer._session_stopped_flag(config).exists()
+        bridge = queue.get_nowait()
+        queue.task_done()
+        bridge.release()
+        music = await asyncio.wait_for(queue.get(), timeout=2)
+        queue.task_done()
+        assert music.path == normalized and not music.metadata.get("rescue")
+        producing.cancel()
+        await asyncio.gather(producing, return_exceptions=True)
+        queue.put_nowait(music)
+        tasks.append(asyncio.create_task(streamer.run_playback_loop(app)))
+        chunk = await asyncio.wait_for(first_chunk, timeout=2)
+        assert chunk and normalized.read_bytes().startswith(chunk)
+        download.assert_not_awaited()
+        producer.validate_download.assert_any_call(normalized, background=False, min_size_bytes=1)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_first_download_source_timing_is_recorded_once(music_cache, monkeypatch):
+    from mammamiradio.core import models
+
+    config, track, normalized = music_cache
+    normalized.unlink()
+    original = config.music_dir / "original.mp3"
+    original.write_bytes(b"x" * 700_000)
+    state = StationState(playlist=[track])
+    now = [100.0]
+    clock = SimpleNamespace(monotonic=lambda: now[0], time=lambda: now[0])
+    monkeypatch.setattr(models, "time", clock)
+    monkeypatch.setattr(producer, "time", clock)
+
+    async def download(*_args, **_kwargs):
+        now[0] += 3
+        return original
+
+    def normalize(_source, destination, *_args, **_kwargs):
+        now[0] += 2
+        destination.write_bytes(b"x" * 700_000)
+
+    monkeypatch.setattr(producer, "download_track", AsyncMock(side_effect=download))
+    monkeypatch.setattr(producer, "normalize", Mock(side_effect=normalize))
+    state.set_gen("finding", "music", track.display)
+    rendered = await producer._render_music_track(
+        track, config, temp_prefix="music", context="music", timing_state=state
+    )
+    assert rendered is not None
+    assert state._render_timing_stages == {"source": 3000.0, "normalize": 2000.0}
     assert len(state.gen_recent) == 1

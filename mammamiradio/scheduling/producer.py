@@ -138,6 +138,8 @@ from mammamiradio.hosts.ad_creative import (
 from mammamiradio.hosts.context_cues import generate_impossible_line
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 from mammamiradio.playlist.downloader import (
+    VALIDATION_PROBE_START_FAILURE_PREFIX,
+    VALIDATION_PROBE_TIMEOUT_REASON,
     accept_recovered_download,
     download_track,
     evict_cache_lru,
@@ -359,6 +361,16 @@ def _select_safe_ad_spot(
 # fixtures.  The producer's live path uses _fetch_home_context_outcome above.
 _LEGACY_FETCH_HOME_CONTEXT = fetch_home_context
 _REAL_ASYNCIO_SLEEP = asyncio.sleep
+
+
+class _UnverifiedMusicCacheError(AudioToolError):
+    """Keep an unverified derivative out of this attempt's recovery audio."""
+
+    def __init__(self, path: Path, reason: str) -> None:
+        super().__init__(reason)
+        self.path = path
+
+
 CHAOS_AUDIO_FAILURE_BACKOFF_SECONDS = 0.5
 CHAOS_AUDIO_FAILURE_LIMIT = 5
 
@@ -1091,10 +1103,10 @@ async def _render_music_track(
         validate_fn = partial(validate_download, norm_cached, background=background, min_size_bytes=1)
         cached_audio, reason = await loop.run_in_executor(None, validate_fn)
         if not cached_audio:
-            if reason == "ffprobe timed out" or reason.startswith("ffprobe failed to start:"):
+            if reason == VALIDATION_PROBE_TIMEOUT_REASON or reason.startswith(VALIDATION_PROBE_START_FAILURE_PREFIX):
                 # A missing or busy probe cannot establish corruption. Refuse
                 # admission while retaining prepared bytes for a later retry.
-                raise AudioToolError(reason)
+                raise _UnverifiedMusicCacheError(norm_cached, reason)
             # A damaged derivative can be rebuilt from a good original. Do not
             # denylist the whole recording before that source gets its chance.
             logger.warning("Removing invalid normalized cache (%s): %s", reason, norm_cached.name)
@@ -1170,7 +1182,7 @@ async def _render_music_track(
         timing_state.end_gen(ok=True)
 
     with _timed_render_stage(timing_state, "normalize"):
-        if norm_cached.exists():
+        if cached_audio and norm_cached.exists():
             logger.debug("Normalization cache hit%s: %s", f" ({context})" if context else "", norm_cached.name)
             # A cache hit skips normalize() + its reconcile pass, so a file produced
             # before reconciliation existed would air at its old level. Reconcile it on
@@ -1193,6 +1205,8 @@ async def _render_music_track(
                 return RenderedMusicTrack(track=track, path=norm_cached, cache_path=norm_cached, cache_hit=True)
 
         if not cached_audio:
+            # Source admission succeeded; the old derivative must not survive an encode failure.
+            norm_cached.unlink(missing_ok=True)
             norm_path = config.tmp_dir / f"{temp_prefix}_{uuid4().hex[:8]}.mp3"
             _norm_fn = partial(
                 normalize,
@@ -1769,7 +1783,9 @@ async def _queue_starter_catalog_bridge_segment(
     return True
 
 
-async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
+async def _producer_error_recovery_segment(
+    state: StationState, config: StationConfig, *, excluded_paths: tuple[Path, ...] = ()
+) -> Segment | None:
     """Build the best non-silent segment for broad producer exception recovery."""
     fallback_path = _pick_recovery_clip(state)
     if fallback_path:
@@ -1802,6 +1818,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
         allow_recent_repeat=True,
         require_known_origin=True,
         allow_external_media=external_media_enabled(config.allow_ytdlp),
+        excluded_paths=excluded_paths,
     )
     if norm_path:
         metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
@@ -1816,6 +1833,8 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
         )
 
     last_good_payload = _blocklist_safe_last_music(state, purpose="error recovery")
+    if last_good_payload is not None and last_good_payload.path in excluded_paths:
+        last_good_payload = None
     last_good = last_good_payload.path if last_good_payload is not None else None
     last_good_title = ""
     last_good_artist = ""
@@ -9209,7 +9228,10 @@ async def _run_producer_inner(
                         consecutive,
                         post_failure_backoff,
                     )
-                segment = await _producer_error_recovery_segment(state, config)
+                if isinstance(e, _UnverifiedMusicCacheError):
+                    segment = await _producer_error_recovery_segment(state, config, excluded_paths=(e.path,))
+                else:
+                    segment = await _producer_error_recovery_segment(state, config)
                 if segment is None:
                     state.take_runtime_provider_observations(generation_provider_token)
                     await asyncio.sleep(0.5)
