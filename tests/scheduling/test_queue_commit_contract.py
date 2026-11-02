@@ -1517,9 +1517,7 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
         ("artista", "canzone uno"): {"display": "Artista - Canzone Uno"},
         ("artista", "canzone due"): {"display": "Artista - Canzone Due"},
     }
-    # Pin the cache path under assertion. Without this, two probes can both
-    # belong to the randomly selected second track while this test checks the
-    # first track's cache, making the queue contract spuriously order-dependent.
+    # Pin the song whose rendered cache and commit rejection are under assertion.
     state.pinned_track = state.playlist[0]
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -1536,7 +1534,7 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
         Path(dst).write_bytes(b"cached")
 
     with (
-        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", side_effect=[SegmentType.MUSIC, asyncio.CancelledError]),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3"),
         patch(f"{PRODUCER_MODULE}.normalize"),
         patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=_fake_copy2),
@@ -1544,7 +1542,11 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await _wait_for(lambda: probe_calls >= 2)
+            # Finish the rejected attempt before another render can replace its cache.
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+            assert probe_calls == 1
+            assert state.discard_by_reason.get(GenerationWasteReason.BLOCKLIST_GATE, 0) == 1
             assert queue.empty()
             assert state.queued_segments == []
             assert state.last_music_file == previous_song

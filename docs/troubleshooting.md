@@ -304,9 +304,9 @@ become a normal video once the broadcast ends.
 
 ## The station keeps rejecting the same track
 
-If a track fails `validate_download` (too short, corrupt, missing duration), the cached copy at `cache_dir/{cache_key}.mp3` used to stay put. The next selection of the same track returned it as a cache hit and the gate rejected it again. Endless loop.
+If an original download fails `validate_download` (too short, corrupt, missing duration), the station purges the failed cache artifacts and avoids that cache key for the remainder of the session. The producer's main-loop, prefetch, and prewarm paths skip it before trying another download.
 
-The station purges the file and avoids that cache key for the remainder of the session. The producer's main-loop, prefetch, and prewarm paths skip it before trying another download.
+An eligible normalized copy that fails format or minimum-duration validation is handled separately: the station removes that derivative and tries the original source. A broken derivative alone does not denylist the recording. A timed-out or unavailable FFprobe leaves the prepared copy intact and excludes it from that attempt's recovery audio until it can be inspected again. A track outside the current music window remains session-rejected.
 
 The music quality gate (mostly silence, short normalization output) has a different escape valve — the 3-consecutive-rejection circuit breaker — and does NOT denylist source tracks. A quality-gate rejection drops the cached normalization so it's recomputed next time, but the source track can still be re-picked (the gate failure is usually a normalization artifact, not source corruption).
 
