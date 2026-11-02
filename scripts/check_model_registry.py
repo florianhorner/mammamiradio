@@ -12,7 +12,8 @@ Two questions, answered without provider API keys:
                entry as current | legacy | unlisted | deprecated(<date>) | retired.
                --gate drift (default) fails on anything not current; --gate liveness
                fails only on deprecated / retired.
-  --report     Both, unconditionally, in one combined report; exit = max of the two.
+               --gate watch accepts dated, exact-pin legacy/unlisted holds only.
+  --report     Age and watch, unconditionally; exit = max of the two.
 
 Exit codes: 0 nothing to report under the chosen gate; 1 a finding; 2 the provider docs
 could not be read, lost the anchors this parser relies on, or the checker itself failed.
@@ -67,7 +68,7 @@ FIXTURE_FILES: dict[str, str] = {
     "openai_deprecations": "openai-deprecations.md",
 }
 
-GATES = ("drift", "liveness")
+GATES = ("drift", "liveness", "watch")
 LIVENESS_STATUSES = frozenset({"deprecated", "retired"})
 ANTHROPIC_STATES = frozenset({"active", "legacy", "deprecated", "retired"})
 
@@ -615,6 +616,54 @@ def format_verdict(verdict: Verdict) -> str:
     return f"{verdict.entry.label:<18} {verdict.entry.model_id:<28} {verdict.status:<11} {verdict.detail}".rstrip()
 
 
+def accepted_holds(raw: dict, verdicts: list[Verdict], today: dt.date) -> set[str]:
+    """Validate bounded decisions, never permitting a lifecycle warning to be held."""
+    section = raw.get("model_watch", {})
+    if not isinstance(section, dict) or set(section) - {"holds"}:
+        raise RegistryError("[model_watch] must contain only a holds table")
+    holds = section.get("holds", {})
+    if not isinstance(holds, dict):
+        raise RegistryError("[model_watch.holds] must be a table")
+    by_label = {verdict.entry.label: verdict for verdict in verdicts}
+    accepted: set[str] = set()
+    messages: list[str] = []
+    for label, hold in holds.items():
+        prefix = f"model_watch.holds.{label}"
+        if not isinstance(hold, dict) or set(hold) != {"model_id", "status", "reviewed_on", "review_by", "reason"}:
+            raise RegistryError(f"{prefix} needs model_id, status, reviewed_on, review_by and reason")
+        verdict = by_label.get(label)
+        if verdict is None or hold["model_id"] != verdict.entry.model_id:
+            raise RegistryError(f"{prefix} must match an exact catalog label and model_id")
+        if hold["status"] not in ("legacy", "unlisted"):
+            raise RegistryError(f"{prefix}.status must be legacy or unlisted; lifecycle warnings cannot be held")
+        if not isinstance(hold["reason"], str) or not hold["reason"].strip():
+            raise RegistryError(f"{prefix}.reason must be a non-empty string")
+        dates: dict[str, dt.date] = {}
+        for key in ("reviewed_on", "review_by"):
+            value = hold[key]
+            if not isinstance(value, str) or not _ISO_DATE.fullmatch(value):
+                raise RegistryError(f"{prefix}.{key} must be a YYYY-MM-DD string")
+            try:
+                dates[key] = dt.date.fromisoformat(value)
+            except ValueError as exc:
+                raise RegistryError(f"{prefix}.{key} must be a valid date") from exc
+        reviewed, due = dates["reviewed_on"], dates["review_by"]
+        if reviewed > today + dt.timedelta(days=FUTURE_TOLERANCE_DAYS):
+            raise RegistryError(f"{prefix}.reviewed_on is in the future")
+        if not reviewed <= due <= reviewed + dt.timedelta(days=MAX_AGE_DAYS):
+            raise RegistryError(f"{prefix}.review_by must be within {MAX_AGE_DAYS} days of reviewed_on")
+        if today > due:
+            raise RegistryError(f"{prefix} review overdue since {due}; decide the pin again")
+        if verdict.status == hold["status"]:
+            accepted.add(label)
+            messages.append(f"HELD: {label} {verdict.entry.model_id} ({verdict.status}) until {due}: {hold['reason']}")
+        elif verdict.status == "current":
+            messages.append(f"HOLD INACTIVE: {label} is current; decision still due {due}: {hold['reason']}")
+    for message in messages:
+        print(message)
+    return accepted
+
+
 # --- modes --------------------------------------------------------------------
 
 
@@ -638,15 +687,28 @@ def run_providers(raw: dict, today: dt.date, gate: str, fixture_dir: Path | None
     verdicts = classify(entries, docs, today)
     for verdict in verdicts:
         print(format_verdict(verdict))
+    accepted: set[str] = set()
+    hold_error = False
+    if gate == "watch":
+        try:
+            accepted = accepted_holds(raw, verdicts, today)
+        except RegistryError as exc:
+            print(f"FAIL: {exc}")
+            hold_error = True
     if gate == "liveness":
         flagged = [verdict for verdict in verdicts if verdict.status in LIVENESS_STATUSES]
     else:
-        flagged = [verdict for verdict in verdicts if verdict.status != "current"]
+        flagged = [
+            verdict for verdict in verdicts if verdict.status != "current" and verdict.entry.label not in accepted
+        ]
     if flagged:
         names = ", ".join(verdict.entry.label for verdict in flagged)
         print(f"FINDINGS ({gate}): {len(flagged)} of {len(verdicts)} pinned models: {names}")
         return EXIT_FINDING
-    print(f"OK ({gate}): all {len(verdicts)} pinned models are {'alive' if gate == 'liveness' else 'current'}")
+    if hold_error:
+        return EXIT_FINDING
+    description = {"liveness": "alive", "drift": "current", "watch": "current or explicitly held"}[gate]
+    print(f"OK ({gate}): all {len(verdicts)} pinned models are {description}")
     return EXIT_OK
 
 
@@ -654,8 +716,8 @@ def run_report(raw: dict, today: dt.date, fixture_dir: Path | None) -> int:
     print("== Review age ==")
     age_code = run_age(raw, today)
     print("")
-    print("== Providers (drift) ==")
-    providers_code = run_providers(raw, today, "drift", fixture_dir)
+    print("== Providers (watch) ==")
+    providers_code = run_providers(raw, today, "watch", fixture_dir)
     return max(age_code, providers_code)
 
 
@@ -688,13 +750,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--providers", action="store_true", help="classify every pinned model against the public provider docs"
     )
     mode.add_argument(
-        "--report", action="store_true", help="run --age and --providers (drift) unconditionally; exit = max"
+        "--report", action="store_true", help="run --age and --providers (watch) unconditionally; exit = max"
     )
     parser.add_argument(
         "--gate",
         choices=GATES,
         default=None,
-        help="with --providers only. drift (default): anything not current fails; liveness: only deprecated/retired",
+        help="with --providers only. drift (default): not current; liveness: deprecated/retired; watch: dated holds",
     )
     parser.add_argument(
         "--registry", type=Path, default=DEFAULT_REGISTRY, help="path to model_registry.toml (default: repo root)"
@@ -712,7 +774,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.gate is not None and not args.providers:
-        parser.error("--gate applies to --providers only; --report always reports drift")
+        parser.error("--gate applies to --providers only; --report always uses watch")
     today = args.today or dt.datetime.now(dt.UTC).date()
     try:
         raw = load_registry(args.registry)

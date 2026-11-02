@@ -15,6 +15,7 @@ import socket
 import urllib.error
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,9 +26,6 @@ FIXTURES = Path(__file__).parent / "fixtures" / "model_registry"
 SYNTHETIC = FIXTURES / "synthetic"
 REPO_REGISTRY = Path(__file__).resolve().parents[2] / "model_registry.toml"
 TODAY = dt.date(2026, 9, 8)
-# Pins the maintainer holds on purpose while they are alive; empty when every pin is
-# current. The hold reason belongs in the registry's decision comment, not here.
-HELD_LEGACY_PINS = frozenset({"anthropic.haiku"})
 
 REGISTRY_PINNED_2026 = """[models]
 default_profile = "balanced"
@@ -663,10 +661,11 @@ def test_all_current_registry_is_clean_under_drift(tmp_path: Path, capsys: pytes
 def test_real_registry_matches_the_decision_under_fixture_drift(capsys: pytest.CaptureFixture[str]) -> None:
     """The shipped registry reads as the documented decision against the captures.
 
-    Every pin is current, except the ones in HELD_LEGACY_PINS, which may read `legacy`
-    (alive, deliberately held) and never `unlisted`, `deprecated` or `retired`. A bump
-    that forgets to re-capture the provider docs still fails here as `unlisted`.
+    Non-current pins must match explicit holds, without duplicating a permanent
+    hold inventory in test code. Ending a hold after a model upgrade is valid.
     """
+    raw = watch.load_registry(REPO_REGISTRY)
+    holds = raw.get("model_watch", {}).get("holds", {})
     code, out = _run(
         capsys,
         "--providers",
@@ -682,12 +681,14 @@ def test_real_registry_matches_the_decision_under_fixture_drift(capsys: pytest.C
     verdicts = {line.split()[0]: line for line in out.splitlines() if line and not line.startswith(("FINDINGS", "OK"))}
     assert {"anthropic.opus", "anthropic.sonnet", "anthropic.fable", "anthropic.haiku"} <= verdicts.keys(), out
     drifted = {label: line for label, line in verdicts.items() if line.split()[2] != "current"}
-    assert drifted.keys() == HELD_LEGACY_PINS, out
-    for line in drifted.values():
-        assert line.split()[2] == "legacy", line
-    if HELD_LEGACY_PINS:
+    for label, line in drifted.items():
+        assert label in holds, line
+        assert line.split()[1] == holds[label]["model_id"], line
+        assert line.split()[2] == holds[label]["status"], line
+        assert line.split()[2] in {"legacy", "unlisted"}, line
+    if drifted:
         assert code == watch.EXIT_FINDING, out
-        assert f"FINDINGS (drift): {len(HELD_LEGACY_PINS)} of {len(verdicts)} pinned models:" in out
+        assert f"FINDINGS (drift): {len(drifted)} of {len(verdicts)} pinned models:" in out
     else:
         assert code == watch.EXIT_OK, out
         assert "OK (drift):" in out
@@ -944,9 +945,9 @@ def test_report_runs_both_checks_and_exits_with_the_worse_code(
         "2027-01-01",
     )
     assert code == watch.EXIT_FINDING
-    assert "== Review age ==" in out and "== Providers (drift) ==" in out
+    assert "== Review age ==" in out and "== Providers (watch) ==" in out
     assert "FAIL: model_registry.toml last_reviewed=2026-09-08" in out
-    assert "OK (drift)" in out
+    assert "OK (watch)" in out
 
     fresh_but_behind = _registry(tmp_path)
     code, out = _run(
@@ -954,7 +955,7 @@ def test_report_runs_both_checks_and_exits_with_the_worse_code(
     )
     assert code == watch.EXIT_FINDING
     assert "OK: model_registry.toml last_reviewed=2026-09-08" in out
-    assert "FINDINGS (drift)" in out
+    assert "FINDINGS (watch)" in out
 
 
 def test_report_exit_two_when_docs_are_unreadable_even_if_age_is_fine(
@@ -975,7 +976,7 @@ def test_report_is_exit_ok_when_both_gates_are_clean(tmp_path: Path, capsys: pyt
         capsys, "--report", "--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", "2026-09-08"
     )
     assert code == watch.EXIT_OK
-    assert "OK: model_registry.toml" in out and "OK (drift)" in out
+    assert "OK: model_registry.toml" in out and "OK (watch)" in out
 
 
 def test_today_argument_rejects_an_invalid_date(tmp_path: Path) -> None:
@@ -1045,3 +1046,178 @@ def test_missing_required_registry_model_sections_fail_closed(
     code, out = _run(capsys, "--providers", "--registry", str(path), "--fixture-dir", str(FIXTURES))
     assert code == watch.EXIT_FINDING
     assert out.startswith("FAIL: model_registry.toml")
+
+
+# --- deliberate holds ----------------------------------------------------------
+
+
+def _held_registry(tmp_path: Path) -> Path:
+    text = REGISTRY_ALL_CURRENT.replace('haiku = "claude-haiku-5-5"', 'haiku = "claude-haiku-4-5-20251001"')
+    return _registry(
+        tmp_path,
+        text
+        + """
+[model_watch.holds."anthropic.haiku"]
+model_id = "claude-haiku-4-5-20251001"
+status = "legacy"
+reviewed_on = "2026-09-08"
+review_by = "2026-10-23"
+reason = "Measure the fast path first."
+""",
+    )
+
+
+def test_hold_suppresses_only_watch_and_remains_visible(tmp_path, capsys):
+    path = _held_registry(tmp_path)
+    args = ["--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", "2026-09-08"]
+    code, out = _run(capsys, "--report", *args)
+    assert code == watch.EXIT_OK
+    assert "HELD: anthropic.haiku" in out and "until 2026-10-23" in out
+    assert "Measure the fast path first." in out
+    assert "legacy" in out and "OK (watch)" in out
+    code, out = _run(capsys, "--providers", *args)
+    assert code == watch.EXIT_FINDING
+    assert "FINDINGS (drift): 1" in out
+    code, out = _run(capsys, "--providers", "--gate", "liveness", *args)
+    assert code == watch.EXIT_OK and "OK (liveness)" in out
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('"legacy"', '"unlisted"', "FINDINGS (watch)"),
+        ('"legacy"', '"retired"', "lifecycle warnings cannot be held"),
+        ('reason = "Measure the fast path first."', 'reason = " "', "non-empty string"),
+        ('review_by = "2026-10-23"', 'review_by = "2026-10-24"', "within 45 days"),
+        ('review_by = "2026-10-23"', 'review_by = "2026-09-07"', "within 45 days"),
+        ('review_by = "2026-10-23"', 'review_by = "2026-02-30"', "valid date"),
+        ('review_by = "2026-10-23"', "review_by = true", "YYYY-MM-DD"),
+        ('reviewed_on = "2026-09-08"', 'reviewed_on = "2026-09-10"', "in the future"),
+        ('reviewed_on = "2026-09-08"', 'reviewed_on = "tomorrow"', "YYYY-MM-DD"),
+        ('[model_watch.holds."anthropic.haiku"]', '[model_watch.holds."anthropic.typo"]', "exact catalog label"),
+        ('reason = "Measure the fast path first."', 'typo = "Measure the fast path first."', "needs model_id"),
+        ('model_id = "claude-haiku-4-5-20251001"', 'model_id = "claude-haiku-other"', "exact catalog label"),
+    ],
+)
+def test_invalid_or_changed_hold_is_a_finding(tmp_path, capsys, old, new, message):
+    path = _held_registry(tmp_path)
+    path.write_text(path.read_text().replace(old, new))
+    code, out = _run(
+        capsys, "--report", "--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", "2026-09-08"
+    )
+    assert code == watch.EXIT_FINDING and message in out
+
+
+@pytest.mark.parametrize("section", ["model_watch = true", "[model_watch]\nholds = []", "[model_watch]\nhold = {}"])
+def test_malformed_hold_tables_fail_closed(tmp_path, capsys, section):
+    path = _registry(tmp_path, section + "\n" + REGISTRY_ALL_CURRENT)
+    code, out = _run(
+        capsys, "--report", "--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", "2026-09-08"
+    )
+    assert code == watch.EXIT_FINDING and "FAIL:" in out
+
+
+@pytest.mark.parametrize(("today", "expected"), [("2026-10-23", 0), ("2026-10-24", 1)])
+def test_hold_deadline_and_review_age_are_independent(tmp_path, capsys, today, expected):
+    path = _held_registry(tmp_path)
+    # A later global review does not renew the per-pin decision.
+    path.write_text(path.read_text().replace('last_reviewed = "2026-09-08"', 'last_reviewed = "2026-10-22"'))
+    code, out = _run(capsys, "--report", "--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", today)
+    assert code == expected
+    assert "OK: model_registry.toml" in out
+    assert ("review overdue since 2026-10-23" in out) == bool(expected)
+
+
+@pytest.mark.parametrize("state", ["deprecated", "retired"])
+@pytest.mark.parametrize("gate", ["watch", "liveness"])
+def test_held_pin_lifecycle_deterioration_is_never_suppressed(tmp_path, capsys, monkeypatch, state, gate):
+    path = _held_registry(tmp_path)
+    docs = watch.load_docs(FIXTURES)
+    docs.anthropic_rows["claude-haiku-4-5-20251001"] = watch.AnthropicRow(state, "2026-10-01")
+    monkeypatch.setattr(watch, "load_docs", lambda _: docs)
+    code, out = _run(capsys, "--providers", "--gate", gate, "--registry", str(path), "--today", "2026-09-08")
+    assert code == watch.EXIT_FINDING
+    assert state in out and f"FINDINGS ({gate}): 1" in out
+    assert "HELD:" not in out
+
+
+def test_openai_unlisted_hold_cannot_hide_new_shutdown(tmp_path, capsys, monkeypatch):
+    path = _held_registry(tmp_path)
+    path.write_text(
+        path.read_text()
+        .replace("anthropic.haiku", "openai.large")
+        .replace('model_id = "claude-haiku-4-5-20251001"', 'model_id = "gpt-5.6-sol"')
+        .replace('status = "legacy"', 'status = "unlisted"')
+        .replace('haiku = "claude-haiku-4-5-20251001"', 'haiku = "claude-haiku-5-5"')
+    )
+    docs = watch.load_docs(FIXTURES)
+    # Without a shutdown this exact unlisted pin is accepted.
+    docs = replace(docs, openai_models=docs.openai_models - {"gpt-5.6-sol"})
+    monkeypatch.setattr(watch, "load_docs", lambda _: docs)
+    args = ["--providers", "--gate", "watch", "--registry", str(path), "--today", "2026-09-08"]
+    code, out = _run(capsys, *args)
+    assert code == watch.EXIT_OK and "HELD: openai.large" in out
+    docs.openai_shutdowns["gpt-5.6-sol"] = watch.Shutdown(dt.date(2026, 10, 1), "October 1, 2026")
+    code, out = _run(capsys, *args)
+    assert code == watch.EXIT_FINDING and "shuts down 2026-10-01" in out
+    assert "HELD:" not in out
+
+
+def test_holds_do_not_hide_source_failure_or_unheld_drift(tmp_path, capsys):
+    path = _held_registry(tmp_path)
+    args = ["--report", "--registry", str(path), "--today", "2026-09-08"]
+    code, out = _run(capsys, *args, "--fixture-dir", str(tmp_path / "absent"))
+    assert code == watch.EXIT_SOURCE and "UNREADABLE:" in out
+    path.write_text(path.read_text().replace('opus = "claude-opus-5-5"', 'opus = "claude-opus-unknown"'))
+    code, out = _run(capsys, *args, "--fixture-dir", str(FIXTURES))
+    assert code == watch.EXIT_FINDING and "HELD: anthropic.haiku" in out
+    assert "FINDINGS (watch): 1" in out and "anthropic.opus" in out
+
+
+def test_documented_four_holds_resolve_original_watch_finding(tmp_path, capsys, monkeypatch):
+    # Freeze the original scenario in a synthetic registry so future legitimate
+    # pin upgrades and hold removal do not invalidate this regression.
+    raw = watch.load_registry(_held_registry(tmp_path))
+    for key, model_id in raw["models"]["catalog"]["openai"].items():
+        raw["model_watch"]["holds"][f"openai.{key}"] = {
+            "model_id": model_id,
+            "status": "unlisted",
+            "reviewed_on": "2026-09-08",
+            "review_by": "2026-10-23",
+            "reason": "Benchmark the alternatives first.",
+        }
+    docs = watch.load_docs(FIXTURES)
+    # Replay the October watch situation: Haiku legacy, the OpenAI ladder unlisted.
+    docs = replace(docs, openai_models=docs.openai_models - set(raw["models"]["catalog"]["openai"].values()))
+    monkeypatch.setattr(watch, "load_docs", lambda _: docs)
+    reviewed = watch.parse_last_reviewed(raw["models"])
+    assert watch.run_report(raw, reviewed, None) == watch.EXIT_OK
+    out = capsys.readouterr().out
+    held_labels = {line.split()[1] for line in out.splitlines() if line.startswith("HELD:")}
+    assert held_labels == {"anthropic.haiku", "openai.large", "openai.mid", "openai.small"}
+    assert watch.run_providers(raw, reviewed, "drift", None) == watch.EXIT_FINDING
+    assert "FINDINGS (drift): 4 of 7" in capsys.readouterr().out
+
+
+def test_stale_global_review_cannot_be_waived_by_fresh_holds(tmp_path, capsys):
+    path = _held_registry(tmp_path)
+    path.write_text(path.read_text().replace('last_reviewed = "2026-09-08"', 'last_reviewed = "2026-07-01"'))
+    code, out = _run(
+        capsys, "--report", "--registry", str(path), "--fixture-dir", str(FIXTURES), "--today", "2026-09-08"
+    )
+    assert code == watch.EXIT_FINDING
+    assert "HELD: anthropic.haiku" in out and "OK (watch)" in out
+    assert "FAIL: model_registry.toml last_reviewed=2026-07-01" in out
+
+
+def test_provider_restoring_current_status_needs_no_drift_decision(tmp_path, capsys, monkeypatch):
+    path = _held_registry(tmp_path)
+    docs = watch.load_docs(FIXTURES)
+    docs = replace(docs, anthropic_current=docs.anthropic_current | {"claude-haiku-4-5-20251001"})
+    monkeypatch.setattr(watch, "load_docs", lambda _: docs)
+    code, out = _run(capsys, "--report", "--registry", str(path), "--today", "2026-09-08")
+    assert code == watch.EXIT_OK
+    assert "HOLD INACTIVE: anthropic.haiku is current; decision still due 2026-10-23" in out
+    assert "Measure the fast path first." in out
+    assert "HELD:" not in out
+    assert "FINDINGS" not in out

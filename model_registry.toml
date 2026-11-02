@@ -23,6 +23,37 @@ large = "gpt-5.6-sol"
 mid = "gpt-5.6-terra"
 small = "gpt-5.6-luna"
 
+# Machine-readable transcription of the 2026-10-22 decision above, not a new
+# review. Holds apply only to this exact pin and status, never deprecation or
+# retirement. Review by the existing 45-day deadline; renew only after deciding.
+[model_watch.holds."anthropic.haiku"]
+model_id = "claude-haiku-4-5-20251001"
+status = "legacy"
+reviewed_on = "2026-10-22"
+review_by = "2026-12-06"
+reason = "Keep Haiku 4.5 until the thinking-disabled fast path is measured."
+
+[model_watch.holds."openai.large"]
+model_id = "gpt-5.6-sol"
+status = "unlisted"
+reviewed_on = "2026-10-22"
+review_by = "2026-12-06"
+reason = "Keep the OpenAI 5.6 ladder until GPT-6 alternatives are benchmarked."
+
+[model_watch.holds."openai.mid"]
+model_id = "gpt-5.6-terra"
+status = "unlisted"
+reviewed_on = "2026-10-22"
+review_by = "2026-12-06"
+reason = "Keep the OpenAI 5.6 ladder until GPT-6 alternatives are benchmarked."
+
+[model_watch.holds."openai.small"]
+model_id = "gpt-5.6-luna"
+status = "unlisted"
+reviewed_on = "2026-10-22"
+review_by = "2026-12-06"
+reason = "Keep the OpenAI 5.6 ladder until GPT-6 alternatives are benchmarked."
+
 # Effort applies to Anthropic creative models that support adaptive thinking.
 # Haiku must never appear here: Claude Haiku 4.5 rejects effort and would 400.
 [models.effort.anthropic]
