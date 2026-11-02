@@ -3750,16 +3750,19 @@ async def test_prewarm_cached_quality_gate_rejection_purges_normalized_cache(tmp
     config.cache_dir = tmp_path
     queue: asyncio.Queue = asyncio.Queue()
     track = state.playlist[0]
+    track.source = "local"
     source = tmp_path / "source.mp3"
     source.write_bytes(b"downloaded audio")
     norm_cached = _normalized_cache_path(track, config)
     norm_cached.write_bytes(b"stale silent normalized audio")
+    save_track_metadata(norm_cached, track.title, track.artist, source_kind=track.source)
 
     def _reject(*_a, **_kw):
         raise AudioQualityError("silent track")
 
     with (
         patch.object(state, "select_next_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "ok")),
         patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
         patch(f"{PRODUCER_MODULE}.reconcile_cached_music") as mock_reconcile,
         patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
