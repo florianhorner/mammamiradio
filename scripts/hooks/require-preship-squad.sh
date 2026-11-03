@@ -5,7 +5,8 @@
 # review receipts are not PR admission requirements.
 #
 # Raw merge attempts are denied OUTRIGHT — landing goes through
-#      scripts/land-pr.sh (the landing contract in CLAUDE.md "Quality gates").
+#      scripts/land-pr.sh (the landing contract in docs/runbooks/ha-addon.md
+#      "Landing a PR").
 #      This blocks `gh pr merge` and mutating `gh api` merge calls (REST
 #      /pulls/<n>/merge PUT, plus GraphQL mergePullRequest/auto-merge
 #      mutations). The wrapper checks branch freshness, bot threads and cut
@@ -30,7 +31,7 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)" ||
 
 deny_raw_merge() {
   cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw GitHub merge commands are retired. Land via scripts/land-pr.sh <PR#> — it refuses behind/conflicted branches, checks blocking reviews and cut admission, and arms auto-merge with --match-head-commit. This hook denies gh pr merge and mutating gh api merge attempts. Disarming with gh pr merge --disable-auto is allowed. See CLAUDE.md 'Landing contract'."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Raw GitHub merge commands are retired. Land via scripts/land-pr.sh <PR#> — it refuses behind/conflicted branches, checks blocking reviews and cut admission, and arms auto-merge with --match-head-commit. This hook denies gh pr merge and mutating gh api merge attempts. Disarming with gh pr merge --disable-auto is allowed. See docs/runbooks/ha-addon.md 'Landing a PR'."}}
 JSON
   exit 0
 }
