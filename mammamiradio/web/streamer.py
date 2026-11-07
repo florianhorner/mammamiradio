@@ -123,7 +123,9 @@ from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.core.setup_status import (
     addon_options_snippet,
     build_setup_status,
+    cast_cloud_speech_engines,
     classify_station_mode,
+    cloud_speech_engine_ready,
     first_listen_continuity_available,
 )
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
@@ -3943,33 +3945,36 @@ def _script_provider_status(
 
 
 def _tts_provider_status(config, state: StationState, *, use_runtime_observation: bool = True) -> dict:
-    engines = {(host.engine or "edge").strip().lower() for host in config.hosts}
-    engines.update((voice.engine or "edge").strip().lower() for voice in config.ads.voices)
-    if config.sonic_brand.sweeper_voice:
-        engines.add((config.sonic_brand.sweeper_engine or "edge").strip().lower())
-    cloud_engines = sorted(engine for engine in engines if engine != "edge")
+    # The setup checklist reads the same cast, so the two never disagree about
+    # which keys matter.
+    cloud_engines = cast_cloud_speech_engines(config)
     missing: list[str] = []
 
     if cloud_engines:
         primary = cloud_engines[0] if len(cloud_engines) == 1 else "mixed_tts"
-        configured = {
-            # OpenAI TTS also needs a registry-selected speech model. Without it
-            # provider checks report model_routing_unavailable, so runtime status
-            # must agree and treat the voice as falling back to Edge — otherwise
-            # the two operator surfaces disagree.
-            "openai": bool(config.openai_api_key and config.models.tts_model("openai")),
-            "azure": bool(config.azure_speech_key and config.azure_speech_region),
-            "elevenlabs": bool(config.elevenlabs_api_key),
-        }
-        missing = [engine for engine in cloud_engines if not configured.get(engine, False)]
-        if missing and len(missing) == len(cloud_engines):
-            current = "edge"
+        # OpenAI TTS also needs a registry-selected speech model. Without it
+        # provider checks report model_routing_unavailable, so runtime status
+        # must agree and treat the voice as falling back to Edge — otherwise
+        # the two operator surfaces disagree.
+        missing = [engine for engine in cloud_engines if not cloud_speech_engine_ready(config, engine)]
+        # With the key present, only the missing model keeps OpenAI voices off;
+        # telling the operator a key is missing would send them the wrong way.
+        switched_off = [engine for engine in missing if engine == "openai" and config.openai_api_key]
+        keyless = [engine for engine in missing if engine not in switched_off]
+        if missing:
+            current = "edge" if len(missing) == len(cloud_engines) else primary
             fallback_active = True
-            reason = f"TTS provider key missing for {', '.join(missing)}; Edge voice fallback is active"
-        elif missing:
-            current = primary
-            fallback_active = True
-            reason = f"Mixed TTS configured; {', '.join(missing)} voices are falling back to Edge"
+            notes = []
+            if keyless and current == "edge":
+                notes.append(f"TTS provider key missing for {', '.join(keyless)}; Edge voice fallback is active")
+            elif keyless:
+                notes.append(f"Mixed TTS configured; {', '.join(keyless)} voices are falling back to Edge")
+            if switched_off:
+                notes.append(
+                    "OpenAI voices are switched off in this release, so those voices use the free voices. "
+                    "Pin a speech model in model_registry.toml to bring them back"
+                )
+            reason = ". ".join(notes)
         else:
             current = primary
             fallback_active = False
@@ -5229,14 +5234,14 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
         },
         "openai_speech": _voice_provider_health(
             "openai",
-            bool(config.openai_api_key and config.models.tts_model("openai")),
+            cloud_speech_engine_ready(config, "openai"),
             voice_health,
             key_rejected=state.openai_key_status == "rejected",
         ),
-        "azure_speech": _voice_provider_health(
-            "azure", bool(config.azure_speech_key and config.azure_speech_region), voice_health
+        "azure_speech": _voice_provider_health("azure", cloud_speech_engine_ready(config, "azure"), voice_health),
+        "elevenlabs": _voice_provider_health(
+            "elevenlabs", cloud_speech_engine_ready(config, "elevenlabs"), voice_health
         ),
-        "elevenlabs": _voice_provider_health("elevenlabs", bool(config.elevenlabs_api_key), voice_health),
         "chaos": {
             "enabled": state.chaos_mode_active,
             "pending": state.chaos_pending.value if state.chaos_pending else "",

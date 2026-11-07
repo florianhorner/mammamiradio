@@ -7,8 +7,10 @@ without TTS API keys in the environment, i.e. in CI):
   castable. A voice with an unknown role lands in the role index but is never
   requested by the casting engine — dead config.
 - Every canonical role has at least one voice, so it is castable. A role may
-  carry several voices (e.g. an ElevenLabs character plus the original
-  OpenAI/Azure voice); the caster picks one at random per spot for variety.
+  carry several voices; the caster picks one at random per spot for variety.
+- The shipped cast needs one optional paid speech key: every host, airtime ad
+  voice and the ident is ElevenLabs or a free Edge voice, and every ElevenLabs
+  voice names an Edge double.
 - Ad-voice names are unique, since the caster dedupes by name within a spot.
 - Legacy role-only ``spokesperson`` pins remain a temporary compatibility
   hint while PR2 migrates every campaign to direct ``spokesperson_voice``
@@ -35,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from mammamiradio.audio.voice_catalog import EDGE_ITALIAN_VOICES
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState
 from mammamiradio.hosts.ad_creative import (
@@ -368,6 +371,40 @@ def test_both_hosts_route_to_elevenlabs():
             f"host {name!r} expected engine 'elevenlabs', got {by_name[name].engine!r}"
         )
         assert by_name[name].edge_fallback_voice, f"host {name!r} on a cloud engine must declare an edge_fallback_voice"
+
+
+@pytest.mark.parametrize(("config_name", "radio_toml"), _SHIPPED_RADIO_TOMLS)
+def test_shipped_cast_needs_only_the_elevenlabs_key(config_name: str, radio_toml: Path):
+    """Every on-air voice is ElevenLabs or free Edge, and each ElevenLabs voice names its Edge double.
+
+    Reads the raw TOML: the loader silently swaps an unknown or missing Edge voice
+    for the house voice, which would hide the mistake this guards against.
+    """
+    with radio_toml.open("rb") as f:
+        raw = tomllib.load(f)
+    sonic = raw["sonic_brand"]
+    routes = [(f"host {host['name']}", host) for host in raw["hosts"]]
+    routes += [(f"ad voice {voice['name']}", voice) for voice in raw["ads"]["voices"] if voice["airtime_approved"]]
+    routes.append(
+        (
+            "the station ident",
+            {
+                "engine": sonic.get("sweeper_engine", "edge"),
+                "voice": sonic["sweeper_voice"],
+                "edge_fallback_voice": sonic.get("sweeper_edge_fallback_voice"),
+            },
+        )
+    )
+
+    for label, route in routes:
+        engine = route.get("engine", "edge")
+        assert engine in {"elevenlabs", "edge"}, f"{config_name}: {label} needs a {engine} key"
+        if engine == "edge":
+            assert route["voice"] in EDGE_ITALIAN_VOICES, f"{config_name}: {label} is not an Edge voice"
+        else:
+            assert route.get("edge_fallback_voice") in EDGE_ITALIAN_VOICES, (
+                f"{config_name}: {label} must name an Edge double for installs without the key"
+            )
 
 
 def test_no_brand_has_top_level_spokesperson():

@@ -5154,7 +5154,7 @@ const JAMENDO_ERROR_COPY={
 // The blocked row adds a third lever of its own, because a state that never
 // recovers unaided cannot be described by any sentence in this table.
 // There is deliberately no "try different music tags" line: jamendo_tags is a
-// radio.toml key with no env override, no add-on option and no admin field, so
+// radio.toml key with no env override, no add-on setting and no admin field, so
 // on the add-on that advice would name a step the reader cannot take.
 function jamendoFailureHint(code){
   return {
@@ -5850,7 +5850,8 @@ function firstListenConnectionEvidence(){
 function firstListenVoiceEvidence(){
   if(_firstListenUi.keySaving||_firstListenUi.keySaveUnconfirmed)return firstListenConnectionEvidence();
   const keys=firstListenConfiguredKeys();
-  const providers=[['ELEVENLABS_API_KEY','elevenlabs'],['OPENAI_API_KEY','openai_speech'],['AZURE_SPEECH_KEY','azure_speech']].filter(([key])=>keys.has(key));
+  // An OpenAI key alone is a writing key: its voices also need a pinned speech model.
+  const providers=[['ELEVENLABS_API_KEY','elevenlabs'],['OPENAI_API_KEY','openai_speech'],['AZURE_SPEECH_KEY','azure_speech']].filter(([key,name])=>keys.has(key)&&(name!=='openai_speech'||_caps?.provider_health?.openai_speech?.configured===true));
   if(keys.has('AZURE_SPEECH_KEY')!==keys.has('AZURE_SPEECH_REGION'))return{state:'degraded',label:'Azure setup is incomplete',detail:'Add both the Azure key and region, or continue with your current voices.'};
   if(!providers.length)return{state:'idle',label:'Free voices available',detail:'New conversations use the free voices with the default setup. The studio recordings use different voices.'};
   const failed=providers.some(([,name])=>{const h=_caps?.provider_health?.[name]||{};return h.key_status==='rejected'||h.disabled||h.cooldown||h.quota_exhausted||Number(h.failed_voices)>0;});
@@ -7398,7 +7399,7 @@ function setupProviderLabels(configuredKeys){
   const keys=new Set(configuredKeys||[]);
   const labels=[];
   if(keys.has('ANTHROPIC_API_KEY'))labels.push('Anthropic AI hosts');
-  if(keys.has('OPENAI_API_KEY'))labels.push('OpenAI AI hosts + voices');
+  if(keys.has('OPENAI_API_KEY'))labels.push('OpenAI AI hosts');
   const hasAzureKey=keys.has('AZURE_SPEECH_KEY');
   const hasAzureRegion=keys.has('AZURE_SPEECH_REGION');
   if(hasAzureKey&&hasAzureRegion)labels.push('Azure Speech voices');

@@ -192,6 +192,70 @@ async def test_synthesize_elevenlabs_target_uses_its_configured_voice_settings(t
     assert calls == [{"stability": 0.6, "style": 0.2}]
 
 
+def _fake_edge(monkeypatch, *, failing: str) -> list[str]:
+    """Edge renders every voice except ``failing``; returns the voices actually rendered."""
+    rendered: list[str] = []
+
+    class FakeCommunicate:
+        def __init__(self, _text, voice, **_kwargs):
+            self.voice = voice
+
+        async def save(self, path):
+            if self.voice == failing:
+                raise TimeoutError()
+            rendered.append(self.voice)
+            Path(path).write_bytes(b"fake mp3")
+
+    def fake_normalize(raw_path, output_path, _loudnorm, _tempo):
+        Path(output_path).write_bytes(Path(raw_path).read_bytes())
+        return output_path
+
+    monkeypatch.setattr(audition.tts_module.edge_tts, "Communicate", FakeCommunicate)
+    monkeypatch.setattr(audition.tts_module, "_normalize_tolerating_tempo", fake_normalize)
+    audition.tts_module.reset_voice_failures()
+    return rendered
+
+
+@pytest.mark.asyncio
+async def test_edge_target_that_fails_is_never_recorded_as_its_fallback_voice(tmp_path, monkeypatch) -> None:
+    """On air a failed Edge voice falls back to the house voice; an audition must fail instead."""
+    rendered = _fake_edge(monkeypatch, failing="it-IT-GiuseppeMultilingualNeural")
+    target = audition.VoiceAuditionTarget(
+        provider="edge", voice="it-IT-GiuseppeMultilingualNeural", label="edge-giuseppe", source="manual"
+    )
+
+    with pytest.raises(RuntimeError, match="failed to render"):
+        await audition._synthesize_target(target, tmp_path / "giuseppe.mp3")
+
+    assert rendered == [audition.tts_module._EDGE_DEFAULT_FALLBACK_VOICE]
+    assert not (tmp_path / "giuseppe.mp3").exists()
+
+
+@pytest.mark.asyncio
+async def test_edge_target_renders_after_an_earlier_failure_in_the_same_run(tmp_path, monkeypatch) -> None:
+    """A voice that failed once is retried, not skipped straight to the fallback."""
+    _fake_edge(monkeypatch, failing="none")
+    audition.tts_module._failed_edge_voices.add("it-IT-IsabellaNeural")
+    target = audition.VoiceAuditionTarget(
+        provider="edge", voice="it-IT-IsabellaNeural", label="edge-isabella", source="manual"
+    )
+
+    output = await audition._synthesize_target(target, tmp_path / "isabella.mp3")
+
+    assert output.read_bytes() == b"fake mp3"
+
+
+@pytest.mark.asyncio
+async def test_edge_target_with_an_openai_voice_id_fails_before_rendering(tmp_path, monkeypatch) -> None:
+    rendered = _fake_edge(monkeypatch, failing="none")
+    target = audition.VoiceAuditionTarget(provider="edge", voice="coral", label="edge-coral", source="manual")
+
+    with pytest.raises(RuntimeError, match="not an Edge voice"):
+        await audition._synthesize_target(target, tmp_path / "x.mp3")
+
+    assert rendered == []
+
+
 def test_stability_arg_validates_range_and_finiteness() -> None:
     import argparse
 

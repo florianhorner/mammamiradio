@@ -140,6 +140,11 @@ chmod +x "$BIN/gh"
 cat > "$BIN/git" <<GITEOF
 #!/usr/bin/env bash
 if [ "\$1 \${2:-}" = 'rev-parse --show-toplevel' ] && [ "\${GIT_MOCK_ROOT_FAIL:-0}" = 1 ]; then exit 1; fi
+if [ "\$*" = 'rev-parse --verify origin/main^{commit}' ] && [ -n "\${GIT_MOCK_DRIFT_SHA:-}" ]; then
+  "$REAL_GIT" -C "\$GIT_MOCK_EDGE_REPO" "\$@" || exit 1
+  "$REAL_GIT" -C "\$GIT_MOCK_EDGE_REPO" update-ref refs/remotes/origin/main "\$GIT_MOCK_DRIFT_SHA"
+  exit
+fi
 case "\$1" in
   rev-parse|rev-list|cat-file|show|merge-base|diff|status|log|for-each-ref|worktree|symbolic-ref|show-ref|ls-tree|hash-object|config)
     if [ -n "\${GIT_MOCK_EDGE_REPO:-}" ]; then exec "$REAL_GIT" -C "\$GIT_MOCK_EDGE_REPO" "\$@"; fi
@@ -148,6 +153,10 @@ case "\$1" in
     # A shadow run may want fresh refs, but this test must stay offline. Log the
     # call so a case can assert the landed ref is refreshed once per run.
     printf '%s\\n' "\$*" >> "\${GIT_SHIM_LOG:-/dev/null}"
+    [ "\${GIT_MOCK_FETCH_FAIL:-0}" != 1 ] || exit 128
+    if [ -n "\${GIT_MOCK_REFRESH_SHA:-}" ]; then
+      "$REAL_GIT" -C "\$GIT_MOCK_EDGE_REPO" update-ref refs/remotes/origin/main "\$GIT_MOCK_REFRESH_SHA" || exit 1
+    fi
     exit 0 ;;
 esac
 echo "git mock: refusing mutating verb in a read-only shadow: \$*" >&2
@@ -178,7 +187,7 @@ pr_row() { # number title head merge draft labels created author is_bot [branch]
     --arg merge "$merge" --argjson draft "$draft" --argjson labels "$labels" \
     --arg created "$created" --arg author "$author" --argjson is_bot "$is_bot" \
     --arg branch "$branch" --arg pushed "${11:-2026-01-01T00:00:00Z}" \
-    '{number:$number,title:$title,headRefOid:$head,baseRefOid:"'"$ANC_FULL"'",
+    '{number:$number,title:$title,headRefOid:$head,baseRefName:"main",baseRefOid:"'"$ANC_FULL"'",
       mergeStateStatus:$merge,isDraft:$draft,labels:$labels,createdAt:$created,
       headRefName:$branch,commits:[{committedDate:$pushed}],
       url:("https://example.test/pull/" + ($number|tostring)),
@@ -203,6 +212,9 @@ run_plan() { # prs-json [extra env assignments handled by caller]
   GH_MOCK_SUCCESS_SHAS="${SUCCESS_SHAS:-}" \
   GIT_MOCK_ROOT_FAIL="${ROOT_FAIL:-0}" \
   GIT_MOCK_EDGE_REPO="${EDGE_REPO:-}" \
+  GIT_MOCK_FETCH_FAIL="${FETCH_FAIL:-0}" \
+  GIT_MOCK_REFRESH_SHA="${REFRESH_SHA:-}" \
+  GIT_MOCK_DRIFT_SHA="${DRIFT_SHA:-}" \
   GH_MOCK_PR_LIST_FAIL="${PR_LIST_FAIL:-0}" \
   MMR_LAND_EVIDENCE_CHECKER="${EVIDENCE:-$TMPDIR_T/evidence-ok.sh}" \
   MMR_LAND_REVIEW_READER="$TMPDIR_T/evidence-missing.sh" \
@@ -539,25 +551,21 @@ printf '%s' "$OFF" | jq -e '.mode == "off"' >/dev/null \
 pass "kill switch stops the planner itself and answers in the caller's format"
 
 # =============================================================================
-# Case 22: gate-set parity. land-pr.sh arms on verify_head; the queue re-composes
-# the same gates to report WHICH one failed. Adding a gate to verify_head without
-# teaching the queue would leave the shadow reporting READY without it — the
-# exact drift the shared library exists to prevent, one level up.
+# Case 22: gate parity. The queue calls the same verify_head gate land-pr.sh
+# arms on, so a gate added to verify_head reaches the shadow without a second
+# edit. Prove it on a copy whose verify_head refuses: the queue must refuse too.
 # =============================================================================
-gates_in() { sed -n "/^$2() {/,/^}/p" "$1" | grep -oE '\b(evidence_check|squad_check|thread_check|ensure_head_local)\b' | sort -u; }
-VERIFY_GATES="$(gates_in "$REPO_ROOT/scripts/land-gates.sh" verify_head)"
-QUEUE_GATES="$(gates_in "$PLAN" classify_pr)"
-# Without this, renaming verify_head (or moving its closing brace off column 0)
-# makes gates_in return nothing, comm finds nothing missing, and this case
-# prints PASS forever while asserting nothing.
-[ -n "$VERIFY_GATES" ] || fail "gate extraction found no gates in verify_head — the parity check would pass vacuously"
-[ -n "$QUEUE_GATES" ] || fail "gate extraction found no gates in classify_pr — the parity check would pass vacuously"
-! printf '%s\n' "$VERIFY_GATES" "$QUEUE_GATES" | grep -Eq 'evidence_check|squad_check' \
-  || fail "receipt/ledger admission must stay retired in both paths"
-MISSING="$(comm -23 <(printf '%s\n' "$VERIFY_GATES" | sed '/^$/d' | sort) \
-                    <(printf '%s\n' "$QUEUE_GATES" | sed '/^$/d' | sort))"
-[ -z "$MISSING" ] || fail "verify_head gates the queue does not evaluate: $MISSING"
-pass "queue evaluates every verify_head gate, with no receipt/ledger exception"
+PROBE_ROOT="$TMPDIR_T/verify-probe"
+mkdir -p "$PROBE_ROOT/scripts" "$PROBE_ROOT/.github"
+cp "$PLAN" "$REPO_ROOT/scripts/land-gates.sh" "$REPO_ROOT/scripts/edge-select.sh" \
+   "$REPO_ROOT/scripts/review-threads.sh" "$PROBE_ROOT/scripts/"
+: > "$PROBE_ROOT/.github/land-queue.enabled"
+printf '%s\n' 'verify_head() { _gate_say "probe gate refused"; return 1; }' >> "$PROBE_ROOT/scripts/land-gates.sh"
+PRS="[$(pr_row 175 "fix: probe" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
+OUT="$(PLAN="$PROBE_ROOT/scripts/land-queue-plan.sh" run_plan "$PRS")"
+jq -e '.prs[0].state == "BLOCKED_BOT" and (.prs[0].reason | contains("probe gate refused"))' <<<"$OUT" >/dev/null \
+  || fail "the queue must refuse every head verify_head refuses"
+pass "queue evaluates the shared verify_head gate"
 
 # =============================================================================
 # Case 23: a PR whose author account was deleted (.author == null) must not
@@ -568,7 +576,7 @@ pass "queue evaluates every verify_head gate, with no receipt/ledger exception"
 # =============================================================================
 GHOST="$(jq -cn --arg base "$ANC_FULL" --arg head "$HEAD_FULL" \
   '{number:130,title:"chore(edge): cut edge release abc1234",headRefOid:$head,
-    baseRefOid:$base,mergeStateStatus:"CLEAN",isDraft:false,labels:[],
+    baseRefName:"main",baseRefOid:$base,mergeStateStatus:"CLEAN",isDraft:false,labels:[],
     createdAt:"2026-01-01T00:00:00Z",headRefName:"edge-release/abc1234",
     commits:[{committedDate:"2026-01-01T00:00:00Z"}],
     url:"https://example.test/pull/130",author:null}')"
@@ -735,34 +743,60 @@ OUT="$(MMR_LAND_REQUIRE_LEDGER_SQUAD=1 EVIDENCE="$TMPDIR_T/evidence-missing.sh" 
   || fail "an old head commit date must not block without receipts"
 pass "ledger age and obsolete switches do not affect queue readiness"
 
-# =============================================================================
-# The landed-ref refresh is need-driven: a base the local origin/main already
-# covers must not trigger a fetch (a seat with complete history never touches
-# the network), and a base it does not cover must.
-# =============================================================================
+# Every lane rejects other bases before exemptions; unknown types fail closed.
+for lane in feature bot dependabot edge; do
+  row="$(pr_row 210 "fix: target" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" user false)"
+  case "$lane" in
+    bot) row="$(jq '.author.is_bot = true' <<<"$row")" ;;
+    dependabot) row="$(jq '.author.login = "dependabot"' <<<"$row")" ;;
+    edge) row="$(jq '.headRefName = "edge-release/abc1234"' <<<"$row")" ;;
+  esac
+  OUT="$(run_plan "[$(jq '.baseRefName = "release"' <<<"$row")]")"
+  jq -e '.prs[0].state == "SKIPPED" and .decision.action == "none"' <<<"$OUT" >/dev/null \
+    || fail "$lane with other base must be skipped, never exempt/armed/integrated"
+done
+# The unknown-base check runs before any lane is assigned, so one row covers every lane.
+row="$(pr_row 210 "fix: target" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" user false)"
+for value in null '""' 42 false '{}' '[]' missing; do
+  if [ "$value" = missing ]; then bad="$(jq 'del(.baseRefName)' <<<"$row")"
+  else bad="$(jq --argjson value "$value" '.baseRefName = $value' <<<"$row")"; fi
+  if run_plan "[$bad]" > "$TMPDIR_T/base-error" 2>&1; then fail "$value base must fail closed"; fi
+  grep -q 'unknown base branch' "$TMPDIR_T/base-error" || fail "base failure needs clear diagnosis"
+  ! grep -q 'api graphql' "$GH_MOCK_LOG" || fail "unknown base must stop before thread queries"
+done
+# An older feature PR on another base must not stall the main FIFO behind it.
+other="$(jq '.baseRefName = "release"' <<<"$row")"
+row="$(pr_row 211 "fix: main" "$HEAD_FULL" CLEAN false '[]' "2026-02-01T00:00:00Z" user false)"
+OUT="$(run_plan "[$other,$row]")"
+jq -e '.decision.pr == 211 and .decision.action == "arm"' <<<"$OUT" >/dev/null || fail "other base must not stall main FIFO"
+pass "main-only admission precedes every lane exemption and unknown bases fail closed"
+
+# Main freshness is independent of PR count, draft/exempt status, and base coverage.
 FETCH_LOG="$TMPDIR_T/git-fetch.log"
-MAIN_TIP="$(git rev-parse "$MAIN_REF")"
-# Covered base: origin/main's own tip is trivially its ancestor -> no fetch.
-: > "$FETCH_LOG"
-COVERED="$(jq -cn --arg base "$MAIN_TIP" --arg head "$HEAD_FULL" \
-  '{number:210,title:"fix: covered",headRefOid:$head,baseRefOid:$base,mergeStateStatus:"CLEAN",
-    isDraft:false,labels:[],createdAt:"2026-01-01T00:00:00Z",headRefName:"feature/pr-210",
-    url:"https://example.test/pull/210",author:{login:"florianhorner",is_bot:false}}')"
-OUT="$(GIT_SHIM_LOG="$FETCH_LOG" run_plan "[$COVERED]")"
-[ "$(jq -r '.decision.pr' <<<"$OUT")" = "210" ] || fail "planner should decide on the covered-base PR"
-[ "$(grep -c '^fetch -q origin main' "$FETCH_LOG")" = "0" ] \
-  || fail "a base already covered by local origin/main must not trigger a fetch"
-# Uncovered base: the suite's ANC_FULL is branch-only history -> exactly one fetch.
-: > "$FETCH_LOG"
-PRS="[$(pr_row 211 "fix: stale" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
-OUT="$(GIT_SHIM_LOG="$FETCH_LOG" run_plan "$PRS")"
-if git merge-base --is-ancestor "$ANC_FULL" "$MAIN_REF" 2>/dev/null; then
-  : # fixture base happens to be on main here; the covered case above already holds the property
-else
-  [ "$(grep -c '^fetch -q origin main' "$FETCH_LOG")" = "1" ] \
-    || fail "a base not covered by local origin/main must trigger the refresh"
-fi
-pass "landed ref is refreshed only when the local ref does not cover the base"
+for prs in '[]' "[$GHOST]" "$(jq '[.isDraft = true]' <<<"$row")" "[$row]"; do
+  : > "$FETCH_LOG"
+  OUT="$(GIT_SHIM_LOG="$FETCH_LOG" run_plan "$prs")"
+  [ "$(grep -c '^fetch -q --no-tags origin +refs/heads/main:refs/remotes/origin/main$' "$FETCH_LOG")" = 1 ] \
+    || fail "edge must refresh main once independently of PRs"
+done
+OUT="$(FETCH_FAIL=1 run_plan '[]')"
+jq -e '.edge.state == "blocked" and .edge.target == null and (.edge.why | contains("refresh"))' <<<"$OUT" >/dev/null \
+  || fail "failed refresh must block stale edge target"
+! grep -q '^run list' "$GH_MOCK_LOG" || fail "failed refresh must stop before build queries"
+pass "edge freshness is independent and fetch errors fail closed"
+
+# Refresh a stale ref, then move it again immediately after SHA resolution.
+# Both eligibility and the pin must use the captured commit, not the moving ref.
+DRIFT_TIP="$(git -C "$EDGE_FIXTURE" rev-parse HEAD)"
+printf 'version: %s\nhomeassistant_api: true\n' "${BUILT_SHA:0:7}" > "$EDGE_FIXTURE/ha-addon/mammamiradio-edge/config.yaml"
+git -C "$EDGE_FIXTURE" add .
+git -C "$EDGE_FIXTURE" commit -qm 'chore: aligned edge fixture'
+FRESH_TIP="$(git -C "$EDGE_FIXTURE" rev-parse HEAD)"
+git -C "$EDGE_FIXTURE" update-ref refs/remotes/origin/main "$BUILT_SHA"
+OUT="$(EDGE_REPO="$EDGE_FIXTURE" REFRESH_SHA="$FRESH_TIP" DRIFT_SHA="$DRIFT_TIP" RUN_SHAS="$BUILT_SHA" run_plan '[]')"
+jq -e --arg target "${BUILT_SHA:0:7}" '.edge.state == "noop" and .edge.target == $target' <<<"$OUT" >/dev/null \
+  || fail "edge eligibility and pin must use the same fresh immutable commit"
+pass "ref refresh advances stale state and one captured SHA survives subsequent ref movement"
 
 [ ! -e "$RETIRED_READER_CALLS" ] || fail "queue invoked a retired receipt/ledger reader"
 pass "queue never invokes retired receipt or ledger readers"

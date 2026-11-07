@@ -28,7 +28,8 @@ Usage: scripts/pre-release-check.sh
 Pre-release sanity check. Run after the release version and changelogs are updated.
 Verifies version consistency across pyproject.toml + addon config.yaml,
 CHANGELOG head matches the version, all release invariants (FFmpeg eq
-chain count, recovery and browser audio, test mocks, post-restart guard).
+chain count, recovery and browser audio, test mocks, post-restart guard),
+the model registry review, and the speech cast review date.
 
 The physical 20-run Home Assistant Green cold-launch receipt set is opt-in:
 it is waived unless MMR_REQUIRE_HA_RECEIPTS=1, and a waived gate is reported
@@ -297,6 +298,19 @@ echo ""
 echo "11. Model registry (review age + pinned models alive)"
 # Body and contract: scripts/model-registry-gate.sh and CLAUDE.md, Quality gates, "Model registry watch".
 model_registry_gate "$MEDIA_PYTHON" "$SCRIPT_DIR/check_model_registry.py"
+
+echo ""
+echo "12. Speech cast review date"
+# The one-key speech cast is a dated interim; scripts/check_speech_cast.py owns the
+# dates. Same scope as section 11, so a calendar check never turns an ordinary CI
+# run red. The listening-receipt binding runs in the test suite instead.
+if ! model_registry_gate_applies; then
+    echo "  [NOTE] not a release cut (no version line changes against origin/main); the review date is checked on cut PRs and under make pre-release"
+elif "$MEDIA_PYTHON" scripts/check_speech_cast.py --release; then
+    ok "Speech cast is inside its review window"
+else
+    fail "Speech cast is past its review date or the check failed: re-audition the cast before tagging (see above)"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

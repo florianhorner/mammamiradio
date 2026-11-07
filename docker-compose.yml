@@ -19,8 +19,10 @@ services:
       - MAMMAMIRADIO_ALLOW_YTDLP=${MAMMAMIRADIO_ALLOW_YTDLP:-false}
       # Optional: Anthropic API key for AI-generated banter/ads
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      # Optional: OpenAI API key (TTS voices + script generation fallback)
+      # Optional: OpenAI API key (script generation fallback)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Optional: ElevenLabs API key (premium voices for the hosts and ads)
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
       # Optional: Home Assistant
       - HA_TOKEN=${HA_TOKEN:-}
       - HA_URL=${HA_URL:-}

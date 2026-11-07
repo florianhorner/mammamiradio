@@ -8,7 +8,7 @@ Turn it on for music-competition watch parties, Sanremo screenings, or any gathe
 
 ### From the admin panel (recommended)
 
-1. Open `/admin` and scroll to the **Speciali** section.
+1. Open `/admin`, select **Diretta**, and find **Modalità live**.
 2. Click the **★ Festival Mode** toggle.
 3. When fresh replacement audio is ready, the station replaces the upcoming
    normal segments and schedules the next festival-flavored banter. Otherwise,

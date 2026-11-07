@@ -110,6 +110,9 @@ def _write_release_check_repo(
         "#!/usr/bin/env python3\nraise SystemExit(0)\n",
     )
     _write(tmp_path / "scripts/media-proof.py", "#!/usr/bin/env python3\nraise SystemExit(0)\n")
+    # The real review date is tested with pinned days in tests/scripts/test_check_speech_cast.py;
+    # a stub keeps these fixture runs off the calendar.
+    _write(tmp_path / "scripts/check_speech_cast.py", "#!/usr/bin/env python3\nraise SystemExit(0)\n")
 
 
 def _run_release_check(tmp_path: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -130,7 +133,11 @@ def _run_release_check(tmp_path: Path, *, env: dict[str, str] | None = None) -> 
     run_env.pop("MMR_MODEL_REGISTRY_GATE", None)
     result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=run_env)
     # The gate falls through to running when its git diff fails, so prove every run skipped.
-    assert "[NOTE] not a release cut" in result.stdout, result.stdout + result.stderr
+    # Sections 11 and 12 share the note's opening, so each is matched by its own ending.
+    for section_note in ("the review-age and liveness gates run on cut PRs", "the review date is checked on cut PRs"):
+        assert f"[NOTE] not a release cut (no version line changes against origin/main); {section_note}" in (
+            result.stdout
+        ), result.stdout + result.stderr
     return result
 
 
@@ -656,6 +663,71 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(
     assert "browser narration assets and admin metadata match the release manifest" in result.stdout
     # The fixture stays off the calendar and the network: section 11 skips as off a cut.
     assert "[NOTE] not a release cut" in result.stdout
+
+
+def _run_release_check_as_cut(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    """Run the release check with the release-cut sections forced on.
+
+    Forcing them on also runs section 11, which reads the real registry date and the
+    live provider docs. A python3 shim answers scripts/check_model_registry.py with a
+    pass and hands every other script to the real interpreter, so these runs stay off
+    the calendar and the network. Section 11's own logic is tested in
+    tests/workflows/test_model_registry_gate.sh.
+    """
+    shim_dir = tmp_path / ".release-cut-bin"
+    _write(
+        shim_dir / "python3",
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in\n  */check_model_registry.py) exit 0 ;;\nesac\n'
+        f'exec "{sys.executable}" "$@"\n',
+    )
+    os.chmod(shim_dir / "python3", 0o755)
+    env = {
+        **os.environ,
+        "MMR_MODEL_REGISTRY_GATE": "always",
+        "PATH": f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+    return _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path, env=env)
+
+
+def test_pre_release_check_runs_the_speech_cast_review_date(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    _write_release_check_repo(tmp_path)
+
+    result = _run_release_check_as_cut(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[PASS] Model registry review age" in result.stdout
+    assert "12. Speech cast review date" in result.stdout
+    assert "[PASS] Speech cast is inside its review window" in result.stdout
+
+
+def test_pre_release_check_fails_past_the_speech_cast_review_date(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    _write_release_check_repo(tmp_path)
+    _write(
+        tmp_path / "scripts/check_speech_cast.py",
+        "#!/usr/bin/env python3\nprint('FAIL: past the review date')\nraise SystemExit(1)\n",
+    )
+
+    result = _run_release_check_as_cut(tmp_path)
+
+    assert result.returncode == 1
+    assert "[FAIL] Speech cast is past its review date or the check failed" in result.stdout
+    assert "Failed: 1 " in result.stdout
+
+
+def test_pre_release_speech_cast_section_calls_the_release_mode() -> None:
+    """The fixture runs a stub, so pin the real invocation and its release-cut scope here."""
+    body = PRE_RELEASE_CHECK.read_text()
+    section = body[body.index('echo "12. Speech cast review date"') : body.index("# ── Summary")]
+
+    assert 'elif "$MEDIA_PYTHON" scripts/check_speech_cast.py --release; then' in section
+    assert "if ! model_registry_gate_applies; then" in section
 
 
 def test_model_registry_gate_workflow_contract() -> None:
@@ -1721,6 +1793,37 @@ def test_validate_addon_rejects_unknown_effort_level(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "level 'turbo' is not one of" in result.stdout
+
+
+def test_validate_addon_accepts_registry_without_a_speech_model(tmp_path: Path) -> None:
+    """No pinned speech model is valid: OpenAI voices then use their Edge fallback."""
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    pinned = registry.read_text()
+    assert '[tts.openai]\nmodel = "openai-tts"\n\n' in pinned
+    _write(registry, pinned.replace('[tts.openai]\nmodel = "openai-tts"\n\n', ""))
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert "model_registry.toml is valid and remains root-canonical" in result.stdout
+    assert "model_registry.toml parse/schema error" not in result.stdout
+
+
+def test_validate_addon_rejects_an_empty_speech_model(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    registry = tmp_path / "model_registry.toml"
+    _write(registry, registry.read_text().replace('model = "openai-tts"', 'model = ""'))
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "[tts.openai].model must be non-empty when present" in result.stdout
 
 
 def test_validate_addon_rejects_unknown_effort_catalog_key(tmp_path: Path) -> None:

@@ -28,5 +28,4 @@ QA performed:
 - [ ] `<span class="mi">` present in `<h1>` in every modified HTML file
 - [ ] Tricolor div present below `<h1>` (`.tricolor-stripe` on admin, `.tricolor-band` on listener)
 - [ ] No green used for any success/connected state (colorblind safety)
-- [ ] Player QA run passed on `/`
-- [ ] Admin QA run passed on `/admin`
+- [ ] QA Impact records the required Player/Admin QA results, justified reuse, or why a surface is unaffected

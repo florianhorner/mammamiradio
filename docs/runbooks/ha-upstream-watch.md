@@ -1,7 +1,7 @@
 # Runbook — HA upstream watcher
 
 **Job:** catch Home Assistant changes that touch mammamiradio's HA surface
-(the `media_player` entity, the add-on, the planned `custom_components/` integration,
+(the `media_player` entity, the add-on, the HACS-installable `custom_components/mammamiradio/` integration,
 the Music Assistant provider) **before they reach a stable release** — so an
 opportunity like the 2026.6 entity-first card picker, or a breaking change to
 `media_player`/`config_flow`, is known weeks early instead of after it ships.

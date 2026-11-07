@@ -78,10 +78,79 @@ def test_openai_tts_without_registry_model_falls_back_to_edge():
     for host in config.hosts:
         host.engine = "openai"
     config.openai_api_key = "openai-key"
-    config.models.tts_models = {}  # registry TTS route unavailable (legacy/broken registry)
+    config.models.tts_models = {}  # the registry pins no OpenAI speech model
     status = _tts_provider_status(config, StationState())
     assert status["current_provider"] == "edge"
     assert status["fallback_active"] is True
+    # The key is there; calling it missing would send the operator the wrong way.
+    assert "key missing" not in status["current_reason"].lower()
+    assert "switched off" in status["current_reason"].lower()
+
+
+def test_unpinned_openai_and_missing_key_are_reported_separately():
+    """A partial fallback names both causes: the missing key and the switched-off voices."""
+    config = load_config(TOML_PATH)
+    config.ads.voices = []
+    config.sonic_brand.sweeper_voice = ""
+    config.hosts[0].engine = "openai"
+    config.hosts[1].engine = "azure"
+    config.openai_api_key = "openai-key"
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
+    config.models.tts_models = {}
+
+    status = _tts_provider_status(config, StationState())
+
+    assert status["current_provider"] == "edge"
+    assert status["fallback_active"] is True
+    assert "key missing for azure" in status["current_reason"].lower()
+    assert "openai voices are switched off" in status["current_reason"].lower()
+
+
+def test_unpinned_openai_beside_a_working_elevenlabs_key_reads_as_switched_off_only():
+    """A mixed cast keeps its working voices; only the OpenAI ones are named, never as a missing key."""
+    config = load_config(TOML_PATH)
+    config.ads.voices = []
+    config.sonic_brand.sweeper_voice = ""
+    config.hosts[0].engine = "elevenlabs"
+    config.hosts[1].engine = "openai"
+    config.openai_api_key = "openai-key"
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = "eleven-key"
+    config.models.tts_models = {}
+
+    status = _tts_provider_status(config, StationState())
+
+    assert status["primary_provider"] == "mixed_tts"
+    assert status["current_provider"] == "mixed_tts"
+    assert status["fallback_active"] is True
+    reason = status["current_reason"].lower()
+    assert "openai voices are switched off" in reason
+    assert "key missing" not in reason
+    assert "elevenlabs" not in reason
+    assert "model_registry.toml" in reason
+
+
+def test_staged_ad_candidates_do_not_affect_voice_status():
+    """A candidate that never airs cannot put the voice card into fallback."""
+    config = load_config(TOML_PATH)
+    config.sonic_brand.sweeper_voice = ""
+    for host in config.hosts:
+        host.engine = "elevenlabs"
+    config.ads.voices = config.ads.voices[:1]
+    config.ads.voices[0].engine = "azure"
+    config.ads.voices[0].airtime_approved = False
+    config.openai_api_key = ""
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = "eleven-key"
+
+    status = _tts_provider_status(config, StationState())
+
+    assert status["primary_provider"] == "elevenlabs"
+    assert status["fallback_active"] is False
 
 
 def test_runtime_fallback_overrides_configured_mixed_tts():

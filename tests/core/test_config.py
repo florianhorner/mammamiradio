@@ -571,8 +571,15 @@ def test_load_config_normalizes_ad_voice_with_openai_id(tmp_path):
     assert rinaldo.voice == "it-IT-DiegoNeural"
 
 
-def test_load_config_accepts_provider_routed_ad_voice_with_openai_id():
-    toml_path = Path(__file__).resolve().parents[2] / "radio.toml"
+def test_load_config_accepts_provider_routed_ad_voice_with_openai_id(tmp_path):
+    # The shipped cast has no OpenAI voice since 2026-10-22; route one here.
+    shipped = (Path(__file__).resolve().parents[2] / "radio.toml").read_text(encoding="utf-8")
+    fiamma_route = 'name = "Fiamma"\nvoice = "uC9VI5XrTxXRNlCzGSKR"\nengine = "elevenlabs"\n'
+    assert fiamma_route in shipped
+    toml_path = tmp_path / "radio.toml"
+    toml_path.write_text(
+        shipped.replace(fiamma_route, 'name = "Fiamma"\nvoice = "coral"\nengine = "openai"\n'), encoding="utf-8"
+    )
     config = load_config(str(toml_path))
 
     fiamma = next(v for v in config.ads.voices if v.name == "Fiamma")
@@ -1496,7 +1503,7 @@ def test_load_config_tolerates_legacy_sonic_brand_keys(tmp_path):
 
     source = Path(__file__).resolve().parents[2] / "radio.toml"
     raw = source.read_text()
-    anchor = 'sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"'
+    anchor = 'sweeper_engine = "edge"'
     assert anchor in raw, "anchor line drifted; update this test's injection point"
     custom = raw.replace(
         anchor,

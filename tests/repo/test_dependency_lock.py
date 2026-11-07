@@ -52,6 +52,17 @@ def test_multidict_lock_excludes_items_view_reference_leak() -> None:
     )
 
 
+def test_edge_tts_lock_excludes_the_handshake_rejection() -> None:
+    pin = _runtime_pins()["edge-tts"]
+    assert len(pin.specifier) == 1, "edge-tts must have one exact runtime pin"
+    specifier = next(iter(pin.specifier))
+    assert specifier.operator == "==", "edge-tts must remain hash-locked to an exact version"
+    assert Version(specifier.version) >= Version("7.3.1"), (
+        "Microsoft rejects the speech handshake of edge-tts before 7.3.1, which silences every free voice; "
+        "regenerate the runtime lock rather than lowering this floor"
+    )
+
+
 @pytest.mark.skipif(sys.implementation.name != "cpython", reason="C-extension reference counts require CPython")
 @pytest.mark.parametrize("dictionary_class", ["MultiDict", "CIMultiDict"])
 @pytest.mark.parametrize("operation", ["reflected_union", "subtraction", "intersection"])

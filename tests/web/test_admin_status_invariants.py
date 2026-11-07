@@ -403,6 +403,9 @@ def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> Non
         "['AZURE_SPEECH_KEY','azure_speech']",
     ):
         assert provider in voices
+    # An OpenAI key is a writing key first; it voices nothing without a pinned
+    # speech model, which the provider health snapshot reports as `configured`.
+    assert "name!=='openai_speech'||_caps?.provider_health?.openai_speech?.configured===true" in voices
     assert "keys.has('AZURE_SPEECH_KEY')!==keys.has('AZURE_SPEECH_REGION')" in voices
     assert "state:'degraded',label:'Azure setup is incomplete'" in voices
     assert "_caps?.provider_health?.[name]||{}" in voices

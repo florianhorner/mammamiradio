@@ -1644,3 +1644,12 @@ def test_guide_playback_stall_is_recovered_by_a_watchdog() -> None:
 
     stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
     assert "clearTimeout(_firstListenGuideWatchdog)" in stop_guide
+
+
+def test_an_openai_key_alone_is_never_shown_as_voices():
+    """An OpenAI key writes the hosts; its voices also need a pinned speech model, and none ships."""
+    labels = _function("setupProviderLabels", "setupProviderReadiness")
+    assert "if(keys.has('OPENAI_API_KEY'))labels.push('OpenAI AI hosts');" in labels
+
+    evidence = _function("firstListenVoiceEvidence", "firstListenHouseholdProofRequired")
+    assert "name!=='openai_speech'||_caps?.provider_health?.openai_speech?.configured===true" in evidence

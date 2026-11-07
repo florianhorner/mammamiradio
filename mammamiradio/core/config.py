@@ -598,11 +598,17 @@ def _load_model_registry(path: Path, *, legacy_raw: dict | None = None) -> Model
     # log and keep routing, so OpenAI TTS degrades to its Edge fallback and the
     # cost estimate uses the conservative fallback rate instead of going dark.
     try:
-        tts = raw.get("tts") or {}
-        openai_tts = tts.get("openai") if isinstance(tts, dict) else None
-        if not isinstance(openai_tts, dict) or not str(openai_tts.get("model", "")).strip():
+        tts = raw.get("tts", {})
+        if not isinstance(tts, dict):
+            raise ValueError("[tts] must be a table")
+        openai_tts = tts.get("openai")
+        if openai_tts is None:
+            # Pinning no speech model is a deliberate choice, not a broken registry.
+            log.info("Registry pins no OpenAI speech model (%s); OpenAI voices use their Edge fallback", path)
+        elif not isinstance(openai_tts, dict) or not str(openai_tts.get("model", "")).strip():
             raise ValueError("tts.openai.model must be a non-empty string")
-        models.tts_models["openai"] = str(openai_tts["model"])
+        else:
+            models.tts_models["openai"] = str(openai_tts["model"])
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         log.error("Registry TTS selection unavailable (%s): %s — OpenAI TTS will use its Edge fallback", path, exc)
     try:

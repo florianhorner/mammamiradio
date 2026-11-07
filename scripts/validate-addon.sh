@@ -852,10 +852,15 @@ if effort is not None:
                     f'model_registry.toml schema invalid: models.effort.{provider}.{key} must not '
                     f'set effort on Haiku ({model_id})'
                 )
-tts = raw.get('tts')
-openai_tts = tts.get('openai') if isinstance(tts, dict) else None
-if not isinstance(openai_tts, dict) or not str(openai_tts.get('model', '')).strip():
-    raise SystemExit('model_registry.toml schema invalid: [tts.openai].model must be non-empty')
+tts = raw.get('tts', {})
+if not isinstance(tts, dict):
+    raise SystemExit('model_registry.toml schema invalid: [tts] must be a table')
+# No pinned speech model is valid; OpenAI voices then use their Edge fallback.
+openai_tts = tts.get('openai')
+if openai_tts is not None and (
+    not isinstance(openai_tts, dict) or not str(openai_tts.get('model', '')).strip()
+):
+    raise SystemExit('model_registry.toml schema invalid: [tts.openai].model must be non-empty when present')
 pricing = raw.get('pricing')
 if not isinstance(pricing, dict):
     raise SystemExit('model_registry.toml schema invalid: [pricing] table is required')

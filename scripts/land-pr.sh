@@ -64,8 +64,10 @@ land_one() {
 
   case "$pr" in (*[!0-9]*|'') die "PR number must be numeric, got: $pr" ;; esac
 
-  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,mergeStateStatus 2>/dev/null)" \
+  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,baseRefName,mergeStateStatus 2>/dev/null)" \
     || die "could not read PR #$pr. Check the number and your gh auth, then re-run."
+  [ "$(printf '%s' "$view" | jq -r "$LAND_BASE_JQ land_base" 2>/dev/null)" = main ] \
+    || die "PR #$pr must have a verified main base — refusing non-main or unknown targets."
   state="$(printf '%s' "$view" | jq -r '.state')"
   head="$(printf '%s' "$view" | jq -r '.headRefOid')"
   base="$(printf '%s' "$view" | jq -r '.baseRefOid')"
@@ -91,10 +93,8 @@ land_one() {
     return 1
   fi
 
-  # The base is only trusted if it is landed in origin/main; a stale local ref
-  # would refuse GitHub's real base. Refresh only if the local ref does not
-  # already cover it — a seat with complete history never fetches.
-  refresh_landed_ref "$base"
+  # Hydrate the exact objects reported by GitHub; admission does not depend on
+  # the freshness of this checkout's remote-tracking ref.
   ensure_head_local "$pr" "$head" \
     || die "PR #$pr head $head is not available locally and could not be fetched — cannot verify landing gates against it."
   if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
@@ -109,11 +109,31 @@ land_one() {
   # This is read-only admission; freeze/thaw remain explicit release actions.
   GH_REPO="$LAND_REPO" bash "$SCRIPT_DIR/dependabot-window-hold.sh" check-cut "$base" "$head" || return 1
 
+  # Gates can take time. Refuse changes to the checked target or commits before
+  # arming; this read is not an atomic lock against later retargeting.
+  view="$(gh pr view "$pr" --json state,headRefOid,baseRefOid,baseRefName,mergeStateStatus 2>/dev/null)" \
+    || die "could not re-read PR #$pr before arming — refusing to merge; retry."
+  printf '%s' "$view" | jq -e --arg head "$head" --arg base "$base" \
+    "$LAND_BASE_JQ "'type == "object" and .state == "OPEN" and
+      land_base == "main" and .headRefOid == $head and .baseRefOid == $base and
+      .mergeStateStatus != "BEHIND" and .mergeStateStatus != "DIRTY"' >/dev/null 2>&1 \
+    || die "PR #$pr changed or its state could not be verified before arming — rerun landing checks."
+
   # Pin the merge to the exact head verified above. If anything pushes to the
   # branch after this, GitHub refuses the merge instead of landing unseen code.
   gh pr merge "$pr" --squash --auto --match-head-commit "$head" --delete-branch --repo "$LAND_REPO" \
     || die "arming auto-merge for PR #$pr failed — see gh output above, fix, and re-run."
-  say "land-pr: PR #$pr armed — GitHub merges it once required checks pass on head ${head:0:12}."
+  # Cancellation is best-effort: GitHub may already have merged the PR.
+  if ! view="$(gh pr view "$pr" --json baseRefName --repo "$LAND_REPO" 2>/dev/null)" \
+    || ! printf '%s' "$view" | jq -e "$LAND_BASE_JQ "'type == "object" and land_base == "main"' >/dev/null 2>&1; then
+    if gh pr merge "$pr" --disable-auto --repo "$LAND_REPO"; then
+      say "land-pr: Auto-merge disabled for PR #$pr."
+    else
+      say "land-pr: could not disable auto-merge for PR #$pr — inspect it on GitHub immediately."
+    fi
+    die "PR #$pr target changed or could not be verified after arming; inspect its target and merge state before retrying. Cancellation cannot undo a completed merge."
+  fi
+  say "land-pr: PR #$pr auto-merge request accepted for head ${head:0:12}; confirm its merge state on GitHub."
   say "         If the head changes before then, the merge will not fire; re-run this script."
 }
 

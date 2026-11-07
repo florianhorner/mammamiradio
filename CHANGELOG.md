@@ -8,6 +8,8 @@ Dates for published releases use Europe/Berlin.
 
 ## [Unreleased]
 
+- **Ready-to-play songs no longer need their original download.** When a song’s original download has been cleared, the station can reuse its verified prepared copy instead of trying to fetch it again. Source permissions and audio checks still apply.
+
 - **Hosts and voices talk to Anthropic and OpenAI through the current SDKs.** The station now runs the Anthropic 1.x and OpenAI 3.x Python SDKs, which bring their own HTTP transport (httpx2). Request logging from that transport is quietened the same way as before, so nothing new appears in the logs at the default level.
 - **The creative hosts move to Opus 5.5 and Sonnet 5.5.** Premium and balanced scripts are written by the newer models, and the admin cost counter uses the current Opus price (4 dollars in, 20 dollars out per million tokens). The fast Haiku route is unchanged.
 

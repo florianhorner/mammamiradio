@@ -1,38 +1,11 @@
 name: Model registry watch
 
-# Weekly nag for model_registry.toml: is it still decided lately, and are its pins
-# still current at the providers? Runs scripts/check_model_registry.py --report,
-# which asks both questions against the public provider docs, no API keys needed.
-#
-# This is the weekly half of the watch. The other half runs at the release cut
-# (scripts/pre-release-check.sh section 11) and gates on age plus liveness only.
-# This job is deliberately NOT a PR check: a calendar assertion on unrelated PRs
-# gets bumped reflexively, which is the failure the review stamp exists to prevent.
-#
-# Issue posture is cloned from advertised-version.yml, with two deliberate changes
-# and one mechanical one.
-#
-# First: a broken watcher files an issue. In the parent, an unreachable registry
-# leaves the issue alone, because addon-release.yml is the loud primary detector
-# and a blip must not close a live drift issue. Here --report IS the only detector,
-# and its own contract says a broken scraper must never look green. So a run that
-# cannot read the provider docs opens or keeps the issue too, with a body and a
-# title that name the watcher rather than a pin. The cost is one comment per bad
-# Monday during a docs outage; it closes itself on the next clean run.
-#
-# Second: an already-open issue gets this week's report as a comment. The parent
-# only notes "already tracked". A nag that goes quiet after the first week is not
-# a nag, and the comment is how a two-month-old finding stays visible.
-#
-# Mechanical: the verdict is read from the exit code plus the report's own
-# headers, because the checker has no VERDICT line. A crash before the checker's
-# main() (an interpreter without tomllib, a syntax error) also exits 1, with a
-# traceback and no report; that is filed as the watcher being broken, never as a
-# pin finding with a traceback for evidence.
-#
-#   clean            -> close any open watch issue
-#   a finding        -> open the issue, or comment this week's report on it
-#   watcher broken   -> same, with a body and title that name the watcher
+# Weekly decision watch. --report checks review age and provider status, honoring
+# only dated exact-pin legacy/unlisted holds. Release cuts independently use age
+# plus liveness; holds never suppress deprecation or retirement.
+# An issue tracks the latest report; subscribers receive a comment only when the
+# report changes. Only the running age counter is normalized for deduplication.
+# Broken checks remain visible and never close an existing issue.
 
 on:
   schedule:
@@ -87,7 +60,7 @@ jobs:
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Open, comment on, or close the watch issue
+      - name: Open, update, or close the watch issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERDICT: ${{ steps.report.outputs.verdict }}
@@ -107,9 +80,9 @@ jobs:
           if [ "$VERDICT" = "pass" ]; then
             if [ -n "$EXISTING" ]; then
               gh issue close "$EXISTING" \
-                --comment "This week's report is clean: every pin is current and the review stamp is fresh. Closing automatically."
+                --comment "This week's report has no pending decisions: pins are current or explicitly held, no lifecycle warnings were found, and review dates are fresh. Closing automatically."
             else
-              echo "Registry is decided and current; nothing to report."
+              echo "Registry has no pending decisions; nothing to report."
             fi
             exit 0
           fi
@@ -127,19 +100,30 @@ jobs:
           else
             TITLE="Model registry needs a decision"
             {
-              printf '%s\n\n' 'The weekly model registry watch found something to decide: a pinned model is no longer current at its provider, or `model_registry.toml` has not been reviewed in over 45 days.'
+              printf '%s\n\n' 'The weekly model registry watch found something to decide: a pin has new or unaccepted provider drift, a lifecycle warning, an invalid or expired hold, or a review stamp older than 45 days.'
               printf '%s\n' '```'
               printf '%s\n' "$DETAIL"
               printf '%s\n\n' '```'
-              printf '%s\n' '**Fix:** run `python scripts/check_model_registry.py --providers`, decide each flagged pin (bump it or deliberately hold it), then set `last_reviewed` in `model_registry.toml` to today and say which in the comment beside it. Holding is a valid decision; an undated one is not.'
-              printf '%s\n\n' 'The release cut runs the same check and refuses to cut on a stale stamp, so deciding now saves a red cut later.'
+              printf '%s\n' '**Fix:** run `python3 scripts/check_model_registry.py --report` and inspect raw drift with `--providers`. Decide each finding. For a deliberate legacy/unlisted hold, record the exact pin, status, reason and review dates under `[model_watch.holds]` (see `docs/release-process.md`). Update `last_reviewed` only after an actual review. Deprecation and retirement cannot be held.'
+              printf '%s\n\n' 'The release cut separately checks review age and liveness. Watch holds never waive those checks.'
             } > "$BODY"
           fi
           printf '%s\n' 'This issue closes itself once a weekly run comes back clean.' >> "$BODY"
 
+          # Keep dates, status changes and failures in the identity. Only a line's
+          # running age changes harmlessly between otherwise identical reports.
+          FINGERPRINT="$(sed -E '/^(OK|FAIL): model_registry\.toml last_reviewed=/s/is [0-9]+ days old/is <age> days old/' "$BODY" | sha256sum | cut -d ' ' -f1)"
+          MARKER="<!-- model-registry-watch:$FINGERPRINT -->"
+          printf '\n%s\n' "$MARKER" >> "$BODY"
           if [ -n "$EXISTING" ]; then
+            PREVIOUS="$(gh issue view "$EXISTING" --json body --jq .body)"
+            if printf '%s\n' "$PREVIOUS" | grep -qFx -- "$MARKER"; then
+              echo "Unchanged findings already tracked in #$EXISTING."
+              exit 0
+            fi
             gh issue comment "$EXISTING" --body-file "$BODY"
-            echo "Updated #$EXISTING with this week's report."
+            gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY"
+            echo "Updated #$EXISTING with a changed report."
             exit 0
           fi
           # --force updates an existing label instead of erroring, which makes this
@@ -147,6 +131,6 @@ jobs:
           # labels, the run goes red here with gh's own message rather than one line
           # later on a missing label.
           gh label create "$LABEL" --force \
-            --description "model_registry.toml has a pin that is not current or a review stamp older than 45 days" \
+            --description "Model registry has an unaccepted change, lifecycle warning, or overdue review" \
             --color B60205
           gh issue create --title "$TITLE" --label "$LABEL" --body-file "$BODY"

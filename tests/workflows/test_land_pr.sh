@@ -72,7 +72,7 @@ mkdir -p "$MOCK_BIN"
 cat > "$MOCK_BIN/gh" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "${GH_MOCK_GUARD:-0}" == "1" && "$1 $2" == "pr merge" ]]; then
-  [[ " $* " == *" --delete-branch "* && " $* " == *" --repo test-owner/test-repo "* ]] || {
+  [[ ( " $* " == *" --delete-branch "* || " $* " == *" --disable-auto "* ) && " $* " == *" --repo test-owner/test-repo "* ]] || {
     echo 'guard: explicit repository and branch cleanup required' >&2
     exit 1
   }
@@ -95,16 +95,34 @@ echo "$*" >> "$GH_MOCK_LOG"
 case "$1 $2" in
   "pr view")
     [[ "$*" != *"commits"* ]] || exit 64
+    if [[ "$*" == *"--json baseRefName"* ]]; then
+      [[ "${GH_MOCK_AFTER_FAIL:-0}" != 1 ]] || exit 1
+      after_json='{"baseRefName":"main"}'
+      printf '%s\n' "${GH_MOCK_AFTER_JSON-$after_json}"
+      exit 0
+    fi
+    if [ "$(grep -c '^pr view ' "$GH_MOCK_LOG")" -gt 1 ]; then
+      [[ "${GH_MOCK_FINAL_FAIL:-0}" != 1 ]] || exit 1
+      if [ "${GH_MOCK_FINAL_JSON+x}" = x ]; then
+        printf '%s\n' "$GH_MOCK_FINAL_JSON"
+        exit 0
+      fi
+    fi
     head="${GH_MOCK_HEAD:?}"
     merge_state="${GH_MOCK_MERGE_STATE:-CLEAN}"
     commits="${GH_MOCK_COMMITS_JSON:-}"
     if [ -z "$commits" ]; then
       commits="[{\"committedDate\":\"${GH_MOCK_COMMIT_DATE:?}\"}]"
     fi
-    printf '{"state":"%s","headRefOid":"%s","baseRefOid":"%s","mergeStateStatus":"%s","commits":%s}\n' \
-      "${GH_MOCK_STATE:-OPEN}" "$head" "${GH_MOCK_BASE:?}" "$merge_state" "$commits"
+    printf '{"state":"%s","headRefOid":"%s","baseRefOid":"%s","baseRefName":%s,"mergeStateStatus":"%s","commits":%s}\n' \
+      "${GH_MOCK_STATE:-OPEN}" "$head" "${GH_MOCK_BASE:?}" "${GH_MOCK_BASE_NAME_JSON:-\"main\"}" "$merge_state" "$commits"
     ;;
-  "pr merge") : ;;
+  "pr merge")
+    if [[ "$*" == *"--disable-auto"* ]]; then
+      exit "${GH_MOCK_DISABLE_RC:-0}"
+    fi
+    exit "${GH_MOCK_ARM_RC:-0}"
+    ;;
   "repo view")
     printf '%s\n' 'test-owner/test-repo'
     ;;
@@ -165,7 +183,6 @@ run_land() {
       GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
       GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" GH_MOCK_COMMENT_JSON="$EMPTY_COMMENTS" \
       MMR_LAND_REVIEW_READER="$reader" \
-      MMR_LAND_SKIP_FETCH="${MMR_LAND_SKIP_FETCH:-1}" \
       MMR_LAND_SKIP_EVIDENCE_CHECK="${MMR_LAND_SKIP_EVIDENCE_CHECK:-1}" \
       MMR_LAND_SKIP_THREAD_CHECK="${MMR_LAND_SKIP_THREAD_CHECK:-1}" \
       "$@" bash "$LAND" 7 2>&1)" || RUN_RC=$?
@@ -199,7 +216,7 @@ never_merged || fail "missing head-pin support must never merge"
 printf '%s' "$RUN_OUT" | grep -q 'Upgrade gh' || fail "old CLI needs upgrade guidance"
 pass "missing head-pin support remains fail-closed"
 
-# Case 1: CLEAN PR + fresh squad entry at HEAD => arms with pinned real head
+# Case 1: CLEAN PR arms with pinned real head; legacy inputs are ignored.
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
 [ "$RUN_RC" -eq 0 ] || fail "clean PR should arm auto-merge pinned to head (exit code)"
 merged_with "$HEAD_FULL" || fail "clean PR should arm auto-merge pinned to head"
@@ -361,12 +378,12 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
 never_merged || fail "page-2 blocking comment must never merge"
 pass "paginated comment scan finds blocking bot debt"
 
-# Case 20: no local ledger, committed v2 evidence covers head => arm
+# Case 20: receipt presence cannot restore retired admission checks.
 run_land "$(empty_reader)" \
   MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
   MMR_LAND_EVIDENCE_CHECKER="$PASSING_EVIDENCE_CHECKER"
-[ "$RUN_RC" -eq 0 ] || fail "v2-only landing should arm when ledger is absent (exit code)"
-merged_with "$HEAD_FULL" || fail "v2-only landing should arm auto-merge"
+[ "$RUN_RC" -eq 0 ] || fail "receipt presence must not affect landing (exit code)"
+merged_with "$HEAD_FULL" || fail "receipt presence must not affect pinned arming"
 ! printf '%s' "$RUN_OUT" | grep -q "committed v2 evidence covers" \
   || fail "landing must not claim it checked retired evidence"
 pass "receipt presence does not re-enable admission checks"
@@ -382,12 +399,7 @@ run_land "$TMPDIR_T/nonexistent-reader" MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRA
 never_merged || fail "unavailable review data must never arm"
 pass "review data failure remains fail-closed without a ledger"
 
-# =============================================================================
-# The landed-ref refresh. The merge witness trusts a base only if it is landed in
-# origin/main; a landing seat that has not fetched since main advanced would
-# refuse GitHub's real base. The wrapper must refresh the ref before it verifies,
-# and the refresh must never be the thing that fails the landing.
-# =============================================================================
+# Existing exact objects do not require origin/main or a refresh.
 GIT_SHIM_DIR="$TMPDIR_T/gitshim"; mkdir -p "$GIT_SHIM_DIR"
 GIT_SHIM_LOG="$TMPDIR_T/git-shim.log"; : > "$GIT_SHIM_LOG"
 REAL_GIT="$(command -v git)"
@@ -395,44 +407,93 @@ cat > "$GIT_SHIM_DIR/git" <<GITEOF
 #!/usr/bin/env bash
 if [ "\$1" = "fetch" ]; then
   printf '%s\\n' "\$*" >> "$GIT_SHIM_LOG"
-  [ "\${GIT_SHIM_FETCH_FAIL:-0}" = "1" ] && exit 128
-  exit 0
+  exit 128
 fi
 exec "$REAL_GIT" "\$@"
 GITEOF
 chmod +x "$GIT_SHIM_DIR/git"
+EMPTY_READER="$(empty_reader)"
+for ref_state in stale missing; do
+  [ "$ref_state" != missing ] || git update-ref -d refs/remotes/origin/main
+  PATH="$GIT_SHIM_DIR:$PATH" run_land "$EMPTY_READER" GH_MOCK_BASE="$BEHIND_BASE_FULL"
+  [ "$RUN_RC" -eq 0 ] || fail "present exact objects should arm with $ref_state ref: $RUN_OUT"
+  [ ! -s "$GIT_SHIM_LOG" ] || fail "present exact objects must not fetch"
+  merged_with "$HEAD_FULL" || fail "exact objects must retain head-pinned arming"
+done
+pass "present exact objects need no main-ref refresh"
 
-READER_OK="$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
-: > "$GIT_SHIM_LOG"
-# The base must be one the local origin/main does NOT cover, or nothing fetches.
-# The fixture's HEAD~1 is origin/main; BEHIND_BASE_FULL is a divergent sibling.
-PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL"
-[ "$RUN_RC" -eq 0 ] || fail "clean PR should still arm with the fetch enabled: $RUN_OUT"
-grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "wrapper must refresh origin/main before verifying"
-merged_with "$HEAD_FULL" || fail "arming must still happen after the refresh"
-pass "wrapper refreshes origin/main before verifying the base"
+# Reject every non-main/unknown base before object hydration or thread queries.
+for base_name in '"release"' null '""' 42 false '{}' '[]'; do
+  PATH="$GIT_SHIM_DIR:$PATH" run_land "$EMPTY_READER" GH_MOCK_BASE_NAME_JSON="$base_name" \
+    GH_MOCK_HEAD=0000000000000000000000000000000000000000 MMR_LAND_SKIP_THREAD_CHECK=0
+  [ "$RUN_RC" -ne 0 ] || fail "base $base_name must refuse"
+  never_merged || fail "base $base_name must never merge"
+  [ ! -s "$GIT_SHIM_LOG" ] || fail "base rejection must precede object fetch"
+  ! grep -q 'api graphql' "$GH_MOCK_LOG" || fail "base rejection must precede review queries"
+done
+pass "non-main and unverifiable bases fail before gates or merge"
 
-: > "$GIT_SHIM_LOG"
-PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$BEHIND_BASE_FULL" GIT_SHIM_FETCH_FAIL=1
-[ "$RUN_RC" -eq 0 ] || fail "a failed refresh must not itself fail the landing (the remaining gates decide): $RUN_OUT"
-grep -q "^fetch -q origin main" "$GIT_SHIM_LOG" || fail "refresh must still be attempted"
-merged_with "$HEAD_FULL" || fail "with remaining gates passing, a failed refresh must not block the arm"
-pass "a failed refresh is tolerated; the remaining gates decide"
+# State can change while object hydration and review/release checks run.
+FINAL_VIEW="$(jq -n --arg head "$HEAD_FULL" --arg base "$ANC_FULL" \
+  '{state:"OPEN", headRefOid:$head, baseRefOid:$base, baseRefName:"main", mergeStateStatus:"CLEAN"}')"
+for change in '.baseRefName = "train/test"' '.baseRefName = null' \
+  '.headRefOid = "different"' '.baseRefOid = "different"' \
+  '.state = "CLOSED"' '.state = "MERGED"' \
+  '.mergeStateStatus = "BEHIND"' '.mergeStateStatus = "DIRTY"'; do
+  run_land "$EMPTY_READER" GH_MOCK_FINAL_JSON="$(printf '%s' "$FINAL_VIEW" | jq "$change")"
+  [ "$RUN_RC" -ne 0 ] || fail "changed final snapshot must refuse: $change"
+  never_merged || fail "changed final snapshot must never merge: $change"
+done
+pass "changed target, commits, state or mergeability prevent arming"
+
+for invalid_view in '' '{' '{}' 'null' '[]'; do
+  run_land "$EMPTY_READER" GH_MOCK_FINAL_JSON="$invalid_view"
+  [ "$RUN_RC" -ne 0 ] || fail "invalid final snapshot must refuse: $invalid_view"
+  never_merged || fail "invalid final snapshot must never merge"
+done
+run_land "$EMPTY_READER" GH_MOCK_FINAL_FAIL=1
+[ "$RUN_RC" -ne 0 ] || fail "failed final read must refuse"
+never_merged || fail "failed final read must never merge"
+pass "unavailable final PR state fails closed"
+
+run_land "$EMPTY_READER" GH_MOCK_FINAL_JSON="$FINAL_VIEW"
+[ "$RUN_RC" -eq 0 ] || fail "unchanged final snapshot should arm: $RUN_OUT"
+merged_with "$HEAD_FULL" || fail "unchanged snapshot must retain head pin"
+[ "$(grep -c '^pr view ' "$GH_MOCK_LOG")" -eq 3 ] || fail "must read PR state before and after arming"
+tail -n 3 "$GH_MOCK_LOG" | head -n 1 | grep -q '^pr view ' \
+  || fail "final state read must immediately precede merge"
+! grep -q -- '--disable-auto' "$GH_MOCK_LOG" || fail "main target must retain auto-merge"
+pass "unchanged snapshot is rechecked immediately before pinned arming"
+
+for after_view in '{"baseRefName":"release"}' '{"baseRefName":null}' '{"baseRefName":42}' '' '{' '{}' 'null' '[]'; do
+  run_land "$EMPTY_READER" GH_MOCK_AFTER_JSON="$after_view" GH_MOCK_GUARD=1
+  [ "$RUN_RC" -ne 0 ] || fail "changed or unknown target after arming must fail"
+  merged_with "$HEAD_FULL" || fail "fixture must arm before target changes"
+  tail -n 1 "$GH_MOCK_LOG" | grep -q '^pr merge 7 --disable-auto --repo test-owner/test-repo$' \
+    || fail "unverified target must trigger explicit-repo cancellation"
+done
+pass "changed or invalid target after arming triggers cancellation"
+
+for disable_rc in 0 1; do
+  run_land "$EMPTY_READER" GH_MOCK_AFTER_FAIL=1 GH_MOCK_DISABLE_RC="$disable_rc"
+  [ "$RUN_RC" -ne 0 ] || fail "failed post-arm read must fail"
+  grep -q -- '--disable-auto' "$GH_MOCK_LOG" || fail "read failure must attempt cancellation"
+  if [ "$disable_rc" -eq 0 ]; then
+    printf '%s' "$RUN_OUT" | grep -q 'Auto-merge disabled' || fail "report successful cancellation"
+  else
+    ! printf '%s' "$RUN_OUT" | grep -q 'Auto-merge disabled' || fail "must not claim failed cancellation succeeded"
+    printf '%s' "$RUN_OUT" | grep -q 'could not disable' || fail "report cancellation failure"
+  fi
+done
+pass "failed post-arm read cancels and reports cancellation failures honestly"
+
+run_land "$EMPTY_READER" GH_MOCK_ARM_RC=1
+[ "$RUN_RC" -ne 0 ] || fail "failed arming must fail"
+! grep -q -- '--json baseRefName' "$GH_MOCK_LOG" || fail "failed arming must not report post-arm success"
+pass "failed arming stops before post-arm validation"
 
 ! grep -q -- '--unshallow' "$LAND" || fail "landing must not fetch full history"
 pass "landing does not request a full-history fetch"
-
-# Complete history: a base the local origin/main already covers must not fetch.
-# This mirrors the invariant tests/workflows/test_dependabot_automerge_gate.sh
-# holds against this same wrapper, so the property lives with its owner too.
-: > "$GIT_SHIM_LOG"
-if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
-  COVERED_BASE="$(git rev-parse origin/main)"
-  PATH="$GIT_SHIM_DIR:$PATH" MMR_LAND_SKIP_FETCH=0 run_land "$READER_OK" GH_MOCK_BASE="$COVERED_BASE"
-  [ "$(grep -c '^fetch -q origin main' "$GIT_SHIM_LOG")" = "0" ] \
-    || fail "a base already covered by local origin/main must not trigger a fetch"
-  pass "complete history never fetches (base already covered by origin/main)"
-fi
 
 [ ! -e "$RETIRED_READER_CALLS" ] || fail "retired receipt/ledger reader was invoked"
 pass "landing never invokes retired receipt or ledger readers"
@@ -440,9 +501,24 @@ pass "landing never invokes retired receipt or ledger readers"
 # The sentinel only fires when a retired knob is read by name; a retired reader
 # called by its default path would slip past it. No landing script may name one.
 RETIRED_NAMES='read-preship-ledger|check-preship-evidence|gstack-review-read|MMR_LAND_REVIEW_READER|MMR_LAND_EVIDENCE_CHECKER|squad_check|evidence_check'
-! grep -nE "$RETIRED_NAMES" "$REPO_ROOT/scripts/land-gates.sh" "$LAND" "$REPO_ROOT/scripts/land-queue-plan.sh" \
-  || fail "a landing script names a retired review reader or gate"
-pass "no landing script names a retired review reader or gate"
+assert_no_retired_names() {
+  local rc=0
+  grep -nE "$RETIRED_NAMES" "$@" || rc=$?
+  case "$rc" in
+    1) return 0 ;;
+    0) echo "retired review reader or gate found" >&2 ;;
+    *) echo "retired-name scan failed (exit $rc)" >&2 ;;
+  esac
+  return 1
+}
+assert_no_retired_names "$REPO_ROOT/scripts/land-gates.sh" "$LAND" "$REPO_ROOT/scripts/land-queue-plan.sh" \
+  || fail "landing script retirement guard failed"
+printf '%s\n' 'thread_check' > "$TMPDIR_T/scan-clean"
+printf '%s\n' 'squad_check' > "$TMPDIR_T/scan-retired"
+assert_no_retired_names "$TMPDIR_T/scan-clean" || fail "clean scan should pass"
+if assert_no_retired_names "$TMPDIR_T/scan-retired" >/dev/null 2>&1; then fail "retired name must fail"; fi
+if assert_no_retired_names "$TMPDIR_T/missing" >/dev/null 2>&1; then fail "grep error must fail"; fi
+pass "retired-name guard rejects matches and scan errors"
 
 echo
 echo "All $PASS_COUNT land-pr cases passed."

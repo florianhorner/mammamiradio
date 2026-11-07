@@ -1048,6 +1048,25 @@ Once playback is running, protected recovery uses only admitted non-transient
 media, packaged recovery audio, the emergency tone, or forced banter. Jamendo is
 never eligible for rescue, and silent audio is never queued intentionally.
 
+Ordinary music preparation also reuses a normalized copy before reacquiring its
+original, which cache eviction may already have removed. This shortcut requires
+a recorded source matching the selected track and the same effective origin
+gate as recovery: local media or enabled standalone external media. Unknown,
+retired, and session-rejected origins still require ordinary source admission.
+An ineligible derivative is replaced from the admitted original, never reused
+merely because its old path still exists.
+Cached bytes pass format and applicable current duration admission before
+loudness reconciliation; the producer and prewarm retain their audio-quality
+gates. A damaged normalized copy is removed and rebuilt from its original when
+available, without denying the whole recording merely for a broken derivative.
+Prepared copies do not inherit the original download’s fixed byte-size floor,
+so lower-bitrate output remains reusable. If eviction removes the copy during
+validation or reconciliation, preparation retries the original source once.
+A timed-out or unavailable probe refuses admission but preserves the prepared
+copy for a later retry; inability to inspect it does not prove corruption.
+That recovery attempt excludes the unverified path from cache and last-known-good
+music, trying another eligible song or the bounded sweeper/tone fallback instead.
+
 ### Operator song blocklist
 
 Base sources are reconstructed on startup, so an in-memory "remove" could
@@ -1095,14 +1114,18 @@ Each host declares a TTS engine in `radio.toml`: `engine = "edge"` (default), `e
 **Edge TTS** (Microsoft): free, no API key. Each host maps to an Azure Neural voice (e.g., `it-IT-GiuseppeNeural`). SSML prosody tags (rate, pitch) are derived from the host's personality axes for voice differentiation.
 
 **OpenAI TTS**: requires `OPENAI_API_KEY` and uses the separately configured
-`[tts.openai]` registry entry. Each host maps to an OpenAI voice (e.g., `onyx`).
+`[tts.openai]` registry entry. The entry is optional, and none ships: a registry
+without it is valid, and every OpenAI voice then renders on its Edge double, key
+or no key. The shipped cast uses no OpenAI or Azure voice; its one paid speech
+key is ElevenLabs (see the speech cast note above `[[ads.voices]]` in `radio.toml`).
+A custom host can map to an OpenAI voice (e.g., `onyx`).
 Personality-aware delivery instructions are generated from the host's energy,
 warmth, and chaos axes — the model interprets these as acting direction, not
 just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 
-**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) is the default for ads, sweepers, guest bits, and every host. The expressive `eleven_v3` delivery path (with a code-owned `delivery_profile`) is present in the code but disabled by default: Marco and Giulia currently ship on V2 after their V3 host-performance audition was rejected. When a host opts into `eleven_v3`, V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
+**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) is the default for the ElevenLabs ad characters, guest bits, and every host; the shipped station ident and two ad voices are free Edge voices. The expressive `eleven_v3` delivery path (with a code-owned `delivery_profile`) is present in the code but disabled by default: Marco and Giulia currently ship on V2 after their V3 host-performance audition was rejected. When a host opts into `eleven_v3`, V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
 
 For selected normal host banter on a V3 host, the script carries one semantic
 cue beside — never inside — the clean spoken text. Marco may be `energetic`, `curious`, or
@@ -1605,14 +1628,7 @@ responses are accepted only for the query generation that started them.
 
 ### Auth rules
 
-Admin access is granted by one of:
-
-- localhost access, unless `ADMIN_PASSWORD` is configured
-- HTTP Basic auth via `ADMIN_USERNAME` and `ADMIN_PASSWORD`
-- token auth via `X-Radio-Admin-Token` header for non-local requests when only `ADMIN_TOKEN` is configured
-- private-network trust (LAN, Tailscale, HA Supervisor) when no credential is configured — reads allowed, writes CSRF-checked; public IPs are always rejected
-
-In standalone mode, a non-loopback bind without a credential is rejected during config validation. The HA add-on is exempt: it boots on `0.0.0.0` with no credential and trusts its own LAN. The full matrix is the single source of truth in [operations.md](operations.md) ("Admin access model").
+`_validate` in `mammamiradio/core/config.py` decides whether the process may boot on its bind address, and `require_admin_access` in `mammamiradio/web/auth.py` authorizes each admin request. Both follow the tables in [operations.md, "Admin access model"](operations.md#admin-access-model), the single source of truth.
 
 ### CSRF protection
 
@@ -1770,7 +1786,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup; keepsake eligibility gates, exact-segment extraction, durable keepsake save |
 | `mammamiradio/release_campaign.py` | Packaged release-beat manifest loading and bounded on-air campaign state (`cache/release_campaign_ledger.json`) |
 | `mammamiradio/restart_handoff.py` | Post-restart music continuity spool: producer writes safe recent segments, startup admits them into the queue (`cache/restart_handoff/`) |
-| `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
+| `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy |
 | `mammamiradio/hosts/prompt_world.py` | Prompt-fiction data: expression banks, host fingerprints, exchange-shape/lore banks, style directives, Chaos/Festival mode blocks |
 | `mammamiradio/hosts/relationship.py` | Roster-aware exchange-shape/lore selection and in-memory recency rotation |
 | `mammamiradio/hosts/transitions.py` | Transition rewrite openers + anti-repeat stem/massage helpers |
@@ -1791,7 +1807,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/home/context_value.py` | Privacy-safe classification of a detached preview as useful, ambient-only, or empty |
 | `mammamiradio/home/catalog.py` | Generated device-label catalog: curated overrides, Anthropic-backed generation, four-tier resolver |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
-| `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |
+| `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout |
 | `mammamiradio/web/status_payload.py` | Shared admin/listener status payload serializers re-exported by `streamer.py` |
 | `mammamiradio/web/auth.py` | Request-layer admin auth: `require_admin_access`, CSRF enforcement, trusted-network classification |
 | `mammamiradio/web/listener_requests.py` | Listener-request endpoints (submit, public feed, admin queue, dismiss) and the song-wish download background task |

@@ -73,7 +73,8 @@ If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace l
 Then fill in whatever `.env` values you need:
 
 - `ANTHROPIC_API_KEY` for banter and ad script generation (falls back to OpenAI if unavailable)
-- `OPENAI_API_KEY` for TTS voices and as a script generation fallback
+- `OPENAI_API_KEY` as a script generation fallback
+- `ELEVENLABS_API_KEY` for the premium cast; without it every voice uses its free Edge double
 - `HA_TOKEN` for Home Assistant prompt context
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` if you plan to bind outside localhost
 
@@ -127,7 +128,7 @@ Useful URLs:
 
 - `http://127.0.0.1:8000/` — listener page for public callers; flips to the admin control room when the request carries a trusted HA ingress header
 - `http://127.0.0.1:8000/listen` — explicit listener alias (always the public UI)
-- `http://127.0.0.1:8000/admin` — admin control room (guarded by `require_admin_access`: loopback, private network including HA Supervisor ingress, admin token, or basic auth)
+- `http://127.0.0.1:8000/admin` — admin control room (open on loopback; other callers follow the [Admin access model](docs/operations.md#admin-access-model))
 - `http://127.0.0.1:8000/stream` — infinite MP3 stream
 - `http://127.0.0.1:8000/public-status` — public JSON
 - `http://127.0.0.1:8000/status` — admin JSON
@@ -362,6 +363,12 @@ Use a distinct tracked receipt path for each reviewed selection. Without
 existing receipt. `--overwrite-selection-receipt` deliberately replaces that
 chosen receipt; use it only to correct the same review, never to start a new
 audit history.
+
+The shipped cast's receipt is `proof/2026-10-22-speech-cast.json`. The test
+suite runs `scripts/check_speech_cast.py --binding`, which fails when an
+airtime ad voice or the station ident has no accepted row there, so a recast
+lands together with its new rows. An Edge audition that fails is recorded as
+failed, never as the house voice the station would have aired instead.
 
 Accepted media and human-review receipts remain immutable. Historical
 content-addressed receipts under `proof/preship-reviews/v2/` remain readable

@@ -16,6 +16,7 @@ from mammamiradio.core.setup_status import (
     build_guided_setup,
     build_setup_status,
     classify_station_mode,
+    cloud_speech_engine_ready,
     detect_run_mode,
     first_listen_continuity_available,
     first_listen_onboarding_active,
@@ -1248,3 +1249,94 @@ def test_fresh_recovery_strip_advances_through_audio_and_privacy_before_repair()
         "target": "setup",
         "focus": "source",
     }
+
+
+def _route_cast(config, *, hosts: str, ads: str, ident: str) -> None:
+    """Send every host, airtime ad voice and the ident to one engine each."""
+    for host in config.hosts:
+        host.engine = hosts
+    for voice in config.ads.voices:
+        voice.engine = ads
+    config.sonic_brand.sweeper_voice = "ident-voice"
+    config.sonic_brand.sweeper_engine = ident
+
+
+def _voice_keys(config) -> dict:
+    payload = build_setup_status(config, _real_state())
+    return next(item for item in payload["essentials"] if item["key"] == "tts_keys")
+
+
+def _clear_speech_keys(config) -> None:
+    config.openai_api_key = ""
+    config.azure_speech_key = ""
+    config.azure_speech_region = ""
+    config.elevenlabs_api_key = ""
+
+
+def test_voice_keys_count_only_the_engines_the_cast_uses():
+    config = load_config()
+    _clear_speech_keys(config)
+    _route_cast(config, hosts="elevenlabs", ads="elevenlabs", ident="elevenlabs")
+    config.openai_api_key = "openai-key"
+    config.azure_speech_key = "azure-key"
+    config.azure_speech_region = "westeurope"
+
+    unused_keys = _voice_keys(config)
+
+    assert unused_keys["status"] == "missing"
+    assert unused_keys["next_action"] == "Add ELEVENLABS_API_KEY for the premium voices."
+    # Saved keys stay listed: the admin form merges them across essentials.
+    assert unused_keys["configured_keys"] == ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "OPENAI_API_KEY"]
+    assert unused_keys["accepted_keys"][0] == "ELEVENLABS_API_KEY"
+
+    config.elevenlabs_api_key = "eleven-key"
+    assert _voice_keys(config)["status"] == "configured"
+
+
+def test_voice_keys_name_the_ident_key_after_elevenlabs():
+    config = load_config()
+    _clear_speech_keys(config)
+    _route_cast(config, hosts="elevenlabs", ads="elevenlabs", ident="azure")
+
+    assert _voice_keys(config)["next_action"] == (
+        "Add ELEVENLABS_API_KEY for the premium voices, then AZURE_SPEECH_KEY plus AZURE_SPEECH_REGION "
+        "for the rest of the cast."
+    )
+
+
+def test_staged_ad_candidates_do_not_ask_for_their_key():
+    config = load_config()
+    _clear_speech_keys(config)
+    _route_cast(config, hosts="elevenlabs", ads="elevenlabs", ident="elevenlabs")
+    config.ads.voices[0].engine = "azure"
+    config.ads.voices[0].airtime_approved = False
+
+    assert _voice_keys(config)["next_action"] == "Add ELEVENLABS_API_KEY for the premium voices."
+
+
+def test_openai_key_without_a_pinned_speech_model_is_not_a_premium_voice():
+    config = load_config()
+    _clear_speech_keys(config)
+    _route_cast(config, hosts="openai", ads="openai", ident="openai")
+    config.openai_api_key = "openai-key"
+    config.models.tts_models = {}
+
+    voice_keys = _voice_keys(config)
+
+    assert voice_keys["status"] == "missing"
+    assert voice_keys["next_action"] == "This cast uses only the free voices, so no voice key is needed."
+
+    config.models.tts_models = {"openai": "test-openai-tts"}
+    assert _voice_keys(config)["status"] == "configured"
+
+
+@pytest.mark.parametrize("engine", ["edge", "unsupported"])
+def test_free_or_unknown_engine_is_not_premium_ready_with_cloud_keys(engine):
+    config = load_config()
+    config.openai_api_key = "openai-key"
+    config.models.tts_models = {"openai": "test-openai-tts"}
+    config.azure_speech_key = "azure-key"
+    config.azure_speech_region = "westeurope"
+    config.elevenlabs_api_key = "eleven-key"
+
+    assert not cloud_speech_engine_ready(config, engine)

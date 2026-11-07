@@ -64,31 +64,12 @@ Marco and Giulia. Future host-writing changes must preserve these traits:
 
 ## Parallel workspaces
 
-Admission, Path A vs Path B, write-sets, and the "do this now" triage live in
-[`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md).
-Hard rules agents must not invent around:
+Use one writer per worktree. Resolve conflicts in the source checkout, rerun
+affected checks and review the resulting diff. The maintainer merges human and
+feature PRs through `scripts/land-pr.sh`. Queue reports are advisory and cannot
+authorize a merge. See the [merge and queue runbook](runbooks/parallel-workspaces.md)
+for supported commands and shared-file constraints.
 
-- Max 3 active Conductor workspaces for this repo, including an active train.
-  Do not create a fourth to "help" merge, fix conflicts, or orchestrate the
-  others.
-- Do not merge. The maintainer lands with `scripts/land-pr.sh`.
-- Path B workers do not edit shared files listed in that runbook; put a
-  manifest note in the handoff. A dedicated Path A workspace may own those
-  files only when its objective and exclusive write-set name them.
-- Do not spawn workspaces, trains, or extra PRs unless the current message
-  assigned that role.
-
-## PR Landing Queue
-
-- For multi-PR or coordinator landing sessions, run `scripts/pr-queue-status.sh`
-  at the start and again after each confirmed merge so the remaining queue is
-  based on current GitHub/worktree state rather than chat memory.
-- The single landing conductor owns the full output and merge order. Individual
-  PR agents may include the relevant script output as their readiness receipt
-  before handing off.
-- For ordinary single-PR work, `scripts/pr-queue-status.sh` is optional and
-  advisory only. It must not be treated as a merge gate; `scripts/land-pr.sh`
-  remains the only required landing path.
 
 ## Dependabot Batches
 
@@ -119,12 +100,3 @@ Hard rules agents must not invent around:
   the recreated head. GitHub Actions must not post Dependabot rebase or recreate
   commands: its bot actor is rejected, and batch-wide nudges create repeated
   comment and CI churn under strict up-to-date checks.
-
-## Integration Trains
-
-- Default ship path, WIP cap, and write-sets:
-  [`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md).
-- When active, `Train/Listener QS` uses `train/listener-qs` from a recorded
-  `origin/main` SHA. Path B stays dormant until the maintainer creates that
-  branch and its dedicated Conductor workspace. Feature worktrees targeting
-  the active train hand off through `docs/listener-qs-train.md`.

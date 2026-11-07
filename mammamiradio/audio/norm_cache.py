@@ -343,6 +343,7 @@ def select_norm_cache_rescue(
     allow_recent_repeat: bool,
     require_known_origin: bool = False,
     allow_external_media: bool = False,
+    excluded_paths: tuple[Path, ...] = (),
 ) -> Path | None:
     """Pick a cache rescue clip without replaying the current/recent song first.
 
@@ -350,6 +351,9 @@ def select_norm_cache_rescue(
     cache files are dropped first, before the recent-identity de-dup. If every file is
     banned (nothing left) the rescue degrades to ``None`` and the caller's next layer
     (canned clip / forced banter) keeps audio flowing rather than airing a banned song.
+
+    ``excluded_paths`` holds audio unverified in this recovery attempt without
+    removing its bytes or preventing a later ordinary validation retry.
 
     ``allow_recent_repeat`` is REQUIRED, deliberately. It is the caller's honest
     answer to "what is below me?", and it defaulted to the permissive value
@@ -368,7 +372,7 @@ def select_norm_cache_rescue(
     Passing ``True`` from a caller that DOES have rungs below it is how a drain
     bridge came to queue the on-air song back-to-back with nothing in between.
     """
-    norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    norm_files = [path for path in sorted(cache_dir.glob("norm_*.mp3")) if path not in excluded_paths]
     if require_known_origin:
         norm_files = [
             path
