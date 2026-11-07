@@ -8853,9 +8853,29 @@ async def test_transition_final_language_failure_is_counted_once(config, state, 
 async def test_listener_truth_repair_counts_final_language_failure(config, state):
     config.super_italian_mode = False
     response = {"lines": [{"host": host.name, "text": "Questa canzone è bella."} for host in _regular_hosts(config)]}
-    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock(return_value=response)):
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock(return_value=response)
+    ) as generate:
         assert await scriptwriter_module.repair_banter_without_listener_context(state, config) is None
-    assert (state.language_guard_rejections, state.language_guard_failures) == (0, 1)
+    assert generate.await_count == 2
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_repair_gets_its_one_language_retry(config, state):
+    config.super_italian_mode = False
+    responses = [
+        {"lines": [{"host": host.name, "text": text} for host in _regular_hosts(config)]}
+        for text in ("Questa canzone è bella.", "This song is ready for you.")
+    ]
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock(side_effect=responses)
+    ) as generate:
+        lines = await scriptwriter_module.repair_banter_without_listener_context(state, config)
+    assert lines and len(lines) == len(_regular_hosts(config))
+    assert all(line.text == "This song is ready for you." for line in lines)
+    assert generate.await_count == 2
+    assert (state.language_guard_rejections, state.language_guard_failures) == (1, 0)
 
 
 @pytest.mark.asyncio
