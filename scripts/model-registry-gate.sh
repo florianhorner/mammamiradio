@@ -4,9 +4,10 @@
 # Two questions about model_registry.toml, answered by scripts/check_model_registry.py:
 # did a maintainer decide the pins in the last 45 days, and are the pinned IDs still
 # alive at their providers? The contract, the env vars and why the section never runs
-# on feature PRs are in CLAUDE.md, Quality gates, "Model registry watch". The section
-# lives in its own file so tests/workflows/test_model_registry_gate.sh can drive it
-# without running the other ten sections of the release check each time.
+# on feature PRs are in docs/release-process.md, "Practical sequencing (soak hygiene)",
+# the model registry bullet. The section lives in its own file so
+# tests/workflows/test_model_registry_gate.sh can drive it without running the other
+# ten sections of the release check each time.
 #
 # Callers provide ok(), fail() and waive(), pre-release-check.sh's reporters.
 # shellcheck shell=bash
