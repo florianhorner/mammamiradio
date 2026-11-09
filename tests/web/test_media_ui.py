@@ -191,3 +191,11 @@ def test_admin_leads_with_included_access_and_only_clears_operator_owned_ids() -
     assert guard < clear.index("confirm(prompt)")
     assert guard < clear.index("mediaSourceRequest(")
     assert "clear_client_id:true" in clear
+
+
+def test_admin_shows_parked_jamendo_as_standby_not_preparing() -> None:
+    block = _function_block(ADMIN_HTML.read_text(encoding="utf-8"), "jamendoPresentation")
+    standby = block.index("s.standby===true")
+    working = block.index("Preparing one Jamendo track")
+    assert standby < working
+    assert "Jamendo on standby" in block

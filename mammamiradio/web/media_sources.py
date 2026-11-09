@@ -116,6 +116,7 @@ def safe_jamendo_status(config: object, provider: object | None = None) -> dict[
     failure = str(raw.get("last_failure_code") or "")
     if failure not in _JAMENDO_FAILURE_CODES:
         failure = "api_failed" if failure else ""
+    standby = raw.get("standby") is True and state == "idle"
     age = raw.get("last_success_age_sec")
     if isinstance(age, bool) or not isinstance(age, int | float) or age < 0:
         age = None
@@ -159,6 +160,7 @@ def safe_jamendo_status(config: object, provider: object | None = None) -> dict[
         and client_configured
         and acknowledged
         and bool(raw.get("in_flight", state in {"discovering", "fetching", "normalizing"})),
+        "standby": enabled and client_configured and acknowledged and standby,
         "last_success_age_sec": age,
         "last_failure_code": failure or None,
         "rejected_count": rejected,
@@ -244,6 +246,7 @@ def _apply_failure_status(config: object, provider: object | None) -> dict[str, 
             "state": "blocked",
             "ready": False,
             "in_flight": False,
+            "standby": False,
             "last_failure_code": "api_failed",
             "stream_status": "unaffected",
         }

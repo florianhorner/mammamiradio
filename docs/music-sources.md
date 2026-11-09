@@ -217,7 +217,7 @@ copyright status.
 | --- | --- | --- |
 | `idle` | disabled | Jamendo is off; starter and local music continue. |
 | `blocked` | needs configuration | Confirm non-commercial use; if included access is unavailable, add an operator client ID. |
-| `working` | idle, discovering, fetching, normalizing, queued, playing, or consumed | One single-use track is being prepared; base music continues. |
+| `working` | idle, discovering, fetching, normalizing, queued, playing, or consumed | One single-use track is being prepared, or an unused one expired and the station waits for the next music request to prepare another; base music continues. |
 | `ready` | ready | One track is prepared for one play, then deleted. |
 | `degraded` | transient provider failure | Base music continues; use **Check again** when useful. |
 | `blocked` | provider-wide configuration or contract rejection | The candidate cannot be used; check again or turn Jamendo off. |

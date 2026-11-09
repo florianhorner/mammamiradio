@@ -294,7 +294,7 @@ always remains best-effort and never blocks or delays audio.
 
 - `MUSIC`
   - plays the packaged starter derivatives directly (they are already normalized and hash-verified), or normalizes operator-owned local files before queueing; all twelve starter tracks complete before a starter repeat
-  - may accept a one-play Jamendo artifact only from the transient provider's lease boundary. A miss falls through immediately to local/starter music; the artifact is deleted after playback or cancellation and is never cache/rescue/handoff material
+  - may accept a one-play Jamendo artifact only from the transient provider's lease boundary. A miss falls through immediately to local/starter music; the artifact is deleted after playback or cancellation and is never cache/rescue/handoff material. A lease nobody takes within 30 minutes expires and the provider parks idle; the next `take_ready_segment` miss is the demand signal that prepares a new track
   - uses chart/classic/external candidates only in a standalone install with the effective `external-media` extra. Both add-ons omit the distribution, module, and executable
   - after eligible non-starter music lands, may launch a background prefetch that normalizes the predicted next track so it is ready before queue drain. A running prefetch is left to finish rather than cancelled and replaced — cancelling cannot stop its in-flight executor FFmpeg, which would keep holding the background admission slot (see [Egress FX pipeline](#egress-fx-pipeline-the-transmitter-applied-last)) while a replacement parks another thread behind it; the next music segment retries with a fresh candidate
 - `BANTER`

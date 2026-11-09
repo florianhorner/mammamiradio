@@ -155,7 +155,10 @@ Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
   missing. No client ID is needed; the station brings its own Jamendo access. A
   migrated operator ID remains disabled until reviewed.
 - **Preparing one Jamendo track** is normal. Starter/local music continues and
-  a Jamendo miss never delays the next music slot. When the attempt in progress
+  a Jamendo miss never delays the next music slot. A prepared track nobody
+  plays within 30 minutes is discarded, and the row keeps this label while the
+  station waits for the next music slot before preparing another; no action is
+  needed. When the attempt in progress
   is rejecting candidates, the row states the reason for that attempt in plain
   language instead of a running total, so a provider that keeps failing no
   longer reads as healthy.

@@ -119,6 +119,7 @@ async def test_default_start_is_inert_and_redacted(tmp_path):
             "provider_confirmation": "pending",
             "ready": False,
             "in_flight": False,
+            "standby": False,
             "last_success_age_sec": None,
             "last_failure_code": None,
             "rejected_count": 0,
@@ -882,6 +883,10 @@ async def test_expired_ready_lease_is_deleted_instead_of_queued(tmp_path):
         now[0] += 1801
         assert provider.take_ready_segment() is None
         assert not lease.artifact_path.exists()
+        # The request that found the lease aged out is itself the demand signal:
+        # the expired lease is gone and exactly one fresh preparation starts.
+        assert provider._lease is None
+        assert provider._task is not None
     finally:
         await provider.stop()
         await client.aclose()
@@ -2812,3 +2817,116 @@ def test_auth_statuses_are_still_blocking_not_rate_limited() -> None:
     with pytest.raises(jt._BlockedError) as excinfo:
         jt._validated_api_results(403, b"")
     assert excinfo.value.code == "api_auth_failed"
+
+
+@pytest.mark.asyncio
+async def test_unused_expired_lease_parks_until_music_is_requested(tmp_path):
+    client, _ = _client_for_items()
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker())
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "ready")
+        lease = provider._lease
+        assert lease is not None
+        provider._expire_ready_lease(lease.lease_id)
+        await asyncio.sleep(0.05)
+        # Parked: no fresh download started on its own.
+        assert provider._lease is None
+        assert provider._task is None
+        assert provider._state == jt.JamendoProviderState.IDLE
+        assert provider.status()["standby"] is True
+        # A real request for music is the demand signal.
+        assert provider.take_ready_segment() is None
+        assert provider.status()["standby"] is False
+        await _wait_for_state(provider, "ready")
+        assert provider._lease is not None
+        # Park, demand, ready, serve: the woken track is actually deliverable.
+        assert provider.take_ready_segment() is not None
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_parked_provider_makes_no_requests_and_wakes_once(tmp_path):
+    calls: list[Path] = []
+    client, requests = _client_for_items()
+    provider = jt.JamendoStreamProvider(
+        tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker(calls=calls)
+    )
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "ready")
+        lease = provider._lease
+        assert lease is not None
+        provider._expire_ready_lease(lease.lease_id)
+        requests_before, workers_before = len(requests), len(calls)
+        await asyncio.sleep(0.05)
+        assert (len(requests), len(calls)) == (requests_before, workers_before)
+        # Two quick misses must start exactly one preparation.
+        assert provider.take_ready_segment() is None
+        first_task = provider._task
+        assert first_task is not None
+        assert provider.take_ready_segment() is None
+        assert provider._task is first_task
+        await _wait_for_state(provider, "ready")
+        assert len(calls) == workers_before + 1
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_retry_wakes_a_parked_provider(tmp_path):
+    client, _ = _client_for_items()
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker())
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "ready")
+        lease = provider._lease
+        assert lease is not None
+        provider._expire_ready_lease(lease.lease_id)
+        assert provider._state == jt.JamendoProviderState.IDLE
+        assert provider.retry() is True
+        await _wait_for_state(provider, "ready")
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_expiry_after_stop_does_not_park_or_wake(tmp_path):
+    client, _ = _client_for_items()
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker())
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "ready")
+    finally:
+        await provider.stop()
+        await client.aclose()
+    assert provider._state == jt.JamendoProviderState.DISABLED
+    assert provider.take_ready_segment() is None
+    assert provider._task is None
+
+
+@pytest.mark.asyncio
+async def test_aged_out_lease_on_take_wakes_in_the_same_request(tmp_path):
+    now = [100.0]
+    client, _ = _client_for_items()
+    provider = jt.JamendoStreamProvider(
+        tmp_path,
+        lambda: 0,
+        http_client=client,
+        stream_worker=_successful_worker(),
+        clock=lambda: now[0],
+    )
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "ready")
+        now[0] += 1801
+        assert provider.take_ready_segment() is None
+        assert provider._task is not None
+        await _wait_for_state(provider, "ready")
+    finally:
+        await provider.stop()
+        await client.aclose()

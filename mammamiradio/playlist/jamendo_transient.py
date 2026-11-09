@@ -131,6 +131,7 @@ class JamendoProviderState(StrEnum):
     # DISABLED / NEEDS_CONFIG -> IDLE -> DISCOVERING -> FETCHING
     # -> NORMALIZING -> READY -> QUEUED -> PLAYING -> CONSUMED -> IDLE
     # awaited transient failure -> DEGRADED; contract/config failure -> BLOCKED
+    # READY unused for 30 min -> IDLE (parked, no timer); a take miss prepares
     DISABLED = "disabled"
     NEEDS_CONFIG = "needs_config"
     IDLE = "idle"
@@ -1096,7 +1097,9 @@ class JamendoStreamProvider:
             lease = self._lease
             if self._state != JamendoProviderState.READY or lease is None or not self._lease_valid_unlocked(lease):
                 if lease is not None and self._state == JamendoProviderState.READY:
-                    self._release_current_unlocked("lease_invalid")
+                    aged_out = self._clock() - lease.fetched_at > _MAX_LEASE_AGE_SEC
+                    self._release_current_unlocked("expired" if aged_out else "lease_invalid")
+                self._wake_on_demand_unlocked()
                 return None
             self._state = JamendoProviderState.QUEUED
             if self._lease_expiry_handle is not None:
@@ -1150,6 +1153,29 @@ class JamendoStreamProvider:
             self._release_current_unlocked(reason)
             return True
 
+    def _is_parked_unlocked(self) -> bool:
+        return (
+            self._lease is None
+            and self._state == JamendoProviderState.IDLE
+            and self._pending_delay is None
+            and self._task is None
+            and self._worker_task is None
+        )
+
+    def _wake_on_demand_unlocked(self) -> None:
+        """Prepare the next track when music is requested while parked.
+
+        Only a parked provider wakes: backoff, blocked and in-flight states are
+        left alone, so a request never bypasses a retry delay.
+        """
+        if not self._is_parked_unlocked():
+            return
+        self._pending_delay = 0.0
+        try:
+            self._ensure_scheduled_unlocked()
+        except RuntimeError:
+            self._pending_delay = None
+
     def status(self) -> dict[str, object]:
         """Return the redacted, non-blocking administrative snapshot."""
         with self._lock:
@@ -1177,6 +1203,9 @@ class JamendoStreamProvider:
                     JamendoProviderState.NORMALIZING,
                 }
                 or (self._worker_task is not None and not self._worker_task.done()),
+                # Parked after an unused track expired: nothing is being prepared
+                # until the station next asks for music.
+                "standby": self._is_parked_unlocked(),
                 "last_success_age_sec": round(success_age, 3) if success_age is not None else None,
                 "last_failure_code": self._last_failure_code,
                 "rejected_count": self._rejected_count,
@@ -1750,7 +1779,12 @@ class JamendoStreamProvider:
         self._state = JamendoProviderState.CONSUMED
         release_code = reason if reason in _LEASE_RELEASE_LOG_CODES else "released"
         logger.info("jamendo_lease_released code=%s", release_code)
-        if not self._stopped and self._configuration_valid_unlocked():
+        if reason == "expired" and not self._stopped and self._configuration_valid_unlocked():
+            # Nobody took the lease: park instead of downloading another track
+            # nobody will play. ``take_ready_segment`` wakes the provider.
+            self._state = JamendoProviderState.IDLE
+            self._pending_delay = None
+        elif not self._stopped and self._configuration_valid_unlocked():
             self._pending_delay = 0.0
             self._ensure_scheduled_unlocked()
         elif not self._enabled:

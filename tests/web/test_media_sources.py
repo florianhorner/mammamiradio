@@ -168,6 +168,7 @@ def test_safe_status_has_exact_redacted_contract_even_with_hostile_provider_fact
         "provider_confirmation": "pending",
         "ready": True,
         "in_flight": False,
+        "standby": False,
         "last_success_age_sec": 12.5,
         "last_failure_code": "api_failed",
         "rejected_count": 3,
@@ -1239,3 +1240,17 @@ async def test_clearing_while_staying_enabled_drops_queued_jamendo_segments(monk
     assert app.state.queue.qsize() == 1
     assert app.state.queue.get_nowait() is local
     assert app.state.station_state.queued_segments == [{"id": "local-1", "type": "music"}]
+
+
+def test_jamendo_standby_flag_is_projected_only_while_idle_and_configured() -> None:
+    app = _app(enabled=True, client_id="client_123", acknowledged=True)
+    provider = app.state.jamendo_provider
+
+    provider.status = lambda: {"state": "idle", "standby": True}
+    assert media_sources.safe_jamendo_status(app.state.config, provider)["standby"] is True
+
+    provider.status = lambda: {"state": "discovering", "standby": True}
+    assert media_sources.safe_jamendo_status(app.state.config, provider)["standby"] is False
+
+    provider.status = lambda: {"state": "idle", "standby": "yes"}
+    assert media_sources.safe_jamendo_status(app.state.config, provider)["standby"] is False

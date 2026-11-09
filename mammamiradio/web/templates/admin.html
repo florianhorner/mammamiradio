@@ -5190,6 +5190,7 @@ function jamendoPresentation(status){
   if(internal==='playing'&&!s.enabled)return{state:'working',shape:'●',label:'Jamendo track finishing',detail:'Jamendo is off. This track will finish and then be deleted.',actions:[],announcement:'Jamendo track finishing'};
   if(!s.enabled||internal==='disabled')return{state:'idle',shape:'○',label:'Jamendo off',detail:'Starter and local music continue.',actions:['setup'],announcement:''};
   if(internal==='needs_config')return{state:'blocked',shape:'✗',label:'Finish Jamendo setup',detail:s.shared_access_available?'Confirm non-commercial use to finish. No client ID needed — the station brings its own Jamendo access.':'Add your own Jamendo client ID and confirm non-commercial use.',actions:['setup'],announcement:'Jamendo setup needed'};
+  if(internal==='idle'&&s.standby===true)return{state:'idle',shape:'○',label:'Jamendo on standby',detail:'The last prepared track went unused, so nothing is downloading. A new one is prepared the next time the station needs music. Starter and local music continue.',actions:[],announcement:''};
   if(['idle','discovering','fetching','normalizing','queued','playing','consumed'].includes(internal)){
     // No candidate count here by design. A lifetime total ("823 candidates
     // skipped") reads as catastrophic, says nothing about whether the attempt

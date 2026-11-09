@@ -276,6 +276,7 @@ async def test_jamendo_status_is_admin_only_and_now_playing_exposes_only_safe_at
         "provider_confirmation": "pending",
         "ready": True,
         "in_flight": False,
+        "standby": False,
         "last_success_age_sec": 4,
         "last_failure_code": None,
         "rejected_count": 2,
