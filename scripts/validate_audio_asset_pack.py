@@ -65,6 +65,9 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_AUTHORED_PROVENANCE_TYPE = "project-authored-deterministic-master"
 PROJECT_GENERATOR_KIND = "git-committed-ffmpeg-generator"
+# Generator revisions may be unreachable from any branch (squash merges); a
+# protected tag with this prefix keeps each pinned commit fetchable.
+PROVENANCE_TAG_PREFIX = "provenance/audio-pack-"
 QUALITY_GUARD_KEY = "quality_guard_allowlist"
 CORRELATION_THRESHOLD = 0.98
 CORRELATION_WINDOW_SEC = 0.5
@@ -836,6 +839,37 @@ def _read_git_blob(revision: str, path: str) -> bytes:
     return completed.stdout
 
 
+def provenance_tag_for(revision: str) -> str:
+    """Name of the tag that keeps a pinned generator revision fetchable."""
+    return f"{PROVENANCE_TAG_PREFIX}{revision[:8]}"
+
+
+def _git_commit_present(revision: str) -> bool:
+    """Report whether the pinned generator commit object exists in this clone."""
+    try:
+        completed = subprocess.run(
+            ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("git is required to validate project-authored generator provenance") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"git timed out looking up {revision}") from exc
+    return completed.returncode == 0
+
+
+def _missing_revision_error(revision: str) -> str:
+    tag = provenance_tag_for(revision)
+    return (
+        f"generator revision {revision} is not in this clone, so no generated-source Git blob can be verified. "
+        f"The commit is reachable only through the tag {tag!r}; fetch it with "
+        f"`git fetch origin tag {tag}` and run the check again"
+    )
+
+
 def _probe_audio(path: Path) -> AudioProbe:
     """Inspect one output member with FFprobe; no network or decoding rewrite occurs."""
     try:
@@ -890,6 +924,9 @@ def _probe_audio(path: Path) -> AudioProbe:
 def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...], errors: list[str]) -> None:
     pinned_blob_hashes: dict[tuple[str, str], str | RuntimeError] = {}
     reported_pins: set[tuple[str, str, str]] = set()
+    # A revision whose commit object is absent fails every blob read with a
+    # misleading "path not in revision" message; report it once, by tag.
+    revision_present: dict[str, bool] = {}
     for source in sources:
         if source.original_path is not None:
             try:
@@ -924,6 +961,8 @@ def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...]
         pins = [(generator.path, generator.sha256)]
         pins.extend((dependency.path, dependency.sha256) for dependency in generator.dependencies)
         for path, expected_sha256 in pins:
+            if revision_present.get(generator.revision) is False:
+                break
             key = (generator.revision, path)
             result = pinned_blob_hashes.get(key)
             if result is None:
@@ -931,6 +970,14 @@ def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...]
                     blob = _read_git_blob(*key)
                 except RuntimeError as exc:
                     result = exc
+                    if generator.revision not in revision_present:
+                        try:
+                            revision_present[generator.revision] = _git_commit_present(generator.revision)
+                        except RuntimeError as lookup_exc:
+                            result = lookup_exc
+                        if revision_present.get(generator.revision) is False:
+                            errors.append(_missing_revision_error(generator.revision))
+                            break
                 else:
                     result = hashlib.sha256(blob).hexdigest()
                 pinned_blob_hashes[key] = result
