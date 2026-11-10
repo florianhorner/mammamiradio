@@ -190,9 +190,14 @@ CI enforcement: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.p
   push still fails. Cancelled workflows and obsolete main snapshots do not change
   reports. Reporting API failures fail the job. Token permissions and
   branch-protection rules are not bypassed.
-- The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
-  pack provenance test reads generator inputs at the revision pinned in the
-  manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.
+- The `tests` job checks out full git history (`fetch-depth: 0`), which also
+  fetches every tag. The imaging pack provenance test reads generator inputs at
+  the revision pinned in the manifest, which can be older than `HEAD~1`; a
+  shallow clone cannot prove those hashes. That revision can be reachable only
+  through a `provenance/audio-pack-*` tag, so full branch history is not enough
+  locally: when the validator reports `generator revision … is not in this
+  clone`, run the `git fetch origin tag provenance/audio-pack-…` command it
+  prints (or `git fetch origin '+refs/tags/*:refs/tags/*'`) and rerun the test.
 
 Local check: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 
