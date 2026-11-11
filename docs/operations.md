@@ -526,6 +526,12 @@ The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentional
 `POST /api/listener-request` is public and rate-limited per listener identity.
 The identity is used only as input to the HMAC-backed rate-limit key; raw IP
 addresses are not stored in listener-request state or returned by the API.
+A caller still inside the 30-second window gets `429` before any of the body is
+read. The body is capped at 8 KiB before it is buffered or decoded (a larger
+`Content-Length` is refused outright; a chunked or understated body is abandoned
+as soon as it passes the cap), and a raw name over 240 characters or message
+over 2000 characters is refused, never sliced; all three answer `413` in the
+usual `{"ok": false, "error": ...}` shape and queue nothing.
 
 When the app is served through Home Assistant Supervisor ingress, Supervisor
 appends the caller chain in `X-Forwarded-For`. The station trusts forwarded

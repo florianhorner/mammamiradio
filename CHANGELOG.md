@@ -8,6 +8,8 @@ Dates for published releases use Europe/Berlin.
 
 ## [Unreleased]
 
+- **Song requests are size-checked before the station reads them.** A listener still waiting out the 30-second pause between requests is answered straight away, and an oversized request is turned away with a friendly note to trim it and send it again. One huge request can no longer make the stream stutter for everyone listening.
+
 - **Admin controls are protected from other websites open on the same computer.** On a standalone install, a page from another site in your browser can no longer stop, skip or purge the station or change your API keys behind your back. The dashboard, curl, scripts and Home Assistant automations keep working as before; if the dashboard ever says a change was not accepted, reload /admin and try again.
 
 - **Time checks name the minute you actually hear them.** Mamma Mi Radio prepares each time check a few minutes ahead, so the host used to announce a clock time that was already 4 to 15 minutes old by the time it aired. The station now counts the song on air and everything queued ahead, so "Sono le 14 e 11" really means 14:11, including across midnight.

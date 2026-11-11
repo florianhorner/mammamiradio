@@ -1840,6 +1840,8 @@
           ? _t('form_rate_limited', 'Give the DJ {s}s before sending another dedication.')
               .replace('{s}', String(d.retry_after))
           : _t('form_queue_full', 'The dedication queue is full — wait a moment and try again.');
+      } else if (r.status === 413) {
+        text = _t('form_too_long', 'That dedication is too long to read on air — trim it to a couple of lines and send it again.');
       } else {
         text = _t('form_declined', "That dedication didn't go through — wait a moment and try again.");
       }
