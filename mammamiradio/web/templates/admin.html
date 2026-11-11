@@ -2842,20 +2842,20 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                           <label class="key-field connection-provider"><span>Service to connect</span><select class="input" id="firstListenWritingProvider" onchange="renderFirstListenConnection()"><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option></select></label>
                           <a class="key-help" id="firstListenKeyLink" href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Get an Anthropic key ↗</a>
                           <div class="setup-keys">
-                            <label class="key-field" data-writing-provider="anthropic"><span>Anthropic API key</span><input class="input" id="setupAnthropicKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Anthropic API key" oninput="updateFirstListenKeySaveState()"></label>
-                            <label class="key-field" data-writing-provider="openai" hidden><span>OpenAI API key</span><input class="input" id="setupOpenaiKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="OpenAI API key" oninput="updateFirstListenKeySaveState()"></label>
+                            <label class="key-field" data-writing-provider="anthropic"><span>Anthropic API key</span><input class="input" id="setupAnthropicKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Anthropic API key" oninput="firstListenKeyEdited()"></label>
+                            <label class="key-field" data-writing-provider="openai" hidden><span>OpenAI API key</span><input class="input" id="setupOpenaiKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="OpenAI API key" oninput="firstListenKeyEdited()"></label>
                           </div>
                         </section>
                         <section class="setup-sound-lane" data-connection-stage="voices" aria-labelledby="setupVoiceQualityHeading" hidden>
                           <h4 id="setupVoiceQualityHeading">ElevenLabs · studio voices</h4>
                           <p>In the default setup, add an ElevenLabs key to use the studio voices for new conversations. Without it, new conversations use the free voices heard above.</p>
-                          <label class="key-field"><span>ElevenLabs API key</span><input class="input" id="setupElevenlabsKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="ElevenLabs API key" oninput="updateFirstListenKeySaveState()"></label>
+                          <label class="key-field"><span>ElevenLabs API key</span><input class="input" id="setupElevenlabsKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="ElevenLabs API key" oninput="firstListenKeyEdited()"></label>
                           <details class="setup-advanced" id="setupPremiumVoices">
                             <summary>Other voice setups</summary>
                             <div class="setup-note">For stations already set up to use OpenAI or Azure voices. Adding these keys alone does not switch Marco and Giulia away from the default voice setup. Azure needs both its key and region.</div>
                             <div class="setup-keys">
-                              <label class="key-field"><span>Azure Speech key</span><input class="input" id="setupAzureSpeechKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Azure Speech key" oninput="updateFirstListenKeySaveState()"></label>
-                              <label class="key-field"><span>Azure Speech region</span><input class="input" id="setupAzureSpeechRegion" type="text" placeholder="Leave blank to keep saved region" autocomplete="off" aria-label="Azure Speech region" oninput="updateFirstListenKeySaveState()"></label>
+                              <label class="key-field"><span>Azure Speech key</span><input class="input" id="setupAzureSpeechKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Azure Speech key" oninput="firstListenKeyEdited()"></label>
+                              <label class="key-field"><span>Azure Speech region</span><input class="input" id="setupAzureSpeechRegion" type="text" placeholder="Leave blank to keep saved region" autocomplete="off" aria-label="Azure Speech region" oninput="firstListenKeyEdited()"></label>
                             </div>
                           </details>
                         </section>
@@ -5799,6 +5799,7 @@ function showFirstListenConnection(stage){
   const projection=firstListenProjection();
   if(!projection.privacyUnlocked||_firstListenUi.keySaving||_firstListenUi.privacySaving)return;
   stopFirstListenGuide();
+  _firstListenUi.keySaveRefused='';
   _firstListenUi.connectionStage=stage;
   _firstListenUi.optionalStep=['writing','voices'].includes(stage)?'ai':'';
   _firstListenUi.reviewStep=projection.privacyReviewed&&!_firstListenUi.optionalStep?'privacy':'';
@@ -5850,7 +5851,7 @@ function firstListenConnectionEvidence(){
   return{state:'degraded',label:'Key saved · not confirmed yet',detail:'Check the connection again, or skip AI for now and choose your Home details.'};
 }
 function firstListenVoiceEvidence(){
-  if(_firstListenUi.keySaving||_firstListenUi.keySaveUnconfirmed)return firstListenConnectionEvidence();
+  if(_firstListenUi.keySaving||_firstListenUi.keySaveRefused||_firstListenUi.keySaveUnconfirmed)return firstListenConnectionEvidence();
   const keys=firstListenConfiguredKeys();
   // An OpenAI key alone is a writing key: its voices also need a pinned speech model.
   const providers=[['ELEVENLABS_API_KEY','elevenlabs'],['OPENAI_API_KEY','openai_speech'],['AZURE_SPEECH_KEY','azure_speech']].filter(([key,name])=>keys.has(key)&&(name!=='openai_speech'||_caps?.provider_health?.openai_speech?.configured===true));
@@ -7537,6 +7538,7 @@ async function checkFirstListenConnection(){
   if(_firstListenUi.keySaving||_firstListenUi.connectionChecking||firstListenKeyValues().some(Boolean))return;
   _firstListenUi.connectionChecking=true;
   _firstListenUi.connectionCheckFailed=false;
+  _firstListenUi.keySaveRefused='';
   renderFirstListenProgress();
   try{
     const {response,payload}=await apiResponse('POST','/api/setup/provider-check',{},FIRST_LISTEN_TIMEOUTS.play);
@@ -7564,6 +7566,11 @@ function updateFirstListenKeySaveState(){
   if(next){next.hidden=_firstListenUi.connectionStage!=='voices'&&firstListenConnectionEvidence().state!=='ready';next.disabled=_firstListenUi.keySaving||hasInput;}
   next?.classList.toggle('btn-trigger',!hasInput);
   next?.classList.toggle('btn-util',hasInput);
+}
+function firstListenKeyEdited(){
+  // Typing a new key answers an earlier refusal; drop it so fresh evidence can show.
+  if(_firstListenUi.keySaveRefused){_firstListenUi.keySaveRefused='';renderFirstListenProgress();}
+  updateFirstListenKeySaveState();
 }
 function openFirstListenKeyEditor(el){
   _keysEditMode=true;

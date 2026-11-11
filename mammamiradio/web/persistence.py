@@ -89,10 +89,13 @@ def _dotenv_assignment(key: str, value: str) -> str:
 
 
 def _dotenv_lines(text: str) -> list[str]:
-    """Split .env text the way the shell does: on newline only.
+    """Split .env text into lines without breaking on Unicode line separators.
 
     ``str.splitlines`` also breaks on U+2028, U+2029, U+0085 and friends, which
-    would rewrite a hand-edited line the shell treats as one line into two.
+    the shell reads as ordinary bytes, so it would rewrite one shell line into
+    two. Callers read with ``Path.read_text``, whose universal-newline mode has
+    already turned ``\\r\\n`` and a bare ``\\r`` into ``\\n``; values this module
+    writes never contain either.
     """
     lines = text.split("\n")
     if lines and lines[-1] == "":
@@ -248,7 +251,10 @@ def _save_media_source_settings(
 
     with lock:
         try:
-            lines = _dotenv_lines(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            # Only the standalone .env is sourced by a shell; the add-on secrets
+            # file keeps the splitter its Python readers use.
+            lines = text.splitlines() if addon else _dotenv_lines(text)
         except FileNotFoundError:
             lines = []
 

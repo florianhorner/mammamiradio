@@ -671,6 +671,17 @@ def test_a_refused_key_save_shows_the_station_reason_not_a_lost_connection() -> 
     assert "label:'Not saved',detail:_firstListenUi.keySaveRefused" in evidence
     # A later success or a genuinely lost save clears a stale refusal.
     assert save.count("_firstListenUi.keySaveRefused=''") == 2
+    # The voices stage shows the same refusal instead of falling back to "voices available".
+    voices = _function("firstListenVoiceEvidence", "firstListenHouseholdProofRequired")
+    assert "_firstListenUi.keySaveRefused" in voices.split("\n")[1]
+    # The refusal never sticks: editing a key, changing stage, or re-checking clears it.
+    html = _html()
+    edited = _function("firstListenKeyEdited", "openFirstListenKeyEditor")
+    assert "_firstListenUi.keySaveRefused=''" in edited
+    assert html.count('oninput="firstListenKeyEdited()"') == 5
+    assert 'oninput="updateFirstListenKeySaveState()"' not in html
+    assert "_firstListenUi.keySaveRefused=''" in _function("showFirstListenConnection", "returnToFirstListenSetup")
+    assert "_firstListenUi.keySaveRefused=''" in _function("checkFirstListenConnection", "firstListenKeyFields")
 
 
 def test_not_yet_has_warm_bounded_repair_and_no_volume_mutation() -> None:
