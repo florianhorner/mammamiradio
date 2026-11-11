@@ -8,6 +8,8 @@ Dates for published releases use Europe/Berlin.
 
 ## [Unreleased]
 
+- **The station keeps making new programming when background upkeep hits a snag.** A connection cut off while refreshing the charts, or a cached song file moved at the wrong moment, could leave Mamma Mi Radio repeating its fallback audio until a restart. Now that upkeep simply tries again later and the show goes on.
+
 - **Song requests are size-checked before the station reads them.** A listener still waiting out the 30-second pause between requests is answered straight away, and an oversized request is turned away with a friendly note to trim it and send it again. One huge request can no longer make the stream stutter for everyone listening.
 
 - **Admin controls are protected from other websites open on the same computer.** On a standalone install, a page from another site in your browser can no longer stop, skip or purge the station or change your API keys behind your back. The dashboard, curl, scripts and Home Assistant automations keep working as before; if the dashboard ever says a change was not accepted, reload /admin and try again.

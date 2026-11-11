@@ -1069,6 +1069,37 @@ def test_evict_cache_lru_handles_oserror(cache_dir):
         evict_cache_lru(cache_dir, 0.0001)
 
 
+def test_evict_cache_lru_survives_file_vanishing_between_glob_and_stat(cache_dir):
+    """A file renamed or removed after the listing is skipped; the pass still evicts the rest.
+
+    Bakes rename ``fm_*.staging_*.mp3`` into place and bans purge cache entries while
+    eviction runs in a worker thread, so the glob can name a file that is already gone.
+    """
+    import time
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from mammamiradio.playlist.downloader import evict_cache_lru
+
+    oldest = cache_dir / "old_download.mp3"
+    newest = cache_dir / "new_download.mp3"
+    oldest.write_bytes(b"x" * 1024 * 1024)
+    time.sleep(0.02)
+    newest.write_bytes(b"x" * 1024 * 1024)
+    vanished = cache_dir / "fm_song_v1_abc.staging_deadbeef.mp3"
+    real_glob = Path.glob
+
+    def glob_with_vanished_entry(self, pattern):
+        # The staging file was listed, then renamed away before eviction could stat it.
+        return [vanished, *real_glob(self, pattern)]
+
+    with patch.object(Path, "glob", glob_with_vanished_entry):
+        evict_cache_lru(cache_dir, 1)  # 2 MB of real files -> 1 MB: evict one
+
+    assert not oldest.exists()
+    assert newest.exists()
+
+
 def test_evict_cache_lru_keeps_processed_audio_over_regular(cache_dir):
     """Transient/regular cache files evict before processed audio — an fm_ broadcast-chain
     bake (which may be queued/airing) is kept over a newer regular file, matching the

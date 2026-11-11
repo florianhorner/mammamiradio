@@ -6624,13 +6624,18 @@ async def _run_producer_inner(
                 # Protect norm files currently in the playback queue — and the
                 # capacity-exempt continuity slot — from eviction. Evicting ready
                 # audio would break delivery mid-stream.
-                queued_paths = _cache_eviction_protected_paths(queue, state)
-                await asyncio.to_thread(
-                    evict_cache_lru,
-                    config.cache_dir,
-                    config.max_cache_size_mb,
-                    queued_paths,
-                )
+                # Housekeeping runs outside the per-segment recovery try and nothing
+                # restarts this task, so a failure here must never end the loop.
+                try:
+                    queued_paths = _cache_eviction_protected_paths(queue, state)
+                    await asyncio.to_thread(
+                        evict_cache_lru,
+                        config.cache_dir,
+                        config.max_cache_size_mb,
+                        queued_paths,
+                    )
+                except Exception:
+                    logger.warning("Cache eviction failed; retrying at the next interval", exc_info=True)
             # Periodically refresh the chart playlist mid-session so long-running
             # stations don't loop the same 50 tracks after ~3 hours.  Only merges
             # tracks not already in the playlist — played_tracks history is preserved.
@@ -6640,28 +6645,33 @@ async def _run_producer_inner(
                 and now - _last_playlist_refresh >= _playlist_refresh_interval
             ):
                 _last_playlist_refresh = now
-                refresh_source_revision = state.source_revision
-                refresh_source_readiness = state.source_readiness
-                existing_ids = {t.spotify_id for t in state.playlist}
-                new_tracks = await asyncio.to_thread(fetch_chart_refresh, existing_ids)
-                if (
-                    refresh_source_revision != state.source_revision
-                    or state.playlist_source is None
-                    or state.playlist_source.kind != "charts"
-                ):
-                    logger.info("Discarding chart refresh completed after playlist source switch")
-                else:
-                    # Doorway: a banned song must not slip back in via the mid-session
-                    # chart refresh either (no restart needed to reintroduce it).
-                    new_tracks = filter_blocklisted(new_tracks, state.blocklist)
-                    if new_tracks:
-                        state.playlist.extend(new_tracks)
-                        refresh_source_readiness.observe_tracks(new_tracks)
-                        logger.info(
-                            "Chart refresh: merged %d new track(s) into playlist (%d total)",
-                            len(new_tracks),
-                            len(state.playlist),
-                        )
+                # Same rule as the eviction above: a failed refresh keeps the current
+                # playlist and is retried at the next interval.
+                try:
+                    refresh_source_revision = state.source_revision
+                    refresh_source_readiness = state.source_readiness
+                    existing_ids = {t.spotify_id for t in state.playlist}
+                    new_tracks = await asyncio.to_thread(fetch_chart_refresh, existing_ids)
+                    if (
+                        refresh_source_revision != state.source_revision
+                        or state.playlist_source is None
+                        or state.playlist_source.kind != "charts"
+                    ):
+                        logger.info("Discarding chart refresh completed after playlist source switch")
+                    else:
+                        # Doorway: a banned song must not slip back in via the mid-session
+                        # chart refresh either (no restart needed to reintroduce it).
+                        new_tracks = filter_blocklisted(new_tracks, state.blocklist)
+                        if new_tracks:
+                            state.playlist.extend(new_tracks)
+                            refresh_source_readiness.observe_tracks(new_tracks)
+                            logger.info(
+                                "Chart refresh: merged %d new track(s) into playlist (%d total)",
+                                len(new_tracks),
+                                len(state.playlist),
+                            )
+                except Exception:
+                    logger.warning("Chart refresh failed; keeping the current playlist", exc_info=True)
             await asyncio.sleep(0.5)
             continue
 

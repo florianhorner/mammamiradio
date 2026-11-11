@@ -903,6 +903,8 @@ When a standalone operator has deliberately enabled `external-media` and selecte
 charts as the base, the producer may check every 90 minutes and merge new chart
 entries without resetting `played_tracks` history. This path is absent from both
 add-ons and never substitutes for the offline starter release floor.
+A failed refresh (network drop, truncated or malformed feed) merges nothing,
+keeps the current playlist, and is retried at the next interval.
 
 ## Playback and fanout
 
@@ -1756,6 +1758,7 @@ This repo is biased toward "keep the station on air."
   immediately continue with local/starter music
 - natural optional speech yields to music when real queued audio is below the producer runway floor while queue capacity remains; packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, never ephemeral scratch
 - missing Home Assistant context is ignored
+- idle housekeeping never ends the producer: the hourly cache eviction and the optional chart refresh run while the queue is full, outside the per-segment rescue ladder, so each is wrapped to log a warning and retry at its next interval; `evict_cache_lru` skips a file that is renamed or removed between listing and `stat`, and the chart fetch returns an empty list for a truncated response, a non-UTF-8 or malformed body, or an unexpected feed shape
 - missing ad brands disables live ads; an approved active-mode packaged bank can still fill the break
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
