@@ -3092,6 +3092,7 @@ const _firstListenUi={
   connectionChecking:false,
   connectionCheckFailed:false,
   keySaveUnconfirmed:false,
+  keySaveRefused:'',
   acknowledgedKeys:[],
   guideKey:'',
   guideButton:null,
@@ -5834,6 +5835,7 @@ function firstListenConnectionEvidence(){
   const keys=firstListenConfiguredKeys();
   const caps=_caps?.capabilities||{};
   if(_firstListenUi.keySaving)return{state:'working',label:'Saving connection',detail:'Saving this service. You can continue once the save settles.'};
+  if(_firstListenUi.keySaveRefused)return{state:'blocked',label:'Not saved',detail:_firstListenUi.keySaveRefused};
   if(_firstListenUi.keySaveUnconfirmed)return{state:'degraded',label:'Save not confirmed',detail:'The save may still be reaching the station. Check your connection, then retry the save or reload to see current settings.'};
   const statuses=[['ANTHROPIC_API_KEY','anthropic_key_status'],['OPENAI_API_KEY','openai_key_status']]
     .filter(([key])=>keys.has(key)).map(([,field])=>caps[field]||'unverified');
@@ -7586,9 +7588,16 @@ async function setupSaveKeys(el){
   try{
     const {response,payload:result}=await apiResponse('POST','/api/setup/save-keys',payload,FIRST_LISTEN_TIMEOUTS.privacy);
     const saved=result?.saved;
+    // A refusal is a definite answer, not a lost save: show the station's reason.
+    if(response.status===422&&result?.ok===false&&typeof result?.error==='string'&&result.error){
+      _firstListenUi.keySaveUnconfirmed=false;
+      _firstListenUi.keySaveRefused=result.error;
+      return;
+    }
     if(!response.ok||result?.ok!==true||!Array.isArray(saved)||saved.length!==submitted.length||new Set(saved).size!==saved.length||!submitted.every(item=>saved.includes(item.key)))throw new Error('save_unconfirmed');
     for(const item of submitted){const input=document.getElementById(item.id);if(input.value.trim()===item.value)input.value='';}
     _firstListenUi.keySaveUnconfirmed=false;
+    _firstListenUi.keySaveRefused='';
     _firstListenUi.acknowledgedKeys=[...new Set([..._firstListenUi.acknowledgedKeys,...saved])];
     // A replacement must not inherit the previous key's successful check if
     // the subsequent refresh fails. Only new server evidence can confirm it.
@@ -7596,6 +7605,7 @@ async function setupSaveKeys(el){
       if(saved.includes(key)&&_caps?.capabilities)_caps.capabilities[field]='unverified';
     }
   }catch(error){
+    _firstListenUi.keySaveRefused='';
     _firstListenUi.keySaveUnconfirmed=true;
     console.warn('first_listen_key_save',error?.name==='AbortError'?'timeout':'unconfirmed');
   }finally{

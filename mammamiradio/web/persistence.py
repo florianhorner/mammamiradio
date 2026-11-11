@@ -9,6 +9,7 @@ route handlers stay in ``web.streamer``.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import stat
 import threading
@@ -72,17 +73,31 @@ class UnsafeEnvValueError(ValueError):
 
 
 # start.sh, the Mac launchers, and the Conductor scripts ``source`` the .env, and
-# bash still expands ``$(...)``, backticks, and ``$VAR`` inside double quotes. A
-# value carrying any of these would run as a command on the next station start, or
-# leave a file that no longer sources at all. Real provider keys never contain them.
-_DOTENV_UNSAFE_CHARS = frozenset("\"'\\$`")
+# bash still expands ``$(...)``, backticks, and ``$VAR`` inside double quotes. Only
+# a strict allowlist is safe: a denylist missed Unicode line separators (U+2028,
+# U+0085), which the shell reads as ordinary bytes but Python's ``splitlines``
+# breaks on, so a later save split the line and flipped the quoting of every line
+# after it. Every real provider key, region, toggle, and profile name fits.
+_DOTENV_SAFE_VALUE_RE = re.compile(r"[A-Za-z0-9._~+/=:@-]*")
 
 
 def _dotenv_assignment(key: str, value: str) -> str:
     """Serialize a KEY="VALUE" line that is inert when a shell sources the .env."""
-    if any(ch in _DOTENV_UNSAFE_CHARS or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+    if not _DOTENV_SAFE_VALUE_RE.fullmatch(value):
         raise UnsafeEnvValueError(f"{key} contains a character that is unsafe in a shell-sourced .env")
     return f'{key}="{value}"'
+
+
+def _dotenv_lines(text: str) -> list[str]:
+    """Split .env text the way the shell does: on newline only.
+
+    ``str.splitlines`` also breaks on U+2028, U+2029, U+0085 and friends, which
+    would rewrite a hand-edited line the shell treats as one line into two.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def _env_assignment(key: str, value: str) -> str:
@@ -182,7 +197,7 @@ def _save_dotenv(updates: dict[str, str]) -> None:
     """Write key=value pairs to .env, updating existing keys or appending new ones."""
     with _DOTENV_LOCK:
         env_path = Path(".env")
-        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        lines = _dotenv_lines(env_path.read_text()) if env_path.exists() else []
 
         safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
         # Refuse the whole save before touching the file: a partly written .env
@@ -233,7 +248,7 @@ def _save_media_source_settings(
 
     with lock:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = _dotenv_lines(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             lines = []
 

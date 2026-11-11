@@ -848,6 +848,14 @@ _SHELL_ACTIVE_VALUES = [
     "sk-a'b",
     "sk-a\\b",
     "sk-a\x1bb",
+    # Unicode line separators: one line to the shell, two to str.splitlines.
+    "sk-a\u2028b",
+    "sk-a\u2029b",
+    "sk-a\x85b",
+    # Inert inside quotes, but they run if the quoting is ever flipped.
+    "x; touch pwned; #",
+    "sk a",
+    "sk-é",
 ]
 
 
@@ -882,7 +890,7 @@ def test_saved_dotenv_sources_in_bash_as_the_literal_value(tmp_path, monkeypatch
     import subprocess
 
     monkeypatch.chdir(tmp_path)
-    value = "sk-ant_api03.AZaz09-_~+/=:@%^&*()[]{}<>|;,!?# x"
+    value = "sk-ant-api03_AZaz09-._~+/=:@"
     persistence._save_dotenv({"ANTHROPIC_API_KEY": value})
 
     result = subprocess.run(
@@ -895,3 +903,43 @@ def test_saved_dotenv_sources_in_bash_as_the_literal_value(tmp_path, monkeypatch
 
     assert result.stdout == value
     assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sk-ant-api03-AbC_dEf-123",
+        "sk-proj-AbC_dEf-123",
+        "sk_0123456789abcdef",
+        "0123456789abcdef0123456789abcdef",
+        "westeurope",
+        "true",
+        "-3",
+        "1.5",
+        "jamendo-api-terms-v1",
+        "",
+    ],
+)
+def test_save_dotenv_accepts_every_real_key_and_setting_shape(tmp_path, monkeypatch, value):
+    monkeypatch.chdir(tmp_path)
+    persistence._save_dotenv({"ANTHROPIC_API_KEY": value})
+    assert f'ANTHROPIC_API_KEY="{value}"' in (tmp_path / ".env").read_text()
+
+
+def test_resaving_a_key_never_splits_a_line_the_shell_reads_as_one(tmp_path, monkeypatch):
+    """A hand-edited line holding U+2028 is one line to bash; a save must keep it one line.
+
+    str.splitlines() broke it in two, which left a stray quote that flipped the
+    quoting of every later line, so a later line's ``;`` ran as a command.
+    """
+    import subprocess
+
+    monkeypatch.chdir(tmp_path)
+    original = 'NOTES="a\u2028tail"\nOPENAI_API_KEY="x; touch pwned; #"\n'
+    (tmp_path / ".env").write_text(original, encoding="utf-8")
+
+    persistence._save_dotenv({"ANTHROPIC_API_KEY": "sk-ant-good"})
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == original + 'ANTHROPIC_API_KEY="sk-ant-good"\n'
+    subprocess.run(["bash", "-c", "set -a; source ./.env; set +a"], cwd=tmp_path, check=False, capture_output=True)
+    assert not (tmp_path / "pwned").exists()

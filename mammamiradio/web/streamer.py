@@ -8442,8 +8442,8 @@ def _unsafe_credential_response() -> JSONResponse:
         content={
             "ok": False,
             "error": (
-                "That key has a symbol we can't keep safely (a quote, backslash, dollar sign or backtick), "
-                "so nothing was saved. Copy the key again straight from your provider's page and paste it in."
+                "One of those keys has a character we can't store safely, so nothing was saved. "
+                "Copy the key again straight from your provider's page, without spaces or quotes, and paste it in."
             ),
         },
     )
