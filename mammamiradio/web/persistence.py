@@ -67,6 +67,24 @@ def _sanitize_credential_value(value: str) -> str:
     return value.replace("\n", "").replace("\r", "").strip()
 
 
+class UnsafeEnvValueError(ValueError):
+    """A value that cannot be written to a shell-sourced ``.env`` safely."""
+
+
+# start.sh, the Mac launchers, and the Conductor scripts ``source`` the .env, and
+# bash still expands ``$(...)``, backticks, and ``$VAR`` inside double quotes. A
+# value carrying any of these would run as a command on the next station start, or
+# leave a file that no longer sources at all. Real provider keys never contain them.
+_DOTENV_UNSAFE_CHARS = frozenset("\"'\\$`")
+
+
+def _dotenv_assignment(key: str, value: str) -> str:
+    """Serialize a KEY="VALUE" line that is inert when a shell sources the .env."""
+    if any(ch in _DOTENV_UNSAFE_CHARS or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise UnsafeEnvValueError(f"{key} contains a character that is unsafe in a shell-sourced .env")
+    return f'{key}="{value}"'
+
+
 def _env_assignment(key: str, value: str) -> str:
     """Serialize a KEY=VALUE line that the add-on secrets parser can read back."""
     return f"{key}={shlex.quote(value)}"
@@ -167,6 +185,9 @@ def _save_dotenv(updates: dict[str, str]) -> None:
         lines = env_path.read_text().splitlines() if env_path.exists() else []
 
         safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
+        # Refuse the whole save before touching the file: a partly written .env
+        # would persist some keys and silently drop others.
+        assignments = {k: _dotenv_assignment(k, v) for k, v in safe_updates.items()}
 
         written = set()
         new_lines = []
@@ -175,14 +196,14 @@ def _save_dotenv(updates: dict[str, str]) -> None:
             if stripped and not stripped.startswith("#") and "=" in stripped:
                 key = stripped.split("=", 1)[0].strip()
                 if key in safe_updates:
-                    new_lines.append(f'{key}="{safe_updates[key]}"')
+                    new_lines.append(assignments[key])
                     written.add(key)
                     continue
             new_lines.append(line)
 
-        for key, value in safe_updates.items():
+        for key in safe_updates:
             if key not in written:
-                new_lines.append(f'{key}="{value}"')
+                new_lines.append(assignments[key])
 
         tmp = env_path.with_suffix(".env.tmp")
         # The .env holds provider API keys; create it 0600 so it is not
@@ -226,14 +247,14 @@ def _save_media_source_settings(
                 if key in safe_updates:
                     value = safe_updates[key]
                     if value:
-                        new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+                        new_lines.append(_env_assignment(key, value) if addon else _dotenv_assignment(key, value))
                     written.add(key)
                     continue
             new_lines.append(line)
 
         for key, value in safe_updates.items():
             if key not in written and value:
-                new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+                new_lines.append(_env_assignment(key, value) if addon else _dotenv_assignment(key, value))
 
         tmp = path.with_suffix(path.suffix + ".tmp")
         _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")

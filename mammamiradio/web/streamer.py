@@ -284,6 +284,7 @@ from mammamiradio.web.persistence import (
     _CREDENTIAL_ENV_TO_FIELD,
     _CREDENTIAL_FIELDS,
     _SECRET_WRITE_DURABLE,
+    UnsafeEnvValueError,
     _AddonPersistenceError,
     _apply_live_credentials,
     _sanitize_credential_value,
@@ -8424,11 +8425,28 @@ async def save_keys(request: Request, _: None = Depends(_require_active_setup_ac
 
     try:
         await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    except UnsafeEnvValueError:
+        return _unsafe_credential_response()
     except _AddonPersistenceError:
         logger.error("Failed to persist add-on credentials", exc_info=True)
         return JSONResponse(status_code=500, content={"ok": False, "error": "failed to save credentials"})
 
     return {"ok": True, "saved": list(updates.keys())}
+
+
+def _unsafe_credential_response() -> JSONResponse:
+    """Nothing was saved: tell the operator why, and what to do next."""
+    logger.warning("Refused a credential save: a value held a character that is unsafe in .env")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "ok": False,
+            "error": (
+                "That key has a symbol we can't keep safely (a quote, backslash, dollar sign or backtick), "
+                "so nothing was saved. Copy the key again straight from your provider's page and paste it in."
+            ),
+        },
+    )
 
 
 def _credential_updates_from_env_payload(body: dict, *, require_nonempty: bool) -> dict[str, str]:
@@ -10333,6 +10351,8 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
 
     try:
         await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    except UnsafeEnvValueError:
+        return _unsafe_credential_response()
     except _AddonPersistenceError:
         logger.error("Failed to persist add-on credentials", exc_info=True)
         return JSONResponse(status_code=500, content={"ok": False, "error": "failed to save credentials"})

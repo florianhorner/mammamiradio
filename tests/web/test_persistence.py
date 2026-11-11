@@ -838,3 +838,60 @@ def test_rearming_voice_key_invalidates_only_current_failure_evidence(monkeypatc
     assert engine["invalidated_by_credential_save"] is True
     assert aggregate["invalidated_by_credential_save"] is True
     assert aggregate["last_audible_reason"] == failure_reason
+
+
+_SHELL_ACTIVE_VALUES = [
+    "$(touch pwned)",
+    "`touch pwned`",
+    "sk-$HOME",
+    'sk-a"b',
+    "sk-a'b",
+    "sk-a\\b",
+    "sk-a\x1bb",
+]
+
+
+@pytest.mark.parametrize("value", _SHELL_ACTIVE_VALUES)
+def test_save_dotenv_refuses_shell_active_values_and_leaves_the_file_alone(tmp_path, monkeypatch, value):
+    """start.sh sources .env: a value bash would expand must never reach the file."""
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text('OPENAI_API_KEY="sk-before"\n')
+
+    with pytest.raises(persistence.UnsafeEnvValueError):
+        persistence._save_dotenv({"ANTHROPIC_API_KEY": "sk-fine", "OPENAI_API_KEY": value})
+
+    # All-or-nothing: the safe key in the same save must not land on its own.
+    assert env_file.read_text() == 'OPENAI_API_KEY="sk-before"\n'
+    assert not (tmp_path / ".env.tmp").exists()
+
+
+@pytest.mark.parametrize("value", _SHELL_ACTIVE_VALUES)
+def test_media_source_dotenv_save_refuses_shell_active_values(tmp_path, value):
+    dotenv = tmp_path / ".env"
+    dotenv.write_text('JAMENDO_CLIENT_ID="before"\n')
+
+    with pytest.raises(persistence.UnsafeEnvValueError):
+        persistence._save_media_source_settings({"JAMENDO_CLIENT_ID": value}, addon=False, dotenv_path=dotenv)
+
+    assert dotenv.read_text() == 'JAMENDO_CLIENT_ID="before"\n'
+
+
+def test_saved_dotenv_sources_in_bash_as_the_literal_value(tmp_path, monkeypatch):
+    """Round trip through the real consumer: `set -a; source .env` as start.sh does."""
+    import subprocess
+
+    monkeypatch.chdir(tmp_path)
+    value = "sk-ant_api03.AZaz09-_~+/=:@%^&*()[]{}<>|;,!?# x"
+    persistence._save_dotenv({"ANTHROPIC_API_KEY": value})
+
+    result = subprocess.run(
+        ["bash", "-c", 'set -euo pipefail; set -a; source .env; set +a; printf %s "$ANTHROPIC_API_KEY"'],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout == value
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]

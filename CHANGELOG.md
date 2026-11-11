@@ -8,6 +8,8 @@ Dates for published releases use Europe/Berlin.
 
 ## [Unreleased]
 
+- **Saved keys can no longer run commands when the station starts.** On a standalone install, a pasted key containing a quote, backslash, dollar sign or backtick is now turned away with a plain message instead of being written to `.env`, where the start scripts would have treated it as shell code. Nothing is saved until the key is clean; copy it again from your provider and paste it in.
+
 - **Ready-to-play songs no longer need their original download.** When a song’s original download has been cleared, the station can reuse its verified prepared copy instead of trying to fetch it again. Source permissions and audio checks still apply.
 
 - **Hosts and voices talk to Anthropic and OpenAI through the current SDKs.** The station now runs the Anthropic 1.x and OpenAI 3.x Python SDKs, which bring their own HTTP transport (httpx2). Request logging from that transport is quietened the same way as before, so nothing new appears in the logs at the default level.
