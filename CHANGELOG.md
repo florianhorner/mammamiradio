@@ -8,6 +8,8 @@ Dates for published releases use Europe/Berlin.
 
 ## [Unreleased]
 
+- **Admin controls are protected from other websites open on the same computer.** On a standalone install, a page from another site in your browser can no longer stop, skip or purge the station or change your API keys behind your back. The dashboard, curl, scripts and Home Assistant automations keep working as before; if the dashboard ever says a change was not accepted, reload /admin and try again.
+
 - **Time checks name the minute you actually hear them.** Mamma Mi Radio prepares each time check a few minutes ahead, so the host used to announce a clock time that was already 4 to 15 minutes old by the time it aired. The station now counts the song on air and everything queued ahead, so "Sono le 14 e 11" really means 14:11, including across midnight.
 
 - **Saved keys can no longer run commands when the station starts.** On a standalone install, a pasted key containing anything other than the letters, digits and punctuation real keys use is now turned away with a plain message instead of being written to `.env`, where the start scripts would have treated it as shell code. Nothing is saved until the key is clean; copy it again from your provider and paste it in.

@@ -1011,7 +1011,7 @@ design — see the per-request table for what that LAN may then do.
 
 | Caller origin | Creds configured | Result |
 | --- | --- | --- |
-| Loopback | any | Allow (no CSRF — same machine) |
+| Loopback | any | Allow reads, and writes from non-browser callers (no `Origin`, no `Sec-Fetch-Site`: curl, scripts, HA `rest_command`) and from the admin page itself. A browser write is **`403`** when `Sec-Fetch-Site` is `cross-site`, when `Origin` is not same-origin, or when `Origin` is sent and the `Host` is not `localhost` or a literal loopback/private IP, unless it carries a valid `X-Radio-CSRF-Token` or `X-Radio-Admin-Token` |
 | HA Supervisor net, add-on mode | any | Allow (no CSRF — Docker-internal, used by HA automations) |
 | Private network (LAN / Tailscale / IPv6 ULA+link-local) | `ADMIN_TOKEN` set | Require `X-Radio-Admin-Token` header (`401` if missing/wrong) |
 | Private network | `ADMIN_PASSWORD` set | Require Basic auth + CSRF on writes (`401` if wrong) |
@@ -1027,6 +1027,12 @@ Two invariants this table preserves:
   "allow read on the LAN" row only applies when no credential is configured.
 - **Public IPs never reach `/admin` without a credential.** The credential-less
   LAN fallback is scoped to private networks; a public client is rejected.
+
+- **Being on the station machine is not proof of a trusted page.** Any website
+  open in a browser on that machine can post to `http://127.0.0.1:<port>`, so
+  loopback writes that a browser marks as coming from another site are refused.
+  If the dashboard itself shows "Cross-site admin write blocked", reload
+  `/admin` and retry.
 
 This model reads `request.client.host` raw, so the bind must not sit behind an
 untrusted reverse proxy — one that rewrites the client address would make every

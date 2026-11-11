@@ -1633,7 +1633,7 @@ responses are accepted only for the query generation that started them.
 
 ### CSRF protection
 
-Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients are exempt.
+Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients skip credentials and keep working without any of these when they send no `Origin` and no `Sec-Fetch-Site` header (curl, scripts, HA `rest_command`), but a loopback write that a browser marks as cross-site (`Sec-Fetch-Site: cross-site`, a non-same-origin `Origin`, or an `Origin` with a `Host` that is not `localhost` or a literal loopback/private IP) is refused with `403` unless it carries the CSRF token or the admin token.
 
 First Listen, setup credential actions, speaker playback, and Home entity
 privacy controls use an additional DNS-rebinding boundary. Their setup-status

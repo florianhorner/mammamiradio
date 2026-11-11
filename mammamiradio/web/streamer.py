@@ -271,6 +271,7 @@ from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/t
     _is_hassio_or_loopback,
     _is_loopback_client,
     _is_private_network,
+    _is_trusted_literal_host,
     _same_origin,
     has_valid_admin_basic_credentials,
     require_admin_access,
@@ -700,15 +701,7 @@ def _require_active_setup_access(request: Request, credentials=Depends(security)
         peer_address = None
     ingress = request.headers.get("X-Ingress-Path", "")
     trusted_ingress = bool(config.is_addon and ingress and peer_address is not None and peer_address in _HASSIO_NETWORK)
-    try:
-        request_host = request.url.hostname or ""
-        host_address = ipaddress.ip_address(request_host)
-    except ValueError:
-        host_address = None
-    trusted_literal_host = request_host == "localhost" or bool(
-        host_address is not None
-        and (host_address.is_loopback or any(host_address in network for network in _TRUSTED_NETWORKS))
-    )
+    trusted_literal_host = _is_trusted_literal_host(request)
     if not (trusted_ingress or trusted_literal_host):
         if config.is_addon:
             title = "Open Mamma Mi Radio from Home Assistant"
