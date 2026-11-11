@@ -289,6 +289,7 @@ always remains best-effort and never blocks or delays audio.
   The frozen v1 integration preview retains its existing prediction semantics.
 - banter triggers when `songs_since_banter` crosses the configured threshold, with a small random jitter outside preview mode
 - after a natural pacing decision, `producer.py` applies a runway governor to optional speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`): if the real queued audio is below 240 seconds and the bounded queue can still build more runway, that pick becomes `MUSIC`; if the queue is effectively saturated below the floor, the due speech is allowed; operator forces, chaos first-strike, release-campaign forced banter, bridges, and error recovery stay outside that gate
+- because a governed `TIME_CHECK` is rendered minutes before it airs, its spoken minute is the projected air moment, not the render moment: the wall clock plus the rest of the segment on air (`now_streaming` `started` + `duration_sec`, zero when unknown, e.g. right after a restart) plus the queued audio ahead of it. A natural time check is appended, so all queued audio counts; an operator air-next time check is front-inserted, so only urgent warnings that keep the head count. Hour and day rollover follow the clock (23:58 plus five minutes is announced as 0 e 3)
 
 `producer.py` turns that pacing decision into actual audio files:
 
