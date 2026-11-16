@@ -1,8 +1,6 @@
 # Contributing
 
-This repo is small, but it has real moving parts: FastAPI, FFmpeg, Edge TTS, Claude, and optional Home Assistant. The fastest way to break it is to change behavior without actually running the station.
-
-Do the local setup, run targeted tests, then do a quick listen-through.
+The station has real moving parts: FastAPI, FFmpeg, Edge TTS, an optional AI writer (Anthropic or OpenAI) and optional Home Assistant. The fastest way to break it is to change behavior without running it, so: set up, run targeted tests, then listen.
 
 ## TL;DR
 
@@ -18,22 +16,18 @@ pytest tests/core/test_config.py -q  # fast loop while editing
 make check                         # complete gate before committing
 ```
 
-Full prerequisites, run modes, tests, lint, and commit-message rules below.
-
 ## Prerequisites
 
 - Python 3.11+
 - FFmpeg on your `PATH`
 - Optional: Anthropic and/or OpenAI credentials for the full AI radio experience
 
-No AI or music-provider key is required to run the station: host writing falls
-back to stock copy and fallback voices, while the attributed starter collection
-provides offline music. Jamendo is an explicit, default-off, acknowledged
-non-commercial transient option. A source checkout may also use MP3s in the
-repo-local `music/` directory; those remain operator-supplied and are not
-project-cleared. External extraction requires the standalone `external-media`
-extra plus an explicit enablement flag and is absent from both Home Assistant
-add-ons. See [Music sources and rights boundaries](docs/music-sources.md).
+No AI or music-provider key is required: host writing falls back to stock copy
+and fallback voices, and the attributed starter collection provides offline
+music. Optional sources (default-off Jamendo, operator-supplied MP3s in
+`music/` that the project has not cleared, the standalone `external-media`
+extra) and their rights limits are in [Music sources and rights
+boundaries](docs/music-sources.md).
 
 ## Local setup
 
@@ -49,26 +43,7 @@ cp .env.example .env
 
 Install developer tools first, then the hash-locked runtime dependencies. Installing the application with `--no-deps` preserves those versions; `pip check` verifies its declared requirements. Quality CI and both container builds use the same runtime lock. The dependency tests also verify the requested runtime extras against installed package metadata.
 
-uv does not manage this environment. `pyproject.toml` sets `[tool.uv] managed = false`, so uv's project commands cannot change `.venv`: `uv sync`, `uv lock` and `uv add` refuse, and `uv run` inside the checkout uses the existing `.venv` without syncing it. `uv run` uses a different interpreter instead when another environment is activated (`VIRTUAL_ENV` takes precedence), when `.venv` is missing, or when it is called with `--project` from outside the checkout. The setting does not cover `uv pip install`, `uv pip sync` or `uv venv --clear`, which still write to `.venv`; install with the pip commands above instead. If the dependency tests report a drifted package, repeat the installation above.
-
-For a targeted runtime update, activate a Python 3.11 environment and install the pinned lock-generation tool first. Replace `PACKAGE==VERSION` with the dependency and version you intend to update:
-
-```bash
-python -m pip install pip-tools==7.6.1
-python -m piptools compile --generate-hashes --output-file=requirements.txt --strip-extras --upgrade-package PACKAGE==VERSION pyproject.toml
-```
-
-Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
-
-### Completing a Dependabot lock
-
-Dependabot rewrites only the pins it bumps in `requirements.txt` and never re-resolves the lock. CI installs with `--require-hashes` (`.github/actions/setup-python-ci/action.yml`), so a bump that adds or moves a transitive dependency fails at install time, not in a test.
-
-To complete such a PR, check out the Dependabot branch and merge `origin/main` if the branch is behind (merge, never rebase: the first commit must stay Dependabot's so the auto-merge metadata remains valid). Run the `piptools compile` command above with one `--upgrade-package PACKAGE==VERSION` per package the PR bumps; for the pydantic group pass `pydantic` and `pydantic-settings` only, because pip-compile selects the matching `pydantic-core`. Repeat the installation above, run `make check`, commit as `chore(deps): complete the lock for <package> <version>`, and push to the Dependabot branch. The pushed commit re-runs CI and keeps patch and minor PRs eligible for the guarded auto-merge. Majors land through a migration PR instead.
-
-When `ruff==` moves in `requirements-dev.txt`, set `rev:` under the `ruff-pre-commit` repo in `.pre-commit-config.yaml` to `v<version>` in the same commit (`tests/repo/test_repo_scripts.py` enforces the pair). Never bump `.pre-commit-config.yaml` alone.
-
-If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
+uv does not manage this environment: `pyproject.toml` sets `[tool.uv] managed = false`, so `uv sync`, `uv lock` and `uv add` refuse, and `uv run` uses the existing `.venv` without syncing it (unless another environment is active, `.venv` is missing, or `--project` points here from outside). `uv pip install`, `uv pip sync` and `uv venv --clear` still write to `.venv`; use the pip commands above instead. If the dependency tests report a drifted package, repeat the installation above.
 
 Then fill in whatever `.env` values you need:
 
@@ -80,6 +55,25 @@ Then fill in whatever `.env` values you need:
 
 `radio.toml` is the main station config. That is where you change hosts, pacing, ad brands, audio settings, and Home Assistant enablement.
 
+### Updating the dependency lock
+
+For a targeted runtime update, activate a Python 3.11 environment and install the pinned lock-generation tool first. Replace `PACKAGE==VERSION` with the dependency and version you intend to update:
+
+```bash
+python -m pip install pip-tools==7.6.1
+python -m piptools compile --generate-hashes --output-file=requirements.txt --strip-extras --upgrade-package PACKAGE==VERSION pyproject.toml
+```
+
+Review all changed pins and hashes, then repeat the installation above and run `make check`. Keep Pydantic and its exact Pydantic Core dependency together. Build-system dependencies remain separately resolved by pip's isolated build environment.
+
+#### Completing a Dependabot lock
+
+Dependabot rewrites only the pins it bumps in `requirements.txt` and never re-resolves the lock. CI installs with `--require-hashes` (`.github/actions/setup-python-ci/action.yml`), so a bump that adds or moves a transitive dependency fails at install time, not in a test.
+
+To complete such a PR, check out the Dependabot branch and merge `origin/main` if the branch is behind (merge, never rebase: the first commit must stay Dependabot's so the auto-merge metadata remains valid). Run the `piptools compile` command above with one `--upgrade-package PACKAGE==VERSION` per package the PR bumps; for the pydantic group pass `pydantic` and `pydantic-settings` only, because pip-compile selects the matching `pydantic-core`. Repeat the installation above, run `make check`, commit as `chore(deps): complete the lock for <package> <version>`, and push to the Dependabot branch. The pushed commit re-runs CI and keeps patch and minor PRs eligible for the guarded auto-merge. Majors land through a migration PR instead.
+
+When `ruff==` moves in `requirements-dev.txt`, set `rev:` under the `ruff-pre-commit` repo in `.pre-commit-config.yaml` to `v<version>` in the same commit (`tests/repo/test_repo_scripts.py` enforces the pair). Never bump `.pre-commit-config.yaml` alone.
+
 ## Run the app
 
 Full dev workflow:
@@ -88,13 +82,29 @@ Full dev workflow:
 ./start.sh
 ```
 
-That script runs uvicorn with `--reload`.
-
 Or use Docker (no Python/FFmpeg setup needed):
 
 ```bash
 docker compose up
 ```
+
+If you only need the web app and background tasks:
+
+```bash
+source .venv/bin/activate
+python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio
+```
+
+Useful URLs:
+
+- `http://127.0.0.1:8000/` — listener page for public callers; flips to the admin control room when the request carries a trusted HA ingress header
+- `http://127.0.0.1:8000/listen` — explicit listener alias (always the public UI)
+- `http://127.0.0.1:8000/admin` — admin control room (open on loopback; other callers follow the [Admin access model](docs/operations.md#admin-access-model))
+- `http://127.0.0.1:8000/stream` — infinite MP3 stream
+- `http://127.0.0.1:8000/public-status` — public JSON
+- `http://127.0.0.1:8000/status` — admin JSON
+
+Conductor users: workspace setup, run and archive hooks are described in [docs/conductor.md](docs/conductor.md).
 
 ### Stream-alive reload (optional)
 
@@ -114,26 +124,30 @@ With caddy installed, `./start.sh` automatically uses it:
 - uvicorn listens on `$PORT+1` (internal only, proxied by caddy)
 - Active `/stream` connections survive `--reload` restarts of up to ~30 seconds
 
-**Caddy is optional.** Without it, `./start.sh` falls back to bare uvicorn with a
-warning. The audio stream will still work — it just drops on every file save.
+Without caddy, `./start.sh` falls back to bare uvicorn with a warning.
 
-If you only need the web app and background tasks:
+### Tune host writing without a stream gap
 
-```bash
-source .venv/bin/activate
-python -m uvicorn mammamiradio.main:app --reload --reload-dir mammamiradio
-```
+Host behavior lives in `mammamiradio/hosts/scriptwriter.py` (generation logic)
+and its prompt-data modules in the same folder:
 
-Useful URLs:
+- `prompt_world.py`: expression banks, host fingerprints, exchange shapes and
+  lore, Chaos and Festival mode blocks
+- `relationship.py`: roster-aware shape and lore selection, recency
+- `transitions.py`: transition rewrite openers
+- `fallbacks.py`: chaos stock lines, ad-break bumpers
+- `station_name_guard.py`: scrubs foreign and competitor station names
 
-- `http://127.0.0.1:8000/` — listener page for public callers; flips to the admin control room when the request carries a trusted HA ingress header
-- `http://127.0.0.1:8000/listen` — explicit listener alias (always the public UI)
-- `http://127.0.0.1:8000/admin` — admin control room (open on loopback; other callers follow the [Admin access model](docs/operations.md#admin-access-model))
-- `http://127.0.0.1:8000/stream` — infinite MP3 stream
-- `http://127.0.0.1:8000/public-status` — public JSON
-- `http://127.0.0.1:8000/status` — admin JSON
+After an edit, run `make check`, then `POST /api/hot-reload` (admin auth, empty
+body). It reloads `language_policy`, the modules above, then `scriptwriter`,
+leaves first. `POST /api/trigger {"type": "banter"}` then generates a segment
+with the new code. The stream stays live throughout; if the reload fails (for
+example a syntax error), the endpoint returns 500 and the old code keeps
+running.
 
-To tune host behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py` (generation logic) and/or the prompt-data leaves — `mammamiradio/hosts/prompt_world.py` (expression banks, host fingerprints, exchange-shape/lore data, Chaos/Festival mode blocks), `mammamiradio/hosts/relationship.py` (roster-aware shape/lore selection and recency), `mammamiradio/hosts/transitions.py` (transition rewrite openers), `mammamiradio/hosts/fallbacks.py` (chaos stock lines, ad-break bumpers), `mammamiradio/hosts/station_name_guard.py` (foreign/competitor station-name scrubbing) — run `make check`, then `POST /api/hot-reload` (admin auth, empty body) — it reloads `language_policy`, `prompt_world`, `relationship`, `transitions`, `fallbacks`, `station_name_guard`, then `scriptwriter` leaves-first, so edits to any of them take effect — then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code. `mammamiradio/hosts/memory_extractor.py` (post-air memory extraction) is deliberately excluded from hot-reload — it holds live in-flight task/apply-lock state that a reload would reset mid-extraction; edit it and restart to pick up changes.
+`memory_extractor.py` (post-air memory extraction) is excluded from hot-reload:
+it holds in-flight extraction state that a reload would reset mid-run. Restart
+to pick up changes to it.
 
 ## Fast loop and complete gate
 
@@ -152,14 +166,13 @@ scripts/pre-lint.sh
 ```
 
 It mirrors the Quality lint job without auto-fixing files or starting the full
-pytest/coverage run. Use `make check` for the complete local gate before `/ship`
-when a broad runtime or coverage change needs full-suite proof; required CI
-still makes the final repository-wide decision.
+pytest/coverage run. Before opening a PR with a broad runtime or coverage
+change, run `make check` for full-suite proof; required CI still decides.
 
 Notes:
 
-- The suite never reads your workspace `.env`. `tests/conftest.py` sets `PYTHON_DOTENV_DISABLED=1` at module level, because `core/config.py` loads `.env` at import time, which is during collection; without the switch a local `.env` with `HA_URL` or `HA_ENABLED` fails tests that CI (no `.env`) passes. This needs `python-dotenv>=1.2`; the guard in `tests/core/test_config_env_overrides.py` tells you if yours is older. The `_isolate_env` fixture strips exported provider credentials, HA settings, and local port overrides during tests. The one test that loads a dotenv file on purpose (the guide generator's `--env-file` test) lifts the switch for itself.
-- `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes. On PRs that job runs when audio, scheduling, streamer, startup/core configuration, launch-smoke, Python package/runtime/development dependencies, radio/model configuration, the changed-lanes classifier, or the shared Python CI setup change; every push to `main` still runs it.
+- The suite never reads your `.env`: `core/config.py` loads it at import time, so `tests/conftest.py` sets `PYTHON_DOTENV_DISABLED=1` before collection. Without that, a local `.env` with `HA_URL` or `HA_ENABLED` fails tests that pass in CI. It needs `python-dotenv>=1.2` (`tests/core/test_config_env_overrides.py` checks). The `_isolate_env` fixture also strips exported provider credentials, HA settings and port overrides.
+- `tests/hosts/test_ads.py` and `tests/audio/test_normalizer_real_ffmpeg.py` need FFmpeg; the real-FFmpeg tests skip without it. The [Pi aarch64 smoke](#pi-aarch64-smoke) job runs them on ARM to catch aarch64-specific crashes.
 - Home Assistant add-on changes must also pass the local add-on build check:
 
 ```bash
@@ -167,6 +180,15 @@ scripts/validate-addon.sh
 ```
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local container build. If it fails locally, do not commit or push.
+
+For Home Context Director changes, first run the credential-free contract path:
+
+```bash
+pytest tests/home/test_context_director.py tests/home/test_entity_policy.py tests/core/test_home_context_director_lifecycle.py tests/web/test_context_director_public_metadata.py \
+  tests/web/test_streamer_routes.py -k "personal_moment or home_fact or entity_policy"
+```
+
+It covers safe selection, policy migration, queue settlement, public metadata exclusion, and the `PATCH /api/homeassistant/entity-policy` contract (consent gate, queue purge, in-flight reservation release) without a live Home Assistant or provider key.
 
 ### Coverage floors and the ratchet
 
@@ -178,18 +200,12 @@ Coverage must stay above the committed minimums. Two layers enforce this:
 CI enforcement: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
 
 - On PRs: `check` mode — fails if any module dropped below its floor.
-- On main merge: `update` mode recomputes the floors and tries to commit and push
-  updates. A rejected push opens one `coverage-ratchet-stale` issue with the
-  computed diff and a link to the run's diagnostic; it does not infer the cause.
-  For a protected branch, run `make coverage-ratchet` locally and submit the
-  resulting changes through a PR. Verify the reported increases and link that PR
-  with `Fixes #<issue number>`; a later no-change run cannot prove an earlier
-  increase landed, so it leaves the issue open for that verification.
-  A failed/skipped computation or missing result opens a separate
-  `coverage-ratchet-broken` issue, closed when computation recovers even if the
-  push still fails. Cancelled workflows and obsolete main snapshots do not change
-  reports. Reporting API failures fail the job. Token permissions and
-  branch-protection rules are not bypassed.
+- On `main`: `update` mode recomputes the floors and pushes them. If the push is
+  rejected (protected branch), it opens a `coverage-ratchet-stale` issue with the
+  diff: run `make coverage-ratchet` locally, verify the increases, and open a PR
+  with `Fixes #<issue number>`. The issue stays open until then, because a later
+  run cannot prove the earlier increase landed. A failed computation opens a
+  separate `coverage-ratchet-broken` issue that closes when computation recovers.
 - The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
   pack provenance test reads generator inputs at the revision pinned in the
   manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.
@@ -307,22 +323,22 @@ Version files change only in an explicitly authorized release.
 
 ### Auditioning a new ad voice
 
-New ad identities are staged by default. Keep `airtime_approved = false` until
-a provider render and human review approve them; only then set it explicitly to
-`true`. Run configured samples with real credentials; audio and manifests remain
-ignored under `tmp/voice-auditions/`:
-
-When upgrading an existing custom roster, review every `[[ads.voices]]` row:
-omitting `airtime_approved` now means `false`. Set it explicitly to `true` only
-for a character with existing provider and human approval; leave every other row
-`false`. A legacy role pin can keep serving its campaign while a replacement
-waits for approval. Otherwise an unapproved direct character's campaign is
-excluded and another safe campaign is tried. With no safe live campaign, the
-station tries an approved packaged ad before continuity; it never recasts the character.
+New ad identities are staged by default: `airtime_approved` stays `false`
+until a provider render and a human review approve them; only then set it
+explicitly to `true`. Render the configured samples with real credentials
+(audio and manifests stay ignored under `tmp/voice-auditions/`):
 
 ```bash
 ./.venv/bin/python scripts/audition_tts_voices.py --config radio.toml --providers elevenlabs --strict
 ```
+
+When upgrading an existing custom roster, review every `[[ads.voices]]` row:
+omitting `airtime_approved` now means `false`. Set it to `true` only for a
+character with existing provider and human approval. A legacy role pin can keep
+serving its campaign while a replacement waits for approval. Otherwise an
+unapproved direct character's campaign is excluded and another safe campaign is
+tried; with none left, the station tries an approved packaged ad before
+continuity. It never recasts the character.
 
 For an on-demand A/B comparison of ElevenLabs stability, generate all variants
 from the same configured text and compare the profile-labelled clips in the
@@ -370,34 +386,16 @@ airtime ad voice or the station ident has no accepted row there, so a recast
 lands together with its new rows. An Edge audition that fails is recorded as
 failed, never as the house voice the station would have aired instead.
 
-Accepted media and human-review receipts remain immutable. Historical
-content-addressed receipts under `proof/preship-reviews/v2/` remain readable
-with the standalone verifier; they are no longer required for PR or landing
-admission and must not be refreshed for ordinary work.
-
-Keep current implementation checks and review handoffs in the workspace's
-gitignored artifacts. Do not recreate retired fixed-name proof files.
-Review, required checks, and normal landing gates still apply.
-
-Content-addressing makes a v2 receipt deterministic and binds it to the reviewed
-tree; it does not authenticate who created it. `source_record_sha256` identifies
-the exact local review-ledger line used by the emitter, but CI has no copy of that
-ledger to authenticate. Mandatory review-receipt admission and its report-only
-workflow are retired; the standalone verifier and historical receipts remain.
+Accepted media and human-review receipts are immutable. Historical review
+receipts under `proof/preship-reviews/v2/` remain readable with the standalone
+verifier; they are no longer required for a PR or landing, so do not refresh
+them or recreate retired fixed-name proof files. Review, required checks, and
+normal landing gates still apply.
 
 The redacted tracked proof stores the candidate ID and name, selected profile,
 text and audio hashes, provider result, duration, approval status, and human
 rationale code only. It never stores raw audition copy, audio, local paths, or
 credentials.
-
-For Home Context Director changes, first run the credential-free contract path:
-
-```bash
-pytest tests/home/test_context_director.py tests/home/test_entity_policy.py tests/core/test_home_context_director_lifecycle.py tests/web/test_context_director_public_metadata.py \
-  tests/web/test_streamer_routes.py -k "personal_moment or home_fact or entity_policy"
-```
-
-It covers safe selection, policy migration, queue settlement, public metadata exclusion, and the `PATCH /api/homeassistant/entity-policy` contract (consent gate, queue purge, in-flight reservation release) without a live Home Assistant or provider key.
 
 ## Lint, format, and type check
 
@@ -409,9 +407,8 @@ ruff format --check . # format check (CI mode)
 mypy mammamiradio/ tests/  # type check
 ```
 
-`scripts/ruff.toml` extends the root Ruff policy and ignores only `N999`:
-`scripts` is importable for the landing CLI, while its existing hyphenated
-command filenames remain stable shell entry points rather than Python modules.
+`scripts/ruff.toml` extends the root Ruff policy and ignores only `N999`: the
+hyphenated script filenames are shell entry points, not Python modules.
 
 To install pre-commit hooks locally:
 
@@ -428,7 +425,7 @@ checks.
 
 ### UI copy lint
 
-`scripts/check-ui-copy-lint.sh` is the Principle #5 guard over human-facing
+`scripts/check-ui-copy-lint.sh` is the [leadership principle #5](CLAUDE.md#leadership-principles) guard over human-facing
 strings — listener `ui_copy`, the listener/clip/admin templates, `listener.js`/`admin.js`,
 HA add-on option descriptions, and the streamer setup errors. Three rules: machine words on
 a human screen (`tech_lingo`) and copy still phrased around picking a speaker or room
@@ -475,7 +472,7 @@ After starting the app:
 2. Open `http://127.0.0.1:8000/admin` (with admin auth if non-loopback) and confirm the control room loads.
 3. Open `http://127.0.0.1:8000/stream` in a browser or player and confirm audio starts once the first segment is queued.
 4. Hit `/public-status` and confirm the upcoming list reflects only real queued segments, or returns `upcoming_mode="building"` while no render-ready segment exists yet.
-5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.
+5. Use the control room for skip, shuffle, purge, and playlist reorder.
 6. Restart the app and verify the last selected source restores automatically.
 
 If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
@@ -483,7 +480,7 @@ If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or 
 For First Listen or any Home Assistant-facing manual QA, use the
 [disposable local Home Assistant lab](docs/runbooks/first-listen-local-ha.md).
 It exercises a real HA Media Source and Mac VLC `media_player` without exposing
-branch code, test credentials, or synthetic state to the live home.
+branch code, test credentials, or synthetic state to a real home.
 
 ## Documentation expectations
 
@@ -501,21 +498,12 @@ When behavior changes, update the matching docs in the same change:
 
 If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.
 
-When changing anything a listener or operator reads — template copy, `ui_copy.py`,
-toast text, `streamer.py` setup errors, add-on option descriptions — run
-`bash scripts/check-ui-copy-lint.sh`. It holds human-facing strings to leadership
-principle #5. Three rules can fail it: a machine word on screen (`tech_lingo`), copy still
-phrased around picking a speaker or room (`stale_speaker_copy`), and a stated failure with
-no next step (`no_way_out`) — the last one only inside the authored error tables, because
-in free-text toasts the check misjudges correct copy. `--audit` prints everything it found
-and labels each row blocking or advisory.
-
-Known violations are grandfathered in `.config/ui-copy-baseline.json`. Fixing one also
-fails the lint, on purpose: the backlog may only shrink, so it tells you to refresh with
-`bash scripts/check-ui-copy-lint.sh --write-baseline`. Read the `+` lines that refresh
-prints — those are violations it newly *accepted*, and each one should be copy you meant
-to grandfather rather than a regression you just wrote. Fixed entries leave as a
-`- dropped N` line.
+When changing anything a listener or operator reads (template copy, `ui_copy.py`,
+toast text, `streamer.py` setup errors, add-on option descriptions), run
+`bash scripts/check-ui-copy-lint.sh`; [UI copy lint](#ui-copy-lint) has the rules.
+Fixing a grandfathered violation also fails it until you run `--write-baseline`;
+read the `+` lines that refresh prints, because each is a violation it newly
+accepted.
 
 When changing the public install or add-on guides, run `bash scripts/check-docs-safety.sh`. It catches retired Home Assistant navigation, unsafe live-recovery instructions, and broken relative Markdown links before CI does.
 
@@ -524,7 +512,8 @@ Public examples use synthetic entity IDs such as `person.example_resident`,
 household identifiers and private capture notes out of new docs and fixtures.
 The documentation check enforces that convention for its selected public
 examples and rejects obsolete review-receipt requirements in maintained release
-guides. Coupled legacy runtime fixtures require a separate compatibility change.
+guides. Legacy runtime fixtures that still use older IDs change only in a
+dedicated compatibility PR.
 
 Before publishing a PR or a curated GitHub release, save the exact body in a
 local file and run `bash scripts/check-pr-body-lint.sh <body-file>`. The same
@@ -533,8 +522,6 @@ echoing their identifiers into the check's output; public tool documentation and
 contributor attribution remain valid. PR CI checks published text using the base
 branch's rules. It cannot prevent initial publication or guarantee what another
 application may append, so inspect the final payload as well.
-
-
 
 <!-- BEGIN: commit-message-standards (managed by bootstrap-repo.sh — do not hand-edit) -->
 ## Commit messages
