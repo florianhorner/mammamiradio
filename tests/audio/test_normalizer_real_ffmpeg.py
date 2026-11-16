@@ -265,8 +265,8 @@ def test_normalize_applies_soft_fade_in_on_real_audio(tmp_path):
     must show a measurable amplitude ramp in the first 250ms, so music→voice
     hand-offs in the stream aren't hard cuts.
 
-    Guards against the 2026-04-21 regression Florian flagged ("the fade overs
-    from song to speakers arent soft there is a noticable drop").
+    Guards against a heard regression: song-to-host hand-offs had an audible
+    drop instead of a soft fade.
     """
     src = tmp_path / "tone.mp3"
     out = tmp_path / "tone_norm.mp3"
@@ -660,7 +660,7 @@ def test_broadcast_chain_is_loudness_neutral_on_voiceband_real_ffmpeg(tmp_path):
 
 def test_broadcast_chain_cpu_budget_logged(tmp_path, capsys):
     """Measure and surface the added-pass wall-clock for the Pi CPU-budget decision
-    (D4: pure-egress adds one pass per aired segment; all three FX layers stack on
+    (pure-egress adds one pass per aired segment; all three FX layers stack on
     the _NORM_SEM 2-ffmpeg ceiling). Printed to the pi-smoke log, not hard-gated —
     the number informs the pure-egress vs cache-bake call, it doesn't fail CI."""
     import time

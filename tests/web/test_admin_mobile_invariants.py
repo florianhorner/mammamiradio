@@ -820,7 +820,7 @@ def test_on_air_zone_renders_ai_cost_counter() -> None:
     """The On Air zone must carry the AI cost counter (`sidebarCost`).
 
     The token-cost counter has silently disappeared in two prior admin
-    refactors (see memory `feedback_token_cost_counter.md`). The sticky strip
+    refactors (it is a protected UI element in CLAUDE.md). The sticky strip
     test guards `topBarCost`; this guards the always-visible On Air copy so a
     future zone rewrite cannot drop it without a red test.
     """

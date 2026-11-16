@@ -295,7 +295,7 @@ def test_openai_deprecations_html_table_also_parses() -> None:
 
 
 def test_openai_deprecations_tts_voice_rows_parse() -> None:
-    """The tts-1 shutdown rows that broke the 2026-10-05 watch read as dated shutdowns."""
+    """The tts-1 shutdown rows that once broke the watch read as dated shutdowns."""
     shutdowns = watch.parse_openai_deprecations((SYNTHETIC / "openai-deprecations-tts1-shutdown.md").read_text())
     assert shutdowns["tts-1"].date == dt.date(2027, 3, 2)
     assert shutdowns["tts-1-hd"].date == dt.date(2027, 3, 2)
@@ -1187,7 +1187,7 @@ def test_documented_four_holds_resolve_original_watch_finding(tmp_path, capsys, 
             "reason": "Benchmark the alternatives first.",
         }
     docs = watch.load_docs(FIXTURES)
-    # Replay the October watch situation: Haiku legacy, the OpenAI ladder unlisted.
+    # Replay a real failing watch: Haiku legacy, the OpenAI ladder unlisted.
     docs = replace(docs, openai_models=docs.openai_models - set(raw["models"]["catalog"]["openai"].values()))
     monkeypatch.setattr(watch, "load_docs", lambda _: docs)
     reviewed = watch.parse_last_reviewed(raw["models"])

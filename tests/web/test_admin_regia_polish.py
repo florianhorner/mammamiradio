@@ -1,6 +1,6 @@
 """Behavior tests for the Regia admin UX polish pass.
 
-Covers the new behaviors introduced by the regia-admin-ux-feedback branch:
+Covers the behaviors introduced by the Regia admin UX polish:
 undo toast (admin.js), Diretta drawer ARIA subgroups, Motore three-group split
 with Setup auto-collapse, Archivio sessionStorage filters, Scaletta 3-tier
 responsive, the combined mode chip, colorblind shape cues, and the
@@ -118,7 +118,7 @@ def test_mode_chip_element_and_wiring() -> None:
     assert "MODES: " in js
 
 
-# ── Undo safety + restore ordering (Codex review regressions) ───────
+# ── Undo safety + restore ordering (review regressions) ────────────
 
 
 def test_queue_removal_defers_by_stable_id_not_index() -> None:
@@ -154,7 +154,7 @@ def test_rotation_removal_commits_immediately() -> None:
 def test_archivio_filters_restored_after_deferred_helpers_load() -> None:
     """admin.js is deferred, so the inline restore must run on DOMContentLoaded
     (after defer), not at parse time when window.archivioFilterRestore is still
-    undefined (Codex P2)."""
+    undefined."""
     html = _html()
     # Parse-time init is plain defaults, not a restore call.
     assert "let _archivioFilters={q:'',type:'all',scope:'all'};" in html

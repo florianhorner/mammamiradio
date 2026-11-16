@@ -1621,7 +1621,7 @@ def test_guide_playback_stall_is_recovered_by_a_watchdog() -> None:
     at 8.595s and never fired 'ended'. Nothing else in the page notices a
     started clip that silently stops delivering timeupdate/ended -- the app
     UI kept reading "Pause example" and the station stayed paused forever,
-    because every recovery path this session built (see
+    because every other recovery path (see
     test_every_guide_narration_exit_can_resume_the_station) depends on that
     event firing at all. This pins the second-layer safety net: a timer keyed
     to the clip's own duration that forces the same teardown regardless.

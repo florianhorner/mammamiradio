@@ -381,8 +381,8 @@ def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> Non
     assert "const hasDraft=firstListenKeyValues().some(Boolean)" in block
     assert "const showForm=voices||evidence.state!=='ready'||_keysEditMode||hasDraft" in block
     assert "getElementById('setupKeysForm').style.display=showForm?'block':'none'" in block
-    # The glyphs are load-bearing, not decoration: this banner is read by a
-    # red-green colorblind operator, so every state pairs its colour with a shape.
+    # The glyphs are load-bearing, not decoration: red-green colorblind
+    # operators must read this banner, so every state pairs its colour with a shape.
     assert "({ready:'✓ ',working:'○ ',blocked:'✗ ',degraded:'△ '}[evidence.state]||'')+evidence.label" in block
 
     assert "[['ANTHROPIC_API_KEY','anthropic_key_status'],['OPENAI_API_KEY','openai_key_status']]" in writing

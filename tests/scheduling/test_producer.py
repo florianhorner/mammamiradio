@@ -768,14 +768,14 @@ def test_norm_cache_bridge_scrubs_foreign_artist():
     now_streaming.metadata -> the listener now-playing line and Music Assistant."""
     from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
 
-    poisoned = {"title": "Be Without U", "artist": "Radio Sabrina Sensatione"}
+    poisoned = {"title": "Be Without U", "artist": "Radio Ornella Sensatione"}
     with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=poisoned):
         metadata, log_label = _norm_cache_bridge_payload(
             Path("norm_abc_128k.mp3"), "queue_drain_recovery", "Mamma Mi Radio"
         )
 
-    assert "Radio Sabrina Sensatione" not in metadata["artist"]
-    assert "Radio Sabrina Sensatione" not in log_label
+    assert "Radio Ornella Sensatione" not in metadata["artist"]
+    assert "Radio Ornella Sensatione" not in log_label
     assert metadata["artist"] == ""  # whole foreign name stripped (artist field)
     assert metadata["title"] == "Be Without U"  # real title preserved
     assert metadata["queue_drain_recovery"] is True
@@ -803,11 +803,11 @@ def test_norm_cache_bridge_scrubs_foreign_title_prefix():
     A song genuinely titled 'Radio Ga Ga' (no separator) survives."""
     from mammamiradio.scheduling.producer import _norm_cache_bridge_payload
 
-    poisoned = {"title": "Radio Sabrina Sensatione – Be Without U", "artist": "Be Without U"}
+    poisoned = {"title": "Radio Ornella Sensatione – Be Without U", "artist": "Be Without U"}
     with patch(f"{PRODUCER_MODULE}.load_track_metadata", return_value=poisoned):
         metadata, _ = _norm_cache_bridge_payload(Path("norm_abc_128k.mp3"), "queue_drain_recovery", "Mamma Mi Radio")
 
-    assert "Radio Sabrina Sensatione" not in metadata["title"]
+    assert "Radio Ornella Sensatione" not in metadata["title"]
     assert metadata["title"] == "Be Without U"
 
     # A real "Radio X" song title (no separator) is preserved, not blanked.

@@ -7965,14 +7965,14 @@ async def test_write_news_flash_degrades_to_stock_copy_when_registry_unavailable
     assert "breaking news" in text.lower()
 
 
-# --- WS3-A concurrent auth-flood prevention ---
+# --- Concurrent auth-flood prevention ---
 
 
 @pytest.mark.asyncio
 async def test_concurrent_401s_trigger_exactly_one_anthropic_attempt(config, state):
     """N tasks racing _generate_json_response against a bad key must serialize.
 
-    Reproduces the 2026-04-13 flood: concurrent banter/ad/transition tasks all
+    Reproduces a production auth flood: concurrent banter/ad/transition tasks all
     raced past the block check before any could set _anthropic_auth_blocked_until.
     After the fix, the attempt lock serializes the critical section so only the
     first concurrent task hits Anthropic; the rest see the block and fall back.

@@ -2038,7 +2038,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
 
 def test_validate_addon_resolves_owner_from_repository_yaml_without_remote(tmp_path: Path) -> None:
     """No git remote + no gh: the expected image owner must fall back to
-    repository.yaml's url, not an empty owner. Regression for the line-86 bug
+    repository.yaml's url, not an empty owner. Regression for the bug
     where `sed` exiting 0 on empty input left OWNER="" → ghcr.io//... mismatch.
     """
     env = _create_validate_addon_repo(

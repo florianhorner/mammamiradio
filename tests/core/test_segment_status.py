@@ -1,6 +1,6 @@
 """Tests for the shared fallback / stream-outcome classifier.
 
-Guards the prior-learning failure mode ``producer-rescue-paths-miss-fallback-flag``:
+Guards a recurring failure mode:
 producer rescue clips set queue_drain_recovery / silence_fallback / resume_bridge
 WITHOUT fallback:True, and a naive metadata["fallback"] check would miss them.
 """

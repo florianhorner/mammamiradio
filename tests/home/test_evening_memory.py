@@ -1,4 +1,4 @@
-"""Tests for the evening running-gag ledger (Impossible Moments v2, Approach A).
+"""Tests for the evening running-gag ledger (Impossible Moments v2).
 
 Covers the mandatory audio-delivery scenarios at the ledger layer (where the
 logic lives):
@@ -6,7 +6,7 @@ logic lives):
   S2 Empty         — empty/no-event ledger renders nothing, never crashes.
   S3 Post-restart  — save → load resumes the same session and gags.
   S3b Corrupt      — a garbage ledger file starts fresh, never crashes boot.
-Plus codex's high-risk cases: cache-hit double-counting, numeric bucket
+Plus the high-risk cases: cache-hit double-counting, numeric bucket
 explosion, restart-preserved cooldown.
 """
 
@@ -540,7 +540,7 @@ def test_numeric_and_empty_polls_do_not_advance_last_active():
 
 
 def test_quiet_evening_rolls_over_despite_continuous_polling():
-    """The bug Phase 1 fixes: radio-cadence polling used to keep a session alive forever."""
+    """Regression: radio-cadence polling used to keep a session alive forever."""
     led = EveningLedger()
     led.observe([ev(COFFEE, "off", "on", BASE + 1)], now=BASE + 1)
     led.observe([], now=BASE + 1 + EVENING_GAP_SECONDS + 60)  # no home activity for >3.5h
