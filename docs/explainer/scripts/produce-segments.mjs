@@ -1,8 +1,8 @@
 // Compose each scenario's beats[] into one continuous station segment.
 //
 // An operator command, not CI: rendering host voice costs money and the
-// starter-catalog music lands with the modern-starter-crate branch, so this
-// script runs on a maintainer machine after both exist. It is the single
+// script needs the starter-catalog music in place, so it runs on a maintainer
+// machine once both are available. It is the single
 // place segment audio is assembled, so the page, the README proof clip, and
 // any future capture-replacement all share one recipe.
 //

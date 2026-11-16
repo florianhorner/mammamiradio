@@ -17,7 +17,7 @@
   --bg-elevated:     #1C1714;
   /* Espresso warm-brown surfaces for admin (the dominant consumer). Do NOT
    * raise these tokens to fix listener contrast; that washes admin out to
-   * taupe (regressed once in PR #298). Listener cards use the dedicated
+   * taupe (this has regressed before). Listener cards use the dedicated
    * --card* tokens below instead. */
   --surface:         #251E19;
   --surface-hover:   #2E2520;

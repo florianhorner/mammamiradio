@@ -2748,9 +2748,9 @@ def get_cached_home_context(
 
     The module cache is only refreshed by fetch_home_context()'s own poll
     cycle — a caller reading it directly between polls could otherwise see a
-    just-muted entity that hasn't been purged from it yet (adversarial
-    review). Pass ``cache_dir`` to receive a live-policy-filtered copy; omit it
-    for callers that don't consume entity content.
+    just-muted entity that hasn't been purged from it yet. Pass ``cache_dir``
+    to receive a live-policy-filtered copy; omit it for callers that don't
+    consume entity content.
     """
     active_authorization = authorization or HomeAuthorization.narrow()
     if _ha_cache is None or (_ha_cache.authorization_mode, _ha_cache.bindings.identity) != (

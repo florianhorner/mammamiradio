@@ -2,8 +2,8 @@
 
 The single hardest illusion break (leadership principle #1) is a competitor /
 hallucinated radio-station name reaching a human surface. The LLM bleeds
-training-data station names ("Radio Kiss Kiss Moosach") into banter, and home
-context can seed an invented one ("Radio <housemate's name> Sensatione").
+training-data station names ("Radio Kiss Kiss Napoli") into banter, and home
+context can seed an invented one from a household member's name ("Radio Ornella Sensatione").
 
 Two surfaces, two behaviours:
 
@@ -62,7 +62,7 @@ def sanitize_spoken_station_name(text: str, station_name: str) -> str:
     """Replace any radio station name that isn't ours with the correct one.
 
     Guards against LLM training-data bleed where it writes competitor station
-    names (e.g. 'Radio Kiss Kiss Moosach') into spoken script text — the single
+    names (e.g. 'Radio Kiss Kiss Napoli') into spoken script text — the single
     hardest illusion break.
     """
     station_lower = station_name.lower()

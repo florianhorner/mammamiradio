@@ -54,7 +54,7 @@ REJECTED_REBUILD_MESSAGE = (
 )
 
 # Lineage from the first human selection board. Stage 2 records the direction
-# separately from Mac and Sonos approval and sets release_ready=false.
+# separately from the laptop and room-speaker listening approval and sets release_ready=false.
 MOTIF_PROTOTYPE_PACK_DIGEST = "4b7097b5c865e447aa29d250a13daf811d7cf247077a7dc62200524069db3870"
 MOTIF_PROTOTYPE_SHA256 = {
     "midnight_signal": "97a3af9b763f0c78612e31a006489b0cc2e41992cbb9aaae8b755f182382d995",

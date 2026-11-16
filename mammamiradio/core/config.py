@@ -268,8 +268,7 @@ class AudioSection:
     # pre-emphasis HF shelf, ~15 kHz band-limit, flat loudness-offset trim — no stereo
     # swirl, no dynamics) so the station sounds like radio, not a clean studio file.
     # Default OFF (studio-clean): the colour is deliberately subtle and often
-    # imperceptible on good speakers, and the "what should the station sound like"
-    # strategy is being revisited. Set true to opt in.
+    # imperceptible on good speakers. Set true to opt in.
     broadcast_chain: bool = False
     # Short packaged stingers and ad bumpers played at the playback seam, before
     # the next programme file. Default on. Packaged media stays byte-for-byte

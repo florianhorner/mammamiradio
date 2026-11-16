@@ -605,8 +605,7 @@ def _broadcast_filter_chain() -> str:
     it is replaced by a flat ``volume`` trim that keeps the chain neutral by
     construction. The chain SHAPE (no stacked EQ, no loudnorm, no stereo swirl, no
     dynamics) is the safety contract; filter VALUES remain a starting point pending
-    the A/B listening sign-off (the broader "what should the station sound like"
-    strategy is being revisited separately).
+    the A/B listening sign-off.
     """
     return ",".join(
         [

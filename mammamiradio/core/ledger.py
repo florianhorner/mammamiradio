@@ -8,7 +8,7 @@ listener heard what they heard*:
     Tier 2  segment_prepared  the FINAL spoken script, post-processing
     Tier 3  stream_result     the true aired outcome (bytes, skip, listeners)
 
-Design constraints (from /office-hours + two review passes):
+Design constraints:
 
 * **Never break the illusion (#1/#2).** Every operation is best-effort. A full
   disk, a read-only dir, or a saturated queue must NEVER raise into the audio

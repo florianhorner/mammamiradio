@@ -469,7 +469,7 @@ def write_motif_gate_index(manifest: dict[str, object], run_dir: Path, *, timest
 
 
 def write_motif_gate_handoff(manifest: dict[str, object], run_dir: Path) -> Path:
-    """Create the durable Conductor handoff with relative audio and evidence links."""
+    """Create the durable listening-review handoff with relative audio and evidence links."""
     raw_candidates = manifest.get("candidates")
     raw_sources = manifest.get("sources")
     if not isinstance(raw_candidates, list) or not isinstance(raw_sources, list):

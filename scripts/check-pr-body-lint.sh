@@ -7,7 +7,7 @@
 #
 # Run locally:    bash scripts/check-pr-body-lint.sh <body-file>
 # CI invocation:  see .github/workflows/pr-body-lint.yml
-# Local hook:     ~/.claude/hooks/verify-proof-block.sh chains this in when present
+# Local hook:     an optional local pre-PR hook may chain this in when present
 #                 in the project's scripts/ directory at gh pr create time.
 
 set -euo pipefail

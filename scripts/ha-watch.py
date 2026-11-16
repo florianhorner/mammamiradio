@@ -8,7 +8,7 @@ HA breaks and extends these on a monthly cadence, and the high-value changes
 (e.g. the 2026.6 entity-first card picker) land on the developer blog and as
 `breaking-change` pull requests weeks before they reach a stable release.
 
-This script polls the early-warning feeds ranked in the office-hours research
+This script polls the early-warning feeds, most useful first
 (developer blog RSS first, `breaking-change` PRs as ground truth, architecture
 discussions for the long horizon, the main blog for release notes), keeps only
 items that mention mammamiradio's HA surface, and reports the ones it has not

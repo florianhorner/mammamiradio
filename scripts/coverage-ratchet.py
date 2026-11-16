@@ -164,7 +164,7 @@ def run_coverage() -> tuple[dict[str, int], int]:
 
     for line in result.stdout.splitlines():
         # Match lines like: mammamiradio/core/config.py   224  25  72  13   87%   ...
-        # (regex handles any depth under mammamiradio/ post-cathedral)
+        # (regex handles any package depth under mammamiradio/)
         match = re.match(r"^(mammamiradio/\S+\.py)\s+.*\s+(\d+)%", line)
         if match:
             filepath = match.group(1)

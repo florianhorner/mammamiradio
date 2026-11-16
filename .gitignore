@@ -42,7 +42,7 @@ output/
 # never belong in the product repository or its Git history.
 /docs/explainer/**/*.mp4
 
-# Contract-window marker — created only by Florian to open a contract
+# Contract-window marker — created only by the maintainer to open a contract
 # maintenance window (see CONTRACT.md). Never committed.
 .contract-window
 

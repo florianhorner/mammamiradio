@@ -46,7 +46,7 @@ _API_INCLUDE = "licenses"
 # Three lists used to drift independently: the raise sites here, the sanitizer
 # allowlist in web/media_sources.py, and the operator copy table in admin.html.
 # The middle one silently laundered any code it did not know into "api_failed",
-# so the three codes the edge install reports most often never reached a human.
+# so the three most common real-world failure codes never reached a human.
 # tests/playlist/test_jamendo_failure_code_contract.py asserts all three agree.
 JAMENDO_FAILURE_CODES = frozenset(
     {
