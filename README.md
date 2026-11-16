@@ -17,7 +17,7 @@ dramas become part of the show.
 
 > *"Breaking news from the laundry room: it's done. It's been done for two
 > hours. Nobody cares but us."*
->
+
 ## ▶ [Hear it happen: four half-minute moments](https://florianhorner.github.io/mammamiradio/)
 
 **Sound on. No install, no account.** Each clip starts as ordinary radio, then
@@ -35,9 +35,9 @@ Microphone, Third Chair. Synthetic voices throughout.
 </p>
 
 I built this because a smart home is invisible to everyone who did not build
-it. At dinner with seven guests, the hosts called me out for ignoring the pasta
-timer. Someone stopped the conversation to ask what the radio had said. Nobody
-questioned the station until the first fourth-wall break.
+it. With guests at the table, the hosts teased me about an ignored kitchen
+timer, and someone stopped the conversation to ask what the radio had said.
+Nobody questioned the station until the hosts broke the fourth wall.
 
 <p align="center">
   <img src="docs/screenshots/01-house-made-it-on-air.webp" width="960" alt="Marco and Giulia on air reacting to completed laundry, with a privacy-safe Casa receipt">
@@ -51,26 +51,25 @@ imaging, music, and forty fictional sponsors. Home details enter as editorial
 material only when there is something worth airing. The show keeps going when
 the house has nothing to say.
 
-At home, they regularly call me out about the washing machine, what I'm watching
-or listening to, and which room I'm in. I chose to share those details with the
-station. The four public demos use invented data so you can hear that kind of
-exchange without connecting your home.
+On my own station, the hosts react to appliances finishing and to what is
+playing in the house. I chose to share those details with the station. The
+four public demos use invented data so you can hear that kind of exchange
+without connecting your home.
 
 Existing home-aware stations already use broader household context. Fresh
-installations start with Home context off under the default settings. After you
-inspect the filtered preview, their current guided opt-in is limited to daylight
-and one unambiguous weather source, with temperature rounded to five-degree
-Celsius bands. A later Home Profile update will add per-category controls for
-broader sharing.
+installations start with Home context off under the default settings; after a
+filtered preview, the guided opt-in shares only daylight and one unambiguous
+weather source, with temperature rounded to five-degree Celsius bands. A later
+Home Profile update will add per-category controls.
 
 The station runs on your hardware. It is not a voice assistant and does not run
 household automations. If you explicitly choose a Home Assistant speaker, it
 asks that media player to play the stream. There is no Mamma Mi Radio account,
-subscription, or project-operated analytics upload. You add provider keys only
-when you want freshly written dialogue or premium voices.
+subscription, or project-operated analytics upload. Provider keys are optional:
+add them for freshly written dialogue or premium voices.
 
-**Status:** single maintainer, running daily in one household. Stable 3.0.0 is
-available. The First Listen steps and screenshots below describe this release.
+**Status:** single maintainer; runs daily on the maintainer's own station.
+Stable 3.0.0 is available. The First Listen steps and screenshots below describe this release.
 
 ## First listen
 
@@ -86,7 +85,7 @@ start **Mamma Mi Radio**, then open its Web UI.
 
 No AI key is required for your first listen. Fresh installs open **First Listen**
 at the producer desk (`/admin`). Returning installs open the control room;
-you can find First Listen under **Motore -> Setup**.
+you can find First Listen under **Motore → Setup**.
 
 1. Select **Start my station**. A reviewed English opening plays
    `/stream?first_listen=1` on the current device for about 15 seconds, then
@@ -136,11 +135,7 @@ when you want generated host conversations.
 
 The stock Docker setup leaves external extraction off. Standalone installs can
 add the `external-media` extra, but technical access does not grant media
-rights. The supplied Docker container uses `/data/music`. The Home Assistant app
-reads a folder in the Media panel when that storage is mounted (the Music folder
-setting, default `mammamiradio`) and `/data/music` when it is not. Source
-checkouts use `./music`. Set `MAMMAMIRADIO_MUSIC_DIR` to override a standalone
-install.
+rights. [Music](#music) lists where each kind of install keeps songs.
 
 On a Mac, double-click `Start Radio.command` in the checkout. The first time,
 it prepares `.venv`; after that it opens the station straight away.
@@ -154,15 +149,12 @@ installed, the first run installs whichever of the two is missing.
 When both are already installed, the launcher uses those copies.
 
 The launcher installs the versions pinned in `requirements.txt`, then this
-checkout. Leave the window open: on a slow network the download takes
-several minutes. Once setup finishes, later double-clicks skip it, and a
-setup that stopped early runs again. When `requirements.txt`,
-`pyproject.toml` or the launcher's setup steps change, the next double-click
-prepares the station again. If you are offline then and the update needs no
-new components, the launcher starts the station you already have and finishes
-the update on a later double-click; otherwise it asks you to connect first.
-Moving the checkout folder works too: the next double-click prepares the
-station for its new place. `.env` and `music/` stay in the checkout.
+checkout; on a slow network that takes several minutes, so leave the window
+open. Later double-clicks skip setup unless it stopped early, the checkout
+moved, or `requirements.txt`, `pyproject.toml` or the launcher's setup steps
+changed. Offline with such a change pending, the launcher starts the station you
+already have if no new components are needed, and otherwise asks you to connect
+first. `.env` and `music/` stay in the checkout.
 
 #### Mac launcher recovery
 
@@ -173,11 +165,10 @@ the checkout root:
 [ -f "./Start Radio.command" ] && [ -f ./mammamiradio/main.py ] && mkdir -p ./tmp && backup_dir="$(mktemp -d "./tmp/venv-backup.XXXXXX")" && mv .venv "$backup_dir/environment" && open "./Start Radio.command"
 ```
 
-The command first checks for `Start Radio.command` and
-`mammamiradio/main.py`, so outside a Mamma Mi Radio checkout it changes
-nothing. It moves the old environment into a new directory under `tmp/` and
-leaves earlier backups alone. That backup is not a station you can run. `.env` and `music/`
-stay where they are.
+Outside a Mamma Mi Radio checkout the command changes nothing. Inside one, it
+moves the old environment into a new backup directory under `tmp/`
+(not a station you can run) and reopens the launcher. `.env`, `music/` and
+earlier backups stay where they are.
 
 </details>
 
@@ -192,8 +183,7 @@ stay where they are.
 | An AI key plus approved, filtered Home context | Household-aware banter on existing home-aware stations. Today's guided opt-in on fresh installs is limited to coarse daylight and weather |
 
 Provider usage is charged to the API account behind your key; OpenAI API
-billing is separate from ChatGPT subscriptions. ElevenLabs changes only the
-voices. An OpenAI voice you configure yourself also needs a speech model
+billing is separate from ChatGPT subscriptions. An OpenAI voice you configure yourself also needs a speech model
 pinned in `model_registry.toml`; none ships pinned.
 
 ## Privacy
@@ -222,8 +212,8 @@ and clears public Casa moments. Audio on air may finish to avoid dead air, but
 it cannot write Home memory afterward. Home Assistant entity publishing can
 stay on while host context stays off.
 
-The station itself runs on your hardware. Mamma Mi Radio has no account system,
-central service, or project-operated analytics upload. Operational counters and
+Mamma Mi Radio has no account system, central service, or project-operated
+analytics upload, and no subscription. Operational counters and
 the optional provenance ledger remain local. Paid AI calls use credentials you
 supply; Edge is keyless but still online. In the Home Assistant app, saved keys
 live in `/config/secrets.env`; the UI never echoes them. Provider-side processing
@@ -235,10 +225,11 @@ Normal rotation starts with the offline, attributed twelve-track starter
 collection, so no provider account or network music source is required. The
 listener shows the source, license, and modification notice for each track.
 The Home Assistant app scans the Media folder named in its Music folder setting
-when Media is mounted, and `/data/music` when Media is not. The control room
-names that place. Use **Rotazione > Local music > Scan now** to refresh without
-a restart. The supplied Docker container keeps songs in `/data/music`. Other
-standalone installs can set `MAMMAMIRADIO_MUSIC_DIR`.
+(default `mammamiradio`) when Media is mounted, and `/data/music` when it is not.
+The supplied Docker container uses `/data/music` and a source checkout
+`./music`; set `MAMMAMIRADIO_MUSIC_DIR` to override a standalone install. The
+control room names the folder in use; **Rotazione → Local music → Scan now**
+refreshes it without a restart.
 
 Jamendo is off by default. To enable it, acknowledge that your Jamendo API use
 is non-commercial.
@@ -247,8 +238,7 @@ prepares one track at a time and deletes it after play or cancellation. Jamendo
 is not a recovery or restart source. Read [Music sources and rights
 boundaries](docs/music-sources.md) before enabling it.
 
-Packaged recovery clips keep the speaker path audible while the music source
-stays marked unhealthy.
+If a music source fails, packaged recovery clips keep the station audible.
 
 ## Make it yours
 
@@ -285,7 +275,7 @@ live home.
 
 [Interactive demo](https://florianhorner.github.io/mammamiradio/) |
 [Pilot feedback](https://github.com/florianhorner/mammamiradio/discussions/831) |
-[Earlier product assessment](docs/status-quo.md) |
+[3.0.0 release snapshot](docs/status-quo.md) |
 [Architecture](docs/architecture.md) |
 [Music sources and rights](docs/music-sources.md) |
 [Troubleshooting](docs/troubleshooting.md) |
