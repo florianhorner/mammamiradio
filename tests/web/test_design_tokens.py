@@ -43,7 +43,7 @@ def _strip_comments(text: str) -> str:
 
 # --brand-* tokens are intentionally per-station dynamic (set in listener.html
 # from radio.toml [brand.theme]). They are NOT Volare Refined palette primitives —
-# they are the brand-engine overlay layer (PR-C, 2026-04-26). listener.css references
+# they are the brand-engine overlay layer. listener.css references
 # them via fallback: var(--brand-primary, var(--sun)).
 _BRAND_NAMESPACE_RE = re.compile(r"--brand-")
 

@@ -4,8 +4,7 @@
       "Bash(git fetch origin main)",
       "Bash(git fetch origin)",
       "mcp__claude-in-chrome__tabs_context_mcp",
-      "mcp__claude-in-chrome__get_page_text",
-      "mcp__mempalace__mempalace_search"
+      "mcp__claude-in-chrome__get_page_text"
     ],
     "deny": [
       "Bash(ha core restart*)",

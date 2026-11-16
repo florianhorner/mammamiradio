@@ -8,7 +8,7 @@ Three lists have to agree and nothing used to keep them in sync:
 3. the operator sentence table in ``admin.html``.
 
 The drift was not theoretical. ``metadata_changed``, ``identity_mismatch`` and
-``empty_results`` — the three codes the edge install reports most often — were
+``empty_results`` — the three most common real-world failure codes — were
 missing from lists 2 and 3, so the card showed a generic reason for the only
 failures that actually happen. Worse, ``api_auth_failed`` (a wrong client ID,
 one of the few problems an operator can actually fix) was laundered into

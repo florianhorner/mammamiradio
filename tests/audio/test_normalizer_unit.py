@@ -202,8 +202,8 @@ def test_normalize_without_loudnorm_uses_fast_filter(mock_subprocess):
 
 def test_normalize_applies_fade_in_on_final_output(mock_subprocess):
     """Every final-output segment carries a soft fade-in so music→voice
-    hand-offs aren't hard cuts. Florian flagged the drop as audible during
-    a 2026-04-21 listening session; this test guards against regression.
+    hand-offs aren't hard cuts. The drop was audible in a listening check;
+    this test guards against regression.
     """
     mock_run, _ = mock_subprocess
     inp = Path("/tmp/in.mp3")
@@ -1095,7 +1095,7 @@ def test_normalize_real_encode_has_no_xing_header(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# silenceremove must not truncate speech (2026-05-18 HA Green banter outage)
+# silenceremove must not truncate speech (HA Green banter outage)
 # ---------------------------------------------------------------------------
 
 
@@ -1105,7 +1105,7 @@ def test_normalize_silenceremove_uses_negative_stop_periods(mock_subprocess):
 
     A positive stop_periods makes ffmpeg's silenceremove halt output at the FIRST
     silence period, truncating multi-phrase host lines at their first pause (~1.6s).
-    The 2026-05-18 HA Green run rejected every banter for 4+ hours because of this.
+    On HA Green this once rejected every banter for 4+ hours.
     A negative stop_periods trims trailing silence only.
     """
     mock_run, _ = mock_subprocess
@@ -1125,7 +1125,7 @@ def test_normalize_silenceremove_uses_negative_stop_periods(mock_subprocess):
 def test_normalize_fast_path_preserves_speech_with_internal_pauses(tmp_path):
     """normalize(loudnorm=False) must NOT truncate a host line at its internal pauses.
 
-    Behavioural guard for the 2026-05-18 HA Green banter outage: silenceremove with a
+    Behavioural guard for the HA Green banter outage: silenceremove with a
     positive stop_periods halts output at the first silence period, collapsing every
     multi-phrase host line to ~1.6s. Builds a 7.6s line (speech with three internal
     0.4s pauses) and asserts it survives the per-line fast-path encode intact.

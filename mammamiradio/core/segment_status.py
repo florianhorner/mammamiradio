@@ -3,7 +3,7 @@
 Single source of truth, extracted so that BOTH the listener-profile bookkeeping
 in ``StationState.on_stream_segment`` and the provenance ledger's Tier-3
 ``stream_result`` row classify a segment the same way. Duplicating the flag list
-is the documented failure mode ``producer-rescue-paths-miss-fallback-flag``:
+is a known failure mode:
 producer rescue clips set ``queue_drain_recovery`` / ``silence_fallback`` /
 ``resume_bridge`` / ``idle_bridge`` WITHOUT ``fallback:True``, so a naive
 ``metadata["fallback"]`` check silently mislabels exactly the dead-air rescues

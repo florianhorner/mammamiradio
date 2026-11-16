@@ -169,7 +169,7 @@ def _attempt_timeout(max_tokens: int) -> float:
 def _warn_budget_pressure(output_tokens: object, budget: object, caller: str | None) -> None:
     """Tripwire: the next output-contract growth spurt should announce itself in
     logs while generations still succeed, before it becomes an on-air truncation
-    (600 tokens truncated pre-2.8.0, 1200 truncated 2026-07). Best-effort
+    (budgets of 600 and then 1200 tokens both truncated on air). Best-effort
     telemetry: a non-numeric usage value must never raise into generation."""
     if not isinstance(output_tokens, int) or not isinstance(budget, int):
         return
@@ -1387,7 +1387,7 @@ async def _generate_json_response(
                 # inherits the LAST (escalated) budget as its visible-output
                 # floor even when the escalated attempt then died on something
                 # ELSE (timeout, sibling-tripped circuit). The original small
-                # floor is how the live incident's second half happened.
+                # floor let the fallback truncate the same long content again.
                 final_anthropic_max_tokens = current_max_tokens
 
     openai_key = config.openai_api_key or os.getenv("OPENAI_API_KEY", "")
@@ -1410,9 +1410,8 @@ async def _generate_json_response(
 
     # Visible-output floor for the fallback: when Anthropic exhausted its
     # escalated retries on truncation, the same long content is coming here —
-    # the original small floor is how the live incident's second half happened
-    # (the prior reasoning-model incident returned an EMPTY completion, reasoning tokens starving the
-    # visible JSON). The raised TPM reservation is confined to that path.
+    # a small floor would truncate it again (a reasoning model can also return
+    # an EMPTY completion when reasoning tokens starve the visible JSON). The raised TPM reservation is confined to that path.
     visible_budget = final_anthropic_max_tokens
     raw = ""
     finish_reason: str | None = None
@@ -1491,7 +1490,7 @@ async def _generate_json_response(
         choice = resp.choices[0]  # type: ignore[attr-defined]
         raw = (choice.message.content or "").strip()
         finish_reason = getattr(choice, "finish_reason", None)
-        # Retry gate for the OTHER half of the live incident: a completion cut at
+        # Retry gate for truncation on the fallback side: a completion cut at
         # the cap (`finish_reason == "length"`, reasoning tokens included) or a
         # genuinely empty one gets ONE escalated retry. An empty completion with
         # finish_reason "stop" (model finished on purpose) or "content_filter"
@@ -2290,7 +2289,7 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
 # station tight and makes the occasional long break land as "this one mattered".
 _BANTER_EXCHANGE_COUNT: str = "2-3"
 _BANTER_EXCHANGE_COUNT_WARRANTED: str = "4-6"
-# Raised from 1200 (600 pre-2.8.0) after live truncation recurred 2026-07:
+# Raised from 1200 (600 before that) after on-air truncation recurred:
 # warranted 4-6 exchanges plus `new_joke` and `release_beat_used` can still
 # pressure the hot JSON contract. Paired with the escalation retry in
 # _generate_json_response, not a standalone fix.
@@ -2501,7 +2500,7 @@ jokes between the hosts, not exposition. The listener should feel like they're
 overhearing a world that exists with or without them."""
 
     mode_directive = language_mode_directive(config.super_italian_mode)
-    # Test balloon: if the Bavarian guest is in the roster, keep him inside the
+    # Guest host: if the Bavarian guest is in the roster, keep him inside the
     # show as a guest star in either language mode (never described without a brief).
     mode_directive += _guest_host_directive(config, super_italian=config.super_italian_mode)
     station_name = config.display_station_name

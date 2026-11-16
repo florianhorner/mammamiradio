@@ -51,7 +51,7 @@ After priming, each run shows only what's genuinely new.
 ## Scheduled form (weekly)
 
 Run weekly (Tuesdays — betas open ~7 days before the first-Wednesday GA). The
-recommended form factor is a scheduled agent (via `/schedule`) rather than a
+recommended form factor is a scheduled agent rather than a
 bare cron, so it can judge true relevance and open a narrow GitHub issue per
 genuine hit. Suggested agent loop:
 

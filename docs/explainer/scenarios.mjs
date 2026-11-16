@@ -123,7 +123,7 @@ const scenarios = {
     quote: "Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
     reachability: "home-grant",
     // Terracotta, not sage: green is banned twice in the design system
-    // (colorblind owner), and this accent drives the entire on-air chrome.
+    // (colorblind safety), and this accent drives the entire on-air chrome.
     color: "#b47850",
     rgb: "180, 120, 80",
     sensors: [

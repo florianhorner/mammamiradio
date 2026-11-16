@@ -198,7 +198,7 @@ sed -i '' 's/"version": *"[^"]*"/"version": "X.Y.Z"/' custom_components/mammamir
 ## Cutting a stable release (the cadence model)
 
 You develop continuously and never freeze a snapshot — so stable is not "stop and tag
-HEAD." It is "promote a build that has already soaked on the edge Pi." The infra is built
+HEAD." It is "promote a build that has already soaked on the edge channel." The infra is built
 for exactly this: `addon-release.yml` does not rebuild on a tag, it promotes the prebuilt
 `:sha` image. The edge channel is your continuous soak track.
 

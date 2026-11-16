@@ -531,8 +531,8 @@ def test_every_ladder_declares_its_repeat_policy_explicitly():
 
     A caller may inherit the wrong policy in either direction: permissive while
     real audio sits beneath it (a needless repeat), or strict while nothing real
-    does (a looping ident with a playable song in the cache). Both shipped on this
-    branch. Grepping the call sites is the check that scales to the next ladder.
+    does (a looping ident with a playable song in the cache). Both mistakes have
+    shipped. Grepping the call sites is the check that scales to the next ladder.
     """
     import inspect
 
@@ -578,7 +578,7 @@ def test_every_ladder_declares_its_repeat_policy_explicitly():
 def test_operations_doc_repeat_policy_table_matches_the_code():
     """The operator doc's `allow_recent_repeat` table must not contradict the code.
 
-    This table has been wrong in both directions on one branch: first it claimed
+    This table has been wrong in both directions: first it claimed
     the playback-gap rescue asked permissively while the code asked strictly, then
     the code changed and the doc kept the old answer. An operator reading it to
     decide whether a repeat is expected got the opposite of the truth each time,

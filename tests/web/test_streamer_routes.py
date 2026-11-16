@@ -547,7 +547,7 @@ def test_continuity_reservation_falls_back_to_least_recent_when_all_cooling(tmp_
 
 
 # ---------------------------------------------------------------------------
-# The 2026-07-24 incident: a live control re-reserved the song still on air,
+# The bug this guards: a live control re-reserved the song still on air,
 # with the packaged sweeper in front of it, so the listener heard
 #   Don't Lose Your Way -> "Siamo sempre in onda..." -> Don't Lose Your Way.
 # All three scenarios required by the audio-delivery test coverage rule.
@@ -1768,7 +1768,7 @@ async def test_playback_gap_rescue_airs_a_recent_song_rather_than_looping_the_cl
 async def test_rescue_airplay_is_stamped_mid_segment_not_only_at_the_end(tmp_path):
     """A cached rescue enters the rotation cooldown on its FIRST heard chunk.
 
-    The 2026-07-24 incident happened because the only stamp was at segment end:
+    The repeat happened because the only stamp was at segment end:
     a live control firing two minutes into a 3.5-minute play saw the on-air song
     as never heard and re-reserved it. The stamp must land while the song is
     still playing, so anything asking "has this aired recently?" gets a true
@@ -4440,7 +4440,7 @@ async def test_run_playback_loop_rescue_strips_foreign_station_name_from_sidecar
     import json
 
     (tmp_path / "norm_rescue.mp3.json").write_text(
-        json.dumps({"title": "Be Without U", "artist": "Radio Sabrina Sensatione", "source_kind": "local"})
+        json.dumps({"title": "Be Without U", "artist": "Radio Ornella Sensatione", "source_kind": "local"})
     )
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
@@ -4469,7 +4469,7 @@ async def test_run_playback_loop_rescue_strips_foreign_station_name_from_sidecar
 
     now_meta = app.state.station_state.now_streaming.get("metadata", {})
     # The foreign station name must not appear in any listener-facing field.
-    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
+    assert "Radio Ornella Sensatione" not in (now_meta.get("title") or "")
     assert now_meta.get("artist") in (None, "")  # stripped → no artist key
     # The real song title survives.
     assert now_meta.get("title") == "Be Without U", f"got {now_meta.get('title')!r}"
@@ -4496,7 +4496,7 @@ async def test_run_playback_loop_rescue_strips_foreign_station_prefix_from_title
     (tmp_path / "norm_rescue_title.mp3.json").write_text(
         json.dumps(
             {
-                "title": "Radio Sabrina Sensatione – Be Without U",
+                "title": "Radio Ornella Sensatione – Be Without U",
                 "artist": "Mario Biondi",
                 "source_kind": "local",
             }
@@ -4529,7 +4529,7 @@ async def test_run_playback_loop_rescue_strips_foreign_station_prefix_from_title
 
     now_meta = app.state.station_state.now_streaming.get("metadata", {})
     # The foreign station prefix must not appear in the now-playing title.
-    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
+    assert "Radio Ornella Sensatione" not in (now_meta.get("title") or "")
     # Title keeps the clean artist + the real song, prefix trimmed.
     assert "Be Without U" in (now_meta.get("title") or "")
 

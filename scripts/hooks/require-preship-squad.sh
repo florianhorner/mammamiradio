@@ -19,7 +19,7 @@
 # command string, so heredoc/string CONTENT mentioning the guarded commands
 # (e.g. a prompt file being written) trips it too. That false positive is
 # accepted — reword the content or write it via the Write tool. A token-aware
-# parse belongs in permission-guard.py, not here.
+# parse belongs in a separate permission hook, not here.
 #
 # FAILS OPEN: an internal input/parsing error
 # exits 0 (allow). A bug in this guard can never block a PR. The ONLY paths that

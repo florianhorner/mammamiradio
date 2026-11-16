@@ -216,8 +216,8 @@ def _render_gag(bucket: GagBucket) -> str:
     """Render a bucket as approximate Italian gag DATA for inside the fence.
 
     Approximate ("di nuovo"/"non si ferma"), NOT an exact count: BANTER/AD-cadence
-    HA sampling can miss short toggles, so an exact "10th time" is not dependable
-    (codex review). PROVISIONAL phrasing — Phase 1 finalizes and golden-snapshots.
+    HA sampling can miss short toggles, so an exact "10th time" is not dependable.
+    The phrasing is provisional until a golden snapshot pins it.
     """
     cadence = "praticamente non si ferma stasera" if bucket.count >= 4 else "di nuovo stasera"
     # No "old -> new" arrow: _sanitize_prompt_data strips '>' before the gag
@@ -230,7 +230,7 @@ class EveningLedger:
     """Persisted, evening-scoped tally of discrete home events for running gags.
 
     Owns its OWN session identity (PersonaStore's session id is in-memory and
-    does not survive the addon's frequent restarts — codex review). Cooldown
+    does not survive the addon's frequent restarts). Cooldown
     state lives in each bucket's `last_spoken_ts` so a restart cannot re-fire a
     gag that just aired.
     """

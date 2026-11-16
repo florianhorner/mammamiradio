@@ -10867,7 +10867,7 @@ def test_write_banter_resolves_via_module_after_reload() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Resume bridge — covers producer.py lines 599-637 deleted by CodeRabbit #182
+# Resume bridge — restores coverage a past refactor removed
 # ---------------------------------------------------------------------------
 
 

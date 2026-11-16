@@ -305,7 +305,7 @@ First listen, then home context. v2.17 makes first audio sturdier and gives Home
 
 - **Home Assistant context now adapts to each home.** The add-on scores prompt-safe
   entities from the full Home Assistant state snapshot instead of only using a
-  hardcoded apartment list. Location, camera, alarm, and free-text helper
+  fixed built-in entity list. Location, camera, alarm, and free-text helper
   entities plus secret-shaped attributes are filtered before prompt assembly;
   who's home stays as simple home/away (never location) so the hosts can still
   welcome you back and notice an empty house. The admin Engine Room shows what

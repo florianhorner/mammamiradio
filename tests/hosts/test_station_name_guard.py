@@ -18,12 +18,12 @@ STATION = "Mamma Mi Radio"
 
 def test_strip_drops_whole_foreign_station_name():
     # The exact production incident: a poisoned sidecar artist.
-    assert strip_foreign_station_name("Radio Sabrina Sensatione", STATION) == ""
+    assert strip_foreign_station_name("Radio Ornella Sensatione", STATION) == ""
 
 
 def test_strip_keeps_song_when_foreign_name_is_a_leading_prefix():
     # The rescue display form "Artist - Title" where the artist is a station.
-    assert strip_foreign_station_name("Radio Sabrina Sensatione – Be Without U", STATION) == "Be Without U"
+    assert strip_foreign_station_name("Radio Ornella Sensatione – Be Without U", STATION) == "Be Without U"
 
 
 def test_strip_leaves_ordinary_single_token_band():
@@ -72,7 +72,7 @@ def test_strip_handles_siamo_su_prefix_form():
 
 
 def test_strip_keeps_our_own_station_name():
-    ours = "Radio PenthouseFlo FM"
+    ours = "Radio Lungomare FM"
     assert strip_foreign_station_name(ours, ours) == ours
 
 
@@ -92,7 +92,7 @@ def test_strip_prefix_only_never_blanks_a_real_radio_titled_song():
 def test_strip_prefix_only_still_strips_rescue_display_prefix():
     # But the rescue display form "Foreign - Song" still loses the foreign prefix.
     assert (
-        strip_foreign_station_name("Radio Sabrina Sensatione – Be Without U", STATION, prefix_only=True)
+        strip_foreign_station_name("Radio Ornella Sensatione – Be Without U", STATION, prefix_only=True)
         == "Be Without U"
     )
 

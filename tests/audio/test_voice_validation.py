@@ -1,6 +1,6 @@
-"""WS3-B guards: voice validation at config load + runtime memoization.
+"""Voice validation guards: config-load correction + runtime memoization.
 
-Four mandatory guards from the WS3-B charter:
+Four mandatory guards:
   1. edge-tts host with voice="onyx" is corrected at config load.
   2. OpenAI host with voice="onyx" is accepted.
   3. runtime voice failure is memoized — no second edge-tts attempt for the

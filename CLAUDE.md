@@ -13,7 +13,7 @@ The listener must always believe they are hearing a real radio station. Dead air
 A connecting listener hears sound within 1–2 seconds, every time: no exceptions for cold starts, session resumes, idle wakeups, or addon restarts. Every connect path needs an immediate audio source (pre-normalized track, canned clip, anything). Build the bridge first, fix root causes second.
 
 **3. NO LIVE SURGERY ON PRODUCTION SYSTEMS**
-The only legitimate addon code-change path is `branch → PR → merge → CI builds image → addon updates`. No `docker cp`, no `pkill`, no live config edits, no addon restarts without explicit confirmation in the current message. Sleeping humans depend on the system. Full rule: **Production Systems Discipline — HARD STOP** below.
+The only legitimate addon code-change path is `branch → PR → merge → CI builds image → addon updates`. No `docker cp`, no `pkill`, no live config edits, no addon restarts without explicit confirmation in the current message. Live listeners depend on the system, at any hour. Full rule: **Production Systems Discipline — HARD STOP** below.
 
 **4. THE README IS THE PITCH**
 A new reader must get it in 30 seconds or less (a KPI, not an aspiration); needing scrolling, paragraphs of context, or a glossary before the product clicks is failure. The first viewport carries the entire pitch: what it is, what makes it different, what the reader does next. The repo meets the same standard: the folder hierarchy IS the mental model, and a feature whose home cannot be found in 30 seconds means the structure failed.
@@ -23,9 +23,9 @@ Every word a listener or operator reads is product copy, not a log line. No tech
 
 ## Production Systems Discipline — HARD STOP
 
-**No live surgery on the HA Green.** The only legitimate code-change path for the mammamiradio addon is `branch → PR → merge → CI builds image → addon updates to new image`. The restart happens once, planned, when the addon updates: not during the day, not as an experiment, not to "test the fix live".
+**No live surgery on the production add-on host.** The only legitimate code-change path for the mammamiradio addon is `branch → PR → merge → CI builds image → addon updates to new image`. The restart happens once, planned, when the addon updates: not during the day, not as an experiment, not to "test the fix live".
 
-**Default HA development target:** First Listen and other Home Assistant-facing branch work runs against `scripts/first-listen-lab.sh`, the disposable local HA Container + VLC speaker lab (`docs/runbooks/first-listen-local-ha.md`). Never connect branch code to the live home, reuse its token or backup, or attach household/cloud/MQTT devices unless the maintainer explicitly authorizes that live action in the current message. Lab runtime and credentials live only under gitignored `tmp/first-listen-ha-lab/`, never in `.context/` or tracked files.
+**Default HA development target:** First Listen and other Home Assistant-facing branch work runs against `scripts/first-listen-lab.sh`, the disposable local HA Container + VLC speaker lab (`docs/runbooks/first-listen-local-ha.md`). Never connect branch code to a live Home Assistant install, reuse its token or backup, or attach household/cloud/MQTT devices unless the maintainer explicitly authorizes that live action in the current message. Lab runtime and credentials live only under gitignored `tmp/first-listen-ha-lab/`, never in `.context/` or tracked files.
 
 **NEVER do any of these against the running mammamiradio addon without the maintainer's explicit confirmation in the current message:**
 

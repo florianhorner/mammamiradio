@@ -132,7 +132,7 @@ def test_broadcast_filter_chain_shape_is_sigabrt_safe():
 
 
 def test_broadcast_filter_chain_has_no_stereo_swirl():
-    """Regression guard for the 'binaural swirl' illusion-break (#1): the egress chain
+    """Regression guard for the 'binaural swirl' illusion-break: the egress chain
     must contain NO swept-phaser or stereo-decorrelating filter. A swept ``aphaser``
     once sat here as faux multipath and smeared the white-noise ad-bed transition into
     an audible binaural swirl. If any of these reappear in egress, fail loudly — the

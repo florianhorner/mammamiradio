@@ -176,7 +176,7 @@ assert_rejects "options drift" "edge options block drifted"
 # --- Store-listing files ---
 # Supervisor reads the per-app README.md as the listing's long description and
 # returns null when it is absent, so a deleted README is a silently blank store
-# card. Stable icon/logo had no existence coverage at all before 2026-08-15.
+# card. Stable icon/logo once had no existence coverage at all.
 
 stage_file "ha-addon/mammamiradio/README.md"
 rm -f "ha-addon/mammamiradio/README.md"

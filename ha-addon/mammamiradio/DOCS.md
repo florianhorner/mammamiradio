@@ -400,8 +400,8 @@ expected explanation.
 
 ## Upgrade note: next update, not part of 3.0.0
 
-The next update reads a verified private Home profile instead of an embedded
-household map. Eligible installations can recover a matching profile together
+The next update reads a verified private Home profile instead of a built-in
+home map. Eligible installations can recover a matching profile together
 with its original installation evidence and database binding. Installing 3.0.0
 alone does not guarantee recovery for every older installation. Missing or
 conflicting evidence is never reconstructed; broader sharing for other older

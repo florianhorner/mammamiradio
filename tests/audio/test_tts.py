@@ -5459,7 +5459,7 @@ async def test_cloud_renderer_bodies_forward_tempo_to_normalize(_mock_all, tmp_p
     it proves synthesize() passes the kwarg to the boundary and nothing about
     what happens inside. Deleting the tempo forward from any renderer body would
     break every cloud voice with no test failing. That is the same shape as the
-    bug this branch exists to fix: a parameter accepted at the signature and
+    bug this guards against: a parameter accepted at the signature and
     dropped inside.
     """
     from mammamiradio.audio import tts as tts_mod

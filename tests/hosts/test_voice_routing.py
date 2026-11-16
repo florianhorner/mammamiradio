@@ -13,7 +13,7 @@ without TTS API keys in the environment, i.e. in CI):
   voice names an Edge double.
 - Ad-voice names are unique, since the caster dedupes by name within a spot.
 - Legacy role-only ``spokesperson`` pins remain a temporary compatibility
-  hint while PR2 migrates every campaign to direct ``spokesperson_voice``
+  hint until every campaign migrates to direct ``spokesperson_voice``
   ownership. They create no reservation. Synthetic tests below guard the new
   direct-map invariant: the named character must fit *all* pooled formats and
   can never bleed into another brand's cast.

@@ -1,11 +1,11 @@
 """Cross-page contract tests for /public-status vs /status.
 
 The CRITICAL INVARIANT: any field present in BOTH endpoints must hold the
-same value at the same time. This is what prevents the bug class Florian
-flagged on 2026-04-26 (admin says 'Waiting for signal…' while listener
+same value at the same time. This prevents the bug class where admin
+says 'Waiting for signal…' while listener
 says 'IN ONDA' — different code paths producing different state).
 
-Cathedral standard:
+Contract:
 - Strict subset: every field in /public-status must also exist in /status
 - Bytes-identical for shared fields: capabilities dict, brand dict, uptime,
   tracks_played, rotation_track_count, session_stopped, now_streaming, upcoming/upcoming_mode,
@@ -472,7 +472,7 @@ async def test_public_status_rotation_count_follows_live_playlist_mutations():
 async def test_admin_listener_facts_agree():
     """THE cross-page invariant: shared facts must hold the same value at the same time.
 
-    This catches the bug class Florian flagged: admin says 'Waiting for signal…'
+    This catches the bug class where admin says 'Waiting for signal…'
     while listener says 'IN ONDA'. Both endpoints must read from the SAME state
     object via the SAME helper (_public_status_payload), and never compute their
     own divergent values.
