@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # check-merge-gate.sh — assert the merge-gate repo settings have not drifted.
 #
-# The landing contract (CLAUDE.md "Quality gates") rests on four GitHub
-# settings that live OUTSIDE the repo and would fail silently if toggled:
+# The landing contract (docs/runbooks/ha-addon.md "Landing a PR") rests on four
+# GitHub settings that live OUTSIDE the repo and would fail silently if toggled:
 #
 #   1. branch protection on main: strict status checks (branch must be up to
 #      date before merging), so the checked base matches the landing base;
