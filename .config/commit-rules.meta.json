@@ -1,5 +1,32 @@
 {
   "vendored_from": "https://github.com/florianhorner/engineering-standards/blob/1fe9a730a3779349ddcea67974f10050a7548a47/specs/commit-rules.json",
   "sha_pin": "1fe9a730a3779349ddcea67974f10050a7548a47",
-  "fetched_at": "2026-05-17T16:28:30Z"
+  "fetched_at": "2026-05-17T16:28:30Z",
+  "local_overrides": [
+    {
+      "path": "/subject/version_prefix/rationale",
+      "kind": "documentation",
+      "reason": "Describe the optional version prefix without naming a specific tool."
+    },
+    {
+      "path": "/banned_patterns/subject_only/1/fix_hint",
+      "kind": "documentation",
+      "reason": "Describe the four-component form without naming a specific tool."
+    },
+    {
+      "path": "/trailers/metadata/Skill-Run/description",
+      "kind": "documentation",
+      "reason": "Describe the trailer without naming a specific tool."
+    },
+    {
+      "path": "/error_format/rationale",
+      "kind": "documentation",
+      "reason": "Drop an internal design-review reference."
+    },
+    {
+      "path": "/trailers/policy/fork_strip_rationale",
+      "kind": "documentation",
+      "reason": "Describe why fork trailers are stripped without naming an audience."
+    }
+  ]
 }
