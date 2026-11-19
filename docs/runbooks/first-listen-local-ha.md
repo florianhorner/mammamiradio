@@ -127,7 +127,7 @@ In the **local** HA only, change both integration hosts from
 otherwise remove and re-add that local config entry using `show-setup`.
 **Do not make these changes in the production Home Assistant installation.**
 
-## Personal acceptance test
+## Manual acceptance test
 
 For a fast repeat that keeps the radio database and normalized audio cache:
 

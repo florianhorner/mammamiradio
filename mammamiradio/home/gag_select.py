@@ -4,7 +4,7 @@ Extracted from ``EveningLedger.offer_gag`` so the verbal running-gag ledger
 (``hosts/verbal_gag_ledger.py``) can reuse the EXACT same weighted-pick-then-
 silence behavior instead of reinventing it.
 
-Deliberately narrow (Codex review): only the weighted pick + silence roll is
+Deliberately narrow: only the weighted pick + silence roll is
 shared. Eligibility filtering and salience scoring stay in each ledger because
 they differ — home buckets filter on count+cooldown and score by
 tier x log(count) x recency; verbal gags filter on cooldown+not-traveled+domain

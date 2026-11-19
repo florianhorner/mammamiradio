@@ -1,6 +1,6 @@
-"""OpenGraph social card renderer (brand-engine PR-E).
+"""OpenGraph social card renderer.
 
-Per design D-Design-2: poster-style 1200x630 PNG that looks like a still-frame
+Poster-style 1200x630 PNG that looks like a still-frame
 from the listener page, not a generic SaaS marketing card. Italian flag tricolor
 at top, brand identity dominant in Playfair italic, track info as secondary
 lower-third band.
@@ -10,8 +10,8 @@ cairo lib dep). Pillow renders typography well at the 1200x630 size where OG
 previews are viewed — quality bar is "legible + brand-recognizable", not
 marketing-hero crisp. Bundled or system Italian display font preferred.
 
-Generation runs in a background task on track change (per design D4.1: never
-on request thread). Request handler serves cached PNG. Cache miss returns
+Generation runs in a background task on track change (never on
+the request thread). Request handler serves cached PNG. Cache miss returns
 fallback (logo.png) so social previews never 404.
 """
 

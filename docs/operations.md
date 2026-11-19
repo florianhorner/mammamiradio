@@ -215,7 +215,7 @@ because the gate compares against it, and a selection that names no candidate ar
 exit `2`, since a run that compares nothing would read as a pass. Rule: a change to the fast-role pin, its request
 shape, or its token budgets ships with a run of this benchmark on the current production
 prompts, and the registry decision quotes the run. Latency and output budgets measured on
-one model generation are not inherited by the next; the October 2026 run showed Haiku 5.5
+one model generation are not inherited by the next; a benchmark run showed Haiku 5.5
 spending the whole 100-token transition budget on thinking at its default effort, which no
 reading of the model card would have predicted. It makes paid Anthropic calls and is not a CI
 gate, not runtime enforcement, and not a change to `model_registry.toml`. It bypasses the

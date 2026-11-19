@@ -11,8 +11,6 @@
 #
 # Run locally:    bash scripts/check-issue-body-lint.sh <body-file>
 # CI invocation:  see .github/workflows/issue-body-lint.yml
-# Local hook:     ~/.claude/hooks/verify-issue-body.sh chains this in when present
-#                 in the project's scripts/ directory at gh issue create/edit time.
 
 set -euo pipefail
 

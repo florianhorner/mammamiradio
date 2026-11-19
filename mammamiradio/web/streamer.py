@@ -7679,7 +7679,7 @@ _OG_CARD_FALLBACK = b""  # populated lazily on first miss
 async def og_card(request: Request):
     """Serve the OG social card PNG. Cached by brand+track key.
 
-    Per design D-Design-2: poster-style 1200x630, brand-dominant typography,
+    Poster-style 1200x630, brand-dominant typography,
     Italian flag tricolor at top, track info as lower-third band. Falls back
     to the static logo PNG if generation fails — social previews never 404.
     """
@@ -10474,7 +10474,7 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
     if not tracks:
         return {"ok": False, "error": "Pick at least one song to ban."}
 
-    # D5: a bulk ban must not starve the rotation pool onto the emergency rescue path.
+    # A bulk ban must not starve the rotation pool onto the emergency rescue path.
     # Floor is MIN_ROTATION_AFTER_BAN for a healthy pool, but even an already-small
     # pool (< MIN) must keep at least one song — otherwise a single bulk ban could
     # empty the rotation entirely and force permanent rescue playback. (Per-row
@@ -11307,7 +11307,7 @@ async def _clear_empty_heading_after_direction_downloads(
 
 
 # Listener-request endpoints + _download_listener_song background task moved to
-# mammamiradio/web/listener_requests.py (Track B v2.11.0 extraction). The new
+# mammamiradio/web/listener_requests.py. The new
 # router is mounted in main.py alongside this one.
 
 
@@ -12269,10 +12269,10 @@ def _public_status_payload(request: Request, *, include_etag_revision: bool = Fa
         **({"_etag_revision": (event_revision, recent_revision)} if include_etag_revision else {}),
         # Process-local receipt counts reused by the admin status payload.
         "ad_experiment": _ad_experiment_status(state),
-        # Brand-fiction layer (PR-A schema). Listener renders against this.
+        # Brand-fiction layer. Listener renders against this.
         "brand": _serialize_brand(config.brand),
         # Capability flags (listener-safe subset). Listener JS reads these every
-        # poll and toggles [data-cap=KEY] elements (per design D2: client-side
+        # poll and toggles [data-cap=KEY] elements (client-side
         # capability-conditional rendering reacts to runtime cap drift).
         "capabilities": {
             "llm": bool(config.anthropic_api_key or config.openai_api_key),

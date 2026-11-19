@@ -612,9 +612,9 @@ pass "create with repo-like title value is allowed"
 # KNOWN GAP, pinned so it stays a decision rather than drift: a flagless command
 # run after cd-ing into ANOTHER repository is still judged against this checkout,
 # because the hook is invoked with the session cwd and sees no explicit target.
-# It fails in the safe direction (a false refusal, not a false pass), and R12
-# denies the flagless form fleet-wide so it is largely unreachable. Closing it
-# needs the cwd resolution permission-guard.py R13/R19 already had to build.
+# It fails in the safe direction (a false refusal, not a false pass), and a
+# separate permission hook denies the flagless form, so it is largely unreachable.
+# Closing it needs cwd resolution like that hook already does.
 CD_OTHER_REPO='cd /Users/example/repos/gh-workflows && gh pr create --fill'
 [ "$(verdict "$(payload "$CD_OTHER_REPO")" "$DUMMY")" = allow ] \
   || fail "known gap changed: a cd-ed flagless create is no longer judged here"

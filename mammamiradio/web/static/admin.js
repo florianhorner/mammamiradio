@@ -1,6 +1,6 @@
 /* Mamma Mi Radio — admin producer-desk client behavior.
  *
- * Extracted from admin.html (eng review E1) to match the listener.js pattern.
+ * Extracted from admin.html to match the listener.js pattern.
  * This module is intentionally framework-free: it attaches helpers to `window`
  * so the inline <script> in admin.html can call them, and reads/writes the DOM
  * directly. No build step.
@@ -16,7 +16,7 @@
  *   │      (restore row)   (no-op)     row re-renders next poll     │
  *   └─────────────────────────────────────────────────────────────┘
  *
- * Undo toasts are capped at MAX_TOASTS (5, eng review E8); the oldest undo
+ * Undo toasts are capped at MAX_TOASTS (5); the oldest undo
  * commits to make room for another undo. Error toasts have their own smaller
  * cap and only evict older errors, so a backend failure notice can never force
  * a pending undo action to commit. Slide animation is a CSS transition, so the
@@ -27,9 +27,9 @@
   'use strict';
 
   // ── Undo toast stack ─────────────────────────────────────────────
-  const MAX_TOASTS = 5; // eng review E8 — cap visible undo toasts
+  const MAX_TOASTS = 5; // cap visible undo toasts
   const MAX_ERROR_TOASTS = 2; // errors share safe-space, but never evict undo
-  const DEFAULT_TTL = 5000; // eng review D4 — 5s window, auto-dismiss = commit
+  const DEFAULT_TTL = 5000; // 5s window, auto-dismiss = commit
 
   function isHomeAssistantQuickBarShortcut(event) {
     const key = String(event.key || '').toLowerCase();

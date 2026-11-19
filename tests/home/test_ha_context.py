@@ -5069,7 +5069,7 @@ async def test_push_state_to_ha_music_keeps_legit_artist(reset_ha_push_debounce)
             current_track=None,
             listeners_active=1,
             session_stopped=False,
-            station_name="Radio PenthouseFlo FM",
+            station_name="Radio Lungomare FM",
         )
 
     attrs = _media_player_attrs(mock_client)
@@ -5092,24 +5092,24 @@ async def test_push_state_to_ha_strips_foreign_station_name_from_rescue_metadata
             ha_token="t",
             now_streaming={
                 "type": "music",
-                "label": "Radio Sabrina Sensatione – Be Without U",
+                "label": "Radio Ornella Sensatione – Be Without U",
                 "started": time.time() - 5,
                 "metadata": {
-                    "title": "Radio Sabrina Sensatione – Be Without U",
-                    "artist": "Radio Sabrina Sensatione",
+                    "title": "Radio Ornella Sensatione – Be Without U",
+                    "artist": "Radio Ornella Sensatione",
                     "audio_source": "fallback_norm_cache",
                 },
             },
             current_track=None,
             listeners_active=1,
             session_stopped=False,
-            station_name="Radio PenthouseFlo FM",
+            station_name="Radio Lungomare FM",
         )
 
     attrs = _media_player_attrs(mock_client)
-    assert "Radio Sabrina Sensatione" not in attrs["media_artist"]
-    assert "Radio Sabrina Sensatione" not in attrs["media_title"]
-    assert attrs["media_artist"] == "Radio PenthouseFlo FM"  # fell back to our station
+    assert "Radio Ornella Sensatione" not in attrs["media_artist"]
+    assert "Radio Ornella Sensatione" not in attrs["media_title"]
+    assert attrs["media_artist"] == "Radio Lungomare FM"  # fell back to our station
     assert attrs["media_title"] == "Be Without U"  # foreign prefix stripped, song kept
 
 
@@ -5118,7 +5118,7 @@ async def test_push_state_to_ha_post_restart_rescue_artist_falls_back_to_station
     """Scenario 3 — Post-restart: the first segment a reconnecting listener gets is
     a rescue whose current_track ALSO carries a poisoned artist. The fallback chain
     walks past both foreign values to our station name — never a competitor."""
-    poisoned_track = SimpleNamespace(title="Be Without U", artist="Radio Sabrina Sensatione")
+    poisoned_track = SimpleNamespace(title="Be Without U", artist="Radio Ornella Sensatione")
     mock_client = AsyncMock()
     mock_client.post.return_value = MagicMock(status_code=200)
 
@@ -5130,17 +5130,17 @@ async def test_push_state_to_ha_post_restart_rescue_artist_falls_back_to_station
                 "type": "music",
                 "label": "Be Without U",
                 "started": time.time() - 1,
-                "metadata": {"title_only": "Be Without U", "artist": "Radio Sabrina Sensatione"},
+                "metadata": {"title_only": "Be Without U", "artist": "Radio Ornella Sensatione"},
             },
             current_track=poisoned_track,
             listeners_active=2,
             session_stopped=False,
-            station_name="Radio PenthouseFlo FM",
+            station_name="Radio Lungomare FM",
         )
 
     attrs = _media_player_attrs(mock_client)
-    assert attrs["media_artist"] == "Radio PenthouseFlo FM"
-    assert "Sabrina" not in attrs["media_artist"]
+    assert attrs["media_artist"] == "Radio Lungomare FM"
+    assert "Ornella" not in attrs["media_artist"]
 
 
 @pytest.mark.asyncio
@@ -5164,7 +5164,7 @@ async def test_push_state_to_ha_keeps_real_radio_titled_song_and_band(reset_ha_p
             current_track=None,
             listeners_active=1,
             session_stopped=False,
-            station_name="Radio PenthouseFlo FM",
+            station_name="Radio Lungomare FM",
         )
 
     attrs = _media_player_attrs(mock_client)
@@ -5188,16 +5188,16 @@ async def test_push_state_to_ha_non_music_artist_is_always_station_name(reset_ha
                 "label": "Marco & Giulia",
                 "started": time.time() - 2,
                 # An (impossible) poisoned metadata artist must be ignored entirely.
-                "metadata": {"title": "Marco & Giulia", "artist": "Radio Sabrina Sensatione"},
+                "metadata": {"title": "Marco & Giulia", "artist": "Radio Ornella Sensatione"},
             },
             current_track=None,
             listeners_active=1,
             session_stopped=False,
-            station_name="Radio PenthouseFlo FM",
+            station_name="Radio Lungomare FM",
         )
 
     attrs = _media_player_attrs(mock_client)
-    assert attrs["media_artist"] == "Radio PenthouseFlo FM"
+    assert attrs["media_artist"] == "Radio Lungomare FM"
 
 
 @pytest.mark.asyncio

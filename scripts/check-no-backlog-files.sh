@@ -3,8 +3,8 @@
 #
 # CLAUDE.md bans canonical tracked backlog files — public engineering work goes
 # to GitHub issues, private strategy goes to a private durable store. The prose
-# rule alone proved insufficient (docs/todos.md was created in violation of it
-# and dissolved on 2026-05-17), so this guard makes the rule structural.
+# rule alone proved insufficient (a tracked backlog file was created in
+# violation of it), so this guard makes the rule structural.
 #
 # Filenames only — no content keyword scanning. Scanning the repo for words like
 # "deferred" or "follow-up" produces false positives in changelogs, tests, and

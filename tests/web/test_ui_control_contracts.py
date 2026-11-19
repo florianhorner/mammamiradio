@@ -1586,8 +1586,8 @@ class TestSchedulerReasonsDoNotLeakToUI:
         assert _reason_for_decision("music_default") == "No pacing trigger active; continue music flow."
 
     def test_admin_html_does_not_render_it_reason_into_rows(self):
-        # Regression guard: the admin queue render path stripped out `it.reason`
-        # on 2026-04-17. Re-adding it would re-introduce "pacing threshold reached"
+        # Regression guard: the admin queue render path deliberately omits `it.reason`.
+        # Re-adding it would re-introduce "pacing threshold reached"
         # and "No pacing trigger active" rows in the up-next queue.
         html = ADMIN_HTML.read_text()
 

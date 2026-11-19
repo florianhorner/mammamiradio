@@ -147,7 +147,7 @@ def _set_song_error(record: dict[str, Any], reason: str) -> None:
 
 
 def _hash_submitter_ip(ip: str, config: Any) -> str:
-    """HMAC-SHA256(IP, ADMIN_TOKEN) — Eng-Review decision #7.
+    """HMAC-SHA256(IP, ADMIN_TOKEN).
 
     Returns hex digest. The hash is a server-side rate-limit key; never returned
     in listener-facing responses. When ADMIN_TOKEN is empty (dev/local), falls

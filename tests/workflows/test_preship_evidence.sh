@@ -5,7 +5,7 @@
 # while every current verb (default emit, the --v2 compatibility alias, --reattest, and
 # --v2 verification) dispatches into the trusted Python package. Deep receipt semantics
 # live in tests/repo/test_preship_evidence_v2.py; this file guards the shell adapters
-# exactly as CI and operators invoke them. No network, no gh CLI, no real ~/.gstack.
+# exactly as CI and operators invoke them. No network, no gh CLI, no real GSTACK_HOME.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,7 +24,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Structural guard: GSTACK_HOME is exported file-wide to a nonexistent decoy path, so
 # any invocation that forgets a per-call override dies on the missing-ledger guard
-# instead of silently walking the real ~/.gstack on a developer machine.
+# instead of silently walking the developer's real GSTACK_HOME.
 export GSTACK_HOME="$TMP/gstack-DECOY-must-not-be-read"
 
 PYTHON_BIN="$REPO_ROOT/.venv/bin/python"

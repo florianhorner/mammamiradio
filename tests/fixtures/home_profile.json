@@ -103,7 +103,7 @@
     {
       "entity_id": "person.example_pet",
       "label_en": "Household pet",
-      "label_it": "Cane di casa",
+      "label_it": "Animale di casa",
       "priority": "gold",
       "role": "pet",
       "scopes": [
@@ -124,19 +124,19 @@
       ]
     },
     {
-      "entity_id": "input_button.example_elevator_button",
-      "label_en": "Elevator (last used)",
-      "label_it": "Ascensore (ultimo utilizzo)",
+      "entity_id": "input_button.example_garage_button",
+      "label_en": "Garage door (last used)",
+      "label_it": "Porta del garage (ultimo utilizzo)",
       "priority": "gold",
-      "role": "elevator_button",
+      "role": "garage_button",
       "scopes": [
         "ambient_context"
       ]
     },
     {
       "entity_id": "binary_sensor.example_living_presence",
-      "label_en": "Living room/dining/bar presence",
-      "label_it": "Presenza nel soggiorno/sala da pranzo/bar/cucina",
+      "label_en": "Living room presence",
+      "label_it": "Presenza in soggiorno",
       "priority": "silver",
       "role": "living_presence",
       "scopes": [
@@ -328,8 +328,8 @@
     },
     {
       "entity_id": "light.example_wardrobe_stars",
-      "label_en": "Star projector (wardrobe)",
-      "label_it": "Proiettore stelle guardaroba",
+      "label_en": "Star projector (guest room)",
+      "label_it": "Proiettore stelle camera degli ospiti",
       "priority": "silver",
       "role": "wardrobe_stars",
       "scopes": [

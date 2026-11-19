@@ -1286,8 +1286,7 @@ async def _recover_local_rotation(state: StationState, config: StationConfig) ->
         # Directory scan runs off the event loop: an empty crate condition can
         # persist for as long as the operator has no music, and this check
         # re-runs on every generation cycle until it does — a blocking scan
-        # here would stall concurrent playback/stream coroutines exactly like
-        # the pacer-reset bug this same diff fixes.
+        # here would stall concurrent playback/stream coroutines.
         tracks = await asyncio.to_thread(load_operator_local_tracks, config, blocklist=state.blocklist)
     except OSError:
         logger.warning("Could not recover local music from %s", music_dir, exc_info=True)
@@ -1397,7 +1396,7 @@ async def _queue_continuity_bridge(
         # Strict: the packaged clip and the emergency tone sit below this call,
         # so re-airing the song currently on air is never the best option here.
         # Without this a one-song warm cache queued that song back-to-back with
-        # nothing in between — a worse repeat than the one this fix exists for.
+        # nothing in between — a worse repeat than the one this rescue avoids.
         allow_recent_repeat=False,
         stale_check=_bridge_stale_reason,
     ):
@@ -6461,8 +6460,8 @@ async def _run_producer_inner(
             # limitation the relaunch guard below is built around). Cancelling
             # here would flip _prefetch_task.done() to True while the executor
             # thread keeps running, so the relaunch guard would launch a SECOND
-            # prefetch on resume — the exact duplicate-background-work race this
-            # PR closes elsewhere. Left running, it finishes on its own (or is
+            # prefetch on resume — the duplicate-background-work race the
+            # relaunch guard exists to prevent. Left running, it finishes on its own (or is
             # still in flight, in which case the guard correctly skips a relaunch).
             _was_stopped = True
             try:
@@ -6903,10 +6902,9 @@ async def _run_producer_inner(
             timestamp = getattr(ha_cache, "timestamp", 0.0)
             state.ha_context_last_updated = timestamp if isinstance(timestamp, int | float) else 0.0
             # Dashboard HA moments: pick the most notable recent non-person event.
-            # Restrict listener-visible events to the curated set: pre-Phase-A only
-            # vetted entities could surface here, and Phase A's full-snapshot ingest
-            # would otherwise leak any HA entity's friendly_name (e.g.
-            # binary_sensor.example_bedroom_motion, lock.example_gun_safe) to /public-status.
+            # Restrict listener-visible events to the curated set: the full-snapshot
+            # ingest would otherwise leak any HA entity's friendly_name (e.g.
+            # binary_sensor.example_bedroom_motion, lock.example_front_door) to /public-status.
             state.ha_recent_event_count = len(ha_cache.events)
             _public_events = [
                 e
@@ -6932,7 +6930,7 @@ async def _run_producer_inner(
                 state.ha_last_event_label = ""
                 state.ha_last_event_ts = 0.0
                 state.ha_last_event_label_en = ""
-            # Phase 4: reactive triggers — interrupt takes priority over ambient
+            # Reactive triggers — interrupt takes priority over ambient
             # directives.  A cached prompt view can retain recent events for
             # display, so only a just-adopted fresh handoff may consume them.
             if fresh_one_shot_handoff and not state.ha_pending_directive:
@@ -7003,9 +7001,9 @@ async def _run_producer_inner(
                     can_generate_banter=_sw.has_script_llm(config),
                 )
 
-            # Impossible Moments v2 (A): fold new events into the evening ledger
+            # Fold new events into the evening ledger
             # (watermark-deduped) and, for banter only, surface one eligible
-            # running-gag. Ads stay gag-free in v0. The ledger persists across
+            # running-gag. Ads stay gag-free. The ledger persists across
             # the addon's frequent restarts.
             if (
                 state.evening_ledger is not None

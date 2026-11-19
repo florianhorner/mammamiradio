@@ -894,7 +894,7 @@ input[type="range"]:focus-visible {
 .a-programme .col-host { width: 120px; }
 .a-programme .col-duration { width: 58px; }
 .a-programme .col-action { width: 60px; }
-/* 3-tier responsive (eng review T3): desktop (full) → tablet (progressive
+/* 3-tier responsive: desktop (full) → tablet (progressive
    column hide) → phone cards (<768px, handled in the phone @media below).
    768-1023px: hide Source. ≤880px (still tablet): also hide Durata. */
 @media (min-width: 769px) and (max-width: 1023px) {
@@ -2993,7 +2993,7 @@ let _st={}, _caps=null, _capsState='checking', _hostsOk=false, _paceOk=false, _s
 let _nowStart=0, _nowDur=0, _tick=null, _prevNowKey='';
 let _faderDownActive=false, _faderDownSnapshot=null, _resumeFromFaderLabel='';
 let _programmeFilter='all', _lastProgrammeHash='', _lastRunwayHash='';
-// Delayed-commit undo state (eng review T2/E3): destructive queue actions remove
+// Delayed-commit undo state: destructive queue actions remove
 // the row optimistically and defer the backend call by 5s. Undo cancels the
 // pending call; the suppression set keeps status polls from resurrecting the row
 // before commit. There is no inverse endpoint, so deferring the commit is the
@@ -8898,7 +8898,7 @@ async function lrDismiss(id){
 }
 
 // ── Log / Archivio ──
-// Filter state persists across drawer toggles via sessionStorage (eng review T6).
+// Filter state persists across drawer toggles via sessionStorage.
 // Defaults at parse time; sessionStorage restore happens on DOMContentLoaded
 // because admin.js (window.archivioFilterRestore) is deferred and is not yet
 // defined while this inline script runs.

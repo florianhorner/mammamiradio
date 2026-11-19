@@ -1,4 +1,4 @@
-"""Regression guards for QA findings on 2026-04-23.
+"""Regression guards for bugs found in a full-depth QA run.
 
 Each test protects against a specific class of bug identified during the
 full-depth QA run. Delete at your own risk.

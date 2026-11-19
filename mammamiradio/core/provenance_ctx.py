@@ -13,7 +13,7 @@ references the SAME collector object, so concurrent appends from sibling calls a
 land in the one collector — without threading an id back through four call
 signatures.
 
-Discipline (codex review): the producer is one long-running task, so it MUST
+Discipline: the producer is one long-running task, so it MUST
 ``token = set_collector(c)`` then ``finally: reset_collector(token)`` per segment,
 or the next unrelated segment inherits a stale collector.
 """

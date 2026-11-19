@@ -22,7 +22,7 @@
 <link rel="stylesheet" href="{{ ingress_prefix }}/static/base.css?v={{ asset_version }}">
 <link rel="stylesheet" href="{{ ingress_prefix }}/static/listener.css?v={{ asset_version }}">
 <style>
-  /* Brand theme tokens override Volare Refined defaults per [brand.theme] (PR-A guardrails). */
+  /* Brand theme tokens override Volare Refined defaults per [brand.theme]. */
   :root {
     --brand-primary: {{ brand.theme.primary_color }};
     --brand-accent: {{ brand.theme.accent_color }};
@@ -357,7 +357,7 @@
         installBtn.hidden = true;
       });
     }
-    // Capability-conditional rendering (per design D2): toggle [data-cap] elements based on
+    // Capability-conditional rendering: toggle [data-cap] elements based on
     // /public-status capabilities. listener.js calls window.mmrApplyCaps(caps) on each poll.
     function applyCaps(caps) {
       window.mmrLastCaps = caps;

@@ -52,7 +52,7 @@ The historical welcome-clip generator now emits neutral station-continuity
 lines for local review only. Its output is not runtime-discoverable.
 
 Author ads through the existing `synthesize_ad` pipeline, with approved paid
-provider use and reviewed beds/cues. Human audition on a Mac and a small speaker
+provider use and reviewed beds/cues. Human audition on laptop speakers and a small speaker
 must approve the final bytes before retention; a provider fallback is not an
 accepted substitute for the reviewed cast.
 

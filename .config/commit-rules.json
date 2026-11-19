@@ -10,7 +10,7 @@
     "version_prefix": {
       "allowed": true,
       "pattern": "v[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+ ",
-      "rationale": "Optional 4-component ship-version prefix (vMAJOR.MINOR.PATCH.MICRO). gstack workspace-aware /ship puts it at the front of PR titles / squash subjects as a landing-queue claim. Direct commits omit it; short version prefixes (v2, v1.2.3) stay banned via VERSION_IN_SUBJECT."
+      "rationale": "Optional 4-component ship-version prefix (vMAJOR.MINOR.PATCH.MICRO). Release tooling can put it at the front of PR titles / squash subjects to claim a version before landing. Direct commits omit it; short version prefixes (v2, v1.2.3) stay banned via VERSION_IN_SUBJECT."
     }
   },
   "types": {
@@ -95,7 +95,7 @@
         "pattern": "^v[0-9]+(\\.[0-9]+){0,2}([ :]|$)",
         "severity": "block",
         "message": "Short version prefixes (v2, v1.2.3) don't belong in commit subjects; let CHANGELOG do that. The 4-component ship-version prefix (v1.2.3.4) is allowed.",
-        "fix_hint": "Drop the short version prefix. Use 'chore(release): 1.2.3', or the 4-component 'v1.2.3.4 type: subject' form for a gstack /ship PR title.",
+        "fix_hint": "Drop the short version prefix. Use 'chore(release): 1.2.3', or the 4-component 'v1.2.3.4 type: subject' form on a PR title.",
         "spec_anchor": "specs/commit-message-spec.md#subjects"
       }
     ]
@@ -103,7 +103,7 @@
   "trailers": {
     "metadata": {
       "Skill-Run": {
-        "description": "Which gstack skill triggered the commit (e.g., 'ship', 'investigate'). OMIT if not in a skill session \u2014 never fabricate.",
+        "description": "Which agent skill triggered the commit (e.g., 'ship', 'investigate'). OMIT if not in a skill session \u2014 never fabricate.",
         "env_source": "COMMIT_SKILL_RUN"
       },
       "Test-Suite": {
@@ -125,7 +125,7 @@
         "Reviewed-By",
         "Tool"
       ],
-      "fork_strip_rationale": "Strip agent telemetry trailers when committing to a fork branch destined upstream. Different audience (upstream maintainer vs portfolio recruiter). Preserves Co-Authored-By and Tested.",
+      "fork_strip_rationale": "Strip agent telemetry trailers when committing to a fork branch destined upstream. Some upstream maintainers do not want agent metadata in their history. Preserves Co-Authored-By and Tested.",
       "fork_detection_command": "gh repo view --json isFork --jq .isFork",
       "preserved_on_fork": [
         "Co-Authored-By",
@@ -151,6 +151,6 @@
   },
   "error_format": {
     "template": "BLOCK: <rule_id> <message>\nFIX: <fix_hint>\nSPEC: <spec_url>#<rule_id>\nOFFENDING: <literal failing line>",
-    "rationale": "Uniform across local hook + CI so agents have deterministic output to act on. Per DX D2."
+    "rationale": "Uniform across local hook + CI so agents have deterministic output to act on."
   }
 }

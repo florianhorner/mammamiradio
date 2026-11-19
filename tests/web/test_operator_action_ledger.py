@@ -2,9 +2,9 @@
 
 A station-wide character flip (Super Italian, Chaos, Festival, AI Quality, On-Air
 Sound) used to leave no honest trace: the addon runs FastAPI with ``--no-access-log``,
-so the POST never reached the logs and the only feedback was a small toast — which is
-why the 2026-06-19 "who switched the hosts to English?" session could not see what the
-operator had done. These tests lock in that every station-wide toggle now records an
+so the POST never reached the logs and the only feedback was a small toast. A later
+"who switched the hosts to English?" question had no record to answer it from.
+These tests lock in that every station-wide toggle now records an
 ``operator_action`` ledger row (old -> new), and that the recording is strictly
 best-effort: a disabled or failing ledger never affects whether the toggle applied.
 """
