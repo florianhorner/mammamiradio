@@ -161,6 +161,23 @@ there is a real discipline on top of it:
 - Kept out of `pre-release-check.sh` and `make pre-release` on purpose. `quality.yml` runs those on every version-file PR, so a `chore(release): cut X.Y.Z` PR names a version whose image is not built yet and could never go green.
 - Self-test: `bash tests/workflows/test_advertised_version.sh`, hermetic via `MAMMAMIRADIO_TAG_PROBE` plus a `curl` PATH shim. Two cases guard the deadlock from coming back across the whole cut-PR gate closure.
 
+## Protected provenance tags
+
+Project-authored imaging masters pin their generator inputs to an exact Git
+revision (`generator.revision` in `mammamiradio/assets/imaging/manifest.json`).
+A squash merge can leave that commit reachable from no branch, so a tag named
+`provenance/audio-pack-<first 8 hex of the revision>` keeps it fetchable; today
+that is `provenance/audio-pack-7a903df2`.
+
+- Never delete, move, or force-push a `provenance/audio-pack-*` tag. A GitHub
+  tag ruleset on that pattern should block deletion and updates.
+- Re-pinning the pack to a new revision means pushing the matching tag in the
+  same change, before the PR's CI runs.
+- CI cannot pass without the tag: `actions/checkout` with `fetch-depth: 0`
+  fetches all tags, and `scripts/validate_audio_asset_pack.py` fails with one
+  error that names the missing tag and the `git fetch origin tag …` fix. It
+  never skips the blob check.
+
 ## Coordinating parallel workspaces
 
 Independent Conductor workspaces/agents can't command each other, so the shared

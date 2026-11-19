@@ -475,7 +475,11 @@ DSP, and license metadata, plus the selected design and checksum inventory.
 The separate listening board stores the pack-scoped approval receipt. The
 installed manifest omits that receipt and the board previews. CI and add-on
 validation check the installed files against the inventory. `ATTRIBUTION.md`
-is generated from the runtime ledger. The exact inventory is in
+is generated from the runtime ledger. Each project-authored source pins its
+generator inputs to a Git revision that may be reachable from no branch; the
+protected tag `provenance/audio-pack-<first 8 hex of the revision>` keeps that
+commit fetchable (see
+[Release process](release-process.md#protected-provenance-tags)). The exact inventory is in
 [`manifest.json`](../mammamiradio/assets/imaging/manifest.json); the local
 audition procedure is in
 [Operations](operations.md#audition-the-modern-night-drive-imaging-pack).

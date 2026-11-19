@@ -553,6 +553,127 @@ def test_project_authored_master_rejects_generator_blob_hash_mismatch(
         validator.validate_audio_asset_pack(pack_dir)
 
 
+def _generated_pack(tmp_path: Path) -> tuple[Path, dict[str, bytes]]:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    generated_source, blobs = _generated_source(pack_dir)
+    payload["sources"] = [generated_source]
+    _write_manifest(pack_dir, payload)
+    return pack_dir, blobs
+
+
+def _unreadable_blob(revision: str, path: str) -> bytes:
+    raise RuntimeError(f"fatal: path '{path}' exists on disk, but not in '{revision}'")
+
+
+def test_missing_generator_commit_reports_one_actionable_error(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_dir, _blobs = _generated_pack(tmp_path)
+    lookups: list[str] = []
+
+    def commit_present(revision: str) -> bool:
+        lookups.append(revision)
+        return False
+
+    monkeypatch.setattr(validator, "_read_git_blob", _unreadable_blob)
+    monkeypatch.setattr(validator, "_git_commit_present", commit_present)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    revision = "1" * 40
+    tag = "provenance/audio-pack-11111111"
+    provenance_errors = [error for error in caught.value.errors if revision in error]
+    assert provenance_errors == [validator._missing_revision_error(revision)]
+    assert f"git fetch origin tag {tag}" in provenance_errors[0]
+    assert not any("cannot verify generated-source Git blob" in error for error in caught.value.errors)
+    assert lookups == [revision]
+
+
+def test_present_generator_commit_keeps_per_path_blob_errors(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_dir, blobs = _generated_pack(tmp_path)
+
+    def read_git_blob(revision: str, path: str) -> bytes:
+        if path == "radio.toml":
+            return _unreadable_blob(revision, path)
+        return blobs[path]
+
+    monkeypatch.setattr(validator, "_read_git_blob", read_git_blob)
+    monkeypatch.setattr(validator, "_git_commit_present", lambda _revision: True)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    provenance_errors = [error for error in caught.value.errors if "1" * 40 in error]
+    assert len(provenance_errors) == 1
+    assert provenance_errors[0].startswith(f"cannot verify generated-source Git blob {'1' * 40}:radio.toml")
+
+
+def test_present_generator_commit_with_matching_blobs_passes(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_dir, blobs = _generated_pack(tmp_path)
+
+    def commit_present(_revision: str) -> bool:
+        raise AssertionError("commit lookup runs only after a blob read fails")
+
+    monkeypatch.setattr(validator, "_read_git_blob", lambda _revision, path: blobs[path])
+    monkeypatch.setattr(validator, "_git_commit_present", commit_present)
+
+    report = validator.validate_audio_asset_pack(pack_dir)
+
+    assert report.sources[0].generator is not None
+
+
+def test_generator_commit_lookup_failure_is_reported_not_swallowed(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_dir, _blobs = _generated_pack(tmp_path)
+
+    def commit_present(_revision: str) -> bool:
+        raise RuntimeError("git is required to validate project-authored generator provenance")
+
+    monkeypatch.setattr(validator, "_read_git_blob", _unreadable_blob)
+    monkeypatch.setattr(validator, "_git_commit_present", commit_present)
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match="git is required"):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_git_commit_present_raises_when_git_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing_git(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(validator.subprocess, "run", missing_git)
+
+    with pytest.raises(RuntimeError, match="git is required"):
+        validator._git_commit_present("1" * 40)
+
+
+def test_git_commit_present_uses_the_real_object_store() -> None:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=validator.REPO_ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    assert validator._git_commit_present(head) is True
+    assert validator._git_commit_present("0" * 40) is False
+    assert validator.provenance_tag_for("7a903df26748dbf40b9dd3e0dd6bb524b861491a") == (
+        "provenance/audio-pack-7a903df2"
+    )
+
+
 def test_asset_output_hash_and_format_are_checked(tmp_path: Path, fake_probe: None) -> None:
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()
