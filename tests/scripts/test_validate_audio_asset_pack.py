@@ -674,6 +674,48 @@ def test_git_commit_present_uses_the_real_object_store() -> None:
     )
 
 
+def test_git_commit_present_reports_a_broken_repository_as_a_git_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Outside any repository `git cat-file -e` exits 128, the same code an
+    # absent `<rev>^{commit}` gives; it must not read as "fetch the tag".
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    monkeypatch.setattr(validator, "REPO_ROOT", not_a_repo)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="not a git repository"):
+        validator._git_commit_present("0" * 40)
+
+
+def test_git_commit_present_rejects_a_non_commit_object() -> None:
+    tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=validator.REPO_ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    with pytest.raises(RuntimeError, match="is a tree object, not a commit"):
+        validator._git_commit_present(tree)
+
+
+def test_broken_repository_is_never_reported_as_a_missing_provenance_tag(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_dir, _blobs = _generated_pack(tmp_path)
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    monkeypatch.setattr(validator, "_read_git_blob", _unreadable_blob)
+    monkeypatch.setattr(validator, "REPO_ROOT", not_a_repo)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    assert not any("git fetch origin tag" in error for error in caught.value.errors)
+    assert any("not a git repository" in error for error in caught.value.errors)
+
+
 def test_asset_output_hash_and_format_are_checked(tmp_path: Path, fake_probe: None) -> None:
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()

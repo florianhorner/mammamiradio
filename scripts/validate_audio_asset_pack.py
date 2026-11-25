@@ -844,11 +844,10 @@ def provenance_tag_for(revision: str) -> str:
     return f"{PROVENANCE_TAG_PREFIX}{revision[:8]}"
 
 
-def _git_commit_present(revision: str) -> bool:
-    """Report whether the pinned generator commit object exists in this clone."""
+def _git(args: list[str], revision: str) -> subprocess.CompletedProcess[bytes]:
     try:
-        completed = subprocess.run(
-            ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+        return subprocess.run(
+            ["git", *args],
             cwd=REPO_ROOT,
             check=False,
             capture_output=True,
@@ -858,7 +857,26 @@ def _git_commit_present(revision: str) -> bool:
         raise RuntimeError("git is required to validate project-authored generator provenance") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"git timed out looking up {revision}") from exc
-    return completed.returncode == 0
+
+
+def _git_commit_present(revision: str) -> bool:
+    """Report whether the pinned generator commit object exists in this clone.
+
+    ``git cat-file -e`` on a full SHA exits 1 when the object is absent and 128
+    when git itself fails (not a repository, corrupt object store), so only
+    exit 1 means "fetch the tag"; any other failure is raised as a git error.
+    """
+    completed = _git(["cat-file", "-e", revision], revision)
+    if completed.returncode == 1:
+        return False
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or f"git cannot look up {revision}")
+    kind = _git(["cat-file", "-t", revision], revision)
+    object_type = kind.stdout.decode("utf-8", errors="replace").strip()
+    if kind.returncode != 0 or object_type != "commit":
+        raise RuntimeError(f"generator revision {revision} is a {object_type or 'unknown'} object, not a commit")
+    return True
 
 
 def _missing_revision_error(revision: str) -> str:
