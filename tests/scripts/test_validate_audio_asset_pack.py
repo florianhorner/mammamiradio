@@ -43,8 +43,9 @@ def _source(source_id: str = "applause_master", **overrides: object) -> dict[str
     return payload
 
 
-def _generated_source(pack_dir: Path) -> tuple[dict[str, object], dict[str, bytes]]:
-    revision = "1" * 40
+def _generated_source(
+    pack_dir: Path, *, revision: str = "1" * 40, source_id: str = "applause_master"
+) -> tuple[dict[str, object], dict[str, bytes]]:
     generator_path = "scripts/complete_audio_pack_gate.py"
     blobs = {
         generator_path: b"deterministic complete-pack generator\n",
@@ -56,9 +57,9 @@ def _generated_source(pack_dir: Path) -> tuple[dict[str, object], dict[str, byte
     def blob_url(path: str) -> str:
         return f"https://github.com/example/mammamiradio/blob/{revision}/{path}"
 
-    master = pack_dir / "provenance" / "source-masters" / "applause.wav"
+    master = pack_dir / "provenance" / "source-masters" / f"{source_id}.wav"
     master.parent.mkdir(parents=True, exist_ok=True)
-    master_bytes = b"project-authored deterministic PCM master"
+    master_bytes = f"project-authored deterministic PCM master:{source_id}".encode()
     master.write_bytes(master_bytes)
     generator: dict[str, object] = {
         "kind": validator.PROJECT_GENERATOR_KIND,
@@ -73,6 +74,7 @@ def _generated_source(pack_dir: Path) -> tuple[dict[str, object], dict[str, byte
     }
     return (
         _source(
+            source_id,
             source_sha256=_sha256(master_bytes),
             source_url=blob_url(generator_path),
             original_path=master.relative_to(pack_dir).as_posix(),
@@ -567,6 +569,104 @@ def _unreadable_blob(revision: str, path: str) -> bytes:
     raise RuntimeError(f"fatal: path '{path}' exists on disk, but not in '{revision}'")
 
 
+def _two_source_pack(tmp_path: Path, first_revision: str, second_revision: str) -> tuple[Path, dict[str, bytes]]:
+    """Two project-authored sources, one per asset, like the real pack's shape."""
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    applause = _asset(pack_dir, "applause_short", "sfx/applause_short.mp3", ["first_master"])
+    bed = _asset(pack_dir, "night_bed", "beds/night_bed.mp3", ["second_master"], duration_target_sec=8.0)
+    first, blobs = _generated_source(pack_dir, revision=first_revision, source_id="first_master")
+    second, _same_blobs = _generated_source(pack_dir, revision=second_revision, source_id="second_master")
+    payload = _manifest(pack_dir, sources=[first, second], assets=[applause, bed])
+    _write_manifest(pack_dir, payload)
+    return pack_dir, blobs
+
+
+def test_sources_sharing_a_missing_revision_report_it_once(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "1" * 40
+    pack_dir, _blobs = _two_source_pack(tmp_path, revision, revision)
+    reads: list[str] = []
+    lookups: list[str] = []
+
+    def read_git_blob(rev: str, path: str) -> bytes:
+        reads.append(path)
+        return _unreadable_blob(rev, path)
+
+    def commit_present(rev: str) -> bool:
+        lookups.append(rev)
+        return False
+
+    monkeypatch.setattr(validator, "_read_git_blob", read_git_blob)
+    monkeypatch.setattr(validator, "_git_commit_present", commit_present)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    provenance_errors = [error for error in caught.value.errors if revision in error]
+    assert provenance_errors == [validator._missing_revision_error(revision)]
+    assert lookups == [revision]
+    assert len(reads) == 1
+
+
+def test_failed_revision_lookup_is_reported_once_across_sources(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "1" * 40
+    pack_dir, _blobs = _two_source_pack(tmp_path, revision, revision)
+    lookups: list[str] = []
+
+    def commit_present(rev: str) -> bool:
+        lookups.append(rev)
+        raise RuntimeError("fatal: not a git repository (or any of the parent directories): .git")
+
+    monkeypatch.setattr(validator, "_read_git_blob", _unreadable_blob)
+    monkeypatch.setattr(validator, "_git_commit_present", commit_present)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    assert len([error for error in caught.value.errors if revision in error]) == 1
+    assert lookups == [revision]
+
+
+def test_missing_revision_does_not_hide_another_revisions_hash_mismatch(
+    tmp_path: Path,
+    fake_probe: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing, present = "1" * 40, "2" * 40
+    pack_dir, blobs = _two_source_pack(tmp_path, missing, present)
+    lookups: list[str] = []
+
+    def read_git_blob(rev: str, path: str) -> bytes:
+        if rev == missing:
+            return _unreadable_blob(rev, path)
+        return b"different committed bytes" if path == "radio.toml" else blobs[path]
+
+    def commit_present(rev: str) -> bool:
+        lookups.append(rev)
+        return rev != missing
+
+    monkeypatch.setattr(validator, "_read_git_blob", read_git_blob)
+    monkeypatch.setattr(validator, "_git_commit_present", commit_present)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    assert [error for error in caught.value.errors if missing in error] == [validator._missing_revision_error(missing)]
+    assert [error for error in caught.value.errors if present in error] == [
+        f"generated-source Git blob {present}:radio.toml SHA-256 differs from manifest "
+        f"({_sha256(b'different committed bytes')} != {_sha256(blobs['radio.toml'])})"
+    ]
+    assert lookups == [missing]
+
+
 def test_missing_generator_commit_reports_one_actionable_error(
     tmp_path: Path,
     fake_probe: None,
@@ -642,14 +742,25 @@ def test_generator_commit_lookup_failure_is_reported_not_swallowed(
 ) -> None:
     pack_dir, _blobs = _generated_pack(tmp_path)
 
-    def commit_present(_revision: str) -> bool:
+    lookups: list[str] = []
+
+    def commit_present(revision: str) -> bool:
+        lookups.append(revision)
         raise RuntimeError("git is required to validate project-authored generator provenance")
 
     monkeypatch.setattr(validator, "_read_git_blob", _unreadable_blob)
     monkeypatch.setattr(validator, "_git_commit_present", commit_present)
 
-    with pytest.raises(validator.AudioAssetPackValidationError, match="git is required"):
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
         validator.validate_audio_asset_pack(pack_dir)
+
+    # One error that keeps the original blob failure and the lookup failure,
+    # and one lookup: a broken repository is not retried for every pinned path.
+    provenance_errors = [error for error in caught.value.errors if "1" * 40 in error]
+    assert len(provenance_errors) == 1
+    assert "exists on disk, but not in" in provenance_errors[0]
+    assert "git is required" in provenance_errors[0]
+    assert lookups == ["1" * 40]
 
 
 def test_git_commit_present_raises_when_git_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
