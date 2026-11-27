@@ -206,9 +206,12 @@ CI enforcement: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.p
   with `Fixes #<issue number>`. The issue stays open until then, because a later
   run cannot prove the earlier increase landed. A failed computation opens a
   separate `coverage-ratchet-broken` issue that closes when computation recovers.
-- The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
-  pack provenance test reads generator inputs at the revision pinned in the
-  manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.
+- The `tests` job checks out full git history and every tag (`fetch-depth: 0`).
+  The imaging pack provenance test reads generator inputs at the revision pinned
+  in the manifest, which a shallow clone cannot prove and which may be reachable
+  only through a `provenance/audio-pack-*` tag. If the validator reports
+  `generator revision … is not in this clone`, run the `git fetch origin tag …`
+  command it prints and rerun the test.
 
 Local check: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 
