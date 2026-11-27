@@ -83,7 +83,9 @@ jobs:
           persist-credentials: false
           # The audio-pack validator reads generator inputs at the exact Git
           # revision pinned in the provenance manifest. That revision can be
-          # older than HEAD~1, so a shallow checkout cannot prove the hashes.
+          # older than HEAD~1, so a shallow checkout cannot prove the hashes,
+          # and it may be reachable only through a provenance/audio-pack-* tag,
+          # so this checkout must keep fetching tags (no fetch-tags: false).
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-python-ci
@@ -350,7 +352,9 @@ jobs:
           persist-credentials: false
           # The audio-pack validator reads generator inputs at the exact Git
           # revision pinned in the provenance manifest. That revision can be
-          # older than HEAD~1, so a shallow checkout cannot prove the hashes.
+          # older than HEAD~1, so a shallow checkout cannot prove the hashes,
+          # and it may be reachable only through a provenance/audio-pack-* tag,
+          # so this checkout must keep fetching tags (no fetch-tags: false).
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-python-ci

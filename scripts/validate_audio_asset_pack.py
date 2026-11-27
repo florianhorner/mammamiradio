@@ -65,6 +65,10 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_AUTHORED_PROVENANCE_TYPE = "project-authored-deterministic-master"
 PROJECT_GENERATOR_KIND = "git-committed-ffmpeg-generator"
+# Generator revisions may be unreachable from any branch (squash merges); a
+# tag with this prefix keeps each pinned commit fetchable. See
+# docs/release-process.md "Provenance tags" for the rules that keep it in place.
+PROVENANCE_TAG_PREFIX = "provenance/audio-pack-"
 QUALITY_GUARD_KEY = "quality_guard_allowlist"
 CORRELATION_THRESHOLD = 0.98
 CORRELATION_WINDOW_SEC = 0.5
@@ -836,6 +840,60 @@ def _read_git_blob(revision: str, path: str) -> bytes:
     return completed.stdout
 
 
+def provenance_tag_for(revision: str) -> str:
+    """Name of the tag that keeps a pinned generator revision fetchable."""
+    return f"{PROVENANCE_TAG_PREFIX}{revision[:8]}"
+
+
+def _git(args: list[str], revision: str) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            timeout=15,
+            # Untranslated git messages keep the reported errors stable.
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("git is required to validate project-authored generator provenance") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"git timed out looking up {revision}") from exc
+
+
+def _git_commit_present(revision: str) -> bool:
+    """Report whether the pinned generator commit object exists in this clone.
+
+    ``git cat-file -e`` on a full SHA exits 1 when the object is absent and 128
+    when git itself fails (not a repository, corrupt object store), so only
+    exit 1 means "fetch the tag"; any other failure is raised as a git error.
+    """
+    completed = _git(["cat-file", "-e", revision], revision)
+    if completed.returncode == 1:
+        return False
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or f"git cannot look up {revision}")
+    kind = _git(["cat-file", "-t", revision], revision)
+    if kind.returncode != 0:
+        detail = kind.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or f"git cannot read the type of {revision}")
+    object_type = kind.stdout.decode("utf-8", errors="replace").strip()
+    if object_type != "commit":
+        raise RuntimeError(f"generator revision {revision} is a {object_type} object, not a commit")
+    return True
+
+
+def _missing_revision_error(revision: str) -> str:
+    tag = provenance_tag_for(revision)
+    return (
+        f"generator revision {revision} is not in this clone, so no generated-source Git blob can be verified. "
+        f"The tag {tag!r} is meant to keep that commit fetchable; fetch it from the upstream repository with "
+        f"`git fetch origin tag {tag}` (use the upstream remote if origin is a fork) and run the check again"
+    )
+
+
 def _probe_audio(path: Path) -> AudioProbe:
     """Inspect one output member with FFprobe; no network or decoding rewrite occurs."""
     try:
@@ -890,6 +948,12 @@ def _probe_audio(path: Path) -> AudioProbe:
 def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...], errors: list[str]) -> None:
     pinned_blob_hashes: dict[tuple[str, str], str | RuntimeError] = {}
     reported_pins: set[tuple[str, str, str]] = set()
+    # A revision whose commit object is absent fails every blob read with a
+    # misleading "path not in revision" message; report it once, by tag. A
+    # revision whose lookup itself fails is also reported once, so a broken
+    # repository is not retried (and timed out) once per pinned path.
+    revision_present: dict[str, bool] = {}
+    failed_revisions: set[str] = set()
     for source in sources:
         if source.original_path is not None:
             try:
@@ -924,6 +988,8 @@ def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...]
         pins = [(generator.path, generator.sha256)]
         pins.extend((dependency.path, dependency.sha256) for dependency in generator.dependencies)
         for path, expected_sha256 in pins:
+            if revision_present.get(generator.revision) is False or generator.revision in failed_revisions:
+                break
             key = (generator.revision, path)
             result = pinned_blob_hashes.get(key)
             if result is None:
@@ -931,6 +997,19 @@ def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...]
                     blob = _read_git_blob(*key)
                 except RuntimeError as exc:
                     result = exc
+                    if generator.revision not in revision_present:
+                        try:
+                            revision_present[generator.revision] = _git_commit_present(generator.revision)
+                        except RuntimeError as lookup_exc:
+                            failed_revisions.add(generator.revision)
+                            errors.append(
+                                f"cannot verify generated-source Git blob {generator.revision}:{path}: {exc}; "
+                                f"looking up generator revision {generator.revision} also failed: {lookup_exc}"
+                            )
+                            break
+                        if revision_present[generator.revision] is False:
+                            errors.append(_missing_revision_error(generator.revision))
+                            break
                 else:
                     result = hashlib.sha256(blob).hexdigest()
                 pinned_blob_hashes[key] = result
