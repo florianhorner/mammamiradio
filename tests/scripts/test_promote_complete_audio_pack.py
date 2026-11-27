@@ -16,6 +16,8 @@ from scripts import promote_complete_audio_pack as promoter
 
 CONTENT_DIGEST = "c" * 64
 OTHER_CONTENT_DIGEST = "d" * 64
+GENERATOR_PATH = "scripts/generator.py"
+SNAPSHOT_FILE = f"provenance/generator-src/{GENERATOR_PATH}"
 
 
 def _write(path: Path, content: bytes) -> Path:
@@ -72,6 +74,9 @@ def _write_runtime_pack(pack: Path, marker: str) -> dict[str, Any]:
     attribution = _write(pack / "ATTRIBUTION.md", f"attribution {marker}\n".encode())
     asset = _write(pack / "audio" / "station.mp3", f"asset::{marker}".encode())
     master = _write(pack / "provenance" / "source-masters" / "station.mp3", f"asset::{marker}".encode())
+    generator_bytes = f"generator::{marker}".encode()
+    _write(pack / "provenance" / "generator-src" / GENERATOR_PATH, generator_bytes)
+    generator_sha256 = hashlib.sha256(generator_bytes).hexdigest()
     files = sorted(
         [
             {"path": "ATTRIBUTION.md", "sha256": _sha256(attribution)},
@@ -89,6 +94,11 @@ def _write_runtime_pack(pack: Path, marker: str) -> dict[str, Any]:
                 "id": "project.station",
                 "original_path": "provenance/source-masters/station.mp3",
                 "source_sha256": _sha256(master),
+                "generator": {
+                    "path": GENERATOR_PATH,
+                    "sha256": generator_sha256,
+                    "dependencies": [{"path": GENERATOR_PATH, "sha256": generator_sha256}],
+                },
             }
         ],
         "assets": [
@@ -198,6 +208,33 @@ def test_promotes_exact_runtime_pack_with_validated_directory_swap(
     assert len(_safe_dependencies["gate"]) == 2
     assert any("promotion-stage" in path.name for path in _safe_dependencies["validate"])
     assert _safe_dependencies["validate"][-1] == target
+    assert not _promotion_artifacts(target)
+
+
+def test_promotion_carries_the_generator_snapshot_and_drops_the_previous_one(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path)
+    target = tmp_path / "installed"
+    _write_runtime_pack(target, "old")
+    retired = _write(target / "provenance" / "generator-src" / "scripts" / "retired.py", b"old input")
+
+    promoter.promote_complete_audio_pack(candidate.board_manifest, CONTENT_DIGEST, target=target)
+
+    assert (target / SNAPSHOT_FILE).read_bytes() == b"generator::candidate"
+    assert not retired.exists()
+    assert SNAPSHOT_FILE not in promoter._tree_files(target, label="Installed target")
+
+
+def test_candidate_without_its_generator_snapshot_is_not_installed(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path)
+    target = tmp_path / "installed"
+    _write_runtime_pack(target, "old")
+    before = _tree_bytes(target)
+    (candidate.pack / SNAPSHOT_FILE).unlink()
+
+    with pytest.raises(promoter.PromotionError, match="candidate runtime file is missing or unreadable"):
+        promoter.promote_complete_audio_pack(candidate.board_manifest, CONTENT_DIGEST, target=target)
+
+    assert _tree_bytes(target) == before
     assert not _promotion_artifacts(target)
 
 

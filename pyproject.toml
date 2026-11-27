@@ -52,6 +52,9 @@ managed = false
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+# Byte-exact generator inputs retained as audio-pack provenance. They are
+# evidence, not code: reformatting or fixing them would break their hashes.
+extend-exclude = ["mammamiradio/assets/imaging/provenance/generator-src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
@@ -71,6 +74,7 @@ known-first-party = ["mammamiradio"]
 
 [tool.mypy]
 python_version = "3.11"
+exclude = ["mammamiradio/assets/imaging/provenance/generator-src/"]
 check_untyped_defs = false
 ignore_missing_imports = true
 warn_return_any = false
@@ -87,6 +91,7 @@ markers = [
 [tool.vulture]
 min_confidence = 80
 paths = ["mammamiradio"]
+exclude = ["mammamiradio/assets/imaging/provenance/generator-src/"]
 ignore_decorators = [
     "@router.*",
     "@app.*",

@@ -1,0 +1,759 @@
+# Station personality dial. OFF (default): listener UI in English with Italian
+# headlines and station-feel words; AI hosts speak roughly 75% English / 25%
+# Italian (English carries the information; Italian the greetings and punchlines).
+# ON: listener UI is Italian and hosts speak 100% Italian. Toggleable from the
+# admin Engine Room or via MAMMAMIRADIO_SUPER_ITALIAN env var.
+super_italian_mode = false
+
+[station]
+name = "Mamma Mi Radio"
+language = "it"
+theme = "unhinged late-night Italian shock radio broadcasting from somewhere between Windor and Vergen. Two hosts who roast each other, roast the listeners, roast Italy itself. Think Le Iene meets GTA radio. Absurd traffic reports about burning Lamborghinis, breaking news about pizza dough exported to Russia, and sports flashes delivered like a sharp radio sports desk that stays informed even when the match is absurd. Edgy, chaotic, over the top — but always unmistakably Italian."
+
+[sonic_brand]
+tagline = "Da Windor a Vergen, la voce che non si spegne mai!"
+geography = "Windor, Vergen"
+# Full station ident — plays at top of hour and after ad breaks
+full_ident = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
+# Sweeper lines — short voice drops between songs
+sweepers = [
+    "Mamma Mi Radio.",
+    "Windor, Vergen... e tutto il mondo che ascolta.",
+    "Sei su Mamma Mi Radio.",
+    "La radio che tua nonna non approverebbe.",
+    "Da Windor a Vergen, nessuno è al sicuro.",
+]
+# Rhodes motif: C5 → E5 → G5 → C6 (ascending major arpeggio)
+motif_notes = [523, 659, 784, 1047]
+# Sweeper voice — uses a host voice for station idents
+sweeper_voice = "it-IT-Isabella:DragonHDLatestNeural"
+sweeper_engine = "azure"
+sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+
+# ────────────────────────────────────────────────────────────────────────
+# [brand] — what the LISTENER reads on the public page. Separate from
+# [station] (operator config). Each operator's station is a piece of
+# fiction the engine powers. Theme tokens override Volare Refined defaults.
+# ────────────────────────────────────────────────────────────────────────
+[brand]
+station_name = "Mamma Mi Radio"
+frequency = "96,7 FM"
+city = ""
+founded = 2024
+tagline = "La radio che ascolta la tua casa"
+about = "Conduttori notturni registrati su nastro e rimixati per la sera. Da Windor a Vergen. La voce che non si spegne mai."
+opengraph_subtitle = "AI Italian late-night radio · 96,7 FM"
+# Logo shown on the Home Assistant media card when a segment has no real cover
+# (host talk, ads, idle). Must be an absolute http(s) URL; blank = engine default.
+artwork_url = ""
+
+[brand.theme]
+# Volare Refined defaults — override per station fiction.
+# All values validated at config load: hex contrast >= 4.5:1 vs --cream,
+# background lightness <= 25%, fonts from curated list (see config.py).
+primary_color = "#F4D048"
+accent_color = "#B82C20"
+background_color = "#14110F"
+display_font = "Playfair Display"
+body_font = "Outfit"
+mono_font = "JetBrains Mono"
+
+# Per-host display name (FK to [[hosts]].name). Multiple brand hosts can
+# share one engine_host (different alter egos voiced by the same engine).
+[[brand.hosts]]
+engine_host = "Marco"
+display_name = "Marco del bar"
+description = "Conduttore notturno, nato in periferia. Voce graffiante, sigaretta sempre accesa."
+
+[[brand.hosts]]
+engine_host = "Giulia"
+display_name = "Nonna Giulia"
+description = "Voce della cucina. Legge le dediche con calore e ironia. Ti chiama 'tesoro' anche se ha 80 anni."
+
+[playlist]
+shuffle = true
+allow_explicit = true   # false = skip tracks marked explicit
+repeat_cooldown = 5     # Min songs before the same track can replay
+artist_cooldown = 3     # Min songs before the same artist replays
+max_artist_per_hour = 3 # Hard cap on same artist within ~60 min window
+jamendo_client_id = ""
+jamendo_tags = "pop"
+jamendo_country = "ITA"          # ISO 3166-1 alpha-3; "" disables country filter. Other "skins": DEU, FRA, BRA, ...
+jamendo_order = "popularity_week" # popularity_week|popularity_month|popularity_total|releasedate_desc|"" (default)
+jamendo_limit = 200              # Jamendo API result depth, 1-200
+
+[moderation]
+# Exact real-name phrases to reject from listener dediche and song wishes.
+blocked_names = []
+
+[pacing]
+songs_between_banter = 2
+songs_between_ads = 4
+ad_spots_per_break = 2
+lookahead_segments = 4
+
+[[hosts]]
+name = "Marco"
+voice = "o4b57JYAECRMJyCEXyIE"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+elevenlabs_model = "eleven_multilingual_v2"
+voice_settings = { stability = 0.6 }  # tighter diction — fixes Marco's mumble (auditioned 0.42 vs 0.6)
+style = "manic energy, steamrolls every conversation, cuts in hard but always leaves the next host an immediate opening to answer or counter him, says things he shouldn't on air, conspiracy theories about Italian food, gets way too personal about listeners' lives, drops obscure cinema references nobody asked for, once got suspended for a week (he's proud of it), massive ego, catastrophically bad takes delivered with total conviction, never admits he's wrong — doubles down harder when cornered, genuinely believes he is the reason people tune in"
+[hosts.personality]
+energy = 100
+chaos = 100
+warmth = 55
+verbosity = 68
+nostalgia = 75
+
+[[hosts]]
+name = "Giulia"
+voice = "fNmw8sukfGuvWVOp33Ge"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+elevenlabs_model = "eleven_multilingual_v2"
+style = "razor-sharp sarcasm, cuts Marco off whenever he deserves it, openly judges the playlist, delivers devastating one-liners with zero emotion, pretends she's too good for this station but clearly loves it, will burn any caller who says something stupid, openly contemptuous of Marco's intelligence, delivers devastation with the warmth of a tax audit, treats him like a slow child she is legally obligated to work with"
+[hosts.personality]
+energy = 72
+chaos = 92
+warmth = 20
+verbosity = 66
+nostalgia = 30
+
+# ── Test balloon: Bavarian guest host (local feel-test, not shipped) ──────────
+# Kept LAST in the roster on purpose: excludes Hans Günther from the Italian-only h0/h1
+# fallback/chaos pools so he never speaks fluent Italian on an LLM failure.
+[[hosts]]
+name = "Hans Günther"
+voice = "ybmyeTxbWSNXKmSrvUCk"  # Bavarian guest voice (ElevenLabs)
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"  # least-bad: config rejects non-IT edge voices → Italian-accented German on fallback
+voice_settings = { stability = 0.35, style = 0.55 }  # ↓stability = more boisterous, ↑style = more character (house default 0.42/0.45)
+style = "a Bavarian guest in his mid-twenties — Munich tech-scene sharp, fast and funny, Italian-first on air but unmistakably Bavarian in rhythm, swagger, and short pronounceable Boarisch phraselets rather than isolated particles; warm, a little chaotic, ribs the Italian hosts for their precision, drama, and uptight seriousness, brings Wiesn energy without the lederhosen cliché — more 'startup guy who grew up in Giesing' than oompah beer-tent uncle; coffee jokes are occasional, never his default bit; a guest, never a regular: he bursts in, fills the studio, and is gone again"
+[hosts.personality]
+energy = 92
+chaos = 65
+warmth = 88
+verbosity = 62
+nostalgia = 50
+
+[audio]
+sample_rate = 48000
+channels = 2
+bitrate = 192
+# Integrated-LUFS targets for the loudness-reconciliation pass: every finished
+# segment is measured and nudged to one level so music, hosts, beds and ads no
+# longer jump in volume. Ads sit 1 LU hotter so they still pop.
+lufs_target = -16.0
+ad_lufs_target = -15.0
+# FM broadcast chain: colour every aired segment like an over-the-air FM signal
+# (gentle pre-emphasis, a ~15 kHz band-limit, and a flat level trim) so the station
+# sounds like radio, not a clean studio file. Default OFF (studio-clean): the colour
+# is deliberately subtle and often imperceptible on good speakers. Set true to opt in.
+broadcast_chain = false
+
+# Model IDs, provider routing, TTS selection, and model pricing live in the
+# canonical sibling model_registry.toml. This station configuration deliberately
+# contains no provider model identity.
+
+[homeassistant]
+enabled = false
+url = ""
+context_enabled = true       # set false to keep HA entity pushes while disabling full prompt-context polling
+poll_interval = 300          # seconds between full home-state refreshes
+timer_poll_interval = 5      # seconds between lightweight timer-entity checks
+context_refresh_timeout = 2.0  # warm foreground wait; cold first refresh gets 20s, with one retained request capped at 30s total
+mood_llm_enabled = false       # experimental: background AI scene-namer for home mood; heuristic mood stays the instant fallback
+mood_ttl_seconds = 90.0        # minimum seconds between background scene refresh attempts; the last scene keeps airing while a refresh runs (bounded staleness)
+
+# Timer interrupt: when a HA timer fires, hosts immediately interrupt and deliver
+# a pissed/urgent message. Add one [[homeassistant.timer_interrupt]] block per timer.
+# entity_id: the HA timer entity (e.g. timer.pasta_timer)
+# directive:  what the hosts should say — in the language of your station
+# urgency:    "pissed" (default) | "urgent" | "gentle"
+# cooldown:   minimum seconds before the same timer can fire again (default: 60)
+#
+# Example (uncomment and adapt):
+# [[homeassistant.timer_interrupt]]
+# entity_id = "timer.pasta_timer"
+# directive = "Il timer della pasta è scaduto! Tirate fuori quella pasta adesso, per l'amor di Dio!"
+# urgency = "pissed"
+# cooldown = 300
+#
+# [[homeassistant.timer_interrupt]]
+# entity_id = "timer.lavatrice"
+# directive = "La lavatrice ha finito. Muovetevi prima che si sgualcisca tutto."
+# urgency = "urgent"
+
+# Evening running gags ("the coffee machine, on again tonight"). The station
+# notices repeated home toggles over an evening and weaves a deferred, approximate
+# callback into banter. Candidacy is by device DOMAIN, so it works on any home with
+# no config: switch / fan / lock / vacuum / binary_sensor (doorbell, presence)
+# toggles are gag-worthy; sensors, climate, media, lights, and person trackers are
+# not. Override only if you want to tune it.
+# [home.running_gags]
+# domain_allowlist = ["switch", "fan", "lock", "vacuum", "binary_sensor"]  # replaces the default domain set
+# entity_allowlist = []   # if non-empty, restricts gags to these exact entity_ids
+# entity_denylist  = []   # silence chatty entities, e.g. a flapping presence sensor
+
+# Opt-in radio-worthy Home Assistant events. These rules do NOT add the matched
+# entity to the ambient prompt context; they only promote the configured label or
+# directive. Diagnostic signal strength, timestamps, and battery percentage
+# sensors are ignored even under broad globs.
+#
+# [[home.radio_event]]
+# id = "tts_script_started"
+# entity_glob = "script.*tts*"
+# trigger = "state"
+# from_state = "off"
+# to_state = "on"
+# mode = "directive"
+# directive = "One of the house voices just spoke. Mention it once in the next break without naming the source entity."
+# cooldown_seconds = 900
+#
+# [[home.radio_event]]
+# id = "tts_automation_fired"
+# entity_glob = "automation.*tts*"
+# trigger = "attribute"
+# attribute = "last_triggered"
+# mode = "directive"
+# directive = "A Home Assistant voice automation just fired. Make a short, playful next-break callout."
+# cooldown_seconds = 900
+#
+# [[home.radio_event]]
+# id = "device_charging"
+# label = "A household device started charging"
+# domain = "binary_sensor"
+# device_class = "battery_charging"  # or "plug" for plug sensors
+# trigger = "state"
+# from_state = "off"
+# to_state = "on"
+# mode = "gag"
+# cooldown_seconds = 900
+
+[persona]
+arc_thresholds = [4, 11, 26]   # session counts for acquaintance, friend, old_friend
+anthem_threshold = 3            # plays without skip to declare anthem
+skip_bit_threshold = 2          # skips to declare skip-bit
+
+[ads]
+sfx_dir = "sfx"
+
+[imaging]
+bed_volume_db = -18.0
+use_music_queue_for_beds = true
+assets_dir = ""
+
+# ── Supermarkets ──
+[[ads.brands]]
+name = "Prezzoforte"
+tagline = "Prezzoforte. Conveniente. Sempre. Forse."
+category = "supermarket"
+sonic_recipe = "supermarket_dash"
+recurring = true
+[ads.brands.campaign]
+premise = "Prezzoforte's legendary weekly offers: discounts so aggressive the staff look personally offended by them"
+format_pool = ["classic_pitch", "testimonial", "live_remote"]
+spokesperson = "hammer"
+escalation_rule = "Each ad reveals a more outrageous discount, building to prices that are clearly a mistake"
+
+[[ads.brands]]
+name = "Sacchettino"
+tagline = "Sacchettino. Il risparmio che non ti aspetti."
+category = "supermarket"
+sonic_recipe = "supermarket_dash"
+recurring = false
+
+[[ads.brands]]
+name = "Borsello & Figli"
+tagline = "Borsello & Figli. Da tre generazioni, non miglioriamo."
+category = "supermarket"
+sonic_recipe = "supermarket_dash"
+recurring = false
+
+# ── Cars ──
+[[ads.brands]]
+name = "Velocino"
+tagline = "Velocino. L'auto elettrica che ti fa sentire italiano anche quando non lo sei."
+category = "cars"
+sonic_recipe = "motorway_pass"
+recurring = true
+[ads.brands.campaign]
+premise = "The new Velocino Fulmine: an Italian electric car so passionate it occasionally refuses to charge out of spite"
+format_pool = ["classic_pitch", "duo_scene", "live_remote"]
+spokesperson = "hammer"
+escalation_rule = "Each ad reveals a more implausibly Italian feature — the horn plays O Sole Mio, the sat-nav argues back"
+
+[[ads.brands]]
+name = "Stradabella"
+tagline = "Stradabella. Ogni curva, un capolavoro."
+category = "cars"
+sonic_recipe = "motorway_pass"
+recurring = false
+
+[[ads.brands]]
+name = "Motoretto"
+tagline = "Motoretto. Piccolo. Feroce. Parcheggiabile."
+category = "cars"
+sonic_recipe = "motorway_pass"
+recurring = false
+
+# ── Telecom ──
+[[ads.brands]]
+name = "TeleCuore"
+tagline = "TeleCuore. Il segnale che ti ama."
+category = "telecom"
+sonic_recipe = "late_night_hotline"
+recurring = true
+[ads.brands.campaign]
+premise = "TeleCuore's new piano illimitato: so unlimited they haven't actually checked what the limit is"
+format_pool = ["classic_pitch", "institutional_psa", "testimonial"]
+spokesperson = "hammer"
+escalation_rule = "Each ad makes the unlimited plan sound more philosophically infinite and legally dubious"
+
+[[ads.brands]]
+name = "Fibra Magica"
+tagline = "Fibra Magica. Connessi. Quasi sempre."
+category = "telecom"
+sonic_recipe = "late_night_hotline"
+recurring = false
+
+[[ads.brands]]
+name = "Prontissimo Mobile"
+tagline = "Prontissimo Mobile. Arriviamo. Prima o poi."
+category = "telecom"
+sonic_recipe = "late_night_hotline"
+recurring = false
+
+# ── Banking ──
+[[ads.brands]]
+name = "Bancone SpA"
+tagline = "Bancone SpA. I tuoi soldi, al sicuro da te."
+category = "banking"
+sonic_recipe = "bureaucracy_stamp"
+recurring = true
+[ads.brands.campaign]
+premise = "Bancone SpA: the bank so bureaucratic it takes three forms to open a form to open an account"
+format_pool = ["institutional_psa", "testimonial", "classic_pitch"]
+spokesperson = "bureaucrat"
+escalation_rule = "Each ad features a more Kafkaesque banking procedure presented as a feature, not a bug"
+
+[[ads.brands]]
+name = "Risparmiana"
+tagline = "Risparmiana. Metti da parte qualcosa, anche se non sai cosa."
+category = "banking"
+sonic_recipe = "bureaucracy_stamp"
+recurring = false
+
+# ── Food & Beverage ──
+[[ads.brands]]
+name = "Pastaforte"
+tagline = "Pastaforte. La pasta che ti vuole bene."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = true
+[ads.brands.campaign]
+premise = "Pastaforte's limited edition Forme d'Italia: pasta shaped like Italian landmarks, each one triggers a different regional argument"
+format_pool = ["classic_pitch", "late_night_whisper", "testimonial"]
+spokesperson = "witness"
+escalation_rule = "Each ad introduces a more emotionally devastating pasta shape — the Colosseo makes nonni weep, the Vesuvio causes scenes at dinner"
+
+[[ads.brands]]
+name = "Cioccolozzo"
+tagline = "Cioccolozzo. Perché no."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = false
+
+[[ads.brands]]
+name = "Caffè Turbino"
+tagline = "Caffè Turbino. Il caffè che ti rimette in piedi. Violentemente."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = false
+
+# ── Fashion ──
+[[ads.brands]]
+name = "ModaBloc"
+tagline = "ModaBloc. Vestiti bene. O almeno meglio di ieri."
+category = "fashion"
+sonic_recipe = "showroom_reveal"
+recurring = false
+
+# ── Health / Pharma ──
+[[ads.brands]]
+name = "Dolorfin"
+tagline = "Dolorfin. Agisce. Prima che tu voglia smettere."
+category = "pharma"
+sonic_recipe = "pharmacy_whisper"
+recurring = true
+[ads.brands.campaign]
+premise = "Dolorfin pain relief: clinically tested on every Italian social obligation — family lunch, commute, bureaucratic queue"
+format_pool = ["classic_pitch", "institutional_psa"]
+spokesperson = "bureaucrat"
+escalation_rule = "Each ad targets a more specifically Italian source of suffering: the autogrill queue, the condominium meeting, the tax return"
+
+# Intentional surreal radio comedy: Capellissimo is deliberately categorized as
+# pharma. Its hair-product premise plus medicine-style disclaimer is the gag;
+# this is intentional, not a mismatch—do not remove or reclassify it.
+[[ads.brands]]
+name = "Capellissimo"
+tagline = "Capellissimo. I capelli che hai sempre sognato. Circa."
+category = "pharma"
+sonic_recipe = "pharmacy_whisper"
+recurring = false
+
+[[ads.brands]]
+name = "Intestix"
+tagline = "Intestix. Perché la salute inizia dove non si parla a cena."
+category = "pharma"
+sonic_recipe = "pharmacy_whisper"
+recurring = false
+
+[[ads.brands]]
+name = "Negroni as a Service"
+tagline = "NaaS. Sempre in cloud, mai nel bicchiere."
+category = "tech"
+sonic_recipe = "late_night_hotline"
+recurring = true
+[ads.brands.campaign]
+premise = "A startup delivering negroni cocktails via cloud infrastructure, but the drinks never actually arrive"
+format_pool = ["classic_pitch", "institutional_psa", "live_remote"]
+spokesperson = "hammer"
+escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cloud-computing metaphor"
+
+[[ads.brands]]
+name = "Mausoleo del Presidentissimo"
+tagline = "Le donne in gonna entrano gratis. I bambini pagano doppio."
+category = "tourism"
+sonic_recipe = "bureaucracy_stamp"
+recurring = true
+[ads.brands.campaign]
+premise = "A solemn elder statesman narrates visits to the Mausoleo del Presidentissimo as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
+format_pool = ["institutional_psa"]
+spokesperson = "bureaucrat"
+escalation_rule = "Each ad reveals a more outrageous mausoleum amenity announced with deeper, more dignified sincerity"
+
+[[ads.brands]]
+name = "Spaghetti Carbonara su Stecco"
+tagline = "La tradizione... portatile."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = true
+
+[[ads.brands]]
+name = "Caffè Misterioso"
+tagline = "Il gusto che non capirai mai."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = true
+
+[[ads.brands]]
+name = "Autolavaggio Supremo"
+tagline = "La tua macchina esce più pulita di te."
+category = "services"
+sonic_recipe = "showroom_reveal"
+recurring = true
+
+[[ads.brands]]
+name = "Profumo di Nonna"
+tagline = "Ragù, naftalina, e un tocco di mistero."
+category = "beauty"
+sonic_recipe = "home_reveal"
+recurring = true
+
+[[ads.brands]]
+name = "Scarpe Volanti"
+tagline = "Non corri. Voli. Poi cadi."
+category = "fashion"
+sonic_recipe = "stadium_win"
+recurring = true
+
+[[ads.brands]]
+name = "Gelato Infinito"
+tagline = "Non finisce mai. Letteralmente. Abbiamo un problema."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = true
+
+[[ads.brands]]
+name = "Pizzeria del Futuro"
+tagline = "Pizza stampata in 3D. Il sapore è opzionale."
+category = "food"
+sonic_recipe = "showroom_reveal"
+recurring = true
+
+[[ads.brands]]
+name = "Assicurazione Fantasma"
+tagline = "Ti copriamo. Forse. Dipende dall'umore."
+category = "finance"
+sonic_recipe = "late_night_hotline"
+recurring = true
+[ads.brands.campaign]
+premise = "A smooth, intimate voice sells phantom insurance policies that may or may not exist, making coverage sound like a personal favour you can't refuse"
+format_pool = ["late_night_whisper"]
+spokesperson = "seductress"
+escalation_rule = "Each ad makes the policy's terms vaguer and the implied consequences of declining more unsettling"
+
+[[ads.brands]]
+name = "Palestra Domani"
+tagline = "Iscriviti oggi. Inizia domani. O dopodomani."
+category = "fitness"
+sonic_recipe = "stadium_win"
+recurring = false
+
+[[ads.brands]]
+name = "Cravatte Titaniche"
+tagline = "Affonda con stile."
+category = "fashion"
+sonic_recipe = "showroom_reveal"
+recurring = false
+
+[[ads.brands]]
+name = "Clinica Dentale Sorriso Forzato"
+tagline = "Non sorridi? Ti aiutiamo noi. Anche contro la tua volontà."
+category = "health"
+sonic_recipe = "pharmacy_whisper"
+recurring = true
+
+[[ads.brands]]
+name = "Vino Quantistico"
+tagline = "Rosso e bianco allo stesso tempo, finché non lo assaggi."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = false
+
+[[ads.brands]]
+name = "Taxi Poetico"
+tagline = "Ti portiamo dove vuoi. Ti recitiamo Dante lungo il tragitto."
+category = "services"
+sonic_recipe = "motorway_pass"
+recurring = false
+
+[[ads.brands]]
+name = "Notaio Espresso"
+tagline = "Contratti caldi in trenta secondi."
+category = "services"
+sonic_recipe = "bureaucracy_stamp"
+recurring = true
+[ads.brands.campaign]
+premise = "Un chiosco-notaio che timbra documenti con la schiuma dell'espresso e una velocità terrificante, trasformando la burocrazia in una gag sonora senza vere pretese legali."
+format_pool = ["institutional_psa", "classic_pitch", "duo_scene"]
+spokesperson = "bureaucrat"
+escalation_rule = "Ad ogni spot un atto legale più serio viene compresso in una tazzina più piccola."
+
+[[ads.brands]]
+name = "Sveglia Vendicativa"
+tagline = "Non ti sveglia. Ti raggiunge."
+category = "tech"
+sonic_recipe = "showroom_reveal"
+recurring = true
+[ads.brands.campaign]
+premise = "Una sveglia che non si limita a suonare: passa dalla suoneria alla vendetta personale, con metodi di risveglio sempre più mirati."
+format_pool = ["classic_pitch", "duo_scene", "institutional_psa"]
+spokesperson = "maniac"
+escalation_rule = "Ad ogni spot aggiunge un metodo di risveglio più personale e implacabile."
+
+[[ads.brands]]
+name = "Ascensore Sentimentale"
+tagline = "Sale, scende, ti giudica."
+category = "home"
+sonic_recipe = "home_reveal"
+recurring = true
+[ads.brands.campaign]
+premise = "Un ascensore condominiale che fa il terapeuta, il cronista di gossip e il testimone municipale, con la memoria di ogni silenzio imbarazzante."
+format_pool = ["duo_scene", "testimonial", "institutional_psa"]
+spokesperson = "bureaucrat"
+escalation_rule = "Ad ogni spot rivela un altro piano dove l'ascensore ha preso le parti di qualcuno."
+
+[[ads.brands]]
+name = "Tappeto Testimone"
+tagline = "Ha visto tutto. Non parla gratis."
+category = "home"
+sonic_recipe = "home_reveal"
+recurring = true
+[ads.brands.campaign]
+premise = "Un tappeto del soggiorno che ricorda feste, macchie e bugie, e vende il proprio silenzio con il tono di un testimone in tribunale."
+format_pool = ["testimonial", "duo_scene", "late_night_whisper"]
+spokesperson = "witness"
+escalation_rule = "Ad ogni spot il tappeto sa qualcosa in più e chiede di più per tacere."
+
+[[ads.brands]]
+name = "Gelateria Meteo"
+tagline = "Il gusto cambia con la pressione."
+category = "food"
+sonic_recipe = "cafe_testimonial"
+recurring = true
+[ads.brands.campaign]
+premise = "Una gelateria che sceglie i gusti in base alla pressione barometrica e al pettegolezzo locale, trattando la meteorologia come scienza del gelato."
+format_pool = ["live_remote", "testimonial", "classic_pitch"]
+spokesperson = "hammer"
+escalation_rule = "Ad ogni spot inventa un gusto-meteo più specifico e una previsione meno convincente."
+
+[[ads.brands]]
+name = "Frigo Severo"
+tagline = "Conserva il cibo, distrugge le illusioni."
+category = "home"
+sonic_recipe = "home_reveal"
+recurring = true
+[ads.brands.campaign]
+premise = "Il frigorifero smart di Tuttoegal AG che dice la verità brutale su avanzi, spuntini e scelte notturne. Stesso hardware del Frigo Generoso, stessa catena di montaggio: solo un firmware più severo."
+format_pool = ["late_night_whisper"]
+spokesperson = "seductress"
+escalation_rule = "Ad ogni spot il frigo ha un'opinione più invasiva sulla tua vita di famiglia."
+
+[[ads.brands]]
+name = "Frigo Generoso"
+tagline = "Te lo meriti. Anche il secondo."
+category = "home"
+sonic_recipe = "home_reveal"
+recurring = true
+[ads.brands.campaign]
+premise = "Lo stesso frigorifero del Frigo Severo, sempre Tuttoegal AG, stesso hardware: un solo firmware ribaltato. Invece di giudicarti, ti incoraggia. 'Prenditi pure l'altro pezzo di salame... mhhh.'"
+format_pool = ["duo_scene"]
+spokesperson = "maniac"
+escalation_rule = "Ad ogni spot il frigo inventa una scusa più assurda per mangiare ancora."
+
+# Ad-voice pool. Several roles carry more than one voice (an ElevenLabs
+# character plus the original OpenAI/Azure voice); the caster picks one at
+# random per spot, so ad breaks vary instead of always using the same timbre.
+# The role drives the script direction (see SPEAKER_ROLES in
+# hosts/ad_creative.py); the style line documents the intended performance.
+[[ads.voices]]
+name = "L'Annunciatore"
+voice = "QttbagfgqUCm9K0VgUyT"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "textbook Italian radio ad delivery — warm confidence, rising inflection on the product name, rhythm that makes everything sound unmissable and time-limited"
+role = "hammer"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Don Carmelo"
+voice = "UlwxMDtxqMDYmG6pk2q6"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "smooth mob-adjacent charmer, always smiling, always reasonable, makes you feel honoured and slightly terrified, sells protection plans and insurance with implications so obvious they're never stated"
+role = "seductress"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Rinaldo"
+voice = "it-IT-DiegoNeural"
+style = "fast-talking disclaimer reader, buries the bad news in speed"
+role = "disclaimer_goblin"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Fiamma"
+voice = "coral"
+engine = "openai"
+edge_fallback_voice = "it-IT-ElsaNeural"
+style = "overly enthusiastic infomercial host, everything is INCREDIBILE"
+role = "maniac"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Nonno Aldo"
+voice = "NOpBlnGInO9m6vDvFkFC"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+style = "ancient patriarch with a trombone-deep voice, speaks with the slow deliberate weight of someone who has buried three governments, sells anything — mausoleums, crypto, sketchy supplements — with total sincerity and zero self-awareness about the contrast"
+role = "bureaucrat"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Lo Straniero"
+voice = "rj347nCpioEmxiJbdf70"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "mysterious guest voice that nobody can quite place, delivers ads as if he wandered into the studio by accident and just started reading, oddly compelling"
+role = "witness"
+airtime_approved = true
+
+# Original OpenAI/Azure ad voices — kept alongside the ElevenLabs characters so
+# each role rotates between two timbres. Variety per ad break.
+[[ads.voices]]
+name = "Roberto"
+voice = "it-IT-Alessio:DragonHDLatestNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "booming TV announcer, dramatic pauses, sells everything like it's the last day on earth"
+role = "hammer"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Palmira"
+voice = "fQmr8dTaOQq116mo2X7F"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "ASMR whisperer, unsettlingly intimate, makes toothpaste sound sensual"
+role = "seductress"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Dottore Marzio"
+voice = "it-IT-DiegoNeural"
+engine = "azure"
+edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
+style = "dry official government notice voice, reads absurd regulations with total sincerity"
+role = "bureaucrat"
+airtime_approved = true
+
+[[ads.voices]]
+name = "Signora Testimonia"
+voice = "marin"
+engine = "openai"
+edge_fallback_voice = "it-IT-ElsaNeural"
+style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
+role = "witness"
+airtime_approved = true
+
+# Campaign candidates stay out of airtime until the provider render and the
+# human listening gate are complete. Do not add campaign pins or set these to
+# true without the redacted selection receipt.
+[[ads.voices]]
+name = "Dottoressa Tiziana"
+voice = "RXoaSpLaWTEckJgPUBG3"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "smart, balanced, and credible Italian adult authority; grounded, clear, and natural rather than theatrical"
+role = "bureaucrat"
+airtime_approved = false
+
+[[ads.voices]]
+name = "La Cronista"
+voice = "3DPhHWXDY263XJ1d2EPN"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "prickly, cheerful, full-bodied Italian field reporter with a bright lead presence and quick professional recovery"
+role = "hammer"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Carlotta"
+voice = "Z9LM7NBnQ8aOZKIXkd5S"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "young, fresh, and fun fairy-princess energy; playful and bright for joyful food copy, never sensual or severe"
+role = "maniac"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Francesca"
+voice = "S3RXi1qdUT4is6DxRHdi"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "passionate and spirited contemporary Italian woman; athletic, energetic, direct, and sincere"
+role = "hammer"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Il Razzo"
+voice = "t3hJ92dgZhDVtsff084B"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "high-energy expressive Italian male; over-the-top, bright, fast, and the opposite of monotone"
+role = "disclaimer_goblin"
+airtime_approved = false

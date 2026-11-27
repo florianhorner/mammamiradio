@@ -8,12 +8,17 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from scripts import validate_audio_asset_pack as validator
+
+
+def _refuse_subprocess(*args: object, **kwargs: object) -> None:
+    raise AssertionError(f"generator provenance must not start a subprocess: {args!r}")
 
 
 def _sha256(content: bytes) -> str:
@@ -60,6 +65,10 @@ def _generated_source(pack_dir: Path) -> tuple[dict[str, object], dict[str, byte
     master.parent.mkdir(parents=True, exist_ok=True)
     master_bytes = b"project-authored deterministic PCM master"
     master.write_bytes(master_bytes)
+    for path, content in blobs.items():
+        snapshot = pack_dir / validator.generator_snapshot_path(path)
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_bytes(content)
     generator: dict[str, object] = {
         "kind": validator.PROJECT_GENERATOR_KIND,
         "revision": revision,
@@ -398,13 +407,8 @@ def test_project_authored_master_hashes_generator_dependencies_and_renders_disti
     generated_source, blobs = _generated_source(pack_dir)
     payload["sources"] = [generated_source]
     _write_manifest(pack_dir, payload)
-    reads: list[tuple[str, str]] = []
-
-    def read_git_blob(revision: str, path: str) -> bytes:
-        reads.append((revision, path))
-        return blobs[path]
-
-    monkeypatch.setattr(validator, "_read_git_blob", read_git_blob)
+    # Provenance must hold with no Git at all: any subprocess call here fails.
+    monkeypatch.setattr(validator.subprocess, "run", _refuse_subprocess)
 
     report = validator.validate_audio_asset_pack(pack_dir)
     attribution = validator.render_attribution(report)
@@ -414,10 +418,18 @@ def test_project_authored_master_hashes_generator_dependencies_and_renders_disti
         in attribution
     )
     assert "## Source recordings and masters\n" in attribution
-    assert sorted(path for _revision, path in reads) == sorted(blobs)
-    assert "- Generator: [`scripts/complete_audio_pack_gate.py`]" in attribution
+    assert (
+        "- Generator: [`scripts/complete_audio_pack_gate.py`]"
+        "(provenance/generator-src/scripts/complete_audio_pack_gate.py)" in attribution
+    )
+    assert "- Generator revision (reference only): `" + "1" * 40 + "`" in attribution
+    assert "github.com" not in attribution
+    assert sorted(blobs) == ["radio.toml", "scripts/complete_audio_pack_gate.py", "scripts/core_cadence_gate.py"]
     assert "- Generator SHA-256: `" in attribution
-    assert "- Generator dependency: [`scripts/core_cadence_gate.py`]" in attribution
+    assert (
+        "- Generator dependency: [`scripts/core_cadence_gate.py`]"
+        "(provenance/generator-src/scripts/core_cadence_gate.py)" in attribution
+    )
     assert "- Generator runtime: Python `Python 3.12.11`; FFmpeg `ffmpeg 8.0`" in attribution
     assert f"- Master SHA-256: `{generated_source['source_sha256']}`" in attribution
     assert "- Source:" not in attribution
@@ -427,16 +439,14 @@ def test_project_authored_master_hashes_generator_dependencies_and_renders_disti
 def test_project_authored_master_requires_pack_local_original(
     tmp_path: Path,
     fake_probe: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()
     payload = _manifest(pack_dir)
-    generated_source, blobs = _generated_source(pack_dir)
+    generated_source, _blobs = _generated_source(pack_dir)
     generated_source.pop("original_path")
     payload["sources"] = [generated_source]
     _write_manifest(pack_dir, payload)
-    monkeypatch.setattr(validator, "_read_git_blob", lambda _revision, path: blobs[path])
 
     with pytest.raises(validator.AudioAssetPackValidationError, match="original_path is required"):
         validator.validate_audio_asset_pack(pack_dir)
@@ -457,7 +467,6 @@ def test_project_authored_master_requires_pack_local_original(
 def test_project_authored_master_rejects_unpinned_generator_shape(
     tmp_path: Path,
     fake_probe: None,
-    monkeypatch: pytest.MonkeyPatch,
     field: str,
     replacement: object,
     message: str,
@@ -465,13 +474,12 @@ def test_project_authored_master_rejects_unpinned_generator_shape(
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()
     payload = _manifest(pack_dir)
-    generated_source, blobs = _generated_source(pack_dir)
+    generated_source, _blobs = _generated_source(pack_dir)
     generator = generated_source["generator"]
     assert isinstance(generator, dict)
     generator[field] = replacement
     payload["sources"] = [generated_source]
     _write_manifest(pack_dir, payload)
-    monkeypatch.setattr(validator, "_read_git_blob", lambda _revision, path: blobs[path])
 
     with pytest.raises(validator.AudioAssetPackValidationError, match=re.escape(message)):
         validator.validate_audio_asset_pack(pack_dir)
@@ -488,7 +496,6 @@ def test_project_authored_master_rejects_unpinned_generator_shape(
 def test_project_authored_master_rejects_unpinned_generator_dependency(
     tmp_path: Path,
     fake_probe: None,
-    monkeypatch: pytest.MonkeyPatch,
     field: str,
     replacement: object,
     message: str,
@@ -496,7 +503,7 @@ def test_project_authored_master_rejects_unpinned_generator_dependency(
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()
     payload = _manifest(pack_dir)
-    generated_source, blobs = _generated_source(pack_dir)
+    generated_source, _blobs = _generated_source(pack_dir)
     generator = generated_source["generator"]
     assert isinstance(generator, dict)
     dependencies = generator["dependencies"]
@@ -506,7 +513,6 @@ def test_project_authored_master_rejects_unpinned_generator_dependency(
     dependency[field] = replacement
     payload["sources"] = [generated_source]
     _write_manifest(pack_dir, payload)
-    monkeypatch.setattr(validator, "_read_git_blob", lambda _revision, path: blobs[path])
 
     with pytest.raises(validator.AudioAssetPackValidationError, match=re.escape(message)):
         validator.validate_audio_asset_pack(pack_dir)
@@ -515,42 +521,156 @@ def test_project_authored_master_rejects_unpinned_generator_dependency(
 def test_project_authored_master_source_url_must_name_the_generator(
     tmp_path: Path,
     fake_probe: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()
     payload = _manifest(pack_dir)
-    generated_source, blobs = _generated_source(pack_dir)
+    generated_source, _blobs = _generated_source(pack_dir)
     generated_source["source_url"] = "https://example.test/master.mp3"
     payload["sources"] = [generated_source]
     _write_manifest(pack_dir, payload)
-    monkeypatch.setattr(validator, "_read_git_blob", lambda _revision, path: blobs[path])
 
     with pytest.raises(validator.AudioAssetPackValidationError, match=r"source_url must equal.*generator.url"):
         validator.validate_audio_asset_pack(pack_dir)
 
 
-@pytest.mark.parametrize("corrupt_path", ["scripts/complete_audio_pack_gate.py", "scripts/core_cadence_gate.py"])
-def test_project_authored_master_rejects_generator_blob_hash_mismatch(
-    tmp_path: Path,
-    fake_probe: None,
-    monkeypatch: pytest.MonkeyPatch,
-    corrupt_path: str,
-) -> None:
-    pack_dir = tmp_path / "pack"
+def _generated_pack(pack_dir: Path) -> dict[str, bytes]:
     pack_dir.mkdir()
     payload = _manifest(pack_dir)
     generated_source, blobs = _generated_source(pack_dir)
     payload["sources"] = [generated_source]
     _write_manifest(pack_dir, payload)
+    return blobs
 
-    def read_git_blob(_revision: str, path: str) -> bytes:
-        return b"different committed bytes" if path == corrupt_path else blobs[path]
 
-    monkeypatch.setattr(validator, "_read_git_blob", read_git_blob)
+@pytest.mark.parametrize("corrupt_path", ["scripts/complete_audio_pack_gate.py", "scripts/core_cadence_gate.py"])
+def test_project_authored_master_rejects_tampered_generator_snapshot(
+    tmp_path: Path,
+    fake_probe: None,
+    corrupt_path: str,
+) -> None:
+    pack_dir = tmp_path / "pack"
+    _generated_pack(pack_dir)
+    (pack_dir / validator.generator_snapshot_path(corrupt_path)).write_bytes(b"different retained bytes")
 
-    with pytest.raises(validator.AudioAssetPackValidationError, match=r"generated-source Git blob.*SHA-256 differs"):
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
         validator.validate_audio_asset_pack(pack_dir)
+
+    message = str(caught.value)
+    assert f"generator snapshot {corrupt_path} SHA-256 differs from manifest" in message
+    assert message.count("SHA-256 differs from manifest") == 1
+
+
+def test_project_authored_master_rejects_missing_generator_snapshot_file(tmp_path: Path, fake_probe: None) -> None:
+    pack_dir = tmp_path / "pack"
+    _generated_pack(pack_dir)
+    (pack_dir / validator.generator_snapshot_path("radio.toml")).unlink()
+
+    with pytest.raises(
+        validator.AudioAssetPackValidationError,
+        match=r"cannot verify generator snapshot radio\.toml: snapshot file is missing",
+    ):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_project_authored_master_rejects_absent_generator_snapshot(tmp_path: Path, fake_probe: None) -> None:
+    """A pack copied without its snapshot proves nothing, whatever Git holds."""
+    pack_dir = tmp_path / "pack"
+    blobs = _generated_pack(pack_dir)
+    shutil.rmtree(pack_dir / "provenance" / "generator-src")
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    message = str(caught.value)
+    for path in blobs:
+        assert f"cannot verify generator snapshot {path}: snapshot file is missing" in message
+
+
+def test_generator_snapshot_file_cannot_escape_the_pack(tmp_path: Path, fake_probe: None) -> None:
+    """Matching bytes outside the pack must not satisfy a pin through a link."""
+    pack_dir = tmp_path / "pack"
+    blobs = _generated_pack(pack_dir)
+    outside = tmp_path / "outside-radio.toml"
+    outside.write_bytes(blobs["radio.toml"])
+    snapshot = pack_dir / validator.generator_snapshot_path("radio.toml")
+    snapshot.unlink()
+    snapshot.symlink_to(outside)
+
+    with pytest.raises(
+        validator.AudioAssetPackValidationError,
+        match=r"cannot verify generator snapshot radio\.toml: snapshot path must not traverse a symlink",
+    ):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_generator_snapshot_directory_cannot_escape_the_pack(tmp_path: Path, fake_probe: None) -> None:
+    pack_dir = tmp_path / "pack"
+    _generated_pack(pack_dir)
+    snapshot_root = pack_dir / "provenance" / "generator-src"
+    outside = tmp_path / "outside-snapshot"
+    snapshot_root.rename(outside)
+    snapshot_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    message = str(caught.value)
+    assert "snapshot path must not traverse a symlink" in message
+    assert "generator snapshot directory must not be a symlink" in message
+
+
+def test_snapshot_resolution_is_confined_to_the_pack_directory(tmp_path: Path) -> None:
+    """The resolver itself refuses traversal, independent of schema checks."""
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    (tmp_path / "secret.py").write_bytes(b"outside the pack")
+
+    with pytest.raises(ValueError, match="asset path escapes pack directory"):
+        validator._hash_generator_snapshot_file(pack_dir, "../../../secret.py")
+
+
+def test_generator_snapshot_rejects_files_no_generator_pins(tmp_path: Path, fake_probe: None) -> None:
+    """The snapshot sits outside the runtime inventory, so extras are unverified bytes."""
+    pack_dir = tmp_path / "pack"
+    _generated_pack(pack_dir)
+    stray = pack_dir / validator.generator_snapshot_path("scripts/unpinned.py")
+    stray.write_bytes(b"print('nobody hashed me')\n")
+
+    with pytest.raises(
+        validator.AudioAssetPackValidationError,
+        match=r"generator snapshot contains files no generator pins: scripts/unpinned\.py",
+    ):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_pack_without_generators_rejects_a_generator_snapshot(tmp_path: Path, fake_probe: None) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    _write_manifest(pack_dir, _manifest(pack_dir))
+    stray = pack_dir / validator.generator_snapshot_path("scripts/unpinned.py")
+    stray.parent.mkdir(parents=True)
+    stray.write_bytes(b"unverified")
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match="contains files no generator pins"):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_runtime_inventory_excludes_the_generator_snapshot(tmp_path: Path, fake_probe: None) -> None:
+    """The inventory stays a runtime-file ledger; the snapshot check owns the rest."""
+    pack_dir = tmp_path / "pack"
+    blobs = _generated_pack(pack_dir)
+    errors: list[str] = []
+
+    scanned = validator._scan_pack_inventory(pack_dir, errors)
+
+    assert errors == []
+    assert scanned
+    assert not [path for path in scanned if validator.is_generator_snapshot_path(path)]
+    payload = json.loads((pack_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert validator.generator_snapshot_paths(payload) == tuple(
+        sorted(f"provenance/generator-src/{path}" for path in blobs)
+    )
 
 
 def test_asset_output_hash_and_format_are_checked(tmp_path: Path, fake_probe: None) -> None:

@@ -1,0 +1,1129 @@
+"""FastAPI application entrypoint for the mammamiradio station."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.metadata
+import json
+import logging
+import math
+import os
+import secrets
+import shutil
+import sqlite3
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+
+from mammamiradio.audio.norm_cache import norm_cache_origin_is_eligible
+from mammamiradio.audio.normalizer import norm_cache_duration_sec
+from mammamiradio.core.config import (
+    _FALSY as _CONFIG_FALSY,
+)
+from mammamiradio.core.config import (
+    _TRUTHY as _CONFIG_TRUTHY,
+)
+from mammamiradio.core.config import (
+    DEFAULT_STATION_NAME,
+    MIN_MAX_CACHE_SIZE_MB,
+    load_config,
+)
+from mammamiradio.core.first_listen import (
+    FirstListenInstallOriginStatus,
+    FirstListenInstallOriginV1,
+    FirstListenReceiptLoadStatus,
+    FirstListenReceiptStore,
+    capture_first_listen_install_origin,
+    migrate_first_listen_install_origin,
+)
+from mammamiradio.core.models import PlaylistSource, StationState
+from mammamiradio.core.sync import init_db
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
+from mammamiradio.home.context_director import HomeContextDirector
+from mammamiradio.home.entity_policy import muted_entity_ids
+from mammamiradio.home.evening_memory import EveningLedger
+from mammamiradio.home.migration import (
+    LegacyHomePreflightV1,
+    capture_legacy_home_preflight_v1,
+    load_authoritative_legacy_home_preflight_v1,
+    load_legacy_home_database_preflight_v1,
+    persist_legacy_home_database_preflight_v1,
+    rewrite_legacy_home_preflight_cold_v1,
+    seal_legacy_home_provenance_v1,
+)
+from mammamiradio.home.moment_receipts import MomentStore
+from mammamiradio.hosts.persona import PersonaStore
+from mammamiradio.hosts.verbal_gag_ledger import VerbalGagLedger
+from mammamiradio.integrations import router as integrations_router
+from mammamiradio.playlist.blocklist import load_blocklist
+from mammamiradio.playlist.direction import (
+    find_existing_direction_tracks,
+    resolve_direction_tracks,
+    target_dicts_to_targets,
+)
+from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
+from mammamiradio.playlist.jamendo_transient import JamendoStreamProvider
+from mammamiradio.playlist.legacy_media import reconcile_legacy_external_media
+from mammamiradio.playlist.playlist import (
+    PERSISTED_HEADING_FILENAME,
+    fetch_startup_playlist,
+    filter_blocklisted,
+    load_explicit_source,
+    normalized_track_key,
+    read_persisted_heading,
+    read_persisted_source,
+    write_persisted_heading,
+)
+from mammamiradio.playlist.preferences import load_preferences
+from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
+from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
+from mammamiradio.scheduling.producer import _queue_shadow_entry, prewarm_first_segment, run_producer
+from mammamiradio.web.listener_requests import router as listener_requests_router
+from mammamiradio.web.media_sources import router as media_sources_router
+from mammamiradio.web.streamer import (
+    CLIP_MAX_SEGMENT_SECONDS,
+    LiveStreamHub,
+    _clear_active_heading,
+    _download_direction_track,
+    _heading_selection_budget,
+    _register_background_task,
+    _session_stopped_flag,
+    _stream_chunk_size,
+    router,
+    run_playback_loop,
+)
+
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+
+def _configure_http_logging() -> None:
+    level_name = os.getenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", "WARNING").strip().upper()
+    level = logging.getLevelNamesMapping().get(level_name, logging.WARNING)
+    # Jamendo authenticates metadata requests with a query-string client_id.
+    # httpx logs complete request URLs at INFO, so dependency logging must never
+    # be made more verbose than WARNING even when a legacy override remains set.
+    level = max(level, logging.WARNING)
+    logging.getLogger("httpx").setLevel(level)
+    logging.getLogger("httpcore").setLevel(level)
+
+
+_configure_http_logging()
+logger = logging.getLogger("mammamiradio")
+
+_producer_task: asyncio.Task | None = None
+_playback_task: asyncio.Task | None = None
+_prewarm_task: asyncio.Task | None = None
+
+
+def _explicit_bool_env(name: str) -> bool | None:
+    """Return an explicitly valid boolean environment choice, else omitted.
+
+    Uses the exact vocabulary ``core/config.py`` honors when it loads the same
+    variable. A wider set here would classify a value like ``on`` as an
+    explicit choice while config loading ignores it and keeps the
+    ``radio.toml`` setting — the two readers must never disagree about what
+    counts as explicit.
+    """
+    raw = os.getenv(name, "").strip().lower()
+    if raw in _CONFIG_TRUTHY:
+        return True
+    if raw in _CONFIG_FALSY:
+        return False
+    return None
+
+
+def _build_immediate_audio_index(
+    cache_dir: Path,
+    *,
+    bitrate_kbps: int | float | None,
+    allow_external_media: bool = False,
+) -> dict[Path, float]:
+    """Index warm normalized audio without probing it during a control action.
+
+    ``norm_cache_duration_sec`` is intentionally sidecar/file-size based, so a
+    restart can discover its immediately playable runway synchronously without
+    launching FFmpeg on constrained hardware.
+    """
+    indexed: dict[Path, float] = {}
+    for path in sorted(cache_dir.glob("norm_*.mp3")):
+        if not path.is_file() or not norm_cache_origin_is_eligible(
+            path,
+            allow_external_media=allow_external_media,
+        ):
+            continue
+        duration_sec = norm_cache_duration_sec(path, bitrate_kbps=bitrate_kbps)
+        if duration_sec > 0:
+            indexed[path] = duration_sec
+    return indexed
+
+
+def _read_persisted_chaos_mode(config) -> bool:
+    """Read persisted Chaos Mode without arming a first-strike."""
+    raw_env = os.getenv("MAMMAMIRADIO_CHAOS_MODE", "").strip().lower()
+    if raw_env in {"true", "1", "yes", "on"}:
+        return True
+    if raw_env in {"false", "0", "no", "off"}:
+        return False
+    if getattr(config, "is_addon", False):
+        options_path = Path("/data/options.json")
+        try:
+            options = json.loads(options_path.read_text()) if options_path.exists() else {}
+        except (OSError, ValueError):
+            options = {}
+        if not isinstance(options, dict):
+            options = {}
+        if isinstance(options.get("chaos_mode_active"), bool):
+            return bool(options["chaos_mode_active"])
+    return False
+
+
+def _clear_persisted_heading(config) -> None:
+    try:
+        (config.cache_dir / PERSISTED_HEADING_FILENAME).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Failed to clear persisted heading during startup", exc_info=True)
+
+
+async def _restore_direction_targets_background(app_state, heading_id: str, raw_targets, source_revision: int) -> None:
+    """Best-effort target rehydration for persisted directions after instant-audio startup."""
+    try:
+        targets = target_dicts_to_targets(raw_targets)
+        if not targets:
+            return
+        state = app_state.station_state
+        resolved_tracks = await resolve_direction_tracks(
+            targets,
+            playlist=list(state.playlist),
+            pacing=app_state.config.pacing,
+        )
+        resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
+        download_tracks = []
+        async with app_state.source_switch_lock:
+            if state.heading is None or state.heading.id != heading_id or state.source_revision != source_revision:
+                return
+            existing_keys = {normalized_track_key(track) for track in state.playlist}
+            seen_new: set[tuple[str, str]] = set()
+            for track in resolved_tracks:
+                key = normalized_track_key(track)
+                if key in existing_keys or key in seen_new:
+                    continue
+                seen_new.add(key)
+                track.heading_id = heading_id
+                download_tracks.append(track)
+
+        download_tasks = []
+        for track in download_tracks:
+            dl_task = asyncio.create_task(_download_direction_track(track, app_state, source_revision, heading_id))
+            _register_background_task(app_state, dl_task)
+            download_tasks.append(dl_task)
+        if download_tasks:
+            await asyncio.gather(*download_tasks, return_exceptions=True)
+
+        async with app_state.source_switch_lock:
+            state = app_state.station_state
+            if state.heading is None or state.heading.id != heading_id or state.source_revision != source_revision:
+                return
+            playable_count = sum(1 for track in state.playlist if track.heading_id == heading_id)
+            if playable_count == 0:
+                logger.warning("Persisted direction restored no playable tracks; returning to auto")
+                _clear_active_heading(state)
+                _clear_persisted_heading(app_state.config)
+    except Exception:
+        logger.warning("Persisted direction background restore failed", exc_info=True)
+
+
+def _scan_cache_dir(cache_dir: Path) -> tuple[int, int]:
+    """Scan the cache once and return (normalized track count, MP3 megabytes).
+
+    Startup needs the count for its summary and the total size for the disk
+    ceiling. One stat pass avoids extra work on SD-card storage.
+
+    Skip files that disappear during the scan.
+    """
+    norm_count = 0
+    total_bytes = 0
+    try:
+        entries = list(cache_dir.glob("*.mp3"))
+    except OSError:
+        return 0, 0
+    for f in entries:
+        if f.name.startswith("norm_"):
+            norm_count += 1
+        try:
+            total_bytes += f.stat().st_size
+        except OSError:
+            continue  # Eviction or a purge removed the file before stat().
+    return norm_count, total_bytes // (1024 * 1024)
+
+
+def _disk_safe_cache_ceiling_mb(cache_dir: Path, configured_mb: int, *, cached_mb: int) -> tuple[int, bool]:
+    """Return ``(ceiling_mb, disk_limited)`` for a cache that fits the disk.
+
+    A ceiling above free space never triggers eviction. The cache can then fill
+    the volume and block later writes. Count cached bytes as reclaimable, reserve
+    headroom, and cap the ceiling at the affordable size.
+
+    ``ceiling_mb`` is never below ``MIN_MAX_CACHE_SIZE_MB``: when space is below
+    that floor, keep the floor so playback retains its ready-track fallback.
+
+    ``disk_limited`` is True when free space, not the configured value, decided
+    the answer. The caller warns on that flag rather than on the number changing —
+    a station already configured at the floor would otherwise sit on a full disk
+    and say nothing, because the trimmed value equals the configured one.
+
+    If the mount cannot be read, keep the configured value and let startup continue.
+    """
+    reserve_mb = 512
+    try:
+        usage = shutil.disk_usage(cache_dir)
+    except OSError:
+        return max(MIN_MAX_CACHE_SIZE_MB, configured_mb), False
+    affordable_mb = (usage.free // (1024 * 1024)) + cached_mb - reserve_mb
+    if affordable_mb >= configured_mb:
+        return max(MIN_MAX_CACHE_SIZE_MB, configured_mb), False
+    return max(MIN_MAX_CACHE_SIZE_MB, affordable_mb), True
+
+
+def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) -> int:
+    """Synchronously admit safe handoff music before background tasks start."""
+    from mammamiradio.playlist.downloader import external_media_enabled
+
+    if state.session_stopped:
+        logger.info("Restart handoff: skipped because the station is stopped")
+        return 0
+    admission = admit_restart_handoff_entries(
+        config.cache_dir,
+        blocklist=state.blocklist,
+        playlist=state.playlist,
+        pacing=config.pacing,
+        allow_external_media=external_media_enabled(config.allow_ytdlp),
+        require_known_source=True,
+    )
+    accepted = 0
+    for segment in admission.to_segments(config.cache_dir):
+        if queue.full():
+            break
+        shadow_entry = _queue_shadow_entry(segment, reason="Restored from safe restart handoff.")
+        queue.put_nowait(segment)
+        # Protect this file from the per-enqueue spool prune while it is still
+        # queued — resolved to match how _prune_unreferenced_segments compares.
+        try:
+            state.restart_handoff_admitted_paths.add(segment.path.resolve(strict=False))
+        except OSError:
+            state.restart_handoff_admitted_paths.add(segment.path)
+        state.last_enqueued_type = segment.type
+        state.last_music_file = segment.path
+        state.queued_segments.append(shadow_entry)
+        state.last_state_change_at = time.time()
+        accepted += 1
+    if accepted:
+        logger.info("Restart handoff: admitted %d safe music segment(s)", accepted)
+    elif admission.rejected:
+        logger.info("Restart handoff: no segments admitted (%d rejected)", len(admission.rejected))
+    return accepted
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    await startup()
+    yield
+    await shutdown()
+
+
+app = FastAPI(title=DEFAULT_STATION_NAME, lifespan=_lifespan)
+app.include_router(router)
+app.include_router(listener_requests_router)
+app.include_router(media_sources_router)
+app.include_router(integrations_router)
+
+
+async def startup():
+    """Load config, build initial state, and start producer/playback workers."""
+    global _producer_task, _playback_task, _prewarm_task
+
+    config = load_config()
+    # A bundled/default ``context_enabled = true`` must not let a fresh
+    # HA-connected install consume household context before the operator sees
+    # the filtered preview.  An explicit env choice wins in every runtime; a
+    # configured false value is also an explicit narrowing choice.  Otherwise
+    # omission starts fail-closed and a proven pre-feature install may restore
+    # legacy-on only after audio tasks start.
+    home_context_explicit_choice = _explicit_bool_env("MAMMAMIRADIO_HA_CONTEXT_ENABLED")
+    if home_context_explicit_choice is None and not config.homeassistant.context_enabled:
+        home_context_explicit_choice = False
+    if home_context_explicit_choice is None:
+        config.homeassistant.context_enabled = False
+    logger.info("Station: %s (%s)", config.display_station_name, config.station.language)
+
+    from mammamiradio.audio.tts import configure_openai_tts_model
+
+    configure_openai_tts_model(config.models.tts_model("openai"))
+
+    # One integrated-LUFS target across every segment type: configure the
+    # normalizer's reconciliation pass from radio.toml [audio]. Music, dialogue,
+    # bedded banter and ads then all land at the same perceived level.
+    from mammamiradio.audio.normalizer import configure_broadcast_chain, configure_loudness_reconcile
+
+    configure_loudness_reconcile(
+        config.audio.lufs_target,
+        config.audio.ad_lufs_target,
+        sample_rate=config.audio.sample_rate,
+        channels=config.audio.channels,
+        bitrate=config.audio.bitrate,
+    )
+
+    # The egress FM broadcast chain — the final "transmitter" stage every aired
+    # non-rescue segment passes through so the station sounds like radio.
+    configure_broadcast_chain(
+        config.audio.broadcast_chain,
+        sample_rate=config.audio.sample_rate,
+        channels=config.audio.channels,
+        bitrate=config.audio.bitrate,
+    )
+
+    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Prune stale temp render scratch left by a prior run (crash/restart debris)
+    # so the HA add-on's /data/tmp doesn't grow unbounded across restarts.
+    pruned_tmp = prune_stale_tmp_files(config.tmp_dir)
+    if pruned_tmp:
+        logger.info("Temp cleanup: pruned %d stale render file(s)", pruned_tmp)
+    pruned_handoff_tmp = prune_stale_handoff_tmp_files(config.cache_dir)
+    if pruned_handoff_tmp:
+        logger.info("Restart handoff cleanup: pruned %d stale scratch file(s)", pruned_handoff_tmp)
+
+    # Purge suspect cache files (likely failed downloads) before serving
+    purged = purge_suspect_cache_files(config.cache_dir)
+    if purged:
+        logger.info("Cache integrity check: purged %d suspect file(s)", purged)
+    norm_count, cached_mb = _scan_cache_dir(config.cache_dir)
+    logger.info("Normalization cache: %d tracks pre-normalized", norm_count)
+
+    # Choose a disk-safe ceiling before eviction. A limit larger than free space
+    # would not trigger eviction and could fill /data. A failed disk probe leaves
+    # the configured value unchanged so startup can continue.
+    effective_cache_mb, disk_limited = _disk_safe_cache_ceiling_mb(
+        config.cache_dir, config.max_cache_size_mb, cached_mb=cached_mb
+    )
+    if disk_limited:
+        if effective_cache_mb <= MIN_MAX_CACHE_SIZE_MB:
+            # The effective limit is at the floor. The disk may still lack room for
+            # it, so report that condition and tell the operator to free space.
+            logger.warning(
+                "Cache disk is nearly full. The station is using the %d MB minimum instead of the requested "
+                "%d MB. The minimum may still exceed available space, so songs may need to be rebuilt often. "
+                "Free space on the add-on data disk.",
+                effective_cache_mb,
+                config.max_cache_size_mb,
+            )
+        else:
+            logger.warning(
+                "The station reduced the music cache limit from %d MB to %d MB because the cache disk has too "
+                "little free space. Free space or lower the cache size in the add-on settings.",
+                config.max_cache_size_mb,
+                effective_cache_mb,
+            )
+        # Keep the config object and the producer periodic eviction pass on the
+        # same ceiling.
+        config.max_cache_size_mb = effective_cache_mb
+    evict_cache_lru(config.cache_dir, effective_cache_mb)
+
+    # R0 privacy bridge: capture the ORIGINAL pre-init database fact before
+    # init_db can make every later restart look like an upgrade. The first
+    # durable answer is immutable. A cold first-write failure must stop before
+    # database creation or the next boot could falsely become legacy-eligible.
+    db_path = config.cache_dir / "mammamiradio.db"
+    first_listen_origin_capture = capture_first_listen_install_origin(db_path)
+    database_preexisted = db_path.exists()
+    database_preflight = load_legacy_home_database_preflight_v1(db_path)
+    observed_database_preexisted = (
+        database_preflight.database_preexisted if database_preflight is not None else database_preexisted
+    )
+    if database_preflight is not None and not database_preflight.durable:
+        logger.error("Database Home install origin is unreadable; failing narrow without repairing witnesses")
+        legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+    else:
+        try:
+            legacy_preflight = capture_legacy_home_preflight_v1(
+                config.cache_dir / "state",
+                database_preexisted=observed_database_preexisted,
+            )
+        except OSError as exc:
+            if not database_preexisted:
+                logger.critical("Cannot establish cold-install Home context boundary before database creation: %s", exc)
+                raise RuntimeError("cannot establish cold-install Home context boundary") from exc
+            logger.error("Could not persist legacy Home preflight; failing narrow for this boot: %s", exc)
+            legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    if (
+        database_preflight is not None
+        and legacy_preflight.durable
+        and database_preflight.database_preexisted != legacy_preflight.database_preexisted
+    ):
+        logger.error("Home install-origin witnesses disagree; failing narrow for this boot")
+        legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    # A durable sidecar claiming a pre-existing database while no database file
+    # exists is internally contradictory — a legacy install cannot have a cold
+    # database. This catches a transplanted/leftover sidecar (partial backup
+    # restore, cloned config) that would otherwise seed the fresh DB table from
+    # its own claim and self-agree into legacy. Fail narrow (privacy fail-closed).
+    if not database_preexisted and legacy_preflight.durable and legacy_preflight.database_preexisted:
+        logger.error(
+            "Legacy Home witness claims a pre-existing database but none existed; failing narrow for this boot"
+        )
+        legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    # The database provably did not exist at process start, so the only truthful
+    # durable witness is a cold one. A transplanted/malformed sidecar was demoted
+    # in memory above, but it must also be corrected on disk: otherwise the NEXT
+    # boot — where the database now exists — trusts the stale witness, the guards
+    # above no longer fire, and both witnesses self-agree into legacy (household
+    # context leak). Correcting to False can only ever narrow (privacy fail-closed).
+    if not database_preexisted:
+        try:
+            legacy_preflight = rewrite_legacy_home_preflight_cold_v1(config.cache_dir / "state")
+        except OSError as exc:
+            logger.error("Could not correct cold Home preflight witness; failing narrow for this boot: %s", exc)
+            legacy_preflight = LegacyHomePreflightV1(database_preexisted=False, durable=False)
+
+    # Initialize persona database and store for compounding listener memory.
+    first_listen_sentinel_state = init_db(db_path)
+    try:
+        reconcile_legacy_external_media(config.cache_dir, db_path)
+    except Exception:
+        # Fail closed without blocking instant audio: no marker is published,
+        # so the idempotent pass retries next boot, while runtime cache/handoff
+        # admission still refuses unknown or disabled external origins.
+        logger.warning("Legacy external-media reconciliation will retry on the next boot", exc_info=True)
+    if legacy_preflight.durable:
+        try:
+            persist_legacy_home_database_preflight_v1(db_path, legacy_preflight)
+        except (OSError, sqlite3.DatabaseError, RuntimeError, ValueError) as exc:
+            logger.error("Could not verify redundant Home install origin; failing narrow for this boot: %s", exc)
+    home_authorization = (
+        HomeAuthorization.legacy()
+        if load_authoritative_legacy_home_preflight_v1(config.cache_dir / "state", db_path) is not None
+        else HomeAuthorization.narrow()
+    )
+    logger.info("Home context authorization: %s", home_authorization.mode.value)
+    if (
+        home_authorization.allows_label_generation
+        and config.homeassistant.enabled
+        and config.ha_token
+        and config.anthropic_api_key
+    ):
+        logger.info("Label generation sends entity metadata (IDs, names, areas) to LLM provider anthropic")
+    persona_store = PersonaStore(db_path)
+    if not await persona_store.prepare_listener_session_process():
+        logger.warning("Listener-session receipt preparation will retry at the first station epoch")
+
+    try:
+        bridge_app_version = importlib.metadata.version("mammamiradio")
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover - editable installs provide metadata
+        bridge_app_version = "0+unknown"
+    provenance_announced = False
+    provenance_task: asyncio.Task | None = None
+
+    async def _seal_home_provenance(entity_ids: frozenset[str]) -> None:
+        nonlocal provenance_announced
+        try:
+            provenance = await asyncio.to_thread(
+                seal_legacy_home_provenance_v1,
+                config.cache_dir / "state",
+                entity_ids,
+                db_path=db_path,
+                bridge_app_version=bridge_app_version,
+            )
+        except Exception:
+            logger.warning("Legacy Home continuity provenance write failed", exc_info=True)
+            return
+        if provenance is not None and not provenance_announced:
+            provenance_announced = True
+            logger.info("Legacy Home continuity provenance is ready")
+
+    def _observe_home_entity_ids(entity_ids: frozenset[str]) -> None:
+        nonlocal provenance_task
+        if provenance_announced or (provenance_task is not None and not provenance_task.done()):
+            return
+        provenance_task = asyncio.create_task(_seal_home_provenance(entity_ids))
+        app.state.legacy_home_provenance_task = provenance_task
+        _register_background_task(app.state, provenance_task)
+
+    # Dependency checks with install hints
+    _ffmpeg_found = bool(shutil.which("ffmpeg"))
+    from mammamiradio.playlist.downloader import external_media_enabled
+
+    _external_media_enabled = external_media_enabled(config.allow_ytdlp)
+    _ytdlp_found = bool(shutil.which("yt-dlp"))
+    if not _ffmpeg_found:
+        logger.warning(
+            "FFmpeg not found — audio generation will fail. "
+            "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
+        )
+    if config.allow_ytdlp and not _external_media_enabled:
+        logger.warning(
+            "External media was requested but the optional extra is unavailable — starter/local music continues. "
+            "Standalone install: pip install 'mammamiradio[external-media]'"
+        )
+
+    # Restore stop state so a reload/restart honours an operator-issued stop.
+    # The operator's /api/resume is the correct way to clear this — a crash or
+    # watchdog restart should not silently undo a deliberate stop.
+    _stopped_flag = _session_stopped_flag(config)
+    _session_stopped = _stopped_flag.exists()
+    if _session_stopped:
+        logger.info(
+            "Restoring stopped session state from previous run — use /api/resume or the admin panel to start playback"
+        )
+
+    # Restore the evening running-gag ledger so a mid-evening addon restart
+    # resumes the same session and gags instead of resetting them. Missing or
+    # corrupt files start fresh and never block boot. Candidacy policy comes from
+    # config ([home.running_gags]); empty lists keep the built-in domain default.
+    # The mute policy's entity_denylist is static (config-only) and doesn't
+    # purge already-persisted buckets on its own, so a mute applied in a prior
+    # session (or a purge whose save_if_dirty() failed) would otherwise
+    # survive a restart and still be offerable as a running gag (codex
+    # adversarial review). Merge the current mute policy into the denylist
+    # AND purge any matching buckets already on disk.
+    _muted_at_boot = muted_entity_ids(config.cache_dir)
+    evening_ledger = EveningLedger.load(
+        config.cache_dir,
+        domain_allowlist=config.running_gags.domain_allowlist or None,
+        entity_allowlist=config.running_gags.entity_allowlist or None,
+        entity_denylist=(set(config.running_gags.entity_denylist) | _muted_at_boot) or None,
+    )
+    for _muted_entity_id in _muted_at_boot:
+        evening_ledger.purge_entity(_muted_entity_id)
+    # A prior *explicit* global-off purge may have succeeded in memory while
+    # its best-effort disk save failed. Never keep those Home-derived buckets
+    # latent during an explicitly-off boot: a later in-process enable must
+    # start from an empty ledger rather than reviving pre-revocation events.
+    #
+    # Omitted First Listen installs are only provisionally fail-closed here.
+    # A proven pre-feature install may restore legacy-on after audio starts, so
+    # that temporary runtime gate must not erase its durable evening history.
+    explicit_home_context_off_purge_pending = False
+    if home_context_explicit_choice is False and evening_ledger.purge_all_buckets():
+        explicit_home_context_off_purge_pending = True
+    if not explicit_home_context_off_purge_pending:
+        evening_ledger.save_if_dirty(config.cache_dir)
+
+    # Moment Receipts — the durable trail behind ritual-recipe moments.
+    # Restart-durable so the listener strip and admin Moments panel don't blank
+    # on every addon update; corrupt-tolerant load (never aborts the boot).
+    moment_store = MomentStore.load(config.cache_dir)
+
+    # Verbal running-gag ledger — in-memory, session-ephemeral (a restart
+    # correctly forgets verbal gags), so unlike the evening ledger it is not
+    # loaded from disk.
+    verbal_gag_ledger = VerbalGagLedger()
+    try:
+        release_campaign = ReleaseCampaign.load(config.cache_dir)
+    except Exception:
+        # A corrupt/unreadable manifest or ledger must never abort the boot
+        # (INSTANT AUDIO) — fall back to a fully inert campaign built with no
+        # file I/O of its own, so it can't raise the same way again.
+        logger.warning("Failed to load release campaign state; continuing without it", exc_info=True)
+        release_campaign = ReleaseCampaign(
+            config.cache_dir,
+            manifest=ReleaseBeatManifest.disabled(),
+            ledger=ReleaseCampaignLedger.fresh(""),
+        )
+
+    persisted_source = read_persisted_source(config.cache_dir)
+    logger.info("Fetching startup playlist")
+    try:
+        tracks, playlist_source, startup_source_error = fetch_startup_playlist(config, persisted_source)
+    except Exception as e:
+        from mammamiradio.media.starter import starter_source
+
+        logger.error("Playlist fetch crashed: %s — no unverified music will be loaded", e)
+        tracks = []
+        playlist_source = starter_source(0)
+        startup_source_error = str(e)
+
+    # Persistent operator blocklist: a song the operator banned must never re-enter
+    # the pool, including on this cold-start re-fetch (the reported "deleted songs
+    # come back after restart" bug). Filter the freshly fetched pool before it ever
+    # reaches the producer. Best-effort load — a missing/corrupt file bans nothing.
+    blocklist = load_blocklist(config.cache_dir)
+    pre_blocklist_count = len(tracks)
+    tracks = filter_blocklisted(tracks, blocklist)
+    if pre_blocklist_count != len(tracks):
+        logger.info(
+            "Blocklist: filtered %d banned track(s) from the startup pool",
+            pre_blocklist_count - len(tracks),
+        )
+    song_preferences = load_preferences(config.cache_dir)
+    logger.info("Song preferences: loaded %d preference(s)", len(song_preferences))
+
+    persisted_heading = read_persisted_heading(config.cache_dir)
+    pending_direction_targets: list[dict[str, str]] = []
+    if persisted_heading is not None:
+        existing_heading_tracks = []
+        try:
+            if persisted_heading.targets:
+                heading_targets = target_dicts_to_targets(persisted_heading.targets)
+                if not heading_targets:
+                    raise ValueError("persisted direction has no valid targets")
+                pending_direction_targets = [target.to_dict() for target in heading_targets]
+                existing_heading_tracks = find_existing_direction_tracks(tracks, heading_targets)
+                heading_tracks = []
+            else:
+                heading_tracks, _heading_source = load_explicit_source(
+                    config,
+                    PlaylistSource(kind="url", url=persisted_heading.seed),
+                )
+            heading_tracks = filter_blocklisted(heading_tracks, blocklist)
+        except Exception as exc:
+            logger.warning("Persisted heading restore failed; returning to auto: %s", exc)
+            _clear_persisted_heading(config)
+            persisted_heading = None
+        else:
+            if not heading_tracks and not existing_heading_tracks and not pending_direction_targets:
+                logger.warning("Persisted heading restored no playable tracks; returning to auto")
+                _clear_persisted_heading(config)
+                persisted_heading = None
+            else:
+                existing_by_key = {normalized_track_key(track): track for track in tracks}
+                blended_heading_tracks = []
+                retagged_existing = 0
+                for track in existing_heading_tracks:
+                    if track.heading_id != persisted_heading.id:
+                        track.heading_id = persisted_heading.id
+                        retagged_existing += 1
+                    existing_by_key[normalized_track_key(track)] = track
+                for track in heading_tracks:
+                    key = normalized_track_key(track)
+                    existing_track = existing_by_key.get(key)
+                    if existing_track is not None:
+                        if existing_track.heading_id != persisted_heading.id:
+                            existing_track.heading_id = persisted_heading.id
+                            retagged_existing += 1
+                        continue
+                    track.heading_id = persisted_heading.id
+                    existing_by_key[key] = track
+                    blended_heading_tracks.append(track)
+                restored_count = retagged_existing + len(blended_heading_tracks)
+                if not restored_count and not pending_direction_targets:
+                    logger.warning("Persisted heading restored no matching tracks; returning to auto")
+                    _clear_persisted_heading(config)
+                    persisted_heading = None
+                else:
+                    if persisted_heading.selection_budget <= 0:
+                        persisted_heading.selection_budget = _heading_selection_budget(
+                            restored_count or len(pending_direction_targets)
+                        )
+                    if restored_count:
+                        persisted_heading.phase = "steering"
+                        if persisted_heading.first_found_at <= 0:
+                            persisted_heading.first_found_at = time.time()
+                    else:
+                        persisted_heading.phase = "hunting"
+                    tracks = tracks + blended_heading_tracks
+                    logger.info(
+                        "Restored heading %s with %d fetched track(s), %d blended, %d retagged",
+                        persisted_heading.label,
+                        len(heading_tracks),
+                        len(blended_heading_tracks),
+                        retagged_existing,
+                    )
+    logger.info("Loaded %d tracks", len(tracks))
+
+    state = StationState(
+        playlist=tracks,
+        playlist_source=playlist_source,
+        startup_source_error=startup_source_error,
+        heading=persisted_heading,
+        heading_announced_id=persisted_heading.id
+        if persisted_heading is not None and persisted_heading.announced
+        else "",
+        blocklist=blocklist,
+        song_preferences=song_preferences,
+        persona_store=persona_store,
+        evening_ledger=evening_ledger,
+        moment_store=moment_store,
+        verbal_gag_ledger=verbal_gag_ledger,
+        release_campaign=release_campaign,
+        home_context_director=HomeContextDirector(),
+        home_authorization=home_authorization,
+        home_entity_ids_observer=_observe_home_entity_ids if home_authorization.allows_household_moments else None,
+        session_stopped=_session_stopped,
+        chaos_mode_active=_read_persisted_chaos_mode(config),
+        immediate_audio_index=_build_immediate_audio_index(
+            config.cache_dir,
+            bitrate_kbps=config.audio.bitrate,
+            allow_external_media=_external_media_enabled,
+        ),
+    )
+    queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
+
+    # Ring buffer for clip sharing ("share WTF moment"). Sized to hold the longest
+    # shareable ad/banter segment (CLIP_MAX_SEGMENT_SECONDS) so a full spot can be
+    # captured whole; music clips still only read the trailing 30s. Its capacity
+    # follows the bounded source-packet size used by the playback loop. The
+    # max(240, …) floor keeps a usable buffer when bitrate is missing or malformed.
+    from collections import deque
+
+    try:
+        _bytes_per_sec = int(config.audio.bitrate) * 1000 // 8
+        _clip_chunk_bytes = _stream_chunk_size(_bytes_per_sec)
+        _clip_maxlen = max(240, math.ceil(_bytes_per_sec * CLIP_MAX_SEGMENT_SECONDS / _clip_chunk_bytes))
+    except (TypeError, ValueError, AttributeError):
+        _clip_maxlen = 240
+    app.state.clip_ring_buffer: deque[bytes] = deque(maxlen=_clip_maxlen)
+    app.state.last_shareworthy_clip = None
+    app.state.last_shareworthy_starter = None
+
+    # Set app.state for streamer access
+    app.state.queue = queue
+    app.state.skip_event = asyncio.Event()
+    app.state.source_switch_lock = asyncio.Lock()
+    app.state.csrf_token = secrets.token_urlsafe(32)
+    app.state.stream_hub = LiveStreamHub()
+    app.state.stream_hub.bind_state(state)
+    app.state.station_state = state
+    app.state.release_campaign = release_campaign
+    app.state.config = config
+    app.state.start_time = time.time()
+    app.state.first_listen_store = FirstListenReceiptStore(config.cache_dir)
+    app.state.first_listen_receipt = None
+    app.state.first_listen_receipt_load_status = FirstListenReceiptLoadStatus.PENDING
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.UNKNOWN)
+    app.state.first_listen_bootstrap_wired = False
+    # Audio-only cold-install hint. Unlike Home-context authorization this does
+    # not widen access: it lets /stream select the packaged First Listen show
+    # before the asynchronous durable-origin migration has had a chance to run.
+    app.state.first_listen_cold_install = not first_listen_origin_capture.database_preexisted
+    app.state.home_context_choice_explicit = home_context_explicit_choice is not None
+    app.state.home_context_choice_lock = asyncio.Lock()
+    jamendo_provider = JamendoStreamProvider(config.tmp_dir, lambda: state.source_revision)
+    app.state.jamendo_provider = jamendo_provider
+
+    def _persist_heading_update(heading) -> None:
+        async def _write_heading() -> None:
+            # Serialize against clear_heading/source switches and re-check identity
+            # under the lock: after_music fires this off the hot path, so without
+            # the lock a write could land AFTER a "Back to auto" deleted heading.json
+            # and resurrect the just-cleared course on the next restart.
+            try:
+                async with app.state.source_switch_lock:
+                    current = state.heading
+                    if current is None or current.id != heading.id:
+                        return
+                    await asyncio.to_thread(write_persisted_heading, config.cache_dir, current)
+            except Exception:
+                logger.warning("Failed to persist heading update", exc_info=True)
+
+        task = asyncio.create_task(_write_heading())
+        _register_background_task(app.state, task)
+
+    state.heading_persist_callback = _persist_heading_update
+
+    # Provenance ledger (Show Memory). Start BEFORE producer/playback so the
+    # earliest segments are captured, and stop AFTER them on shutdown so final
+    # rows survive. Hung off state so all three capture tiers reach it
+    # (_generate_json_response, producer, on_stream_segment) without app access.
+    from mammamiradio.core.ledger import ProvenanceLedger
+
+    ledger = ProvenanceLedger(
+        config.ledger_dir,
+        enabled=config.ledger_enabled,
+        retention_days=config.ledger_retention_days,
+        queue_max=config.ledger_queue_max,
+    )
+    ledger.start()
+    app.state.ledger = ledger
+    state.ledger = ledger
+
+    try:
+        _admit_restart_handoff(queue, state, config)
+    except Exception:
+        # Best-effort cold-open bridge — a corrupt manifest or a TOCTOU race
+        # reading a spooled file must never abort startup (INSTANT AUDIO).
+        logger.warning("Restart handoff admission failed; continuing without it", exc_info=True)
+
+    # Pre-produce music segments in the background so app startup is instant.
+    # If a listener connects before prewarm finishes, the producer's idle-resume
+    # logic queues a canned clip as an immediate fallback.
+    # Keep prewarm capped at 2 across environments to avoid ffmpeg pileups on
+    # constrained addon hardware while still buffering enough for smooth start.
+    async def _prewarm_multiple():
+        total = 2
+        for _ in range(total):
+            await prewarm_first_segment(queue, state, config)
+
+    _prewarm_task = asyncio.create_task(_prewarm_multiple())
+
+    _playback_task = asyncio.create_task(run_playback_loop(app))
+    _producer_task = asyncio.create_task(
+        run_producer(
+            queue,
+            state,
+            config,
+            skip_event=app.state.skip_event,
+            jamendo_provider=jamendo_provider,
+        )
+    )
+    # Discovery/preparation must never delay listener-ready startup. The
+    # provider itself remains inert unless the current acknowledgement and
+    # client ID are both present.
+    _playlist_config = config.playlist
+
+    def _jamendo_text(name: str, default: str = "") -> str:
+        value = getattr(_playlist_config, name, default)
+        return value if isinstance(value, str) else default
+
+    _jamendo_limit = getattr(_playlist_config, "jamendo_limit", 20)
+    if isinstance(_jamendo_limit, bool) or not isinstance(_jamendo_limit, int):
+        _jamendo_limit = 20
+    app.state.jamendo_start_task = asyncio.create_task(
+        jamendo_provider.start(
+            enabled=getattr(_playlist_config, "jamendo_enabled", False) is True,
+            client_id=_jamendo_text("jamendo_client_id"),
+            noncommercial_acknowledged=(getattr(_playlist_config, "jamendo_noncommercial_acknowledged", False) is True),
+            tags=_jamendo_text("jamendo_tags", "pop"),
+            country=_jamendo_text("jamendo_country"),
+            order=_jamendo_text("jamendo_order", "popularity_week"),
+            limit=_jamendo_limit,
+        ),
+        name="jamendo-transient-start",
+    )
+    app.state.prewarm_task = _prewarm_task
+    app.state.playback_task = _playback_task
+    app.state.producer_task = _producer_task
+    app.state.home_context_off_ledger_persist_task = None
+
+    if explicit_home_context_off_purge_pending:
+
+        async def _persist_explicit_home_context_off_ledger() -> None:
+            """Durably finish an explicit privacy purge outside first audio."""
+            worker = asyncio.create_task(asyncio.to_thread(evening_ledger.save_if_dirty, config.cache_dir))
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # The filesystem worker cannot be cancelled. Drain it before
+                # shutdown releases app-owned state, then preserve cancellation.
+                try:
+                    await worker
+                except Exception:
+                    logger.warning("Explicit Home-context ledger purge could not be saved")
+                raise
+            except Exception:
+                # Runtime privacy already fails closed in memory. Persistence
+                # remains best-effort and can be retried by a later off boot.
+                logger.warning("Explicit Home-context ledger purge could not be saved")
+
+        home_context_off_ledger_persist_task = asyncio.create_task(
+            _persist_explicit_home_context_off_ledger(),
+            name="home-context-off-ledger-persist",
+        )
+        app.state.home_context_off_ledger_persist_task = home_context_off_ledger_persist_task
+        _register_background_task(app.state, home_context_off_ledger_persist_task)
+
+    async def _resolve_first_listen_install_origin() -> None:
+        """Finish feature-era classification without joining the audio critical path."""
+        try:
+            origin = await migrate_first_listen_install_origin(
+                first_listen_origin_capture,
+                first_listen_sentinel_state,
+                config.cache_dir / "state",
+            )
+        except Exception:
+            logger.warning("First-listen install-origin migration failed; preserving privacy-safe unknown state")
+            return
+        if (
+            origin.status is FirstListenInstallOriginStatus.EXISTING
+            and home_authorization.mode is not HomeAuthorizationMode.LEGACY
+            and first_listen_origin_capture.database_bare
+        ):
+            # A partial cold boot can leave behind a new SQLite file before the
+            # feature witnesses are committed. That artifact's signature is a
+            # bare (or unreadable) preexisting file; a populated database is a
+            # real prior install even when its R0 authorization is narrow, so
+            # post-R0 upgraders keep their proven EXISTING classification.
+            logger.error("First-listen witnesses claim EXISTING over a bare database; preserving unknown state")
+            origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.UNKNOWN)
+        app.state.first_listen_install_origin = origin
+        # Serialize compatibility restoration with the live privacy choice.
+        # Classification itself stays outside the lock because it performs
+        # durable I/O; once classified, the lock makes the explicit-choice
+        # latch and runtime enablement one ordered decision.
+        async with app.state.home_context_choice_lock:
+            if (
+                home_context_explicit_choice is None
+                and not bool(app.state.home_context_choice_explicit)
+                and origin.status is FirstListenInstallOriginStatus.EXISTING
+            ):
+                # Compatibility is reversible and starts only after both audio
+                # workers have been scheduled.  A coordinator already created
+                # by the producer is explicitly re-enabled; otherwise it will
+                # observe the updated config when it initializes.
+                config.homeassistant.context_enabled = True
+                coordinator = getattr(state, "ha_context_refresh_mailbox", None)
+                if coordinator is not None and hasattr(coordinator, "enable"):
+                    coordinator.enable()
+                logger.info("Restored omitted Home context for a proven pre-feature install")
+
+    first_listen_origin_task = asyncio.create_task(
+        _resolve_first_listen_install_origin(),
+        name="first-listen-install-origin",
+    )
+    app.state.first_listen_origin_task = first_listen_origin_task
+    _register_background_task(app.state, first_listen_origin_task)
+
+    async def _load_first_listen_receipt() -> None:
+        try:
+            result = await app.state.first_listen_store.load_result()
+        except Exception:
+            # Receipt state is UI progress only.  Corruption or local I/O must
+            # never affect station startup, playback, or privacy authority.
+            app.state.first_listen_receipt_load_status = FirstListenReceiptLoadStatus.UNAVAILABLE
+            logger.warning("First-listen receipt is unavailable; showing setup as incomplete")
+            return
+        # Publish the receipt before its terminal status so synchronous stream
+        # eligibility can never observe PRESENT without the matching object.
+        app.state.first_listen_receipt = result.receipt
+        app.state.first_listen_receipt_load_status = result.status
+
+    first_listen_receipt_task = asyncio.create_task(
+        _load_first_listen_receipt(),
+        name="first-listen-receipt-load",
+    )
+    app.state.first_listen_receipt_task = first_listen_receipt_task
+    _register_background_task(app.state, first_listen_receipt_task)
+    # Only now can request handlers distinguish a deliberately wired pair from
+    # an empty task tuple observed during partial app construction.
+    app.state.first_listen_bootstrap_wired = True
+    if state.heading is not None and pending_direction_targets:
+        restore_task = asyncio.create_task(
+            _restore_direction_targets_background(
+                app.state, state.heading.id, pending_direction_targets, state.source_revision
+            )
+        )
+        _register_background_task(app.state, restore_task)
+    # Validate configured AI keys in the background so a bogus persisted key
+    # surfaces in the admin BEFORE any banter fails. Fire-and-forget —
+    # never awaited, so it can't delay first audio (Leadership Principle #2).
+    if config.anthropic_api_key or config.openai_api_key:
+        from mammamiradio.web.streamer import _run_provider_verdict
+
+        app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(app.state))
+    # Startup diagnostics — first 5 seconds of logs must be actionable for debugging
+    _config_file = Path("radio.toml").resolve()
+    _audio_src = {"charts": "external-media", "starter": "starter", "local": "local"}.get(
+        (playlist_source.kind if playlist_source else ""), "unknown"
+    )
+    logger.info("Startup diagnostics:")
+    logger.info("  config_file=%s  cache_dir=%s", _config_file, config.cache_dir)
+    logger.info("  audio_source=%s  tracks=%d", _audio_src, len(tracks))
+    logger.info(
+        "  keys: anthropic=%s  openai=%s  ha_token=%s",
+        "set" if os.getenv("ANTHROPIC_API_KEY") else "missing",
+        "set" if os.getenv("OPENAI_API_KEY") else "missing",
+        "set" if os.getenv("HA_TOKEN") else "missing",
+    )
+    logger.info(
+        "  deps: ffmpeg=%s  ytdlp=%s (allowed=%s)",
+        "found" if _ffmpeg_found else "MISSING",
+        "found" if _ytdlp_found else "missing",
+        "yes" if _external_media_enabled else "no",
+    )
+    logger.info(
+        "Producer started. Stream at http://%s:%d/stream",
+        config.bind_host,
+        config.port,
+    )
+
+
+async def shutdown():
+    """Stop background workers and close shared streaming resources."""
+    tasks_to_cancel = []
+    if _prewarm_task:
+        _prewarm_task.cancel()
+        tasks_to_cancel.append(_prewarm_task)
+    if _producer_task:
+        _producer_task.cancel()
+        tasks_to_cancel.append(_producer_task)
+    if _playback_task:
+        _playback_task.cancel()
+        tasks_to_cancel.append(_playback_task)
+    jamendo_start_task = getattr(app.state, "jamendo_start_task", None)
+    if jamendo_start_task:
+        jamendo_start_task.cancel()
+        tasks_to_cancel.append(jamendo_start_task)
+    # The provider-verdict probe is created outside the producer/playback set
+    # (startup + credential saves); cancel it so it can't mutate station_state
+    # after teardown begins — same write-after-shutdown race as the downloads.
+    verdict_task = getattr(app.state, "provider_verdict_task", None)
+    if verdict_task:
+        verdict_task.cancel()
+        tasks_to_cancel.append(verdict_task)
+    listener_session_tasks = getattr(getattr(app.state, "station_state", None), "listener_session_tasks", None)
+    if listener_session_tasks:
+        for _session_task in list(listener_session_tasks):
+            _session_task.cancel()
+            tasks_to_cancel.append(_session_task)
+    # Fire-and-forget background tasks (queue-from-search / listener song
+    # downloads). Cancel them too so an in-flight yt-dlp download can't write to
+    # app.state after teardown begins.
+    background_tasks = getattr(app.state, "background_tasks", None)
+    if background_tasks:
+        for _bg in list(background_tasks):
+            _bg.cancel()
+            tasks_to_cancel.append(_bg)
+    # Same write-after-shutdown race as the downloads above: an in-flight
+    # restart-handoff spool write does file I/O via asyncio.to_thread and must
+    # not still be running once teardown proceeds.
+    restart_handoff_tasks = getattr(getattr(app.state, "station_state", None), "_restart_handoff_tasks", None)
+    if restart_handoff_tasks:
+        for _rh in list(restart_handoff_tasks):
+            _rh.cancel()
+            tasks_to_cancel.append(_rh)
+    if tasks_to_cancel:
+        await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+    if hasattr(app.state, "jamendo_start_task"):
+        app.state.jamendo_start_task = None
+    jamendo_provider = getattr(app.state, "jamendo_provider", None)
+    if jamendo_provider is not None:
+        try:
+            await jamendo_provider.stop()
+        except Exception:
+            logger.warning("Failed to stop transient Jamendo provider cleanly", exc_info=True)
+    if hasattr(app.state, "producer_task"):
+        app.state.producer_task = None
+    if hasattr(app.state, "prewarm_task"):
+        app.state.prewarm_task = None
+    if hasattr(app.state, "playback_task"):
+        app.state.playback_task = None
+    if hasattr(app.state, "stream_hub"):
+        app.state.stream_hub.close()
+    # Stop the ledger AFTER producer/playback are cancelled so final rows drain.
+    if getattr(app.state, "ledger", None) is not None:
+        app.state.ledger.stop()
+        app.state.ledger = None
+    if getattr(app.state, "release_campaign", None) is not None:
+        try:
+            await asyncio.to_thread(app.state.release_campaign.save_if_dirty)
+        except Exception:
+            logger.warning("Failed to flush release campaign ledger during shutdown", exc_info=True)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    config = load_config()
+    uvicorn.run(
+        "mammamiradio.main:app",
+        host=config.bind_host,
+        port=config.port,
+    )

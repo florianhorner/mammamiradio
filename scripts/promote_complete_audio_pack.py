@@ -185,6 +185,10 @@ def _tree_files(root: Path, *, label: str) -> dict[str, str]:
         for entry in entries:
             relative_path = relative_parent / entry.name
             relative = relative_path.as_posix()
+            # The generator snapshot is not runtime payload; the validator
+            # checks it against the manifest's generator pins instead.
+            if _validator.is_generator_snapshot_path(relative):
+                continue
             try:
                 if entry.is_symlink():
                     raise PromotionError(f"{label} contains a symlink: {relative}")
@@ -425,7 +429,11 @@ def _assert_existing_target_clean(target: Path) -> dict[str, str]:
 
 
 def _copy_projection(projection: RuntimeProjection, stage: Path) -> None:
-    for relative in projection.expected_files:
+    # The snapshot travels with the pack so the installed copy stays
+    # verifiable; staged validation rejects any file that misses its pin.
+    candidate_manifest = _read_json(projection.candidate_pack / "manifest.json", label="Runtime manifest")
+    snapshot_files = _validator.generator_snapshot_paths(candidate_manifest)
+    for relative in (*projection.expected_files, *snapshot_files):
         source = _regular_file(projection.candidate_pack, relative, label="candidate runtime file")
         destination = stage.joinpath(*PurePosixPath(relative).parts)
         destination.parent.mkdir(parents=True, exist_ok=True)

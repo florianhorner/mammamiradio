@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -158,7 +161,34 @@ def test_runtime_manifest_inventory_excludes_external_receipt() -> None:
     pack_entries = tuple(ASSETS_DIR.rglob("*"))
     assert not [path for path in pack_entries if path.is_symlink()]
     actual_files = {path.relative_to(ASSETS_DIR).as_posix() for path in pack_entries if path.is_file()}
-    assert actual_files == expected_paths | {"manifest.json"}
+    snapshot_paths = set(validate_audio_asset_pack.generator_snapshot_paths(manifest))
+    assert len(snapshot_paths) == 22
+    assert not snapshot_paths & set(declared_paths)
+    assert actual_files == expected_paths | snapshot_paths | {"manifest.json"}
+
+
+def test_generator_snapshot_holds_the_exact_pinned_bytes() -> None:
+    """Every source shares one generator record; its pins are the retained files."""
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    generators = [source["generator"] for source in manifest["sources"]]
+    generator = generators[0]
+
+    assert all(candidate == generator for candidate in generators)
+    assert generator["sha256"] == next(
+        dependency["sha256"] for dependency in generator["dependencies"] if dependency["path"] == generator["path"]
+    )
+    for dependency in generator["dependencies"]:
+        retained = ASSETS_DIR / "provenance" / "generator-src" / dependency["path"]
+        assert hashlib.sha256(retained.read_bytes()).hexdigest() == dependency["sha256"], dependency["path"]
+
+
+def test_attribution_links_resolve_inside_the_pack() -> None:
+    attribution = (ASSETS_DIR / "ATTRIBUTION.md").read_text(encoding="utf-8")
+    targets = set(re.findall(r"\]\((provenance/[^)]+)\)", attribution))
+
+    assert len(targets) == 22
+    assert all((ASSETS_DIR / target).is_file() for target in targets)
+    assert "github.com" not in attribution
 
 
 def test_runtime_manifest_declares_identity_and_bumper_roles() -> None:
@@ -179,6 +209,84 @@ def test_public_pack_provenance_and_attribution_ledger_are_valid() -> None:
     report = validate_audio_asset_pack.validate_audio_asset_pack(ASSETS_DIR)
     validate_audio_asset_pack.check_attribution(report)
     assert report.recipes == len(OFFICIAL_SONIC_RECIPE_IDS)
+
+
+def _git(*args: str, cwd: Path) -> str:
+    completed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Pack Test",
+            "-c",
+            "user.email=pack-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.autocrlf=false",
+            *args,
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+def test_public_pack_validates_in_a_shallow_clone_without_tags(tmp_path: Path) -> None:
+    """The pack proves its own provenance: no tag, no history, no pinned commit.
+
+    The working tree is committed into a scratch repository and cloned at
+    depth 1 without tags, so the generator revision recorded in the manifest
+    cannot exist in the clone. Validation there may use pack files only.
+    """
+    listed = _git(
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        "mammamiradio",
+        "scripts/__init__.py",
+        "scripts/validate_audio_asset_pack.py",
+        cwd=REPO_ROOT,
+    )
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    for relative in filter(None, listed.split("\0")):
+        source = REPO_ROOT / relative
+        if not source.is_file():
+            continue
+        destination = origin / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    _git("init", "--quiet", cwd=origin)
+    _git("commit", "--quiet", "--allow-empty", "-m", "history the clone must not need", cwd=origin)
+    _git("add", "--all", cwd=origin)
+    _git("commit", "--quiet", "-m", "pack", cwd=origin)
+
+    clone = tmp_path / "clone"
+    _git("clone", "--quiet", "--depth", "1", "--no-tags", origin.as_uri(), str(clone), cwd=tmp_path)
+    manifest = json.loads((clone / "mammamiradio/assets/imaging/manifest.json").read_text(encoding="utf-8"))
+    revision = manifest["sources"][0]["generator"]["revision"]
+    assert _git("rev-list", "--count", "HEAD", cwd=clone).strip() == "1"
+    assert _git("tag", "--list", cwd=clone) == ""
+    missing = subprocess.run(["git", "cat-file", "-e", revision], cwd=clone, capture_output=True, check=False)
+    assert missing.returncode != 0
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/validate_audio_asset_pack.py"],
+        cwd=clone,
+        env={**os.environ, "PYTHONPATH": str(clone)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Audio asset pack OK: 47 sources, 47 assets, 9 recipes" in completed.stdout
 
 
 def test_default_imaging_library_uses_the_pack_for_all_audible_default_surfaces(tmp_path: Path) -> None:

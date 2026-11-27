@@ -325,6 +325,14 @@ For post-install listening QA, validate the runtime pack and build a local board
 .venv/bin/python scripts/audition_sonic_brand.py
 ```
 
+The validator works from the pack alone. It checks the generator inputs kept in
+`mammamiradio/assets/imaging/provenance/generator-src/` against the hashes in
+`manifest.json`, so it passes in a shallow clone with no tags. If it reports
+`cannot verify generator snapshot` or `generator snapshot ... SHA-256 differs`,
+a file in that directory is missing or was edited: restore it with
+`git checkout -- mammamiradio/assets/imaging/provenance/generator-src`. Never
+edit those copies by hand; building a new pack rewrites them.
+
 It writes a timestamped review directory under `tmp/sonic-brand-auditions/`.
 The directory contains an `index.html` listening page and a QA manifest. The
 board covers the Neon Relay station ID and sweeper, the time check, both

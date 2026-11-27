@@ -1301,6 +1301,19 @@ else
     fi
 fi
 
+# ---- Imaging-pack generator inputs stay out of images ----
+# The retained generator inputs prove the pack's provenance in the repository.
+# They are not runtime payload, so both build contexts must ignore them; the
+# installed-pack check after a --build run then confirms the image has none.
+GENERATOR_SNAPSHOT_IGNORE="mammamiradio/assets/imaging/provenance/generator-src/"
+for ignore_file in .dockerignore ha-addon/mammamiradio/.dockerignore; do
+    if grep -qxF "$GENERATOR_SNAPSHOT_IGNORE" "$ignore_file" 2>/dev/null; then
+        pass "$ignore_file keeps imaging generator inputs out of the image"
+    else
+        fail "$ignore_file must list $GENERATOR_SNAPSHOT_IGNORE"
+    fi
+done
+
 # ---- Optional: Docker build ----
 if [ "${1:-}" = "--build" ]; then
     echo ""
@@ -1310,6 +1323,8 @@ if [ "${1:-}" = "--build" ]; then
     TMPCTX=$(mktemp -d)
     trap 'rm -rf "$TMPCTX"' EXIT
     cp -r ha-addon/mammamiradio/* "$TMPCTX/"
+    # The glob skips dotfiles; the ignore file is part of the build contract.
+    cp ha-addon/mammamiradio/.dockerignore "$TMPCTX/"
     cp -r mammamiradio/ "$TMPCTX/mammamiradio/"
     cp pyproject.toml "$TMPCTX/"
     cp requirements.txt "$TMPCTX/"

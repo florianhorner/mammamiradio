@@ -8,6 +8,8 @@ Dates for published releases use Europe/Berlin.
 
 ## [Unreleased]
 
+- **The station-sound pack now proves its own origin.** The exact scripts and settings that generated the Modern Night Drive sounds are kept beside the pack in `mammamiradio/assets/imaging/provenance/generator-src/`, and the pack check verifies them by hash. The tests pass in a fresh or shallow clone with no extra Git history or tags. `ATTRIBUTION.md` links to those copies, and they stay out of the Docker and add-on images.
+
 - **Ready-to-play songs no longer need their original download.** When a song’s original download has been cleared, the station can reuse its verified prepared copy instead of trying to fetch it again. Source permissions and audio checks still apply.
 
 - **Hosts and voices talk to Anthropic and OpenAI through the current SDKs.** The station now runs the Anthropic 1.x and OpenAI 3.x Python SDKs, which bring their own HTTP transport (httpx2). Request logging from that transport is quietened the same way as before, so nothing new appears in the logs at the default level.

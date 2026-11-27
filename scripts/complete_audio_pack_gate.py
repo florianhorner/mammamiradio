@@ -1018,6 +1018,32 @@ def _pinned_generator_evidence() -> dict[str, object]:
     }
 
 
+def _write_generator_snapshot(pack_dir: Path) -> None:
+    """Retain the exact pinned generator inputs inside the pack.
+
+    The validator proves provenance by hashing these files, so a pack stays
+    verifiable wherever it is copied, with no Git history. Any previous
+    snapshot is replaced so stale inputs cannot linger beside new pins.
+    """
+    generator = _pinned_generator_evidence()
+    revision = str(generator["revision"])
+    dependencies = generator["dependencies"]
+    assert isinstance(dependencies, list)
+    snapshot_root = pack_dir.joinpath(*PurePosixPath(_validator.GENERATOR_SNAPSHOT_DIR).parts)
+    if snapshot_root.is_symlink():
+        raise ValueError("Complete-pack generator snapshot directory must not be a symlink")
+    if snapshot_root.exists():
+        shutil.rmtree(snapshot_root)
+    for record in dependencies:
+        relative_path = str(record["path"])
+        committed_bytes = _git_blob(revision, relative_path)
+        if hashlib.sha256(committed_bytes).hexdigest() != record["sha256"]:
+            raise ValueError(f"Complete-pack generator dependency changed while it was retained: {relative_path}")
+        destination = snapshot_root.joinpath(*PurePosixPath(relative_path).parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(committed_bytes)
+
+
 def _source_record(
     source_id: str,
     title: str,
@@ -1580,6 +1606,14 @@ exact file inventory. `ATTRIBUTION.md` is generated from that manifest. The
 separate candidate board and its digest-bound listening receipt authorize this
 exact immutable runtime projection before promotion.
 
+`provenance/generator-src/` keeps a byte-exact copy of every generator input
+the manifest pins, stored at its repository path. Validation hashes those
+copies, so the pack proves which bytes generated it in any checkout, with no
+Git history or tags. The Git revision recorded in the manifest is a reference
+only. The directory is provenance evidence, not runtime payload: it sits
+outside the runtime file inventory and is left out of the Docker and add-on
+images.
+
 Validate the installed pack offline with:
 
 ```bash
@@ -1616,7 +1650,7 @@ def _runtime_inventory(pack_dir: Path) -> dict[str, object]:
             continue
         if not path.is_file():
             raise ValueError(f"Runtime pack inventory cannot contain a special entry: {relative}")
-        if relative == "manifest.json":
+        if relative == "manifest.json" or _validator.is_generator_snapshot_path(relative):
             continue
         pure = PurePosixPath(relative)
         if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != relative:
@@ -2041,6 +2075,7 @@ def _render_complete_pack_in_place(
     provisional_runtime_manifest = dict(runtime_manifest)
     provisional_runtime_manifest.pop("inventory")
     _write_json(runtime_manifest_path, provisional_runtime_manifest)
+    _write_generator_snapshot(pack_dir)
     report = _validator.validate_audio_asset_pack(pack_dir, manifest_path=runtime_manifest_path)
     _validator.write_attribution(report)
     _write_runtime_readme(pack_dir)
@@ -2968,6 +3003,7 @@ def validate_complete_audio_pack(manifest_path: Path) -> tuple[dict[str, Any], t
         ".ready",
         *(str(item["path"]) for item in expected_board_files),
         *(f"pack/{asset['path']}" for asset in raw_assets),
+        *(f"pack/{path}" for path in _validator.generator_snapshot_paths(runtime_manifest)),
         *(str(preview["path"]) for preview in raw_previews),
     }
     for source in raw_sources:
