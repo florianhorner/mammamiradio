@@ -64,7 +64,7 @@ def _generator_evidence(
     dependency_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     hashes = dependency_hashes or {
-        path: hashlib.sha256(f"fixture dependency::{path}".encode()).hexdigest() for path in gate.GENERATOR_DEPENDENCIES
+        path: hashlib.sha256(_fixture_dependency_bytes(path)).hexdigest() for path in gate.GENERATOR_DEPENDENCIES
     }
     dependencies = [
         {
@@ -89,6 +89,15 @@ def _generator_evidence(
             "ffmpeg": "ffmpeg fixture",
         },
     }
+
+
+def _fixture_dependency_bytes(path: str) -> bytes:
+    return f"fixture dependency::{path}".encode()
+
+
+def _write_fixture_generator_snapshot(pack_dir: Path) -> None:
+    for path in gate.GENERATOR_DEPENDENCIES:
+        _write(pack_dir / gate._validator.generator_snapshot_path(path), _fixture_dependency_bytes(path))
 
 
 def _runtime_audio_toml() -> bytes:
@@ -621,6 +630,7 @@ def candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Candidate:
     )
     _write(pack_dir / "ATTRIBUTION.md", b"fixture attribution\n")
     gate._write_runtime_readme(pack_dir)
+    _write_fixture_generator_snapshot(pack_dir)
     runtime_manifest_path = pack_dir / "manifest.json"
     gate._write_json(runtime_manifest_path, runtime_manifest)
     runtime_manifest["inventory"] = gate._runtime_inventory(pack_dir)
@@ -1962,3 +1972,70 @@ def test_render_validation_failure_removes_staging_directory(tmp_path: Path, mon
 
     assert not output_root.exists()
     assert not list(tmp_path.glob(".rendered-candidate.*.staging"))
+
+
+def test_generator_snapshot_is_written_from_pinned_blobs_and_replaces_the_previous_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_dir = tmp_path / "pack"
+    generator = _generator_evidence()
+    monkeypatch.setattr(gate, "_pinned_generator_evidence", lambda: copy.deepcopy(generator))
+    reads: list[tuple[str, str]] = []
+
+    def git_blob(revision: str, path: str) -> bytes:
+        reads.append((revision, path))
+        return _fixture_dependency_bytes(path)
+
+    monkeypatch.setattr(gate, "_git_blob", git_blob)
+    stale = _write(pack_dir / gate._validator.generator_snapshot_path("scripts/retired_input.py"), b"stale")
+    _write(pack_dir / gate._validator.generator_snapshot_path("radio.toml"), b"stale bytes for a still-pinned path")
+
+    gate._write_generator_snapshot(pack_dir)
+
+    snapshot_root = pack_dir / "provenance" / "generator-src"
+    written = {
+        path.relative_to(snapshot_root).as_posix(): path.read_bytes()
+        for path in snapshot_root.rglob("*")
+        if path.is_file()
+    }
+    assert not stale.exists()
+    assert written == {f"{path}.txt": _fixture_dependency_bytes(path) for path in gate.GENERATOR_DEPENDENCIES}
+    assert reads == [("a" * 40, path) for path in gate.GENERATOR_DEPENDENCIES]
+
+
+def test_generator_snapshot_refuses_bytes_that_miss_their_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    generator = _generator_evidence()
+    monkeypatch.setattr(gate, "_pinned_generator_evidence", lambda: copy.deepcopy(generator))
+    monkeypatch.setattr(gate, "_git_blob", lambda _revision, _path: b"bytes nobody pinned")
+
+    with pytest.raises(ValueError, match="generator dependency changed while it was retained"):
+        gate._write_generator_snapshot(tmp_path / "pack")
+
+
+def test_candidate_carries_the_generator_snapshot_outside_the_runtime_inventory(candidate: Candidate) -> None:
+    inventory_paths = [item["path"] for item in candidate.runtime_manifest["inventory"]["files"]]
+    snapshot_paths = gate._validator.generator_snapshot_paths(candidate.runtime_manifest)
+
+    assert len(snapshot_paths) == len(gate.GENERATOR_DEPENDENCIES)
+    assert all((candidate.pack_dir / path).is_file() for path in snapshot_paths)
+    assert not [path for path in inventory_paths if gate._validator.is_generator_snapshot_path(path)]
+    gate.validate_complete_audio_pack(candidate.manifest_path)
+
+
+def test_candidate_missing_a_generator_snapshot_file_is_rejected(candidate: Candidate) -> None:
+    (candidate.pack_dir / gate._validator.generator_snapshot_path("radio.toml")).unlink()
+
+    expected = r"board inventory differs \(missing=\['pack/provenance/generator-src/radio.toml.txt'\]"
+    with pytest.raises(ValueError, match=expected):
+        gate.validate_complete_audio_pack(candidate.manifest_path)
+
+
+def test_candidate_with_an_unpinned_generator_snapshot_file_is_rejected(candidate: Candidate) -> None:
+    _write(candidate.pack_dir / gate._validator.generator_snapshot_path("scripts/unpinned.py"), b"extra")
+
+    expected = (
+        r"board inventory differs \(missing=\[\], extra=\['pack/provenance/generator-src/scripts/unpinned.py.txt'\]"
+    )
+    with pytest.raises(ValueError, match=expected):
+        gate.validate_complete_audio_pack(candidate.manifest_path)

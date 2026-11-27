@@ -71,7 +71,7 @@ def test_quality_path_gates_expensive_jobs() -> None:
     assert "if: needs.changes.outputs.workflows == 'true'" in _job_block(_workflow_text(), "invariants")
 
 
-def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
+def test_quality_workflow_keeps_full_history_without_needing_it_for_audio_provenance() -> None:
     def checkout_fetch_depth(job_name: str) -> object:
         steps = _workflow()["jobs"][job_name]["steps"]
         checkout = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@"))
@@ -81,7 +81,8 @@ def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
     assert checkout_fetch_depth("media-report") == 0
     assert checkout_fetch_depth("invariants") == 0
     assert checkout_fetch_depth("tests") == 0
-    assert "pinned in the provenance manifest" in tests_block
+    assert "hashes the generator inputs retained in the pack" in tests_block
+    assert "pinned in the provenance manifest" not in _workflow_text()
 
 
 def test_quality_workflow_scopes_write_to_main_ratchet_job() -> None:

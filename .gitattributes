@@ -1,0 +1,3 @@
+# Retained audio-pack generator inputs are verified by SHA-256: never let
+# line-ending conversion rewrite them on checkout.
+mammamiradio/assets/imaging/provenance/generator-src/** -text

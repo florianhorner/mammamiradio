@@ -1,0 +1,2498 @@
+"""Configuration loading for mammamiradio.
+
+This module combines checked-in station settings from ``radio.toml`` with
+environment-sourced secrets and deployment overrides, then validates the
+result before the rest of the app boots.
+"""
+
+from __future__ import annotations
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore[no-redef]
+import ipaddress
+import math
+import os
+import re
+import shlex
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+from dotenv import load_dotenv
+
+# Voice validation reads the catalog leaf directly rather than the aliases
+# re-exported by ``audio.tts``. ``tts`` pulls in openai, edge_tts, and aiohttp,
+# and config sits in the import graph of the spawned HA projection worker
+# (``home/ha_context.py``), which needs none of them. Same values either way.
+from mammamiradio.audio.voice_catalog import EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE
+from mammamiradio.audio.voice_catalog import is_known_azure_voice, is_known_edge_voice
+from mammamiradio.audio.voice_catalog import is_openai_voice as _looks_like_openai_voice
+from mammamiradio.core.models import HostPersonality, PartyMode, PersonalityAxes
+from mammamiradio.hosts.ad_creative import AdBrand, AdCastReport, AdVoice, CampaignSpine, compile_ad_cast
+
+load_dotenv()
+
+_TRUTHY = {"true", "1", "yes"}
+_FALSY = {"false", "0", "no"}
+
+# Bump only when the operator-facing non-commercial acknowledgement changes.
+# A stored acknowledgement from another revision is intentionally inert.
+JAMENDO_ACK_REVISION = "jamendo-api-terms-v1"
+
+# Canonical name of the local guest-host test balloon. Single source of truth —
+# scriptwriter imports this so the roster gate and the prompt logic can never
+# drift on the spelling. Disabled by dropping him from ``config.hosts`` at load
+# (see MAMMAMIRADIO_GUEST_HOST below); every downstream consumer is then clean.
+GUEST_HOST_NAME = "Hans Günther"
+
+_ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+    ("openai_api_key", "OPENAI_API_KEY"),
+    ("azure_speech_key", "AZURE_SPEECH_KEY"),
+    ("azure_speech_region", "AZURE_SPEECH_REGION"),
+    ("elevenlabs_api_key", "ELEVENLABS_API_KEY"),
+)
+_ADDON_PROVIDER_ENV_KEYS = tuple(env_key for _, env_key in _ADDON_PROVIDER_OPTIONS)
+_ADDON_MEDIA_SOURCE_ENV_KEYS = (
+    "JAMENDO_CLIENT_ID",
+    "MAMMAMIRADIO_JAMENDO_ENABLED",
+    "MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED",
+    "MAMMAMIRADIO_JAMENDO_ACK_REVISION",
+)
+_ADDON_SECRET_ENV_KEYS = (*_ADDON_PROVIDER_ENV_KEYS, *_ADDON_MEDIA_SOURCE_ENV_KEYS)
+
+PACING_BOUNDS: dict[str, tuple[int, int]] = {
+    "songs_between_banter": (2, 60),
+    "songs_between_ads": (1, 60),
+    "ad_spots_per_break": (1, 5),
+}
+
+_ELEVENLABS_V2_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
+    "stability": (0.0, 1.0),
+    "similarity_boost": (0.0, 1.0),
+    "style": (0.0, 1.0),
+}
+_ELEVENLABS_V2_BOOL_SETTINGS = frozenset({"use_speaker_boost"})
+_ELEVENLABS_V2_MODEL = "eleven_multilingual_v2"
+_ELEVENLABS_V3_MODEL = "eleven_v3"
+_ELEVENLABS_SUPPORTED_MODELS = frozenset({_ELEVENLABS_V2_MODEL, _ELEVENLABS_V3_MODEL})
+_ELEVENLABS_DELIVERY_PROFILES = frozenset({"none", "marco", "giulia"})
+_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
+    "stability": (0.0, 1.0),
+}
+
+# Canonical user-facing station name — the single source of truth. Every
+# user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
+# fallbacks) references this so the name cannot drift the way "Radio MammaMia",
+# "MammaMia", "Malamie", and lowercase "mammamiradio" once did. Technical
+# identifiers (package name, env vars, entity IDs, slugs) stay "mammamiradio".
+DEFAULT_STATION_NAME = "Mamma Mi Radio"
+_MAX_STATION_NAME_LEN = 80
+
+# Normalization-cache ceiling in MB. A normalized track uses about 5 MB, so the
+# add-on default covers roughly 200 tracks. Bounds keep malformed values within a
+# usable range instead of failing config load.
+DEFAULT_MAX_CACHE_SIZE_MB = 500
+ADDON_MAX_CACHE_SIZE_MB = 1500
+MIN_MAX_CACHE_SIZE_MB = 200
+MAX_MAX_CACHE_SIZE_MB = 8000
+
+_DEFAULT_SONIC_TAGLINE = "Da Windor a Vergen, la voce che non si spegne mai!"
+_DEFAULT_SONIC_GEOGRAPHY = "Windor, Vergen"
+_DEFAULT_SONIC_FULL_IDENT = "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
+_DEFAULT_SONIC_SWEEPERS = (
+    "Mamma Mi Radio.",
+    "Windor, Vergen... e tutto il mondo che ascolta.",
+    "Sei su Mamma Mi Radio.",
+    "La radio che tua nonna non approverebbe.",
+    "Da Windor a Vergen, nessuno è al sicuro.",
+)
+
+
+def coerce_bool(value: object, default: bool = False) -> bool:
+    """Type-safe bool coercion that rejects truthy-string-of-falsy-word.
+
+    `bool("false")` is `True` in Python; that's the bug this guards against.
+    Accepts: real bool, int (0/1), or str matching _TRUTHY/_FALSY (case-insensitive).
+    Anything else (including "false"-as-truthy-string in plain bool() context)
+    falls back to ``default``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value in (0, 1):
+            return bool(value)
+        return default
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUTHY:
+            return True
+        if v in _FALSY:
+            return False
+    return default
+
+
+@dataclass
+class StationSection:
+    """Station identity and internal scriptwriter configuration."""
+
+    name: str = DEFAULT_STATION_NAME
+    language: str = "it"
+    theme: str = ""
+
+
+@dataclass
+class PlaylistSection:
+    """Playlist source selection and ordering preferences."""
+
+    shuffle: bool = True
+    allow_explicit: bool = True
+    repeat_cooldown: int = 5
+    artist_cooldown: int = 3
+    max_artist_per_hour: int = 3
+    jamendo_client_id: str = ""
+    jamendo_enabled: bool = False
+    jamendo_noncommercial_acknowledged: bool = False
+    jamendo_ack_revision: str = ""
+    jamendo_tags: str = "pop"
+    jamendo_country: str = ""
+    jamendo_order: str = ""
+    jamendo_limit: int = 200
+
+
+@dataclass
+class ModerationSection:
+    """Deterministic listener-request moderation knobs."""
+
+    blocked_names: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PacingSection:
+    """Rules that control how often banter and ad breaks occur."""
+
+    songs_between_banter: int = 2
+    songs_between_ads: int = 4
+    ad_spots_per_break: int = 2
+    lookahead_segments: int = 4
+
+
+@dataclass
+class AudioSection:
+    """Audio pipeline settings for encoding."""
+
+    sample_rate: int = 48000
+    channels: int = 2
+    bitrate: int = 192
+    # Integrated-LUFS targets for the loudness-reconciliation pass (measure +
+    # corrective gain on each finished segment so music, dialogue, bedded banter
+    # and ads all land at one perceived level). ad_lufs_target sits 1 LU hotter
+    # so ads still pop, without the old jarring 2-LU jump.
+    lufs_target: float = -16.0
+    ad_lufs_target: float = -15.0
+    # FM broadcast "transmitter" chain: when true, every aired non-rescue segment gets
+    # one extra ffmpeg pass that colours it like an over-the-air FM signal (gentle
+    # pre-emphasis HF shelf, ~15 kHz band-limit, flat loudness-offset trim — no stereo
+    # swirl, no dynamics) so the station sounds like radio, not a clean studio file.
+    # Default OFF (studio-clean): the colour is deliberately subtle and often
+    # imperceptible on good speakers, and the "what should the station sound like"
+    # strategy is being revisited. Set true to opt in.
+    broadcast_chain: bool = False
+
+
+# ── Dynamic model routing ─────────────────────────────────────────────────
+# Model identities live only in model_registry.toml.  Code works with stable
+# roles and catalog keys, so a provider upgrade is configuration-only rather
+# than a multi-file source change.
+DEFAULT_ROLE = "creative"
+MODEL_REGISTRY_FILENAME = "model_registry.toml"
+CONSERVATIVE_FALLBACK_PRICE: tuple[float, float] = (15.0 / 1_000_000, 75.0 / 1_000_000)
+
+_DEFAULT_ROUTING: dict[str, str] = {
+    "banter": "creative",
+    "news_flash": "creative",
+    "ad": "creative",
+    "transition": "fast",
+    "home_mood": "fast",
+    "memory_extract": "fast",
+    "direction": "creative",
+}
+
+
+@dataclass
+class ModelsSection:
+    """Role-based model routing and pricing loaded from model_registry.toml."""
+
+    catalog: dict[str, dict[str, str]] = field(default_factory=dict)
+    routing: dict[str, str] = field(default_factory=dict)
+    profiles: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    default_profile: str = "balanced"
+    active_profile: str = "balanced"
+    tts_models: dict[str, str] = field(default_factory=dict)
+    prices: dict[str, tuple[float, float]] = field(default_factory=dict)
+    fallback_price: tuple[float, float] = CONSERVATIVE_FALLBACK_PRICE
+    source: str = "unavailable"
+
+    def default_openai_eval_models(self) -> list[str]:
+        """Return the configured OpenAI catalog IDs once, in catalog order."""
+        return list(dict.fromkeys(self.catalog.get("openai", {}).values()))
+
+    def price_for_model(self, model_id: str) -> tuple[float, float, bool]:
+        """Return per-token rates and whether the conservative fallback was used."""
+        rates = self.prices.get(model_id)
+        if rates is None:
+            return (*self.fallback_price, True)
+        return (*rates, False)
+
+    def tts_model(self, provider: str) -> str | None:
+        return self.tts_models.get(provider) or None
+
+
+def _empty_models(*, source: str = "unavailable") -> ModelsSection:
+    """Keep boot safe when model configuration cannot be read.
+
+    No executable provider ID is embedded here: callers see an unavailable
+    route and use their existing stock-copy/Edge-TTS degradation paths.
+    """
+    return ModelsSection(routing=dict(_DEFAULT_ROUTING), source=source)
+
+
+def resolve_model(models: ModelsSection, caller: str | None, provider: str, profile: str | None = None) -> str | None:
+    """Resolve which model voices `caller` on `provider`, right now.
+
+    Never raises. Returns ``None`` when the model registry is unavailable or
+    incomplete, allowing the caller to use its no-LLM fallback rather than make
+    an invalid provider request:
+      1. role  = routing[caller]  (DEFAULT_ROLE if the task isn't routed)
+      2. key   = profiles[active|default][provider][role]
+      3. fallback = profiles[default_profile][provider][role]
+      4. id       = catalog[provider][key]
+
+    Any missing mapping is unavailable rather than an arbitrary catalog entry:
+    a malformed registry must not turn into an accidental provider request.
+    """
+    role = models.routing.get(caller or "", DEFAULT_ROLE)
+    prof = profile or models.active_profile or models.default_profile
+
+    def _key_for(profile_name: str) -> str | None:
+        prov_map = models.profiles.get(profile_name, {}).get(provider, {})
+        return prov_map.get(role)
+
+    key = _key_for(prof) or _key_for(models.default_profile)
+    provider_catalog = models.catalog.get(provider, {})
+    if key:
+        model_id = provider_catalog.get(key)
+        if isinstance(model_id, str) and model_id.strip():
+            return model_id
+    return None
+
+
+def _parse_models_section(raw: dict, *, source: str = "inline registry") -> ModelsSection:
+    """Build routing data from a registry-shaped mapping without model defaults."""
+    import logging as _log
+
+    log = _log.getLogger(__name__)
+    section = raw.get("models")
+    if not section:
+        raise ValueError("models table is missing")
+    try:
+        catalog = section.get("catalog") or {}
+        routing = section.get("routing") or {}
+        profiles = section.get("profiles") or {}
+        if not (isinstance(catalog, dict) and isinstance(routing, dict) and isinstance(profiles, dict)):
+            raise ValueError("models.catalog/routing/profiles must be tables")
+        if not catalog or not profiles:
+            raise ValueError("models.catalog and models.profiles must be non-empty")
+        default_profile = section.get("default_profile", "balanced")
+        merged_routing = {**_DEFAULT_ROUTING, **{str(t): str(r) for t, r in routing.items()}}
+        return ModelsSection(
+            catalog={str(p): {str(k): str(v) for k, v in m.items()} for p, m in catalog.items()},
+            routing=merged_routing,
+            profiles={
+                str(pf): {str(pr): {str(role): str(key) for role, key in rm.items()} for pr, rm in provs.items()}
+                for pf, provs in profiles.items()
+            },
+            default_profile=str(default_profile),
+            active_profile=str(default_profile),
+            source=source,
+        )
+    except Exception as exc:
+        log.error("Invalid model registry %s: %s", source, exc)
+        raise
+
+
+def _parse_registry_pricing(raw: dict, models: ModelsSection) -> None:
+    """Attach model prices by catalog reference, never by copied model ID."""
+
+    pricing = raw.get("pricing") or {}
+    if not isinstance(pricing, dict):
+        raise ValueError("pricing must be a table")
+    fallback_input = (
+        float(pricing.get("fallback_input_per_million", CONSERVATIVE_FALLBACK_PRICE[0] * 1_000_000)) / 1_000_000
+    )
+    fallback_output = (
+        float(pricing.get("fallback_output_per_million", CONSERVATIVE_FALLBACK_PRICE[1] * 1_000_000)) / 1_000_000
+    )
+    if fallback_input < 0 or fallback_output < 0:
+        raise ValueError("pricing fallback rates must be non-negative")
+    if not (math.isfinite(fallback_input) and math.isfinite(fallback_output)):
+        # A nan/inf fallback would later serialize into the /status cost block and
+        # break the admin JSON response. Reject so the conservative default holds.
+        raise ValueError("pricing fallback rates must be finite")
+    models.fallback_price = (fallback_input, fallback_output)
+    catalog_prices = pricing.get("catalog") or {}
+    if not isinstance(catalog_prices, dict):
+        raise ValueError("pricing.catalog must be a table")
+    for provider, catalog in models.catalog.items():
+        configured_prices = catalog_prices.get(provider) or {}
+        if not isinstance(configured_prices, dict):
+            raise ValueError(f"pricing.catalog.{provider} must be a table")
+        for key, model_id in catalog.items():
+            rate = configured_prices.get(key)
+            if not isinstance(rate, dict):
+                continue
+            if "input_per_million" not in rate or "output_per_million" not in rate:
+                # A stub table missing a rate field must NOT silently price at $0.
+                # Leave it unpriced so price_for_model() returns the fallback and
+                # trips the UI flag, rather than under-reporting real cost.
+                import logging as _log
+
+                _log.getLogger(__name__).warning(
+                    "Incomplete pricing for %s.%s (needs input_per_million and output_per_million); "
+                    "treating this model as unpriced",
+                    provider,
+                    key,
+                )
+                continue
+            input_rate = float(rate["input_per_million"]) / 1_000_000
+            output_rate = float(rate["output_per_million"]) / 1_000_000
+            if input_rate < 0 or output_rate < 0:
+                raise ValueError(f"pricing rate for {provider}.{key} must be non-negative")
+            if not (math.isfinite(input_rate) and math.isfinite(output_rate)):
+                # A nan/inf rate would break /status JSON serialization; leave this
+                # model unpriced (fallback + UI flag) instead of poisoning the block.
+                import logging as _log
+
+                _log.getLogger(__name__).warning(
+                    "Non-finite pricing for %s.%s; treating this model as unpriced", provider, key
+                )
+                continue
+            models.prices[model_id] = (input_rate, output_rate)
+
+
+def _load_model_registry(path: Path, *, legacy_raw: dict | None = None) -> ModelsSection:
+    """Load the canonical registry, falling back to read-only legacy routing.
+
+    A missing/malformed registry deliberately leaves routes unavailable. Existing
+    standalone ``radio.toml`` files carrying the former [models] block keep
+    their script routes for this transition, but never become a new canonical
+    source and do not supply TTS or pricing metadata.
+    """
+    import logging as _log
+
+    log = _log.getLogger(__name__)
+    try:
+        with path.open("rb") as registry_file:
+            raw = tomllib.load(registry_file)
+        models = _parse_models_section(raw, source=str(path))
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, tomllib.TOMLDecodeError) as exc:
+        log.error("Model registry unavailable (%s): %s", path, exc)
+        if legacy_raw and legacy_raw.get("models"):
+            try:
+                models = _parse_models_section(legacy_raw, source="legacy radio.toml [models]")
+                log.warning(
+                    "Using deprecated legacy [models] routing; add %s beside radio.toml",
+                    MODEL_REGISTRY_FILENAME,
+                )
+                return models
+            except Exception:
+                log.error("Legacy [models] routing is invalid too", exc_info=True)
+        return _empty_models()
+
+    # Script routing parsed successfully. TTS selection and pricing are secondary
+    # metadata — a typo there must NOT strip working script routes (leadership
+    # principle #2: the station keeps airing). Parse each best-effort: on failure
+    # log and keep routing, so OpenAI TTS degrades to its Edge fallback and the
+    # cost estimate uses the conservative fallback rate instead of going dark.
+    try:
+        tts = raw.get("tts") or {}
+        openai_tts = tts.get("openai") if isinstance(tts, dict) else None
+        if not isinstance(openai_tts, dict) or not str(openai_tts.get("model", "")).strip():
+            raise ValueError("tts.openai.model must be a non-empty string")
+        models.tts_models["openai"] = str(openai_tts["model"])
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        log.error("Registry TTS selection unavailable (%s): %s — OpenAI TTS will use its Edge fallback", path, exc)
+    try:
+        _parse_registry_pricing(raw, models)
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        log.error("Registry pricing unavailable (%s): %s — cost estimate uses the conservative fallback", path, exc)
+    return models
+
+
+def _build_default_models() -> ModelsSection:
+    """Compatibility helper for callers that need the packaged registry.
+
+    Unlike the former built-in fallback catalog, this reads the one canonical
+    configuration file and contains no provider model identity in Python.
+    """
+    return _load_model_registry(Path(MODEL_REGISTRY_FILENAME))
+
+
+# Public alias: cross-module callers (web/streamer.py, audio/tts.py) load the
+# registry through this stable name rather than the underscore-private helper,
+# so an internal rename can't silently break an out-of-module import.
+load_model_registry = _load_model_registry
+
+
+def _apply_model_env_overrides(models: ModelsSection) -> None:
+    """Back-compat env overrides.
+
+    - CLAUDE_CREATIVE_MODEL → anthropic creative-role model
+    - CLAUDE_MODEL          → anthropic fast-role model
+    - OPENAI_SCRIPT_MODEL   → every OpenAI catalog entry (one global OpenAI fallback model)
+
+    Anthropic overrides get dedicated catalog keys instead of rewriting whatever
+    key a profile currently points at. Economy maps creative and fast to the same
+    `haiku` key; mutating that shared key would make balanced/premium
+    transitions inherit a creative override and risk slow inter-song links.
+    """
+    creative_env = os.getenv("CLAUDE_CREATIVE_MODEL")
+    fast_env = os.getenv("CLAUDE_MODEL")
+    anth_catalog = models.catalog.setdefault("anthropic", {})
+    if fast_env:
+        anth_catalog["__env_fast"] = fast_env
+        for prof_data in models.profiles.values():
+            prof_data.setdefault("anthropic", {})["fast"] = "__env_fast"
+    if creative_env:
+        anth_catalog["__env_creative"] = creative_env
+        for prof_data in models.profiles.values():
+            prof_data.setdefault("anthropic", {})["creative"] = "__env_creative"
+    openai_env = os.getenv("OPENAI_SCRIPT_MODEL")
+    if openai_env:
+        for key in models.catalog.get("openai", {}):
+            models.catalog["openai"][key] = openai_env
+
+
+def _validate_models(config: StationConfig) -> None:
+    """Log incomplete routing without inventing a provider model fallback."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    providers = []
+    if config.anthropic_api_key:
+        providers.append("anthropic")
+    if config.openai_api_key or os.getenv("OPENAI_API_KEY"):
+        providers.append("openai")
+    if not providers:
+        return  # No LLM configured — stock copy only, nothing to resolve.
+
+    m = config.models
+    problems: list[str] = []
+    if not m.catalog:
+        problems.append("empty catalog")
+    if m.active_profile not in m.profiles:
+        problems.append(f"active_profile '{m.active_profile}' undefined")
+    if m.default_profile not in m.profiles:
+        problems.append(f"default_profile '{m.default_profile}' undefined")
+    roles = set(m.routing.values()) | {DEFAULT_ROLE}
+    for prof in {m.active_profile, m.default_profile}:
+        for prov in providers:
+            for role in roles:
+                key = m.profiles.get(prof, {}).get(prov, {}).get(role)
+                catalog_value = m.catalog.get(prov, {}).get(key) if key else None
+                if not key or not catalog_value:
+                    problems.append(f"profile '{prof}'/{prov}/role '{role}' unresolved")
+
+    if problems:
+        log.error("Model routing unavailable (%s); script generation will use stock copy", "; ".join(problems[:6]))
+
+
+@dataclass
+class TimerInterruptConfig:
+    """A single HA timer entity that triggers an immediate host interrupt."""
+
+    entity_id: str
+    directive: str
+    urgency: str = "pissed"  # "pissed" | "urgent" | "gentle"
+    cooldown: int = 60  # seconds before this entity can fire again
+
+
+@dataclass
+class HomeAssistantSection:
+    """Optional Home Assistant integration used to seed prompt context."""
+
+    enabled: bool = False
+    url: str = ""
+    context_enabled: bool = True  # full /api/states prompt-context ingest
+    poll_interval: int = 300  # seconds between full state refreshes
+    timer_poll_interval: int = 5  # seconds between lightweight timer-entity state checks
+    # Foreground wait (seconds) before warm prompt generation uses its last safe
+    # context. The producer retains the one request for a separate 30s total cap;
+    # the one-time cold registry/weather warm-up gets a longer foreground wait
+    # (see _HA_CONTEXT_COLD_LOAD_TIMEOUT).
+    context_refresh_timeout: float = 2.0
+    # Experimental LLM scene-namer for the home mood. The heuristic ladder stays
+    # the always-instant fallback and the default remains off.
+    mood_llm_enabled: bool = False
+    mood_ttl_seconds: float = 90.0
+    timer_interrupts: list[TimerInterruptConfig] = field(default_factory=list)
+
+
+@dataclass
+class EveningGagsSection:
+    """Operator overrides for evening running-gag candidacy (Impossible Moments).
+
+    Maps to `[home.running_gags]` in radio.toml. All three lists are empty by
+    default, which keeps the built-in domain-based candidacy (a `switch`/`fan`/
+    `lock`/`vacuum`/`binary_sensor` toggle is gag-worthy on any home). Set
+    `domain_allowlist` to replace the default domain set; `entity_allowlist` to
+    restrict to specific entity_ids; `entity_denylist` to silence chatty entities.
+    Resolved against the ledger in home/evening_memory.py.
+    """
+
+    domain_allowlist: list[str] = field(default_factory=list)
+    entity_allowlist: list[str] = field(default_factory=list)
+    entity_denylist: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RadioEventRule:
+    """Opt-in HA event promotion rule from ``[[home.radio_event]]``."""
+
+    id: str
+    label: str = ""
+    mode: str = "directive"  # "directive" | "gag"
+    entity_id: str = ""
+    entity_glob: str = ""
+    domain: str = ""
+    device_class: str = ""
+    trigger: str = "state"  # "state" | "attribute" | "numeric_threshold"
+    from_state: str = ""
+    to_state: str = ""
+    attribute: str = ""
+    from_value: str = ""
+    to_value: str = ""
+    threshold: float | None = None
+    direction: str = "above"  # "above" | "below"
+    cooldown_seconds: int = 900
+    directive: str = ""
+
+
+@dataclass
+class SonicBrandSection:
+    """Station sonic identity: jingles, sweepers, and motif configuration."""
+
+    tagline: str = ""
+    geography: str = ""
+    full_ident: str = ""
+    sweepers: list[str] = field(default_factory=list)
+    motif_notes: list[int] = field(default_factory=lambda: [523, 659, 784, 1047])
+    sweeper_voice: str = ""
+    sweeper_engine: str = "edge"
+    sweeper_edge_fallback_voice: str = ""
+
+
+@dataclass
+class AdsSection:
+    """Structured ad inventory, voices, and optional sound-effect assets."""
+
+    brands: list[AdBrand] = field(default_factory=list)
+    voices: list[AdVoice] = field(default_factory=list)
+    # Derived at load time from campaign.spokesperson_voice. The report keeps
+    # unsafe campaigns visible to status/reporting while selection skips them.
+    cast_report: AdCastReport = field(default_factory=AdCastReport)
+    sfx_dir: str = "sfx"
+
+
+@dataclass
+class ImagingSection:
+    """Station imaging controls for stingers and spoken-word beds."""
+
+    bed_volume_db: float = -18.0
+    use_music_queue_for_beds: bool = True
+    # Asset directory is resolved from the package at runtime by ImagingLibrary.
+    # Override with assets_dir (absolute path) if you need a custom location.
+    assets_dir: str = ""
+
+
+@dataclass
+class PersonaSection:
+    """Cross-session listener memory tuning."""
+
+    arc_thresholds: list[int] = field(default_factory=lambda: [4, 11, 26])
+    anthem_threshold: int = 3
+    skip_bit_threshold: int = 2
+
+
+# Volare Refined defaults — fall-back values when [brand] is missing or invalid.
+# These match listener.css token defaults and docs/design/system.md.
+_BRAND_DEFAULT_PRIMARY = "#F4D048"  # --sun
+_BRAND_DEFAULT_ACCENT = "#B82C20"  # --lancia
+_BRAND_DEFAULT_BG = "#14110F"  # --shadow
+_BRAND_DEFAULT_TEXT = "#F5EDD8"  # --cream (used for contrast checks)
+_BRAND_DEFAULT_DISPLAY_FONT = "Playfair Display"
+_BRAND_DEFAULT_BODY_FONT = "Outfit"
+_BRAND_DEFAULT_MONO_FONT = "JetBrains Mono"
+
+# Curated font list per design D1 — operators may pick from these only.
+_BRAND_DISPLAY_FONTS = frozenset(
+    {
+        "Playfair Display",
+        "Cormorant Garamond",
+        "Bodoni Moda",
+        "Lora",
+        "Outfit",
+        "JetBrains Mono",
+    }
+)
+_BRAND_BODY_FONTS = frozenset(
+    {
+        "Outfit",
+        "Inter",
+        "Source Sans 3",
+        "IBM Plex Sans",
+    }
+)
+_BRAND_MONO_FONTS = frozenset({"JetBrains Mono", "IBM Plex Mono"})
+_TTS_ENGINES = {"edge", "openai", "azure", "elevenlabs"}
+_CLOUD_TTS_ENGINES = {"openai", "azure", "elevenlabs"}
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
+    """Parse a #RRGGBB hex color into an (r, g, b) tuple. Returns None on invalid input."""
+    s = (hex_color or "").strip().lstrip("#")
+    if len(s) != 6 or not all(c in "0123456789abcdefABCDEF" for c in s):
+        return None
+    try:
+        return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _hex_lightness(hex_color: str) -> float | None:
+    """Return HSL lightness in 0-100 range, or None if hex is invalid."""
+    rgb = _hex_to_rgb(hex_color)
+    if rgb is None:
+        return None
+    r, g, b = (c / 255.0 for c in rgb)
+    cmax, cmin = max(r, g, b), min(r, g, b)
+    return (cmax + cmin) / 2.0 * 100.0
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    """WCAG 2.1 relative luminance from sRGB triplet."""
+
+    def channel(c: int) -> float:
+        v = c / 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(x) for x in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast_ratio(fg_hex: str, bg_hex: str) -> float | None:
+    """WCAG contrast ratio between two hex colors. Returns None if either is invalid."""
+    fg = _hex_to_rgb(fg_hex)
+    bg = _hex_to_rgb(bg_hex)
+    if fg is None or bg is None:
+        return None
+    l1 = _relative_luminance(fg)
+    l2 = _relative_luminance(bg)
+    lighter = max(l1, l2)
+    darker = min(l1, l2)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@dataclass
+class BrandHost:
+    """Per-host brand identity layer — what the LISTENER reads."""
+
+    engine_host: str  # FK to HostPersonality.name
+    display_name: str
+    description: str = ""
+
+
+@dataclass
+class BrandTheme:
+    """Per-station visual identity tokens. All optional — fall back to Volare Refined."""
+
+    primary_color: str = _BRAND_DEFAULT_PRIMARY
+    accent_color: str = _BRAND_DEFAULT_ACCENT
+    background_color: str = _BRAND_DEFAULT_BG
+    display_font: str = _BRAND_DEFAULT_DISPLAY_FONT
+    body_font: str = _BRAND_DEFAULT_BODY_FONT
+    mono_font: str = _BRAND_DEFAULT_MONO_FONT
+
+
+@dataclass
+class BrandSection:
+    """The brand-fiction layer: what listeners see, separate from the engine config."""
+
+    station_name: str = DEFAULT_STATION_NAME
+    frequency: str = ""
+    city: str = ""
+    founded: int = 0
+    tagline: str = ""
+    about: str = ""
+    opengraph_subtitle: str = ""
+    # Absolute http(s) URL to the station logo, surfaced as the HA media_player
+    # entity_picture fallback when a segment has no real cover (voice/ad/idle).
+    # Blank → the engine's built-in default logo (see ha_context). HA resolves
+    # entity_picture against its own origin, so a relative path is rejected here.
+    artwork_url: str = ""
+    hosts: list[BrandHost] = field(default_factory=list)
+    theme: BrandTheme = field(default_factory=BrandTheme)
+
+
+@dataclass
+class IdentitySection:
+    """Resolved station identity shared by every human-facing surface."""
+
+    station_name: str = DEFAULT_STATION_NAME
+    source: str = "default"
+    custom_copy_preserved: bool = False
+    generated: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StationConfig:
+    """Fully resolved application configuration used at runtime."""
+
+    station: StationSection
+    playlist: PlaylistSection
+    pacing: PacingSection
+    hosts: list[HostPersonality]
+    ads: AdsSection
+    imaging: ImagingSection = field(default_factory=ImagingSection)
+    sonic_brand: SonicBrandSection = field(default_factory=SonicBrandSection)
+    audio: AudioSection = field(default_factory=AudioSection)
+    models: ModelsSection = field(default_factory=_empty_models)
+    homeassistant: HomeAssistantSection = field(default_factory=HomeAssistantSection)
+    running_gags: EveningGagsSection = field(default_factory=EveningGagsSection)
+    radio_events: list[RadioEventRule] = field(default_factory=list)
+    moderation: ModerationSection = field(default_factory=ModerationSection)
+    persona: PersonaSection = field(default_factory=PersonaSection)
+    identity: IdentitySection = field(default_factory=IdentitySection)
+    brand: BrandSection = field(default_factory=BrandSection)
+    brand_warnings: list[str] = field(default_factory=list)
+    cache_dir: Path = Path("cache")
+    tmp_dir: Path = Path("tmp")
+    music_dir: Path = Path("music")
+    max_cache_size_mb: int = 500
+
+    # Secrets from env
+    bind_host: str = "127.0.0.1"
+    port: int = 8000
+    admin_username: str = "admin"
+    admin_password: str = ""
+    admin_token: str = ""
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""
+    elevenlabs_api_key: str = ""
+    ha_token: str = ""
+    is_addon: bool = False
+    allow_ytdlp: bool = False
+    super_italian_mode: bool = True
+    party_mode: PartyMode | None = None
+    # Provenance ledger (Show Memory): opt-in, off by default. Records how each
+    # aired moment was made to a daily-rotated JSONL under cache_dir/ledger.
+    ledger_enabled: bool = False
+    ledger_retention_days: int = 14
+    ledger_queue_max: int = 2000
+    # Names of hosts or ad voices that had their configured voice replaced
+    # during config load because the configured ID wasn't valid for the chosen
+    # backend. Empty when all voices passed validation.
+    tts_degraded_voices: list[str] = field(default_factory=list)
+
+    @property
+    def ledger_dir(self) -> Path:
+        """Provenance ledger directory, derived from cache_dir (never hardcoded).
+
+        Inherits the addon (/data/cache) vs standalone (./cache) vs /tmp fallback
+        resolution that cache_dir already performs.
+        """
+        return self.cache_dir / "ledger"
+
+    @property
+    def display_station_name(self) -> str:
+        """Compatibility alias for the resolved listener-facing station name."""
+        return self.identity.station_name or DEFAULT_STATION_NAME
+
+
+def _normalize_tts_voices(config: StationConfig) -> None:
+    """Sanitize host/ad voice config before runtime to prevent avoidable TTS errors.
+
+    Pre-flight validation: each voice is checked against the catalog for its
+    backend. Invalid voices are logged once (WARNING) and substituted with a
+    known-good default before any synthesis is attempted. Substitutions are
+    recorded on config.tts_degraded_voices so capability reporting can
+    surface a degraded-TTS state to the dashboard.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    degraded: list[str] = []
+
+    def _clean_engine(engine: str, owner: str) -> str:
+        result = (engine or "edge").strip().lower()
+        if result not in _TTS_ENGINES:
+            log.warning("Voice '%s' has unknown engine '%s'; using edge", owner, engine)
+            return "edge"
+        return result
+
+    def _fallback(owner: str, configured: str = "") -> str:
+        voice = (configured or "").strip() or _EDGE_DEFAULT_FALLBACK_VOICE
+        if _looks_like_openai_voice(voice) or not is_known_edge_voice(voice):
+            log.warning(
+                "Voice '%s' has invalid edge fallback '%s'; using fallback '%s'",
+                owner,
+                voice,
+                _EDGE_DEFAULT_FALLBACK_VOICE,
+            )
+            return _EDGE_DEFAULT_FALLBACK_VOICE
+        return voice
+
+    def _normalize_edge_voice(owner: str, voice: str, fallback_voice: str = "") -> str:
+        if _looks_like_openai_voice(voice):
+            fallback = _fallback(owner, fallback_voice)
+            log.warning(
+                "Voice '%s' is configured with OpenAI voice '%s' on edge engine; using fallback '%s'",
+                owner,
+                voice,
+                fallback,
+            )
+            degraded.append(owner)
+            return fallback
+        if voice and not is_known_edge_voice(voice):
+            fallback = _fallback(owner, fallback_voice)
+            log.warning(
+                "Voice '%s' has unknown edge voice '%s'; using fallback '%s'",
+                owner,
+                voice,
+                fallback,
+            )
+            degraded.append(owner)
+            return fallback
+        return voice
+
+    def _cloud_fallback(owner: str, engine: str, fallback_voice: str) -> str:
+        fallback = _fallback(owner, fallback_voice)
+        if not fallback_voice:
+            log.warning(
+                "Voice '%s' uses %s TTS but has no edge fallback voice; defaulting to %s",
+                owner,
+                engine,
+                fallback,
+            )
+        return fallback
+
+    for host in config.hosts:
+        host.engine = _clean_engine(host.engine, host.name)
+
+        if host.engine in _CLOUD_TTS_ENGINES:
+            host.edge_fallback_voice = _cloud_fallback(host.name, host.engine, host.edge_fallback_voice)
+
+        # Validate edge-engine hosts against the edge voice catalog.
+        if host.engine == "edge":
+            host.voice = _normalize_edge_voice(host.name, host.voice, host.edge_fallback_voice)
+        elif host.engine == "openai" and not host.voice:
+            fallback = _fallback(host.name, host.edge_fallback_voice)
+            log.warning(
+                "Host '%s' has engine='openai' but no voice ID; switching to edge fallback '%s'",
+                host.name,
+                fallback,
+            )
+            host.engine = "edge"
+            host.voice = fallback
+            degraded.append(host.name)
+        elif host.engine == "openai" and not _looks_like_openai_voice(host.voice):
+            # engine=openai but voice isn't an OpenAI ID → runtime would fail.
+            # Flip the host to edge using the fallback voice so synthesis works.
+            fallback = _fallback(host.name, host.edge_fallback_voice)
+            log.warning(
+                "Host '%s' has engine='openai' but non-OpenAI voice '%s'; switching to edge fallback '%s'",
+                host.name,
+                host.voice,
+                fallback,
+            )
+            host.engine = "edge"
+            host.voice = fallback
+            degraded.append(host.name)
+        elif host.engine == "azure" and not host.voice:
+            fallback = _fallback(host.name, host.edge_fallback_voice)
+            log.warning(
+                "Host '%s' has engine='azure' but no voice; switching to edge fallback '%s'",
+                host.name,
+                fallback,
+            )
+            host.engine = "edge"
+            host.voice = fallback
+            degraded.append(host.name)
+        elif host.engine == "azure" and host.voice.startswith("it-IT-") and not is_known_azure_voice(host.voice):
+            log.info("Host '%s' uses Azure voice '%s' outside the curated local catalog", host.name, host.voice)
+        elif host.engine == "elevenlabs" and not host.voice:
+            fallback = _fallback(host.name, host.edge_fallback_voice)
+            log.warning(
+                "Host '%s' has engine='elevenlabs' but no voice ID; switching to edge fallback '%s'",
+                host.name,
+                fallback,
+            )
+            host.engine = "edge"
+            host.voice = fallback
+            degraded.append(host.name)
+
+    for voice in config.ads.voices:
+        voice.engine = _clean_engine(voice.engine, voice.name)
+        if voice.engine in _CLOUD_TTS_ENGINES:
+            voice.edge_fallback_voice = _cloud_fallback(voice.name, voice.engine, voice.edge_fallback_voice)
+
+        if voice.engine == "edge":
+            voice.voice = _normalize_edge_voice(voice.name, voice.voice, voice.edge_fallback_voice)
+        elif voice.engine == "openai" and not voice.voice:
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
+            log.warning(
+                "Ad voice '%s' has engine='openai' but no voice ID; switching to edge fallback '%s'",
+                voice.name,
+                fallback,
+            )
+            voice.engine = "edge"
+            voice.voice = fallback
+            degraded.append(voice.name)
+        elif voice.engine == "openai" and not _looks_like_openai_voice(voice.voice):
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
+            log.warning(
+                "Ad voice '%s' has engine='openai' but non-OpenAI voice '%s'; switching to edge fallback '%s'",
+                voice.name,
+                voice.voice,
+                fallback,
+            )
+            voice.engine = "edge"
+            voice.voice = fallback
+            degraded.append(voice.name)
+        elif voice.engine == "azure" and not voice.voice:
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
+            log.warning(
+                "Ad voice '%s' has engine='azure' but no voice; switching to edge fallback '%s'",
+                voice.name,
+                fallback,
+            )
+            voice.engine = "edge"
+            voice.voice = fallback
+            degraded.append(voice.name)
+        elif voice.engine == "azure" and voice.voice.startswith("it-IT-") and not is_known_azure_voice(voice.voice):
+            log.info("Ad voice '%s' uses Azure voice '%s' outside the curated local catalog", voice.name, voice.voice)
+        elif voice.engine == "elevenlabs" and not voice.voice:
+            fallback = _fallback(voice.name, voice.edge_fallback_voice)
+            log.warning(
+                "Ad voice '%s' has engine='elevenlabs' but no voice ID; switching to edge fallback '%s'",
+                voice.name,
+                fallback,
+            )
+            voice.engine = "edge"
+            voice.voice = fallback
+            degraded.append(voice.name)
+
+    sb = config.sonic_brand
+    sb.sweeper_engine = _clean_engine(sb.sweeper_engine, "sonic_brand.sweeper_voice")
+    if not sb.sweeper_voice and sb.sweeper_engine in _CLOUD_TTS_ENGINES:
+        log.warning(
+            "Sonic brand sweeper has engine='%s' but no voice; resetting to edge",
+            sb.sweeper_engine,
+        )
+        sb.sweeper_engine = "edge"
+    if sb.sweeper_voice:
+        if sb.sweeper_engine in _CLOUD_TTS_ENGINES:
+            sb.sweeper_edge_fallback_voice = _cloud_fallback(
+                "sonic_brand.sweeper_voice",
+                sb.sweeper_engine,
+                sb.sweeper_edge_fallback_voice,
+            )
+        if sb.sweeper_engine == "edge":
+            sb.sweeper_voice = _normalize_edge_voice(
+                "sonic_brand.sweeper_voice",
+                sb.sweeper_voice,
+                sb.sweeper_edge_fallback_voice,
+            )
+        elif sb.sweeper_engine == "openai" and not _looks_like_openai_voice(sb.sweeper_voice):
+            fallback = _fallback("sonic_brand.sweeper_voice", sb.sweeper_edge_fallback_voice)
+            log.warning(
+                "Sonic brand sweeper has engine='openai' but non-OpenAI voice '%s'; switching to edge fallback '%s'",
+                sb.sweeper_voice,
+                fallback,
+            )
+            sb.sweeper_engine = "edge"
+            sb.sweeper_voice = fallback
+            degraded.append("sonic_brand.sweeper_voice")
+        elif (
+            sb.sweeper_engine == "azure"
+            and sb.sweeper_voice.startswith("it-IT-")
+            and not is_known_azure_voice(sb.sweeper_voice)
+        ):
+            log.info("Sonic brand sweeper uses Azure voice '%s' outside the curated local catalog", sb.sweeper_voice)
+
+    config.tts_degraded_voices = degraded
+
+
+def _compile_ad_cast(config: StationConfig) -> None:
+    """Attach the derived direct-cast report to the loaded ad inventory.
+
+    Invalid direct campaigns remain inspectable through ``cast_report`` but are
+    marked ineligible before producer selection. This is intentionally after
+    TTS normalization: an approved character can retain its explicit safe
+    provider fallback without being replaced by another roster character.
+    """
+
+    report = compile_ad_cast(config.ads.brands, config.ads.voices)
+    config.ads.cast_report = report
+    config.ads.voices = [
+        replace(
+            voice,
+            reserved_for=report.reserved_voice_owners.get(voice.name, frozenset()),
+            direct_identity_quarantined=voice.name in report.quarantined_voice_names,
+        )
+        for voice in config.ads.voices
+    ]
+    config.ads.brands = [
+        replace(
+            brand,
+            cast_eligible=brand.name not in report.excluded_brands,
+            campaign=(
+                replace(
+                    brand.campaign,
+                    spokesperson_role=report.primary_roles.get(brand.name, ""),
+                )
+                if brand.campaign is not None
+                else None
+            ),
+        )
+        for brand in config.ads.brands
+    ]
+    if report.warnings:
+        import logging
+
+        log = logging.getLogger(__name__)
+        for warning in report.warnings:
+            # ``compile_ad_cast`` deliberately omits provider voice IDs.
+            log.warning("ads.cast: %s", warning)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a bind target should be treated as localhost-only.
+
+    An empty bind host is NOT loopback: ``socket.bind("")`` listens on all
+    interfaces (equivalent to ``0.0.0.0``), so it must satisfy the same
+    credential requirement as any other non-loopback bind.
+    """
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_addon() -> bool:
+    """Detect if running as a Home Assistant addon."""
+    # Only trust Supervisor-provided tokens as addon signals.
+    # /data/options.json may exist in non-addon environments (e.g. mounted test/dev paths).
+    return bool(os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN"))
+
+
+def _apply_addon_options() -> None:
+    """Read add-on files and set env vars for add-on credentials."""
+    import json
+
+    options_path = Path("/data/options.json")
+    options = {}
+    if options_path.exists():
+        try:
+            options = json.loads(options_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            options = {}
+
+    provider_values = {}
+    for opt_key, env_key in _ADDON_PROVIDER_OPTIONS:
+        val = options.get(opt_key, "")
+        if val:
+            provider_values[env_key] = str(val)
+    provider_values.update(_read_addon_provider_secrets(Path("/config/secrets.env")))
+    for env_key, val in provider_values.items():
+        if val and not os.getenv(env_key):
+            os.environ[env_key] = val
+
+    env_map = {
+        "station_name": "STATION_NAME",
+        "admin_password": "ADMIN_PASSWORD",
+    }
+    for opt_key, env_key in env_map.items():
+        val = options.get(opt_key, "")
+        if val and not os.getenv(env_key):
+            os.environ[env_key] = val
+
+    si = options.get("super_italian_mode")
+    if isinstance(si, bool) and not os.getenv("MAMMAMIRADIO_SUPER_ITALIAN"):
+        os.environ["MAMMAMIRADIO_SUPER_ITALIAN"] = "true" if si else "false"
+
+    fm = options.get("festival_mode")
+    if isinstance(fm, bool) and not os.getenv("MAMMAMIRADIO_FESTIVAL_MODE"):
+        os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = "true" if fm else "false"
+
+    bc = options.get("broadcast_chain")
+    if isinstance(bc, bool) and not os.getenv("MAMMAMIRADIO_BROADCAST_CHAIN"):
+        os.environ["MAMMAMIRADIO_BROADCAST_CHAIN"] = "true" if bc else "false"
+
+    qp = options.get("quality_profile")
+    if isinstance(qp, str) and qp and not os.getenv("MAMMAMIRADIO_QUALITY"):
+        os.environ["MAMMAMIRADIO_QUALITY"] = qp
+    legacy_claude_model = options.get("claude_model") if not qp else None
+    if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
+        os.environ["CLAUDE_MODEL"] = legacy_claude_model
+
+    # Pacing (mirrors the toggles above): map Supervisor's generated
+    # /data/options.json startup projection to env for the non-run.sh add-on boot
+    # path. run.sh normally exports these first, and the `not os.getenv` guard
+    # keeps that export authoritative; the load-time override loop clamps to
+    # range, so no clamp is needed here. bool is excluded because it is an int
+    # subclass.
+    for opt_key, env_key in (
+        ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
+        ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
+        ("ad_spots_per_break", "MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"),
+    ):
+        pv = options.get(opt_key)
+        if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
+            os.environ[env_key] = str(pv)
+
+    # The direct add-on fallback treats non-positive cache input as malformed
+    # before clamping, matching the run.sh contract. The parser matrix test keeps
+    # both ingestion paths aligned for supported add-on input.
+    cache_mb = options.get("norm_cache_mb")
+    if (
+        isinstance(cache_mb, int)
+        and not isinstance(cache_mb, bool)
+        and cache_mb > 0
+        and not os.getenv("MAMMAMIRADIO_MAX_CACHE_MB")
+    ):
+        os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] = str(cache_mb)
+
+
+def _parse_secret_env_lines(lines: list[str], known_keys) -> tuple[dict[str, str], list[tuple[int, str]]]:
+    """Parse KEY=VALUE env-file lines shared by the add-on secrets.env readers.
+
+    Grammar: optional BOM on line 1, `#`-comment/blank skip, optional `export ` prefix,
+    split on the first `=`, and `shlex`-aware quote handling requiring exactly one token.
+    Returns the recognized {key: value} assignments plus (line_no, reason) for every
+    skipped line, so callers can decide whether/how to warn about them.
+    """
+    values: dict[str, str] = {}
+    skipped: list[tuple[int, str]] = []
+    for line_no, raw_line in enumerate(lines, 1):
+        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].lstrip()
+        if "=" not in stripped:
+            skipped.append((line_no, "missing KEY=VALUE"))
+            continue
+        key, raw_value = stripped.split("=", 1)
+        key = key.strip()
+        if key not in known_keys:
+            skipped.append((line_no, "unsupported key"))
+            continue
+        value = raw_value.strip()
+        if value[:1] in ('"', "'"):
+            try:
+                parts = shlex.split(value, comments=False, posix=True)
+            except ValueError:
+                skipped.append((line_no, "invalid quoting"))
+                continue
+            if len(parts) != 1:
+                skipped.append((line_no, "invalid quoted value"))
+                continue
+            value = parts[0].strip()
+        if value:
+            values[key] = value
+    return values, skipped
+
+
+def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
+    """Parse /config/secrets.env without logging raw secret file contents."""
+    if not path.exists():
+        return {}
+
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        log.warning("Could not read /config/secrets.env")
+        return {}
+
+    values, skipped = _parse_secret_env_lines(lines, _ADDON_SECRET_ENV_KEYS)
+    for line_no, reason in skipped:
+        log.warning("Ignoring /config/secrets.env line %s: %s", line_no, reason)
+    return values
+
+
+def is_absolute_http_url(value: str) -> bool:
+    """True only for an absolute http(s) URL that has a host.
+
+    Raise-safe by contract: a malformed value (e.g. an unterminated IPv6 literal
+    like ``http://[::1`` makes ``urlsplit`` raise ``ValueError``, and a bad port
+    makes ``.hostname`` raise) returns ``False`` rather than propagating. Both
+    callers depend on this: the config loader must never fail boot, and the HA
+    push must never raise into the audio path. Used for the ``[brand]
+    artwork_url`` guardrail and the ``album_art`` cover check (``ha_context``).
+    """
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme in ("http", "https") and bool(parsed.hostname)
+    except ValueError:
+        return False
+
+
+def _parse_brand(raw: dict, hosts: list[HostPersonality]) -> tuple[BrandSection, list[str]]:
+    """Parse [brand] from radio.toml; apply guardrails per design D1.
+
+    Returns (BrandSection, warnings_list). Never raises — degrades gracefully so
+    INSTANT AUDIO leadership principle holds even when [brand] config is bad.
+    """
+    warnings: list[str] = []
+    brand_raw = dict(raw.get("brand", {}))
+
+    # If [brand] is missing entirely, derive defaults from existing config
+    if not brand_raw:
+        return (
+            BrandSection(
+                station_name=raw.get("station", {}).get("name", DEFAULT_STATION_NAME),
+                hosts=[
+                    BrandHost(engine_host=h.name, display_name=h.name, description=(h.style or "")[:160]) for h in hosts
+                ],
+            ),
+            warnings,
+        )
+
+    # Pull nested blocks out before constructing the dataclass
+    theme_raw = dict(brand_raw.pop("theme", {}))
+    brand_hosts_raw = brand_raw.pop("hosts", [])
+
+    # Theme guardrails per design D1
+    theme = BrandTheme()
+    for field_name in ("primary_color", "accent_color", "background_color"):
+        if field_name in theme_raw:
+            value = theme_raw[field_name]
+            rgb = _hex_to_rgb(value)
+            if rgb is None:
+                warnings.append(f"brand.theme.{field_name}={value!r} is not a valid hex color; using Volare default")
+                continue
+            # Background-specific guardrails (Volare Refined invariants):
+            # 1. Must be dark (lightness <= 25) — dark-canvas theme
+            # 2. Body text (--cream) must achieve 4.5:1 contrast against this bg
+            # primary_color and accent_color are decorative (not body text), so
+            # they only need hex validity — no contrast check.
+            if field_name == "background_color":
+                lightness = _hex_lightness(value)
+                if lightness is not None and lightness > 25:
+                    warnings.append(
+                        f"brand.theme.background_color={value!r} is too light "
+                        f"(L={lightness:.0f} > 25); Volare Refined requires a dark canvas. Using default."
+                    )
+                    continue
+                ratio = _contrast_ratio(_BRAND_DEFAULT_TEXT, value)
+                if ratio is not None and ratio < 4.5:
+                    warnings.append(
+                        f"brand.theme.background_color={value!r} fails 4.5:1 contrast against "
+                        f"--cream body text (got {ratio:.2f}:1); using Volare default for accessibility"
+                    )
+                    continue
+            setattr(theme, field_name, value)
+    # Font guardrails — must be from curated lists
+    for font_field, allowed in (
+        ("display_font", _BRAND_DISPLAY_FONTS),
+        ("body_font", _BRAND_BODY_FONTS),
+        ("mono_font", _BRAND_MONO_FONTS),
+    ):
+        if font_field in theme_raw:
+            value = theme_raw[font_field]
+            if value not in allowed:
+                warnings.append(
+                    f"brand.theme.{font_field}={value!r} is not in the approved list. "
+                    f"Pick one of: {', '.join(sorted(allowed))}. Using default."
+                )
+                continue
+            setattr(theme, font_field, value)
+
+    # Brand hosts — every brand_host.engine_host must reference an existing [[hosts]].name
+    valid_host_names = {h.name for h in hosts}
+    brand_hosts: list[BrandHost] = []
+    for bh in brand_hosts_raw:
+        engine_host = bh.get("engine_host", "")
+        if engine_host not in valid_host_names:
+            warnings.append(
+                f"brand.host.engine_host={engine_host!r} does not match any [[hosts]] "
+                f"entry; dropping this brand host. Valid: {sorted(valid_host_names)}"
+            )
+            continue
+        brand_hosts.append(
+            BrandHost(
+                engine_host=engine_host,
+                display_name=bh.get("display_name", engine_host),
+                description=bh.get("description", ""),
+            )
+        )
+    # Auto-fill: every engine host SHOULD have a brand host
+    covered = {bh.engine_host for bh in brand_hosts}
+    for h in hosts:
+        if h.name not in covered:
+            brand_hosts.append(BrandHost(engine_host=h.name, display_name=h.name, description=(h.style or "")[:160]))
+
+    # Validate founded year
+    founded = brand_raw.get("founded", 0)
+    if founded:
+        try:
+            year = int(founded)
+        except (TypeError, ValueError):
+            warnings.append(f"brand.founded={founded!r} is not a valid year; dropping field")
+            brand_raw.pop("founded", None)
+        else:
+            from datetime import datetime as _dt
+
+            current_year = _dt.now().year
+            if year < 1900 or year > current_year + 1:
+                warnings.append(f"brand.founded={year} is outside 1900..{current_year + 1}; dropping field")
+                brand_raw.pop("founded", None)
+            else:
+                brand_raw["founded"] = year
+
+    # Artwork URL guardrail: HA resolves entity_picture against its own origin,
+    # so only an absolute http(s) URL with a host is usable. A relative, non-http,
+    # scheme-only ("http://"), hostless-authority ("https://:443/logo.png"), or
+    # malformed value would 404 (or be rejected) on the HA media card; warn and
+    # fall back to the engine default (blank). is_absolute_http_url is raise-safe.
+    artwork_url = str(brand_raw.get("artwork_url", "") or "").strip()
+    if artwork_url and not is_absolute_http_url(artwork_url):
+        warnings.append(
+            f"brand.artwork_url={artwork_url!r} is not an absolute http(s) URL with a host; "
+            "ignoring it and using the default station logo"
+        )
+        artwork_url = ""
+
+    brand = BrandSection(
+        station_name=brand_raw.get("station_name", raw.get("station", {}).get("name", DEFAULT_STATION_NAME)),
+        frequency=brand_raw.get("frequency", ""),
+        city=brand_raw.get("city", ""),
+        founded=int(brand_raw.get("founded", 0)),
+        tagline=brand_raw.get("tagline", ""),
+        about=brand_raw.get("about", ""),
+        opengraph_subtitle=brand_raw.get("opengraph_subtitle", ""),
+        artwork_url=artwork_url,
+        hosts=brand_hosts,
+        theme=theme,
+    )
+    return brand, warnings
+
+
+def _err(field: str, msg: str) -> str:
+    """Format a config validation error with a hint about which TOML section to edit.
+
+    >>> _err("pacing.ad_spots_per_break", "must be <= 5")
+    'pacing.ad_spots_per_break must be <= 5 (set in radio.toml [pacing])'
+    """
+    section = field.split(".", 1)[0]
+    return f"{field} {msg} (set in radio.toml [{section}])"
+
+
+def _validate(config: StationConfig) -> None:
+    """Fail fast on bad config instead of cryptic runtime errors."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    errors = []
+
+    # Models degrade rather than fail boot — a model misconfig must never take
+    # the station off air. Runs before the fail-fast checks below.
+    _validate_models(config)
+
+    if not config.hosts:
+        errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
+    for index, host in enumerate(config.hosts):
+        errors.extend(_validate_host_elevenlabs_config(host, index=index))
+    # Bounds are shared with env-load clamping and PATCH /api/pacing so the
+    # accepted range cannot drift between boot and live admin changes.
+    for _pacing_attr, (_lo, _hi) in PACING_BOUNDS.items():
+        _value = getattr(config.pacing, _pacing_attr)
+        if _value < _lo:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be >= {_lo}"))
+        if _value > _hi:
+            errors.append(_err(f"pacing.{_pacing_attr}", f"must be <= {_hi}"))
+    if config.pacing.lookahead_segments < 1:
+        errors.append(_err("pacing.lookahead_segments", "must be >= 1"))
+    if config.homeassistant.poll_interval < 1:
+        errors.append(_err("homeassistant.poll_interval", "must be >= 1"))
+    if config.homeassistant.timer_poll_interval < 1:
+        errors.append(_err("homeassistant.timer_poll_interval", "must be >= 1"))
+    _ctx_timeout = config.homeassistant.context_refresh_timeout
+    if (
+        isinstance(_ctx_timeout, bool)
+        or not isinstance(_ctx_timeout, int | float)
+        or not math.isfinite(_ctx_timeout)
+        or _ctx_timeout <= 0
+    ):
+        errors.append(_err("homeassistant.context_refresh_timeout", "must be a positive number"))
+    if not isinstance(config.homeassistant.mood_llm_enabled, bool):
+        errors.append(_err("homeassistant.mood_llm_enabled", "must be true or false"))
+    _mood_ttl = config.homeassistant.mood_ttl_seconds
+    if (
+        isinstance(_mood_ttl, bool)
+        or not isinstance(_mood_ttl, int | float)
+        or not math.isfinite(_mood_ttl)
+        or _mood_ttl <= 0
+    ):
+        errors.append(_err("homeassistant.mood_ttl_seconds", "must be a positive number"))
+    _allowed_urgencies = {"pissed", "urgent", "gentle"}
+    for idx, timer_cfg in enumerate(config.homeassistant.timer_interrupts):
+        if timer_cfg.cooldown < 1:
+            errors.append(_err(f"homeassistant.timer_interrupt[{idx}].cooldown", "must be >= 1"))
+        if timer_cfg.urgency not in _allowed_urgencies:
+            errors.append(
+                _err(f"homeassistant.timer_interrupt[{idx}].urgency", f"must be one of {sorted(_allowed_urgencies)}")
+            )
+    if not isinstance(config.persona.anthem_threshold, int) or config.persona.anthem_threshold < 1:
+        errors.append(_err("persona.anthem_threshold", "must be >= 1"))
+    if not isinstance(config.persona.skip_bit_threshold, int) or config.persona.skip_bit_threshold < 1:
+        errors.append(_err("persona.skip_bit_threshold", "must be >= 1"))
+    if config.playlist.jamendo_client_id:
+        config.playlist.jamendo_client_id = config.playlist.jamendo_client_id.strip()
+    if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]{8,128}$", config.playlist.jamendo_client_id):
+        log.warning("Invalid jamendo_client_id format — Jamendo source disabled")
+        config.playlist.jamendo_client_id = ""
+        config.playlist.jamendo_enabled = False
+    if config.playlist.jamendo_ack_revision != JAMENDO_ACK_REVISION:
+        config.playlist.jamendo_noncommercial_acknowledged = False
+    if config.playlist.jamendo_enabled and (
+        not config.playlist.jamendo_client_id or not config.playlist.jamendo_noncommercial_acknowledged
+    ):
+        log.warning("Jamendo enablement is incomplete — keeping transient expansion disabled")
+        config.playlist.jamendo_enabled = False
+    if config.playlist.jamendo_country and not re.match(r"^[A-Z]{3}$", config.playlist.jamendo_country):
+        errors.append(
+            _err(
+                "playlist.jamendo_country",
+                "must be a 3-letter uppercase ISO 3166-1 alpha-3 code (e.g. 'ITA', 'DEU', 'FRA') or empty",
+            )
+        )
+    _valid_jamendo_orders = {
+        "popularity_total",
+        "popularity_month",
+        "popularity_week",
+        "releasedate_desc",
+    }
+    if config.playlist.jamendo_order and config.playlist.jamendo_order not in _valid_jamendo_orders:
+        errors.append(_err("playlist.jamendo_order", f"must be one of {sorted(_valid_jamendo_orders)} or empty"))
+    if not isinstance(config.playlist.jamendo_limit, int) or isinstance(config.playlist.jamendo_limit, bool):
+        errors.append(_err("playlist.jamendo_limit", "must be an integer between 1 and 200"))
+    elif not 1 <= config.playlist.jamendo_limit <= 200:
+        errors.append(_err("playlist.jamendo_limit", "must be between 1 and 200"))
+
+    if not (config.anthropic_api_key or config.openai_api_key):
+        log.warning("No ANTHROPIC_API_KEY or OPENAI_API_KEY — banter/ads will use fallback text")
+    if config.homeassistant.mood_llm_enabled and not config.anthropic_api_key:
+        log.warning("Home Assistant mood LLM enabled but no ANTHROPIC_API_KEY — using heuristic home mood")
+    if config.homeassistant.enabled and not config.ha_token:
+        log.warning("Home Assistant enabled but no HA_TOKEN in environment")
+    if not config.ads.brands:
+        log.warning("No ad brands configured — ad segments will be skipped")
+    if (
+        not _is_loopback_host(config.bind_host)
+        and not (config.admin_password or config.admin_token)
+        and not config.is_addon
+    ):
+        errors.append("Set ADMIN_PASSWORD or ADMIN_TOKEN when binding to a non-loopback host")
+
+    if errors:
+        raise ValueError("Config errors:\n  " + "\n  ".join(errors))
+
+
+def _env_positive_float(name: str) -> float | None:
+    """Parse a positive finite float from an env var; warn and return None on invalid.
+
+    Shared by the `[homeassistant]` numeric env overrides so the
+    parse/validate/warn behavior can't drift between knobs.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not a number)", name, raw)
+        return None
+    if math.isfinite(value) and value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be a finite number > 0)", name, raw)
+    return None
+
+
+def _env_positive_int(name: str) -> int | None:
+    """Parse a positive integer from an env var; warn and return None on invalid."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not an integer)", name, raw)
+        return None
+    if value > 0:
+        return value
+    log.warning("Ignoring %s=%r (must be > 0)", name, raw)
+    return None
+
+
+def _env_clamped_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    """Parse an integer env var, clamp it to range, and use a default for invalid input.
+
+    Unlike :func:`_env_positive_int`, this always returns a concrete number.
+    Config loading uses this helper so malformed input logs a warning and does not
+    abort startup.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not an integer), using %d", name, raw, default)
+        return default
+    if value < minimum:
+        log.warning("Raising %s=%d to the %d minimum", name, value, minimum)
+        return minimum
+    if value > maximum:
+        log.warning("Capping %s=%d at the %d maximum", name, value, maximum)
+        return maximum
+    return value
+
+
+def _clean_str(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _parse_host_elevenlabs_model(value: object, *, index: int) -> str:
+    """Parse the explicit ElevenLabs model without silently changing voice behavior."""
+
+    field_name = f"hosts[{index}].elevenlabs_model"
+    if value is None:
+        return _ELEVENLABS_V2_MODEL
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(_err(field_name, "must be a non-empty string"))
+    model = value.strip()
+    if model not in _ELEVENLABS_SUPPORTED_MODELS:
+        raise ValueError(_err(field_name, f"must be one of {sorted(_ELEVENLABS_SUPPORTED_MODELS)}"))
+    return model
+
+
+def _parse_host_delivery_profile(value: object, *, index: int) -> str:
+    """Parse the constrained semantic performance profile for a host."""
+
+    field_name = f"hosts[{index}].delivery_profile"
+    if value is None:
+        return "none"
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(_err(field_name, "must be a non-empty string"))
+    profile = value.strip().lower()
+    if profile not in _ELEVENLABS_DELIVERY_PROFILES:
+        raise ValueError(_err(field_name, f"must be one of {sorted(_ELEVENLABS_DELIVERY_PROFILES)}"))
+    return profile
+
+
+def _parse_host_voice_settings(
+    value: object,
+    *,
+    index: int,
+    engine: object,
+    elevenlabs_model: str,
+) -> dict[str, float | bool]:
+    """Validate host ElevenLabs tuning against the selected model's contract.
+
+    V2 retains its historic pass-through override surface. V3 accepts only
+    stability, because similarity/style/Speaker Boost are incompatible there.
+    """
+
+    field_name = f"hosts[{index}].voice_settings"
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(_err(field_name, "must be a TOML table"))
+    if not value:
+        return {}
+    if elevenlabs_model != _ELEVENLABS_V3_MODEL:
+        # Host V2 settings historically passed straight through to the exact V2
+        # payload. Keep that compatibility boundary intact for existing voices.
+        return dict(value)
+
+    engine_name = _clean_str(engine).lower() or "edge"
+    if engine_name != "elevenlabs":
+        raise ValueError(_err(field_name, "is supported only for engine = 'elevenlabs'"))
+
+    parsed: dict[str, float | bool] = {}
+    for key, raw_value in value.items():
+        if key in _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int | float) or not math.isfinite(raw_value):
+                raise ValueError(_err(f"{field_name}.{key}", "must be a finite number between 0 and 1"))
+            lower, upper = _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS[key]
+            if not lower <= raw_value <= upper:
+                raise ValueError(_err(f"{field_name}.{key}", "must be between 0 and 1"))
+            parsed[key] = float(raw_value)
+        else:
+            allowed = sorted(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)
+            raise ValueError(_err(f"{field_name}.{key}", f"must be one of {allowed}"))
+    return parsed
+
+
+def _validate_host_elevenlabs_config(host: HostPersonality, *, index: int) -> list[str]:
+    """Return validation errors for direct ``HostPersonality`` construction too."""
+
+    errors: list[str] = []
+    model = host.elevenlabs_model
+    profile = host.delivery_profile
+    field_prefix = f"hosts[{index}]"
+
+    if not isinstance(model, str) or model not in _ELEVENLABS_SUPPORTED_MODELS:
+        errors.append(
+            _err(f"{field_prefix}.elevenlabs_model", f"must be one of {sorted(_ELEVENLABS_SUPPORTED_MODELS)}")
+        )
+        return errors
+    if not isinstance(profile, str) or profile not in _ELEVENLABS_DELIVERY_PROFILES:
+        errors.append(
+            _err(f"{field_prefix}.delivery_profile", f"must be one of {sorted(_ELEVENLABS_DELIVERY_PROFILES)}")
+        )
+        return errors
+    if profile != "none" and host.name.strip().casefold() != profile:
+        errors.append(
+            _err(
+                f"{field_prefix}.delivery_profile",
+                f"'{profile}' is reserved for the host named '{profile.title()}'",
+            )
+        )
+    if model == _ELEVENLABS_V3_MODEL:
+        if (host.engine or "edge").strip().lower() != "elevenlabs":
+            errors.append(_err(f"{field_prefix}.elevenlabs_model", "'eleven_v3' requires engine = 'elevenlabs'"))
+        if profile == "none":
+            errors.append(
+                _err(
+                    f"{field_prefix}.delivery_profile",
+                    "'eleven_v3' requires the matching audited host delivery profile",
+                )
+            )
+        if not isinstance(host.voice_settings, dict):
+            errors.append(_err(f"{field_prefix}.voice_settings", "must be a TOML table"))
+        elif sorted(set(host.voice_settings) - set(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)):
+            errors.append(
+                _err(
+                    f"{field_prefix}.voice_settings",
+                    f"for eleven_v3 must use only {sorted(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)}",
+                )
+            )
+        elif "stability" in host.voice_settings:
+            stability = host.voice_settings["stability"]
+            if isinstance(stability, bool) or not isinstance(stability, int | float) or not math.isfinite(stability):
+                errors.append(
+                    _err(f"{field_prefix}.voice_settings.stability", "must be a finite number between 0 and 1")
+                )
+            elif not 0 <= stability <= 1:
+                errors.append(_err(f"{field_prefix}.voice_settings.stability", "must be between 0 and 1"))
+    elif profile != "none":
+        errors.append(_err(f"{field_prefix}.delivery_profile", "requires elevenlabs_model = 'eleven_v3'"))
+    return errors
+
+
+def _parse_ad_voice_settings(value: object, *, index: int, engine: object) -> dict[str, float | bool]:
+    """Validate explicit Eleven v2 ad tuning without copying TTS defaults.
+
+    ``audio.tts`` remains the source of the house defaults. This parser only
+    accepts deliberate per-character overrides, so a typo cannot silently turn
+    into an ineffective API field or a non-Eleven engine's ignored setting.
+    """
+
+    field_name = f"ads.voices[{index}].voice_settings"
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(_err(field_name, "must be a TOML table"))
+    if not value:
+        return {}
+
+    engine_name = _clean_str(engine).lower() or "edge"
+    if engine_name != "elevenlabs":
+        raise ValueError(_err(field_name, "is supported only for engine = 'elevenlabs'"))
+
+    parsed: dict[str, float | bool] = {}
+    for key, raw_value in value.items():
+        if key in _ELEVENLABS_V2_FLOAT_SETTING_BOUNDS:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int | float) or not math.isfinite(raw_value):
+                raise ValueError(_err(f"{field_name}.{key}", "must be a finite number between 0 and 1"))
+            lower, upper = _ELEVENLABS_V2_FLOAT_SETTING_BOUNDS[key]
+            if not lower <= raw_value <= upper:
+                raise ValueError(_err(f"{field_name}.{key}", "must be between 0 and 1"))
+            parsed[key] = float(raw_value)
+        elif key in _ELEVENLABS_V2_BOOL_SETTINGS:
+            if not isinstance(raw_value, bool):
+                raise ValueError(_err(f"{field_name}.{key}", "must be true or false"))
+            parsed[key] = raw_value
+        else:
+            allowed = sorted((*_ELEVENLABS_V2_FLOAT_SETTING_BOUNDS, *_ELEVENLABS_V2_BOOL_SETTINGS))
+            raise ValueError(_err(f"{field_name}.{key}", f"must be one of {allowed}"))
+    return parsed
+
+
+def _parse_ad_voice_name(value: object, *, index: int) -> str:
+    """Normalize the character key used by direct-cast ownership."""
+
+    name = _clean_str(value)
+    if not name:
+        raise ValueError(_err(f"ads.voices[{index}].name", "must be a non-empty string"))
+    return name
+
+
+def _parse_ad_brand_name(value: object, *, index: int) -> str:
+    """Normalize the campaign key used by direct-cast ownership."""
+
+    name = _clean_str(value)
+    if not name:
+        raise ValueError(_err(f"ads.brands[{index}].name", "must be a non-empty string"))
+    return name
+
+
+def _parse_spokesperson_voice(value: object) -> tuple[str, bool]:
+    """Preserve malformed explicit direct mappings for fail-closed compilation."""
+
+    if value is None:
+        return "", False
+    return (_clean_str(value), True)
+
+
+def _parse_ad_voice_airtime_approved(value: object, *, index: int) -> bool:
+    """Parse the explicit approval gate; unmarked config voices stay staged."""
+
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(_err(f"ads.voices[{index}].airtime_approved", "must be true or false"))
+    return value
+
+
+def _parse_ad_voice_secondary_only(value: object, *, index: int) -> bool:
+    """Keep the house-support role opt-in and impossible to mistype."""
+
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(_err(f"ads.voices[{index}].secondary_only", "must be true or false"))
+    return value
+
+
+def sanitize_station_name(value: object) -> str:
+    """Return a safe, bounded station name for human-facing surfaces."""
+    if not isinstance(value, str):
+        return ""
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", " ", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:_MAX_STATION_NAME_LEN].rstrip()
+
+
+def _is_default_station_name(value: object) -> bool:
+    return sanitize_station_name(value).casefold() == DEFAULT_STATION_NAME.casefold()
+
+
+def _default_identity_pack(station_name: str, sonic_brand: SonicBrandSection | None = None) -> dict[str, Any]:
+    """Deterministic station-copy pack derived from the chosen station name."""
+    name = sanitize_station_name(station_name) or DEFAULT_STATION_NAME
+    tagline = (
+        sanitize_station_name(getattr(sonic_brand, "tagline", ""))
+        if sonic_brand is not None
+        else _DEFAULT_SONIC_TAGLINE
+    ) or _DEFAULT_SONIC_TAGLINE
+    geography = (
+        sanitize_station_name(getattr(sonic_brand, "geography", ""))
+        if sonic_brand is not None
+        else _DEFAULT_SONIC_GEOGRAPHY
+    ) or _DEFAULT_SONIC_GEOGRAPHY
+    sweepers = [
+        f"{name}.",
+        f"{geography}... e tutto il mondo che ascolta.",
+        f"Sei su {name}.",
+        "La radio che tua nonna non approverebbe.",
+        "Da Windor a Vergen, nessuno è al sicuro.",
+    ]
+    return {
+        "spoken_ident": f"{name}... {tagline}",
+        "sweepers": sweepers,
+        "listener_title": name,
+        "share_title": f"{name} - live radio",
+        "home_assistant_name": name,
+    }
+
+
+def _resolve_identity(
+    *,
+    station_raw: dict,
+    brand: BrandSection,
+    sonic_brand: SonicBrandSection,
+    addon_mode: bool,
+    env_station_name: str,
+    brand_warnings: list[str],
+) -> IdentitySection:
+    """Resolve one station identity after TOML, env, and add-on inputs are known."""
+    station_raw_name = sanitize_station_name(station_raw.get("name"))
+    brand_name = sanitize_station_name(brand.station_name)
+
+    if env_station_name:
+        station_name = env_station_name
+        source = "ha_addon" if addon_mode else "env"
+    elif station_raw_name and not _is_default_station_name(station_raw_name):
+        station_name = station_raw_name
+        source = "station"
+    elif brand_name and not _is_default_station_name(brand_name):
+        station_name = brand_name
+        source = "brand"
+    else:
+        station_name = station_raw_name or brand_name or DEFAULT_STATION_NAME
+        source = "default"
+
+    station_name = sanitize_station_name(station_name) or DEFAULT_STATION_NAME
+    station_raw["name"] = station_name
+    pack = _default_identity_pack(station_name, sonic_brand)
+
+    custom_copy_preserved = False
+    if brand_name and not _is_default_station_name(brand_name) and brand_name != station_name:
+        custom_copy_preserved = True
+    brand.station_name = station_name
+
+    full_ident = str(sonic_brand.full_ident or "")
+    if not full_ident or full_ident == _DEFAULT_SONIC_FULL_IDENT:
+        sonic_brand.full_ident = str(pack["spoken_ident"])
+    elif station_name not in full_ident:
+        custom_copy_preserved = True
+
+    if not sonic_brand.sweepers or tuple(sonic_brand.sweepers) == _DEFAULT_SONIC_SWEEPERS:
+        sonic_brand.sweepers = list(pack["sweepers"])
+    elif not any(station_name in line for line in sonic_brand.sweepers):
+        custom_copy_preserved = True
+
+    if custom_copy_preserved:
+        brand_warnings.append(
+            "custom identity copy preserved; regenerate it deliberately if it should use the current station name"
+        )
+
+    return IdentitySection(
+        station_name=station_name,
+        source=source,
+        custom_copy_preserved=custom_copy_preserved,
+        generated=pack,
+    )
+
+
+def _parse_radio_event_rules(value: object) -> list[RadioEventRule]:
+    """Parse ``[[home.radio_event]]`` rules.
+
+    Bad rule blocks are ignored with a warning. This feature is opt-in and
+    operator-facing, so a malformed custom event must not stop the station.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        log.warning("Ignoring [home.radio_event]: expected an array of tables")
+        return []
+
+    rules: list[RadioEventRule] = []
+    seen_ids: set[str] = set()
+    for idx, raw_rule in enumerate(value):
+        if not isinstance(raw_rule, dict):
+            log.warning("Ignoring home.radio_event[%d]: expected a table", idx)
+            continue
+        rule_id = _clean_str(raw_rule.get("id"))
+        if not rule_id:
+            log.warning("Ignoring home.radio_event[%d]: id is required", idx)
+            continue
+        if rule_id in seen_ids:
+            log.warning("Ignoring home.radio_event[%d]: duplicate id %r", idx, rule_id)
+            continue
+
+        mode = _clean_str(raw_rule.get("mode")) or "directive"
+        trigger = _clean_str(raw_rule.get("trigger")) or "state"
+        direction = _clean_str(raw_rule.get("direction")) or "above"
+        if mode not in {"directive", "gag"}:
+            log.warning("Ignoring home.radio_event[%d] %r: mode must be directive or gag", idx, rule_id)
+            continue
+        if trigger not in {"state", "attribute", "numeric_threshold"}:
+            log.warning(
+                "Ignoring home.radio_event[%d] %r: trigger must be state, attribute, or numeric_threshold",
+                idx,
+                rule_id,
+            )
+            continue
+        if direction not in {"above", "below"}:
+            log.warning("Ignoring home.radio_event[%d] %r: direction must be above or below", idx, rule_id)
+            continue
+
+        entity_id = _clean_str(raw_rule.get("entity_id"))
+        entity_glob = _clean_str(raw_rule.get("entity_glob"))
+        domain = _clean_str(raw_rule.get("domain"))
+        device_class = _clean_str(raw_rule.get("device_class"))
+        if not any((entity_id, entity_glob, domain)):
+            log.warning("Ignoring home.radio_event[%d] %r: one selector is required", idx, rule_id)
+            continue
+
+        label = _clean_str(raw_rule.get("label"))
+        directive = _clean_str(raw_rule.get("directive"))
+        if mode == "directive" and not directive:
+            log.warning("Ignoring home.radio_event[%d] %r: directive is required for directive mode", idx, rule_id)
+            continue
+        if mode == "gag" and not label:
+            log.warning("Ignoring home.radio_event[%d] %r: label is required for gag mode", idx, rule_id)
+            continue
+
+        attribute = _clean_str(raw_rule.get("attribute"))
+        if trigger == "attribute" and not attribute:
+            log.warning("Ignoring home.radio_event[%d] %r: attribute is required", idx, rule_id)
+            continue
+
+        threshold: float | None = None
+        if trigger == "numeric_threshold":
+            raw_threshold = raw_rule.get("threshold")
+            if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, int | float | str):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be numeric", idx, rule_id)
+                continue
+            try:
+                threshold = float(raw_threshold)
+            except (TypeError, ValueError):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be numeric", idx, rule_id)
+                continue
+            if not math.isfinite(threshold):
+                log.warning("Ignoring home.radio_event[%d] %r: threshold must be finite", idx, rule_id)
+                continue
+
+        cooldown_raw = raw_rule.get("cooldown_seconds", 900)
+        cooldown_seconds = 900
+        if not isinstance(cooldown_raw, bool):
+            try:
+                parsed_cooldown = int(cooldown_raw)
+            except (TypeError, ValueError):
+                parsed_cooldown = 900
+            if parsed_cooldown >= 1:
+                cooldown_seconds = parsed_cooldown
+
+        rules.append(
+            RadioEventRule(
+                id=rule_id,
+                label=label,
+                mode=mode,
+                entity_id=entity_id,
+                entity_glob=entity_glob,
+                domain=domain,
+                device_class=device_class,
+                trigger=trigger,
+                from_state=_clean_str(raw_rule.get("from_state")),
+                to_state=_clean_str(raw_rule.get("to_state")),
+                attribute=attribute,
+                from_value=_clean_str(raw_rule.get("from_value")),
+                to_value=_clean_str(raw_rule.get("to_value")),
+                threshold=threshold,
+                direction=direction,
+                cooldown_seconds=cooldown_seconds,
+                directive=directive,
+            )
+        )
+        seen_ids.add(rule_id)
+    return rules
+
+
+def load_config(path: str = "radio.toml") -> StationConfig:
+    """Load ``radio.toml`` plus environment overrides into a validated config."""
+    addon_mode = _is_addon()
+    if addon_mode:
+        _apply_addon_options()
+
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+
+    hosts: list[HostPersonality] = []
+    for index, raw_host in enumerate(raw.get("hosts", [])):
+        elevenlabs_model = _parse_host_elevenlabs_model(raw_host.get("elevenlabs_model"), index=index)
+        engine = raw_host.get("engine", "edge")
+        if elevenlabs_model == _ELEVENLABS_V3_MODEL and _clean_str(engine).lower() != "elevenlabs":
+            raise ValueError(_err(f"hosts[{index}].elevenlabs_model", "'eleven_v3' requires engine = 'elevenlabs'"))
+        hosts.append(
+            HostPersonality(
+                name=raw_host["name"],
+                voice=raw_host["voice"],
+                style=raw_host["style"],
+                personality=PersonalityAxes.from_dict(raw_host.get("personality", {})),
+                engine=engine,
+                edge_fallback_voice=raw_host.get("edge_fallback_voice", ""),
+                voice_settings=_parse_host_voice_settings(
+                    raw_host.get("voice_settings", {}),
+                    index=index,
+                    engine=engine,
+                    elevenlabs_model=elevenlabs_model,
+                ),
+                elevenlabs_model=elevenlabs_model,
+                delivery_profile=_parse_host_delivery_profile(raw_host.get("delivery_profile"), index=index),
+            )
+        )
+
+    # Parse ads section with structured brands and voices
+    ads_raw = raw.get("ads", {})
+    if "brand_pool" in ads_raw:
+        # Backward compat: convert flat string list to AdBrand objects
+        brands: list[AdBrand] = [
+            AdBrand(name=_parse_ad_brand_name(name, index=index), tagline="", category="general")
+            for index, name in enumerate(ads_raw["brand_pool"])
+        ]
+        voices: list[AdVoice] = []
+        sfx_dir = ads_raw.get("sfx_dir", "sfx")
+    else:
+        brands = []
+        for brand_index, b in enumerate(ads_raw.get("brands", [])):
+            campaign_raw = b.get("campaign")
+            campaign = None
+            if campaign_raw and isinstance(campaign_raw, dict):
+                spokesperson_voice, spokesperson_voice_declared = _parse_spokesperson_voice(
+                    campaign_raw.get("spokesperson_voice")
+                )
+                campaign = CampaignSpine(
+                    premise=campaign_raw.get("premise", ""),
+                    sonic_signature=campaign_raw.get("sonic_signature", ""),
+                    sonic_recipe=campaign_raw.get("sonic_recipe", ""),
+                    format_pool=campaign_raw.get("format_pool", []),
+                    spokesperson_voice=spokesperson_voice,
+                    spokesperson_voice_declared=spokesperson_voice_declared,
+                    # Transitional compatibility only: a later gated migration
+                    # replaces this role hint with the authoritative direct
+                    # character mapping.
+                    spokesperson=_clean_str(campaign_raw.get("spokesperson")),
+                    escalation_rule=campaign_raw.get("escalation_rule", ""),
+                )
+            brands.append(
+                AdBrand(
+                    name=_parse_ad_brand_name(b.get("name"), index=brand_index),
+                    tagline=b.get("tagline", ""),
+                    category=b.get("category", "general"),
+                    recurring=b.get("recurring", True),
+                    sonic_recipe=b.get("sonic_recipe", ""),
+                    campaign=campaign,
+                )
+            )
+        voices = []
+        for index, raw_voice in enumerate(ads_raw.get("voices", [])):
+            engine = raw_voice.get("engine", "edge")
+            voices.append(
+                AdVoice(
+                    name=_parse_ad_voice_name(raw_voice.get("name"), index=index),
+                    voice=raw_voice["voice"],
+                    style=raw_voice.get("style", ""),
+                    role=raw_voice.get("role", ""),
+                    engine=engine,
+                    edge_fallback_voice=raw_voice.get("edge_fallback_voice", ""),
+                    voice_settings=_parse_ad_voice_settings(
+                        raw_voice.get("voice_settings", {}), index=index, engine=engine
+                    ),
+                    airtime_approved=_parse_ad_voice_airtime_approved(raw_voice.get("airtime_approved"), index=index),
+                    secondary_only=_parse_ad_voice_secondary_only(raw_voice.get("secondary_only"), index=index),
+                )
+            )
+        sfx_dir = ads_raw.get("sfx_dir", "sfx")
+
+    # Legacy: station.bitrate → audio.bitrate migration
+    station_raw = dict(raw.get("station", {}))
+    audio_raw = dict(raw.get("audio", {}))
+    if "bitrate" in station_raw:
+        import logging as _log
+
+        _log.getLogger(__name__).warning("station.bitrate is deprecated — use audio.bitrate instead")
+        # pop() cleans station_raw so StationSection(**station_raw) won't get an unexpected kwarg
+        if "bitrate" not in audio_raw:
+            audio_raw["bitrate"] = station_raw.pop("bitrate")
+        else:
+            station_raw.pop("bitrate")
+
+    # Legacy: model IDs moved from [audio] to model_registry.toml. An upgraded standalone
+    # radio.toml may still carry claude_model / claude_creative_model /
+    # openai_script_model in [audio]; drop them so AudioSection(**audio_raw) does
+    # not raise TypeError and refuse to boot. Model selection now lives in the
+    # registry; matching environment overrides still take precedence when a
+    # usable registry route exists. Leadership principle #2: the station must
+    # always boot.
+    _legacy_audio_model_keys = [
+        k for k in ("claude_model", "claude_creative_model", "openai_script_model") if k in audio_raw
+    ]
+    if _legacy_audio_model_keys:
+        import logging as _log
+
+        _log.getLogger(__name__).warning(
+            "Ignoring deprecated [audio] keys %s — model selection now lives in model_registry.toml "
+            "(see CLAUDE.md). Remove them from radio.toml.",
+            _legacy_audio_model_keys,
+        )
+        for _k in _legacy_audio_model_keys:
+            audio_raw.pop(_k, None)
+
+    # Env override for the FM broadcast chain (HA add-on `broadcast_chain` option →
+    # MAMMAMIRADIO_BROADCAST_CHAIN via run.sh) so addon operators can toggle on-air
+    # colouring without rebuilding the baked-in radio.toml. env > toml.
+    _bc_env = os.getenv("MAMMAMIRADIO_BROADCAST_CHAIN", "").strip().lower()
+    if _bc_env in _TRUTHY:
+        audio_raw["broadcast_chain"] = True
+    elif _bc_env in _FALSY:
+        audio_raw["broadcast_chain"] = False
+
+    ha_raw = raw.get("homeassistant", {})
+    # Env-var overrides for HA add-on: HA_URL and HA_ENABLED
+    if os.getenv("HA_URL"):
+        ha_raw["url"] = os.getenv("HA_URL")
+    ha_enabled_env = os.getenv("HA_ENABLED", "").strip().lower()
+    ha_force_disabled = ha_enabled_env in _FALSY
+    if ha_enabled_env in _TRUTHY:
+        ha_raw["enabled"] = True
+    elif ha_force_disabled:
+        ha_raw["enabled"] = False
+    _ha_context_env = os.getenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "").strip().lower()
+    if _ha_context_env in _TRUTHY:
+        ha_raw["context_enabled"] = True
+    elif _ha_context_env in _FALSY:
+        ha_raw["context_enabled"] = False
+    elif _ha_context_env:
+        import logging as _ha_context_logging
+
+        _ha_context_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_CONTEXT_ENABLED=%r (use true/1/yes or false/0/no)",
+            _ha_context_env,
+        )
+    _ha_mood_llm_env = os.getenv("MAMMAMIRADIO_HA_MOOD_LLM", "").strip().lower()
+    if _ha_mood_llm_env in _TRUTHY:
+        ha_raw["mood_llm_enabled"] = True
+    elif _ha_mood_llm_env in _FALSY:
+        ha_raw["mood_llm_enabled"] = False
+    elif _ha_mood_llm_env:
+        # A typo ("ture") must not silently leave the experiment off while the
+        # operator believes it is on.
+        import logging as _mood_logging
+
+        _mood_logging.getLogger(__name__).warning(
+            "Ignoring MAMMAMIRADIO_HA_MOOD_LLM=%r (use true/1/yes or false/0/no)",
+            _ha_mood_llm_env,
+        )
+    # Env overrides for positive-float HA knobs. Reject non-float / non-positive
+    # values (keep the toml/default) rather than letting a typo disable them.
+    _ctx_override = _env_positive_float("MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT")
+    if _ctx_override is not None:
+        ha_raw["context_refresh_timeout"] = _ctx_override
+    _poll_override = _env_positive_int("MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL")
+    if _poll_override is not None:
+        ha_raw["poll_interval"] = _poll_override
+    _mood_ttl_override = _env_positive_float("MAMMAMIRADIO_HA_MOOD_TTL_SECONDS")
+    if _mood_ttl_override is not None:
+        ha_raw["mood_ttl_seconds"] = _mood_ttl_override
+    # Parse [[ha.timer_interrupt]] blocks — extracted before ** expansion
+    timer_interrupts_raw = ha_raw.pop("timer_interrupt", [])
+    timer_interrupts = [
+        TimerInterruptConfig(
+            entity_id=t["entity_id"],
+            directive=t["directive"],
+            urgency=t.get("urgency", "pissed"),
+            cooldown=int(t.get("cooldown", 60)),
+        )
+        for t in timer_interrupts_raw
+        if isinstance(t, dict) and t.get("entity_id") and t.get("directive")
+    ]
+    ha_section = HomeAssistantSection(**ha_raw)
+    ha_section.timer_interrupts = timer_interrupts
+
+    # Evening running-gag candidacy overrides ([home.running_gags]). Degrade to
+    # built-in domain-based defaults on any malformed value — never raise (a bad
+    # operator config must not stop the station booting).
+    def _str_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [v.strip() for v in value if isinstance(v, str) and v.strip()]
+
+    home_raw = raw.get("home", {})
+    radio_events_raw = home_raw.get("radio_event", []) if isinstance(home_raw, dict) else []
+    radio_events = _parse_radio_event_rules(radio_events_raw)
+    gags_raw = home_raw.get("running_gags", {}) if isinstance(home_raw, dict) else {}
+    if not isinstance(gags_raw, dict):
+        gags_raw = {}
+    running_gags = EveningGagsSection(
+        domain_allowlist=_str_list(gags_raw.get("domain_allowlist")),
+        entity_allowlist=_str_list(gags_raw.get("entity_allowlist")),
+        entity_denylist=_str_list(gags_raw.get("entity_denylist")),
+    )
+    moderation_raw = raw.get("moderation", {})
+    if not isinstance(moderation_raw, dict):
+        moderation_raw = {}
+    moderation = ModerationSection(blocked_names=_str_list(moderation_raw.get("blocked_names")))
+    ha_token = os.getenv("HA_TOKEN", "")
+    # Auto-enable HA if token is present and URL is set (Docker/add-on convenience)
+    if ha_token and ha_section.url and not ha_section.enabled and not ha_force_disabled:
+        ha_section.enabled = True
+    if ha_section.enabled and not ha_token:
+        import logging as _log
+
+        _log.getLogger(__name__).warning("Home Assistant enabled but no HA_TOKEN in environment")
+
+    # Env-var overrides for Docker/HA add-on: station identity and playlist
+    env_station_name = sanitize_station_name(os.getenv("STATION_NAME", ""))
+    if env_station_name:
+        station_raw["name"] = env_station_name
+    if os.getenv("STATION_THEME"):
+        station_raw["theme"] = os.getenv("STATION_THEME")
+    # Dynamic model routing comes from the sibling canonical registry. Legacy
+    # standalone [models] blocks remain a read-only bridge for upgrades.
+    registry_path = Path(path).with_name(MODEL_REGISTRY_FILENAME)
+    models_section = _load_model_registry(registry_path, legacy_raw=raw)
+    _apply_model_env_overrides(models_section)
+    playlist_raw = dict(raw.get("playlist", {}))
+    if os.getenv("JAMENDO_CLIENT_ID") is not None:
+        playlist_raw["jamendo_client_id"] = os.getenv("JAMENDO_CLIENT_ID", "").strip()
+    jamendo_enabled_env = os.getenv("MAMMAMIRADIO_JAMENDO_ENABLED")
+    if jamendo_enabled_env is not None:
+        playlist_raw["jamendo_enabled"] = coerce_bool(jamendo_enabled_env, False)
+    jamendo_ack_env = os.getenv("MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED")
+    jamendo_ack_revision = os.getenv("MAMMAMIRADIO_JAMENDO_ACK_REVISION", "").strip()
+    if jamendo_ack_env is not None:
+        playlist_raw["jamendo_noncommercial_acknowledged"] = (
+            coerce_bool(jamendo_ack_env, False) and jamendo_ack_revision == JAMENDO_ACK_REVISION
+        )
+    playlist_raw["jamendo_ack_revision"] = jamendo_ack_revision
+    if os.getenv("JAMENDO_COUNTRY") is not None:
+        playlist_raw["jamendo_country"] = os.getenv("JAMENDO_COUNTRY", "").strip()
+    if os.getenv("JAMENDO_ORDER") is not None:
+        playlist_raw["jamendo_order"] = os.getenv("JAMENDO_ORDER", "").strip()
+    jamendo_limit_env = os.getenv("JAMENDO_LIMIT")
+    if jamendo_limit_env is not None and jamendo_limit_env.strip():
+        try:
+            playlist_raw["jamendo_limit"] = int(jamendo_limit_env.strip())
+        except ValueError:
+            playlist_raw["jamendo_limit"] = jamendo_limit_env.strip()
+
+    # Env-var overrides for runtime data directories (for Docker volume mounts).
+    # Keep the music location explicit so every ingest/download path observes
+    # the same operator-owned directory.
+    cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
+    tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "tmp"))
+    music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
+
+    # Parse sonic brand section
+    sonic_brand_raw = raw.get("sonic_brand", {})
+    sonic_brand_sweepers = sonic_brand_raw.pop("sweepers", [])
+    sonic_brand_motif = sonic_brand_raw.pop("motif_notes", [523, 659, 784, 1047])
+    # Tolerate legacy keys from older operator radio.toml files.
+    sonic_brand_raw.pop("short_sting", None)
+    sonic_brand_raw.pop("sweeper_probability", None)
+    sonic_brand = SonicBrandSection(
+        **sonic_brand_raw,
+        sweepers=sonic_brand_sweepers,
+        motif_notes=sonic_brand_motif,
+    )
+
+    # Parse brand-fiction layer (separate from operator-truth engine config).
+    # Validation is graceful — invalid values fall back to Volare Refined defaults
+    # and surface as brand_warnings for the operator (Engine Room panel).
+    brand, brand_warnings = _parse_brand(raw, hosts)
+    identity = _resolve_identity(
+        station_raw=station_raw,
+        brand=brand,
+        sonic_brand=sonic_brand,
+        addon_mode=addon_mode,
+        env_station_name=env_station_name,
+        brand_warnings=brand_warnings,
+    )
+    if brand_warnings:
+        import logging as _log
+
+        log = _log.getLogger(__name__)
+        for w in brand_warnings:
+            log.warning("brand: %s", w)
+
+    config = StationConfig(
+        station=StationSection(**station_raw),
+        playlist=PlaylistSection(**playlist_raw),
+        pacing=PacingSection(**raw.get("pacing", {})),
+        hosts=hosts,
+        ads=AdsSection(brands=brands, voices=voices, sfx_dir=sfx_dir),
+        imaging=ImagingSection(**raw.get("imaging", {})),
+        sonic_brand=sonic_brand,
+        audio=AudioSection(**audio_raw),
+        models=models_section,
+        homeassistant=ha_section,
+        running_gags=running_gags,
+        radio_events=radio_events,
+        moderation=moderation,
+        persona=PersonaSection(**raw.get("persona", {})),
+        identity=identity,
+        brand=brand,
+        brand_warnings=brand_warnings,
+        cache_dir=cache_dir,
+        tmp_dir=tmp_dir,
+        music_dir=music_dir,
+        max_cache_size_mb=_env_clamped_int(
+            "MAMMAMIRADIO_MAX_CACHE_MB",
+            # The add-on default covers a whole rotation of about 200 tracks at
+            # roughly 5 MB each. Standalone keeps the smaller 500 MB default.
+            default=ADDON_MAX_CACHE_SIZE_MB if addon_mode else DEFAULT_MAX_CACHE_SIZE_MB,
+            minimum=MIN_MAX_CACHE_SIZE_MB,
+            maximum=MAX_MAX_CACHE_SIZE_MB,
+        ),
+        bind_host=os.getenv("MAMMAMIRADIO_BIND_HOST", "127.0.0.1"),
+        port=int(os.getenv("MAMMAMIRADIO_PORT", "8000")),
+        admin_username=os.getenv("ADMIN_USERNAME", "admin"),
+        admin_password=os.getenv("ADMIN_PASSWORD", ""),
+        admin_token=os.getenv("ADMIN_TOKEN", ""),
+        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+        azure_speech_key=os.getenv("AZURE_SPEECH_KEY", ""),
+        azure_speech_region=os.getenv("AZURE_SPEECH_REGION", ""),
+        elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+        ha_token=ha_token,
+        is_addon=addon_mode,
+        # Both current HA add-ons deliberately omit extractor authority. Legacy
+        # options/env values are ignored there; standalone users need the
+        # optional external-media extra as well as this explicit opt-in.
+        allow_ytdlp=(not addon_mode and os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")),
+        super_italian_mode=coerce_bool(raw.get("super_italian_mode", True)),
+    )
+
+    _super_italian_env = os.getenv("MAMMAMIRADIO_SUPER_ITALIAN", "").strip().lower()
+    if _super_italian_env in _TRUTHY:
+        config.super_italian_mode = True
+    elif _super_italian_env in _FALSY:
+        config.super_italian_mode = False
+
+    _festival_env = os.getenv("MAMMAMIRADIO_FESTIVAL_MODE", "").strip().lower()
+    if _festival_env in _TRUTHY:
+        config.party_mode = "festival"
+    elif _festival_env in _FALSY:
+        config.party_mode = None
+
+    # Guest-host off switch. Default ON (he stays on the roster). An explicit
+    # falsy value drops him from config.hosts before anything reads the roster,
+    # so the prompt, the system-prompt cache key, and voice validation are all
+    # clean with no per-call gating.
+    _guest_host_env = os.getenv("MAMMAMIRADIO_GUEST_HOST", "").strip().lower()
+    if _guest_host_env in _FALSY:
+        config.hosts = [h for h in config.hosts if h.name != GUEST_HOST_NAME]
+        config.brand.hosts = [h for h in config.brand.hosts if h.engine_host != GUEST_HOST_NAME]
+
+    _ledger_env = os.getenv("MAMMAMIRADIO_LEDGER_ENABLED", "").strip().lower()
+    if _ledger_env in _TRUTHY:
+        config.ledger_enabled = True
+    elif _ledger_env in _FALSY:
+        config.ledger_enabled = False
+    _ledger_retention = os.getenv("MAMMAMIRADIO_LEDGER_RETENTION_DAYS", "").strip()
+    if _ledger_retention.isdigit() and int(_ledger_retention) > 0:
+        config.ledger_retention_days = int(_ledger_retention)
+
+    # Env overrides for pacing (HA addon pacing options -> MAMMAMIRADIO_PACING_*
+    # via run.sh; also the admin slider persistence path writing standalone .env).
+    # Values are clamped to the same bounds as _validate()/PATCH /api/pacing so a
+    # stale or hand-edited env can never brick boot — audio continuity wins over a
+    # strict reject (INSTANT AUDIO).
+    for _pacing_env, _pacing_attr in (
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", "songs_between_banter"),
+        ("MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS", "songs_between_ads"),
+        ("MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK", "ad_spots_per_break"),
+    ):
+        _pacing_raw = os.getenv(_pacing_env, "").strip()
+        if not _pacing_raw:
+            continue
+        try:
+            _pacing_val = int(_pacing_raw)
+        except ValueError:
+            continue
+        _lo, _hi = PACING_BOUNDS[_pacing_attr]
+        setattr(config.pacing, _pacing_attr, max(_lo, min(_hi, _pacing_val)))
+
+    # Quality dial: pick the active model profile (premium|balanced|economy).
+    # Mirrors the MAMMAMIRADIO_SUPER_ITALIAN env pattern; the HA addon maps its
+    # quality_profile option to this var via run.sh.
+    _quality_env = os.getenv("MAMMAMIRADIO_QUALITY", "").strip().lower()
+    if _quality_env:
+        if _quality_env in config.models.profiles:
+            config.models.active_profile = _quality_env
+        else:
+            import logging as _log
+
+            _log.getLogger(__name__).warning(
+                "MAMMAMIRADIO_QUALITY=%s is not a defined profile (%s) — keeping %s",
+                _quality_env,
+                sorted(config.models.profiles),
+                config.models.active_profile,
+            )
+
+    # Addon overrides: persistent paths, auto-enable HA
+    if addon_mode:
+        import logging as _log
+
+        _log.getLogger(__name__).info("Running as Home Assistant addon")
+        config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
+        config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
+        config.music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "/data/music"))
+        # Auto-enable HA context via Supervisor API unless explicitly disabled.
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
+        if supervisor_token and not ha_force_disabled:
+            config.homeassistant.enabled = True
+            config.homeassistant.url = "http://supervisor/core"
+            config.ha_token = supervisor_token
+        elif ha_force_disabled:
+            config.homeassistant.enabled = False
+            config.ha_token = ""
+
+    _normalize_tts_voices(config)
+    _compile_ad_cast(config)
+    _validate(config)
+    from mammamiradio.hosts.persona import set_arc_thresholds
+
+    set_arc_thresholds(config.persona.arc_thresholds)
+    return config
+
+
+def runtime_json(config: StationConfig | None = None) -> dict:
+    """Return resolved runtime settings for shell consumers."""
+    if config is None:
+        config = load_config()
+    return {
+        "bind_host": config.bind_host,
+        "port": config.port,
+        "tmp_dir": str(config.tmp_dir),
+    }
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "runtime-json":
+        print(json.dumps(runtime_json()))
+    else:
+        print("Usage: python -m mammamiradio.core.config runtime-json", file=sys.stderr)
+        sys.exit(1)

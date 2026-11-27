@@ -1,0 +1,4 @@
+# The add-on build copies the mammamiradio/ package into this context.
+# The imaging pack's retained generator inputs are provenance evidence for
+# repository checks, not runtime payload: keep them out of the image.
+mammamiradio/assets/imaging/provenance/generator-src/

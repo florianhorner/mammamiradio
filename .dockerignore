@@ -18,3 +18,5 @@ go-librespot/
 node_modules
 .claude/
 **/.staging/
+# Imaging-pack generator inputs: provenance evidence, not runtime payload.
+mammamiradio/assets/imaging/provenance/generator-src/

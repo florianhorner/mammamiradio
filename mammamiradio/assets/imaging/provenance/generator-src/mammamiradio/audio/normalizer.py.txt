@@ -1,0 +1,2179 @@
+"""FFmpeg-based helpers for shaping all audio into a consistent stream format."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import math
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+from collections.abc import Sequence
+from pathlib import Path
+
+from mammamiradio.audio.admission import ffmpeg_slot
+
+logger = logging.getLogger(__name__)
+_NORM_CACHE_BITRATE_RE = re.compile(r"_(?P<bitrate>[1-9]\d*)k\.mp3$")
+DEFAULT_CONCAT_SILENCE_MS = 300
+_CACHE_SOURCE_KINDS = frozenset({"classic", "demo", "jamendo", "local", "starter", "youtube"})
+
+
+class ConcatDurationError(RuntimeError):
+    """Raised when strict concat detects a proven output duration shortfall."""
+
+
+def _norm_sidecar_path(norm_path: Path) -> Path:
+    """Companion JSON path for a normalized cache file."""
+    return norm_path.parent / f"{norm_path.name}.json"
+
+
+def _load_sidecar(sidecar: Path) -> dict:
+    """Best-effort read of a norm sidecar's JSON dict; {} on missing/corrupt.
+
+    The sidecar is shared state: ``save_track_metadata`` writes ``{title, artist}``
+    and ``reconcile_cached_music`` writes ``reconciled_lufs``. Both must read-merge
+    through here so neither clobbers the other's keys, regardless of call order.
+    """
+    try:
+        if sidecar.exists():
+            # read_text() raises UnicodeDecodeError on a non-UTF8/corrupt sidecar;
+            # treat that as a benign empty read so it never escapes into the audio path.
+            data = json.loads(sidecar.read_text())
+            if isinstance(data, dict):
+                return data
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _positive_finite_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        numeric = float(value)
+        if math.isfinite(numeric) and numeric > 0:
+            return numeric
+    return None
+
+
+def save_track_metadata(
+    norm_path: Path,
+    title: str,
+    artist: str,
+    *,
+    duration_ms: int | None = None,
+    source_kind: str | None = None,
+) -> None:
+    """Persist norm-cache metadata so rescue paths can surface current-track facts.
+
+    Called only when a cache file is freshly (re)normalized. Any `reconciled_lufs`
+    marker, or prior duration, found here is tied to the OLD content of an orphaned
+    sidecar (eviction unlinks the .mp3 but leaves the .json), so it is DROPPED.
+    The fresh file must re-earn content-specific markers. Other keys are preserved.
+    """
+    sidecar = _norm_sidecar_path(norm_path)
+    data = _load_sidecar(sidecar)
+    data.pop("reconciled_lufs", None)  # content-specific; a fresh file re-earns it
+    data.pop("duration_ms", None)
+    data.pop("duration_sec", None)
+    data.pop("duration_s", None)
+    data.pop("source_kind", None)
+    data.update({"title": title, "artist": artist})
+    duration = _positive_finite_number(duration_ms)
+    if duration is not None:
+        data["duration_ms"] = round(duration)
+    if source_kind in _CACHE_SOURCE_KINDS:
+        data["source_kind"] = source_kind
+    try:
+        sidecar.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
+
+
+def refresh_track_metadata(
+    norm_path: Path,
+    title: str,
+    artist: str,
+    *,
+    duration_ms: int | None = None,
+    source_kind: str | None = None,
+) -> None:
+    """Refresh mutable norm-cache metadata without clearing content markers."""
+    sidecar = _norm_sidecar_path(norm_path)
+    data = _load_sidecar(sidecar)
+    data.update({"title": title, "artist": artist})
+    duration = _positive_finite_number(duration_ms)
+    if duration is not None:
+        data.pop("duration_sec", None)
+        data.pop("duration_s", None)
+        data["duration_ms"] = round(duration)
+    if source_kind in _CACHE_SOURCE_KINDS:
+        data["source_kind"] = source_kind
+    try:
+        sidecar.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.debug("Could not refresh norm metadata sidecar %s: %s", sidecar.name, exc)
+
+
+def load_track_metadata(norm_path: Path) -> dict[str, str | int] | None:
+    """Return public norm-cache metadata from a valid title/artist sidecar."""
+    # Reuse _load_sidecar so a non-UTF8/non-dict/corrupt sidecar returns None
+    # cleanly instead of raising (same failure mode guarded in the reconcile path).
+    data = _load_sidecar(_norm_sidecar_path(norm_path))
+    title = data.get("title")
+    artist = data.get("artist")
+    if isinstance(title, str) and isinstance(artist, str) and title and artist:
+        metadata: dict[str, str | int] = {"title": title, "artist": artist}
+        duration_ms = _positive_finite_number(data.get("duration_ms"))
+        if duration_ms is not None:
+            metadata["duration_ms"] = round(duration_ms)
+        return metadata
+    return None
+
+
+def load_track_cache_source(norm_path: Path) -> str:
+    """Return the persisted source class for a normalized cache artifact.
+
+    Legacy sidecars predate this field. They deliberately return an empty
+    string so strict rescue callers can leave the bytes on disk while refusing
+    to air media whose acquisition class is unknown.
+    """
+    value = _load_sidecar(_norm_sidecar_path(norm_path)).get("source_kind")
+    return value if isinstance(value, str) and value in _CACHE_SOURCE_KINDS else ""
+
+
+def _norm_cache_filename_bitrate_kbps(norm_path: Path) -> float | None:
+    match = _NORM_CACHE_BITRATE_RE.search(norm_path.name)
+    if not match:
+        return None
+    return _positive_finite_number(int(match.group("bitrate")))
+
+
+def norm_cache_duration_sec(norm_path: Path, *, bitrate_kbps: int | float | None = None) -> float:
+    """Return a non-blocking duration estimate for a normalized cache file.
+
+    Rescue paths cannot afford an ffprobe call before audio starts. Prefer the
+    sidecar duration for freshly normalized cache files; older sidecars degrade to
+    a constant-bitrate estimate from file size and the encoded bitrate in the
+    cache filename, falling back to the station bitrate when absent.
+    """
+    data = _load_sidecar(_norm_sidecar_path(norm_path))
+    duration_ms = _positive_finite_number(data.get("duration_ms"))
+    if duration_ms is not None:
+        return duration_ms / 1000.0
+    for key in ("duration_sec", "duration_s"):
+        duration_sec = _positive_finite_number(data.get(key))
+        if duration_sec is not None:
+            return duration_sec
+    bitrate = _norm_cache_filename_bitrate_kbps(norm_path) or _positive_finite_number(bitrate_kbps)
+    if bitrate is None:
+        return 0.0
+    try:
+        size_bytes = norm_path.stat().st_size
+    except OSError:
+        return 0.0
+    if size_bytes <= 0:
+        return 0.0
+    return max((size_bytes * 8) / (bitrate * 1000), 0.1)
+
+
+def humanize_norm_filename(name: str) -> str:
+    """Best-effort readable label from a ``norm_<slug>_<bitrate>k.mp3`` filename when no sidecar exists."""
+    stem = Path(name).stem
+    if stem.startswith("norm_"):
+        stem = stem[len("norm_") :]
+    # Drop a trailing _<digits>k bitrate segment if present.
+    stem = re.sub(r"_\d+k$", "", stem)
+    words = [w for w in stem.split("_") if w]
+    if not words:
+        return "Recovered track"
+    return " ".join(words).title()
+
+
+def measure_lufs(input_path: Path, *, background: bool = False) -> float | None:
+    """Fast integrated loudness measurement via ebur128 (~2-5s on Pi, no upsample).
+
+    Returns integrated LUFS value, or None if measurement fails.
+    """
+    cmd = [
+        "ffmpeg",
+        "-i",
+        str(input_path),
+        "-af",
+        "ebur128=peak=true",
+        "-f",
+        "null",
+        "-",
+    ]
+    _t0 = time.perf_counter()
+    try:
+        with ffmpeg_slot(background=background):
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    logger.debug("ffmpeg stage measure_lufs %s: %.2fs", input_path.name, time.perf_counter() - _t0)
+    # ebur128 logs a per-frame "I: -70.0 LUFS" line (the gate floor, before any
+    # data has accumulated) for EVERY frame, then the true integrated value in
+    # its end-of-stream Summary. Take the LAST match — the Summary value — not
+    # the first per-frame -70.0 (which made this return -70 for everything,
+    # silently disabling the fast-path skip below and any LUFS-based correction).
+    matches = re.findall(r"I:\s+(-?\d+\.\d+)\s+LUFS", result.stderr or "")
+    if matches:
+        return float(matches[-1])
+    return None
+
+
+# Shared FFmpeg output arguments for consistent MP3 encoding across all generators.
+_MP3_OUTPUT_ARGS: list[str] = ["-ar", "48000", "-ac", "2", "-b:a", "192k", "-write_xing", "0", "-f", "mp3"]
+_FFMPEG_APHASER_MAX_DELAY_MS = 5.0
+_FFMPEG_TREMOLO_MIN_FREQ_HZ = 0.1
+_FFMPEG_TIMEOUT_SEC = float(os.getenv("MAMMAMIRADIO_FFMPEG_TIMEOUT_SEC", "180"))
+
+# Loudness reconciliation: when configured (configure_loudness_reconcile, called
+# once at startup), each finished segment is measured and nudged to one
+# integrated-LUFS target so music, dialogue, bedded banter and ads land at the
+# same perceived level — regardless of which upstream filter (dynaudnorm on the
+# Green vs loudnorm) produced them. None = disabled (the default, so tests and
+# any unconfigured import keep today's raw per-filter levels).
+_loudness_reconcile: tuple[float, float] | None = None  # (main_target_lufs, ad_target_lufs)
+# Output encoding args for the reconcile re-encode — set from radio.toml [audio] at
+# startup so a non-default sample rate / channels / bitrate is preserved (matching
+# what normalize() honours), never silently rewritten to the house defaults.
+_reconcile_output_args: list[str] = list(_MP3_OUTPUT_ARGS)
+
+# FM broadcast "transmitter" chain: when configured (configure_broadcast_chain,
+# called once at startup from radio.toml [audio]), each finished segment gets one
+# extra ffmpeg pass that colours it like an over-the-air FM signal. It is the LAST
+# stage of the egress pipeline — applied after all mixing/concat so music and voice
+# leave through the same transmitter. None = disabled (the default, so tests and
+# any unconfigured import stay studio-clean). When enabled this holds the output-
+# encoding args (the station's sample rate / channels / bitrate), like the reconcile
+# pass, so the colouring re-encode never rewrites a non-default encoding.
+_broadcast_output_args: list[str] | None = None
+
+# Canonical list of supported SFX types (synthetic fallbacks).
+# Pre-recorded files in sfx_dir can extend this, but this list is what the
+# LLM prompt advertises as available.
+AVAILABLE_SFX_TYPES: list[str] = [
+    "chime",
+    "ding",
+    "cash_register",
+    "register_hit",
+    "sweep",
+    "whoosh",
+    "tape_stop",
+    "hotline_beep",
+    "mandolin_sting",
+    "ice_clink",
+    "startup_synth",
+]
+
+
+def _run_ffmpeg(
+    cmd: list[str],
+    description: str,
+    *,
+    rescue: bool = False,
+    background: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run an ffmpeg command with stderr capture and logging on failure.
+
+    Per-stage wall time is logged at DEBUG (set LOG_LEVEL=DEBUG for a soak) so the
+    render-latency deep-dive can attribute the seconds — every ffmpeg stage funnels
+    through here labelled by ``description`` (e.g. "normalize X", "LUFS reconcile",
+    "mix voice with talk bed", "concat N files"). ``rescue=True`` is reserved for
+    emergency audio call sites that must not wait behind normal work.
+    ``background=True`` is for prefetch work that may use only one of the two
+    ordinary ffmpeg slots.
+    """
+    _t0 = time.perf_counter()
+    try:
+        with ffmpeg_slot(rescue=rescue, background=background):
+            result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        logger.error("ffmpeg timed out after %.0fs (%s)", _FFMPEG_TIMEOUT_SEC, description)
+        raise
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace")[-500:]
+        logger.error("ffmpeg failed (%s): %s", description, stderr)
+        result.check_returncode()  # raises CalledProcessError
+    logger.debug("ffmpeg stage %s: %.2fs", description, time.perf_counter() - _t0)
+    return result
+
+
+def _fmt_num(value: float) -> str:
+    """Format floats for FFmpeg expressions with bounded precision."""
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _aphaser(
+    *,
+    in_gain: float,
+    out_gain: float,
+    delay: float,
+    decay: float,
+    speed: float,
+    phaser_type: str = "t",
+) -> str:
+    safe_delay = min(max(delay, 0.0), _FFMPEG_APHASER_MAX_DELAY_MS)
+    return (
+        f"aphaser=in_gain={_fmt_num(in_gain)}:out_gain={_fmt_num(out_gain)}:"
+        f"delay={_fmt_num(safe_delay)}:decay={_fmt_num(decay)}:"
+        f"speed={_fmt_num(speed)}:type={phaser_type}"
+    )
+
+
+def _tremolo(*, freq: float, depth: float) -> str:
+    safe_freq = max(freq, _FFMPEG_TREMOLO_MIN_FREQ_HZ)
+    return f"tremolo=f={_fmt_num(safe_freq)}:d={_fmt_num(depth)}"
+
+
+def _gate_after(onset_sec: float) -> str:
+    """Return a lavfi-safe gate expression that is 1 after onset, else 0."""
+    onset = max(0.0, onset_sec)
+    return f"if(gte(t\\,{_fmt_num(onset)})\\,1\\,0)"
+
+
+def _mp3_output_args(*, sample_rate: int, channels: int, bitrate: int) -> list[str]:
+    """Build the station's MP3 output-encoding args (the shape ``normalize()`` honours).
+
+    One builder for both corrective re-encode passes — the loudness reconcile and the
+    FM broadcast chain — so a future encoding change (e.g. an id3 flag) lands in one
+    place and can never drift between the two passes.
+    """
+    return [
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        str(channels),
+        "-b:a",
+        f"{bitrate}k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+    ]
+
+
+def configure_loudness_reconcile(
+    main_target: float | None,
+    ad_target: float | None,
+    *,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    bitrate: int = 192,
+) -> None:
+    """Enable per-segment LUFS reconciliation (call once at startup).
+
+    Pass the integrated-LUFS targets for non-ad and ad segments; pass None for
+    either to disable reconciliation entirely (returns to raw per-filter levels).
+    The corrective re-encode honours the station's configured encoding so a
+    non-default sample rate / channels / bitrate is preserved, not silently
+    rewritten to the house 48k/stereo/192k defaults.
+    """
+    global _loudness_reconcile, _reconcile_output_args
+    _loudness_reconcile = None if main_target is None or ad_target is None else (float(main_target), float(ad_target))
+    _reconcile_output_args = _mp3_output_args(sample_rate=sample_rate, channels=channels, bitrate=bitrate)
+
+
+def _reconcile_lufs(path: Path, *, ad: bool = False, background: bool = False) -> bool:
+    """Nudge a finished segment to the configured integrated-LUFS target.
+
+    No-op unless reconciliation is configured. Measures the file (cheap ebur128)
+    and applies a single corrective ``volume`` gain so the integrated level lands
+    on target. Idempotent: a file already on target gets a sub-0.5 dB correction
+    and is skipped, so the redundant terminal passes some segments take (e.g.
+    ``normalize()`` then ``mix_voice_with_bed()``) cost only a measure, never a
+    second re-encode. Best-effort — a failed measure, re-encode, or rename leaves
+    the file as produced and never raises into the audio path.
+
+    Returns ``True`` only when the file is confirmed at target — either already
+    within tolerance or successfully re-encoded. Returns ``False`` when the level
+    could not be verified (reconcile unconfigured, measurement failed, or the
+    re-encode/rename failed). Callers that persist a "reconciled" marker MUST gate
+    it on a ``True`` result, or a transiently-failed file gets permanently marked
+    fixed while still off target.
+    """
+    cfg = _loudness_reconcile
+    if cfg is None:
+        return False
+    target = cfg[1] if ad else cfg[0]
+    lufs = measure_lufs(path, background=background)
+    if lufs is None:
+        return False  # measurement failed — leave the file as produced
+    # Clamp so a near-silent or corrupt file is never pumped to a huge gain.
+    gain_db = max(-12.0, min(12.0, target - lufs))
+    if abs(gain_db) < 0.5:
+        return True  # already on target (within measurement noise) — confirmed
+    tmp = path.with_name(f"{path.stem}.lufs{path.suffix}")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(path),
+        "-af",
+        # Keep a codec-safety margin after any positive loudness correction.
+        # MP3 can overshoot the pre-encode sample peak substantially on bright,
+        # compressed speech; -2.5 dBFS here preserves the station's decoded
+        # <= -1.0 dBTP contract after the corrective re-encode.
+        f"volume={_fmt_num(gain_db)}dB,alimiter=limit=0.75:level=false:latency=true",
+        *_reconcile_output_args,
+        str(tmp),
+    ]
+    try:
+        _run_ffmpeg(cmd, f"LUFS reconcile ({gain_db:+.1f} dB) {path.name}", background=background)
+        # Rename inside the try so a failed atomic replace (disk full, vanished
+        # file) also leaves the original untouched — never raises.
+        tmp.replace(path)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        tmp.unlink(missing_ok=True)
+        return False  # measure/encode/rename failed — keep the original, never break audio
+    logger.info("LUFS reconcile: %s -> %.1f LUFS (%+.1f dB)", path.name, target, gain_db)
+    return True
+
+
+def reconcile_cached_music(path: Path, *, background: bool = False) -> None:
+    """Bring a CACHED music file to the configured target on a cache-hit play.
+
+    A cache hit skips ``normalize()`` (and therefore the reconcile pass), so a norm
+    file produced before reconciliation existed would air at its old, un-reconciled
+    level — the cause of "some songs are just quieter". This corrects it on hit, then
+    records the target in the file's sidecar so later hits skip the work *and* the
+    ebur128 measure and stay instant (matters on constrained addon hardware). It
+    self-heals the existing cache one play at a time. No-op when reconciliation is
+    unconfigured; idempotent and best-effort — never raises into the audio path.
+    """
+    cfg = _loudness_reconcile
+    if cfg is None:
+        return
+    target = cfg[0]  # music uses the non-ad target
+    sidecar = _norm_sidecar_path(path)
+    data = _load_sidecar(sidecar)
+    if data.get("reconciled_lufs") == target:
+        return  # already at the current target — instant hit, no measure
+    if not _reconcile_lufs(path, background=background):
+        return  # measure/re-encode failed — leave UNMARKED so the next hit retries
+    data["reconciled_lufs"] = target
+    try:
+        sidecar.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.debug("Could not mark norm sidecar reconciled %s: %s", sidecar.name, exc)
+
+
+def configure_broadcast_chain(
+    enabled: bool,
+    *,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    bitrate: int = 192,
+) -> None:
+    """Enable the FM broadcast 'transmitter' chain (call once at startup).
+
+    Pass enabled=False (or never call this) to leave segments studio-clean. The
+    colouring re-encode honours the station's configured encoding so a non-default
+    sample rate / channels / bitrate is preserved — matching what normalize() and
+    the loudness reconcile pass already emit.
+    """
+    global _broadcast_output_args
+    if not enabled:
+        _broadcast_output_args = None
+        return
+    _broadcast_output_args = _mp3_output_args(sample_rate=sample_rate, channels=channels, bitrate=bitrate)
+
+
+def _broadcast_filter_chain() -> str:
+    """The FM 'transmitter' colour applied LAST in the egress pipeline.
+
+    Deliberately conservative — a gentle pre-emphasis HF shelf at the real ~75 µs
+    turnover (~2.1 kHz, not 3180 Hz), the ~15 kHz FM channel band-limit, and a flat
+    loudness-offset trim. NO equalizer + loudnorm stack (that is the psymodel.c:576
+    SIGABRT surface on ffmpeg 8.x / Pi aarch64), and no loudnorm at all — the segment
+    is already at target from the upstream reconcile pass. NO stereo-decorrelating
+    filter (phaser / stereotools / haas / inter-channel delay): a swept ``aphaser``
+    used to sit here as faux "multipath", but its 0.5 Hz LFO swirled broadband stereo
+    content (the white-noise static bed between ad voice lines) into an audible
+    "binaural" smear — a #1 illusion-break, so it was removed. NO dynamics stage
+    either — segments are already loudness-reconciled before egress, so the old
+    ``acompressor`` leveller was redundant AND not loudness-neutral across content;
+    it is replaced by a flat ``volume`` trim that keeps the chain neutral by
+    construction. The chain SHAPE (no stacked EQ, no loudnorm, no stereo swirl, no
+    dynamics) is the safety contract; filter VALUES remain a starting point pending
+    the A/B listening sign-off (the broader "what should the station sound like"
+    strategy is being revisited separately).
+    """
+    return ",".join(
+        [
+            # FM pre-emphasis: gentle HF shelf at the ~75 µs turnover (~2.1 kHz).
+            "treble=g=2:f=2100",
+            # FM channel band-limit: roll off the top above ~15 kHz.
+            "lowpass=f=15000",
+            # Flat trim (content-independent): offsets the ~+0.85 LU the pre-emphasis
+            # shelf adds so the coloured segment holds its reconciled target. A flat
+            # gain, NOT a compressor: the old acompressor was not loudness-neutral
+            # across content (over-pulled a hot voice vs broadband; its makeup floored
+            # at 1.0 so it couldn't be flatly compensated), and the removed phaser's
+            # attenuation had been masking that. Segments are already loudness-
+            # reconciled before egress, so a dynamic leveller here is redundant.
+            # Measured broadband +0.7 / voice +1.0 LU pre-trim, ~±0.2 LU after.
+            "volume=-0.85dB",
+        ]
+    )
+
+
+def broadcast_chain_version() -> str | None:
+    """A short stable fingerprint of the active broadcast chain, or None when disabled.
+
+    Combines the filter graph with the output-encoding args so any change to either —
+    a filter tweak or a different sample rate / channels / bitrate — yields a new
+    fingerprint. Callers that cache a coloured ("baked") render key the cache file by
+    this value, so a chain change re-bakes instead of airing a stale colour, and the
+    superseded bakes fall out of the cache by normal LRU eviction.
+    """
+    if _broadcast_output_args is None:
+        return None
+    payload = _broadcast_filter_chain() + "|" + " ".join(_broadcast_output_args)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def apply_broadcast_chain(input_path: Path, output_path: Path) -> bool:
+    """Colour a finished segment with the FM broadcast chain (one ffmpeg pass).
+
+    No-op (returns False, leaving output_path unwritten) when the chain is not
+    configured. Best-effort: any ffmpeg failure returns False and leaves the input
+    untouched — never raises into the audio path, never produces dead air. The
+    leaf ffmpeg runner holds _NORM_SEM so this pass respects the Pi 2-ffmpeg
+    ceiling. Returns True only when output_path was successfully written.
+    """
+    args = _broadcast_output_args
+    if args is None:
+        return False
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-threads",
+        "1",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-filter:a",
+        _broadcast_filter_chain(),
+        *args,
+        str(output_path),
+    ]
+    try:
+        _run_ffmpeg(cmd, f"broadcast chain {input_path.name}")
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        output_path.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def normalize(
+    input_path: Path,
+    output_path: Path,
+    config=None,
+    *,
+    loudnorm: bool = True,
+    music_eq: bool = False,
+    background: bool = False,
+) -> Path:
+    """Re-encode an input file to the station's target loudness and format.
+
+    Set loudnorm=False for intermediate files that will receive a final loudnorm
+    pass later (e.g. individual TTS lines before dialogue assembly). This runs
+    ~3x faster on constrained hardware — just re-encodes to station format without
+    the EBU R128 analysis pass. Silence trimming is still applied.
+
+    Set music_eq=True for yt-dlp music tracks to apply a gentle broadcast EQ
+    before the loudness pass: removes subsonic rumble, de-muds compressed audio,
+    adds presence, and rolls off HF harshness from lossy re-encoding.
+    """
+    sample_rate = str(config.audio.sample_rate) if config else "48000"
+    channels = str(config.audio.channels) if config else "2"
+    bitrate = f"{config.audio.bitrate}k" if config else "192k"
+
+    # Broadcast EQ for music: tonal consistency across yt-dlp rips.
+    # Applied *before* loudnorm so the level measurement sees the equalized signal.
+    # Kept gentle — this is correction, not creative processing.
+    music_eq_chain = (
+        "highpass=f=35,"  # sub-bass rumble from video codec leakage
+        "equalizer=f=200:t=o:w=150:g=-2,"  # de-mud (compressed video audio)
+        "equalizer=f=3000:t=o:w=1000:g=1.5,"  # presence / clarity
+        # NOTE: f=12000 HF shelf removed — 3 equalizers + loudnorm triggers
+        # psymodel.c:576 SIGABRT (calc_energy) in ffmpeg 8.x on Pi aarch64.
+        "acompressor=threshold=0.25:ratio=2:attack=20:release=250:makeup=1"  # gentle radio leveller
+    )
+
+    # ``loudnorm`` doubles as the reconcile gate below, but the fast-path skip also
+    # sets it False for a FINAL track already near -16. Capture the caller's intent
+    # first so a skipped-but-final segment still reconciles to the configured target
+    # (which may not be -16); intermediate TTS lines pass loudnorm=False and stay raw.
+    is_final = loudnorm
+    # Skip the expensive loudnorm pass if the file is already within ±1.5 LU of -16 LUFS,
+    # but still re-encode to the station format (sample rate, channels, bitrate) and trim
+    # trailing silence. A bare shutil.copy2 would leave the file at whatever sample rate
+    # the source was (e.g. 44.1 kHz from yt-dlp), which can cause audio glitches at stream
+    # boundaries. measure_lufs takes ~2-5s on Pi vs 10-75s for a full loudnorm pass.
+    # When music_eq is requested, we always re-encode (EQ requires a pass regardless).
+    if loudnorm and not music_eq:
+        lufs = measure_lufs(input_path, background=background)
+        if lufs is not None and abs(lufs - (-16.0)) <= 1.5:
+            loudnorm = False  # fall through to the fast format-conversion path below
+            logger.info("LUFS skip (%.1f LUFS, within tolerance): %s", lufs, input_path.name)
+
+    if loudnorm:
+        if config is not None and getattr(config, "is_addon", False) is True:
+            norm_part = "dynaudnorm=f=150:g=13,alimiter=limit=0.95"
+        else:
+            norm_part = "loudnorm=I=-16:LRA=11:TP=-1.5"
+        # stop_periods MUST stay negative. A positive stop_periods makes silenceremove
+        # halt output at the FIRST silence period, truncating speech at its first
+        # inter-phrase pause (host lines collapsed to ~1.6s). -1 trims trailing silence only.
+        silence_trim = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+        # Soft fade-in on every final-output segment: music → banter hand-offs
+        # used to be a hard cut at full volume. A short ramp-in on the incoming
+        # segment turns the perceived "drop" into a gentle entry without
+        # breaking the illusion. Not applied on the fast path (loudnorm=False)
+        # because those are intermediate TTS lines that get concatenated into
+        # dialogue — a per-line fade would produce choppy speech.
+        fade_in = "afade=t=in:d=0.25"
+        audio_filter = (
+            f"{music_eq_chain},{norm_part},{silence_trim},{fade_in}"
+            if music_eq
+            else f"{norm_part},{silence_trim},{fade_in}"
+        )
+    else:
+        # stop_periods=-1 (negative) trims trailing silence only; a positive value
+        # truncates speech at the first pause. See the note in the loudnorm branch above.
+        audio_filter = "silenceremove=start_periods=0:stop_periods=-1:stop_threshold=-50dB:stop_duration=0.3"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-threads",
+        "1",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-ar",
+        sample_rate,
+        "-ac",
+        channels,
+        "-b:a",
+        bitrate,
+        "-filter:a",
+        audio_filter,
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"normalize {input_path.name}", background=background)
+    if is_final:
+        # Final segment (incl. a fast-path-skipped one) — bring it to the configured
+        # target; reconcile is a cheap no-op when already there.
+        _reconcile_lufs(output_path, background=background)
+    logger.info("Normalized%s: %s -> %s", "" if loudnorm else " (fast)", input_path.name, output_path.name)
+    return output_path
+
+
+def probe_duration_sec(path: Path, *, rescue: bool = False) -> float | None:
+    """Best-effort mp3 duration probe; None if ffprobe fails.
+
+    Used by concat_files for a duration-invariant sanity check. We don't want
+    a probe failure to crash a concat — just skip the check. ``rescue`` routes
+    the probe through the bounded rescue admission slot so a dead-air fill is
+    never queued indefinitely behind ordinary normalization jobs.
+    """
+    try:
+        with ffmpeg_slot(rescue=rescue):
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+    except subprocess.TimeoutExpired:
+        logger.warning("ffprobe timed out probing %s", path.name)
+        return None
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def concat_files(
+    paths: list[Path],
+    output_path: Path,
+    silence_ms: int = DEFAULT_CONCAT_SILENCE_MS,
+    loudnorm: bool = True,
+    *,
+    strict_duration: bool = False,
+) -> Path:
+    """Concatenate rendered parts into a single MP3 segment.
+
+    When silence_ms > 0, short silence gaps are inserted between each part
+    using the FFmpeg aevalsrc filter for a more produced feel.
+
+    Set loudnorm=False when all inputs are already normalized to skip the
+    expensive EBU R128 loudness pass (~1-3s saved per concat).
+
+    Set strict_duration=True for host-segment assembly where a proven output
+    shortfall must reject the segment instead of only logging.
+    """
+    if len(paths) == 0:
+        raise ValueError("concat_files: paths list must not be empty")
+    if len(paths) == 1:
+        return paths[0]
+
+    inputs = []
+    filter_parts = []
+    silence_dur = silence_ms / 1000.0
+
+    if silence_ms > 0 and len(paths) > 1:
+        stream_idx = 0
+        for i, p in enumerate(paths):
+            inputs.extend(["-i", str(p)])
+            filter_parts.append(f"[{stream_idx}:a]")
+            stream_idx += 1
+            if i < len(paths) - 1:
+                inputs.extend(["-f", "lavfi", "-i", f"aevalsrc=0|0:d={silence_dur}:s=48000:c=stereo"])
+                filter_parts.append(f"[{stream_idx}:a]")
+                stream_idx += 1
+        total_streams = len(paths) + len(paths) - 1
+    else:
+        for i, p in enumerate(paths):
+            inputs.extend(["-i", str(p)])
+            filter_parts.append(f"[{i}:a]")
+        total_streams = len(paths)
+
+    norm_filter = ",loudnorm=I=-16:LRA=11:TP=-1.5" if loudnorm else ""
+    filter_str = "".join(filter_parts) + f"concat=n={total_streams}:v=0:a=1{norm_filter}[out]"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        *inputs,
+        "-filter_complex",
+        filter_str,
+        "-map",
+        "[out]",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "192k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"concat {len(paths)} files")
+    logger.info("Concatenated %d files -> %s", len(paths), output_path.name)
+
+    # Duration-invariant guard (Item 1, banter mid-sentence cutoff):
+    # If the output is materially shorter than the sum of inputs + gaps, the
+    # concat likely truncated on a bad frame header in one of the inputs. Log
+    # loudly with all three numbers so post-mortem can identify the culprit
+    # input without re-running the session. Never crash — the stream keeps
+    # playing whatever made it into the file.
+    try:
+        output_dur = probe_duration_sec(output_path)
+        if output_dur is None or output_dur <= 0:
+            return output_path
+        input_durs = [probe_duration_sec(p) for p in paths]
+        if any(d is None or d <= 0 for d in input_durs):
+            return output_path
+        total_input_dur = sum(input_durs)  # type: ignore[arg-type]  # all non-None guarded above
+        expected = total_input_dur + (len(paths) - 1) * silence_dur
+        # Allow 5% slack for ffmpeg encoding rounding + loudnorm edge trimming.
+        threshold = 0.95 * expected
+        if output_dur < threshold:
+            detail = (
+                f"concat_files duration shortfall: output={output_dur:.2f}s expected>={threshold:.2f}s "
+                f"(sum_inputs={total_input_dur:.2f}s + {max(0, len(paths) - 1)} gaps x {silence_dur:.2f}s). "
+                f"Output: {output_path.name}. Inputs (dur): "
+                f"{[(p.name, f'{d:.2f}') for p, d in zip(paths, input_durs, strict=False)]}"
+            )
+            logger.warning("%s", detail)
+            if strict_duration:
+                raise ConcatDurationError(detail)
+    except ConcatDurationError:
+        raise  # must not be swallowed by the broad instrumentation guard below
+    except Exception as exc:  # defense-in-depth — never let instrumentation break prod
+        logger.debug("concat_files duration probe skipped: %s", exc)
+
+    return output_path
+
+
+def generate_tone(
+    output_path: Path,
+    freq_hz: float = 880,
+    duration_sec: float = 0.5,
+    *,
+    rescue: bool = False,
+) -> Path:
+    """Generate a sine tone with fade-in/out envelope (chime/ding sound)."""
+    fade = min(0.15, duration_sec / 3)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency={freq_hz}:duration={duration_sec}",
+        "-af",
+        f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade}:d={fade},volume=0.35",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "192k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"tone {freq_hz}Hz", rescue=rescue)
+    return output_path
+
+
+def generate_sweep(output_path: Path, start_hz: float = 200, end_hz: float = 2000, duration_sec: float = 0.8) -> Path:
+    """Generate a frequency sweep (radio transition whoosh)."""
+    if start_hz <= 0 or end_hz <= 0:
+        raise ValueError("Sweep frequencies must be positive")
+    if duration_sec <= 0:
+        raise ValueError("Sweep duration must be positive")
+    if math.isclose(start_hz, end_hz):
+        return generate_tone(output_path, freq_hz=start_hz, duration_sec=duration_sec)
+
+    fade = min(0.1, duration_sec / 4)
+    fade_str = f"{fade:g}"
+    fade_out_start = f"{max(duration_sec - fade, 0):g}"
+    ratio = end_hz / start_hz
+    start_hz_str = format(start_hz, ".12g")
+    duration_str = format(duration_sec, ".12g")
+    ratio_str = format(ratio, ".12g")
+    chirp_expr = f"0.2*sin(2*PI*{start_hz_str}*{duration_str}/log({ratio_str})*(({ratio_str})^(t/{duration_str})-1))"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc={chirp_expr}|{chirp_expr}:d={duration_str}:s=48000:c=stereo",
+        "-af",
+        f"afade=t=in:d={fade_str},afade=t=out:st={fade_out_start}:d={fade_str}",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "192k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"sweep {start_hz}-{end_hz}Hz")
+    return output_path
+
+
+def _generate_cash_register(output_path: Path, duration_sec: float = 0.35) -> Path:
+    """Layered cash register: bell strike + mechanical clatter + noise burst.
+
+    Tones combined into single aevalsrc with exponential decay envelopes.
+    Noise stays as separate input (can't be expressed in aevalsrc).
+    """
+    d = duration_sec
+    # Bell tones with exponential decay envelopes in one expression:
+    # 1200Hz bell (fast decay) + 1507Hz detuned bell (0.7x vol) + 2400Hz ring (0.4x, shorter)
+    tones_expr = "1.0*sin(2*PI*1200*t)*exp(-8*t)+0.7*sin(2*PI*1507*t)*exp(-10*t)+0.4*sin(2*PI*2400*t)*exp(-20*t)"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc={tones_expr}|{tones_expr}:d={d}:s=48000:c=stereo",
+        "-f",
+        "lavfi",
+        "-i",
+        f"anoisesrc=d={d * 0.15}:c=pink:r=48000:a=0.3",
+        "-filter_complex",
+        f"[1:a]afade=t=in:d=0.001,afade=t=out:st=0.01:d={d * 0.15 - 0.01}[click];"
+        f"[0:a][click]amix=inputs=2:duration=longest,"
+        f"aecho=0.8:0.5:15|30:0.2|0.1,volume=2.0[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        str(d),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "cash register SFX")
+    return output_path
+
+
+def _generate_whoosh(output_path: Path, duration_sec: float = 0.6) -> Path:
+    """Filtered pink noise whoosh — bandpass sweeps up for a rush of air."""
+    d = duration_sec
+    fade = min(0.08, d / 4)
+    # Pink noise through a rising bandpass filter gives a natural whoosh
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"anoisesrc=d={d}:c=pink:r=48000:a=0.5",
+        "-f",
+        "lavfi",
+        "-i",
+        f"anoisesrc=d={d}:c=white:r=48000:a=0.15",
+        "-filter_complex",
+        # Pink noise with rising bandpass (low → high sweep feel)
+        f"[0:a]highpass=f=200:t=q:w=0.7,lowpass=f=4000:t=q:w=0.5,"
+        f"afade=t=in:d={fade},afade=t=out:st={d - fade * 2}:d={fade * 2}[pink];"
+        # Gentle white noise layer for airiness
+        f"[1:a]highpass=f=2000,lowpass=f=8000,"
+        f"afade=t=in:d={d * 0.3},afade=t=out:st={d * 0.5}:d={d * 0.4}[air];"
+        f"[pink][air]amix=inputs=2:duration=first,volume=1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "whoosh SFX")
+    return output_path
+
+
+def _generate_mandolin_sting(output_path: Path, duration_sec: float = 0.5) -> Path:
+    """Render the electronic relay sting behind the legacy compatibility name.
+
+    ``mandolin_sting`` is an operator-facing key that cannot disappear from
+    older campaign data.  Its sound is deliberately no longer a novelty
+    mandolin: one compact midrange relay pulse and a restrained glass answer
+    keep incomplete/custom packs inside the Modern Night Drive palette.
+    """
+    d = duration_sec
+    expr = (
+        "0.62*sin(2*PI*510*t)*exp(-26*t)"
+        "+0.24*sin(2*PI*765*t)*exp(-31*t)"
+        f"+0.30*sin(2*PI*1040*(t-0.18))*exp(-11*(t-0.18))*{_gate_after(0.18)}"
+        f"+0.12*sin(2*PI*1560*(t-0.18))*exp(-15*(t-0.18))*{_gate_after(0.18)}"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
+        "-af",
+        "highpass=f=180,lowpass=f=6200,aecho=0.7:0.35:24:0.10,volume=1.8",
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        str(d),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "legacy relay sting SFX")
+    return output_path
+
+
+def _generate_ice_clink(output_path: Path, duration_sec: float = 0.3) -> Path:
+    """Ice clink: layered high-frequency tones with fast decay + noise transient.
+
+    Tones combined into single aevalsrc with exponential decay. 4 inputs → 2.
+    """
+    d = duration_sec
+    # Three glass-like tones with fast exponential decay, single expression
+    tones_expr = "1.0*sin(2*PI*2400*t)*exp(-15*t)+0.6*sin(2*PI*3200*t)*exp(-20*t)+0.3*sin(2*PI*4800*t)*exp(-25*t)"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc={tones_expr}|{tones_expr}:d={d}:s=48000:c=stereo",
+        "-f",
+        "lavfi",
+        "-i",
+        f"anoisesrc=d={d * 0.08}:c=white:r=48000:a=0.2",
+        "-filter_complex",
+        f"[1:a]afade=t=in:d=0.001,afade=t=out:st=0.005:d={d * 0.08 - 0.005}[click];"
+        f"[0:a][click]amix=inputs=2:duration=longest,"
+        f"aecho=0.8:0.6:8|16:0.3|0.15,volume=2.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        str(d),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "ice clink SFX")
+    return output_path
+
+
+def generate_sfx(output_path: Path, sfx_type: str, sfx_dir: Path | None = None) -> Path:
+    """Generate or load a sound effect. Checks sfx_dir for pre-recorded files first."""
+    import shutil
+
+    # Check for pre-recorded SFX file
+    if sfx_dir and sfx_dir.is_dir():
+        for ext in (".mp3", ".wav", ".ogg"):
+            candidate = sfx_dir / f"{sfx_type}{ext}"
+            if candidate.exists():
+                shutil.copy2(candidate, output_path)
+                logger.info("Using pre-recorded SFX: %s", candidate.name)
+                return output_path
+
+    def _simple_fallback() -> Path:
+        if sfx_type in ("sweep", "whoosh", "startup_synth"):
+            return generate_sweep(output_path, start_hz=320, end_hz=1100, duration_sec=0.35)
+        if sfx_type == "tape_stop":
+            return generate_sweep(output_path, start_hz=1400, end_hz=120, duration_sec=0.3)
+        if sfx_type in ("cash_register", "register_hit", "ice_clink", "mandolin_sting"):
+            return generate_tone(output_path, freq_hz=1047, duration_sec=0.18)
+        if sfx_type == "hotline_beep":
+            return generate_tone(output_path, freq_hz=1336, duration_sec=0.18)
+        return generate_tone(output_path, freq_hz=880, duration_sec=0.25)
+
+    try:
+        # Synthetic fallbacks — richer audio using layered lavfi filters
+        if sfx_type in ("chime", "ding"):
+            return generate_tone(output_path, freq_hz=880, duration_sec=0.4)
+        if sfx_type in ("cash_register", "register_hit"):
+            return _generate_cash_register(output_path)
+        if sfx_type in ("sweep", "whoosh"):
+            return _generate_whoosh(output_path)
+        if sfx_type == "tape_stop":
+            # Descending sweep — tape stopping effect
+            return generate_sweep(output_path, start_hz=2000, end_hz=80, duration_sec=0.5)
+        if sfx_type == "hotline_beep":
+            # Short dual-tone DTMF-like beep
+            return generate_tone(output_path, freq_hz=1336, duration_sec=0.2)
+        if sfx_type == "mandolin_sting":
+            return _generate_mandolin_sting(output_path)
+        if sfx_type == "ice_clink":
+            return _generate_ice_clink(output_path)
+        if sfx_type == "startup_synth":
+            # Ascending sweep with synth bloom character
+            return generate_sweep(output_path, start_hz=200, end_hz=1200, duration_sec=0.6)
+        logger.warning("Unknown SFX type '%s', using default chime", sfx_type)
+        return generate_tone(output_path, freq_hz=880, duration_sec=0.4)
+    except Exception as exc:
+        logger.warning("Synthetic SFX '%s' failed, using simple fallback: %s", sfx_type, exc)
+        return _simple_fallback()
+
+
+def generate_music_bed(output_path: Path, mood: str, duration_sec: float) -> Path:
+    """Generate a synthetic music bed for an ad based on mood.
+
+    Each mood uses a distinct waveform texture (via harmonics) and a distinct
+    effects chain so beds sound different from each other.  The heavy aecho
+    that caused all beds to drone identically has been removed; moods now use
+    aphaser, equalizer, or short room reverb to add space without beating.
+    """
+    fade_out = min(1.5, duration_sec / 3)
+    d = duration_sec
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+    def _piano(f: float) -> str:
+        """Harmonic series that sounds like a soft struck string (no pure sine)."""
+        return f"sin(2*PI*{f}*t)+0.7*sin(2*PI*{f * 2}*t)+0.25*sin(2*PI*{f * 3}*t)+0.1*sin(2*PI*{f * 4}*t)"
+
+    def _hollow(f: float) -> str:
+        """Odd harmonics only — clarinet / organ quality."""
+        return f"sin(2*PI*{f}*t)+0.33*sin(2*PI*{f * 3}*t)+0.2*sin(2*PI*{f * 5}*t)+0.14*sin(2*PI*{f * 7}*t)"
+
+    def _saw(f: float) -> str:
+        """All harmonics — bright / buzzy sawtooth character."""
+        return (
+            f"sin(2*PI*{f}*t)"
+            f"+0.5*sin(2*PI*{f * 2}*t)"
+            f"+0.33*sin(2*PI*{f * 3}*t)"
+            f"+0.25*sin(2*PI*{f * 4}*t)"
+            f"+0.2*sin(2*PI*{f * 5}*t)"
+        )
+
+    def _pad_expr(root: float, third: float, fifth: float, wave_fn) -> str:
+        """Chord built from three voices using the given waveform."""
+        r = wave_fn(root)
+        t = wave_fn(third)
+        fi = wave_fn(fifth)
+        return f"0.5*({r})+0.4*({t})+0.35*({fi})"
+
+    def _fades(d: float, fo: float) -> str:
+        return f"afade=t=in:d=0.6,afade=t=out:st={d - fo}:d={fo}"
+
+    def _run(expr: str, af: str, label: str) -> Path:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
+            "-af",
+            af,
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+        _run_ffmpeg(cmd, f"music bed ({label})")
+        logger.info("Generated music bed: %s (%s, %.1fs)", output_path.name, label, d)
+        return output_path
+
+    # ── suspicious_jazz: walking bass with piano harmonics, tiny room reverb ──
+    if mood == "suspicious_jazz":
+        root, third, fifth = 220.0, 277.0, 370.0
+        flat7 = root * 1.8
+        bass_expr = (
+            f"0.35*sin(2*PI*{root * 0.5}*t)*max(0\\,1-2*mod(t\\,2))"
+            f"+0.35*sin(2*PI*{fifth * 0.5}*t)*max(0\\,1-2*abs(mod(t\\,2)-0.5))"
+            f"+0.35*sin(2*PI*{flat7 * 0.5}*t)*max(0\\,1-2*abs(mod(t\\,2)-1.0))"
+            f"+0.35*sin(2*PI*{third * 0.5}*t)*max(0\\,1-2*abs(mod(t\\,2)-1.5))"
+        )
+        pad = _pad_expr(root, third, fifth, _piano)
+        expr = f"0.5*({pad})+0.7*({bass_expr})"
+        af = (
+            f"aecho=0.6:0.3:25|55:0.04|0.02,"  # tiny room reverb only
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "suspicious_jazz")
+
+    # ── discount_techno: sawtooth pulse with fast rhythmic tremolo ────────────
+    if mood == "discount_techno":
+        root, third, fifth = 110.0, 165.0, 220.0
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = (
+            f"{_tremolo(freq=8, depth=0.55)},"  # fast tremolo -> rhythmic pulse, not drone
+            f"highpass=f=180,"  # cut muddy bass
+            f"equalizer=f=3000:t=o:w=800:g=3,"  # presence boost
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "discount_techno")
+
+    # ── tarantella_pop: bright saw chord, phaser for movement ────────────────
+    if mood == "tarantella_pop":
+        root, third, fifth = 523.0, 659.0, 784.0
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = (
+            f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=3.0, decay=0.4, speed=0.5)},"
+            f"highpass=f=250,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "tarantella_pop")
+
+    # ── upbeat: bright piano chord, fast phaser ───────────────────────────────
+    if mood == "upbeat":
+        root, third, fifth = 330.0, 440.0, 523.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=2.0, decay=0.3, speed=0.8)},"
+            f"highpass=f=200,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "upbeat")
+
+    # ── shopping_channel: bright hollow organ, quick tremolo ─────────────────
+    if mood == "shopping_channel":
+        root, third, fifth = 400.0, 600.0, 800.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = f"{_tremolo(freq=5, depth=0.3)},highpass=f=200,{_fades(d, fade_out)},volume=0.13"
+        return _run(expr, af, "shopping_channel")
+
+    # ── lounge: warm piano pad, gentle slow phaser ───────────────────────────
+    if mood == "lounge":
+        root, third, fifth = 220.0, 330.0, 440.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=4.0, decay=0.5, speed=0.25)},"
+            f"lowpass=f=1800,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "lounge")
+
+    # ── cheap_synth_romance: hollow mid-range, slow phaser ───────────────────
+    if mood == "cheap_synth_romance":
+        root, third, fifth = 293.0, 370.0, 440.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"{_aphaser(in_gain=0.5, out_gain=0.74, delay=5.0, decay=0.6, speed=0.2)},"
+            f"lowpass=f=1400,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.14"
+        )
+        return _run(expr, af, "cheap_synth_romance")
+
+    # ── luxury_spa: very soft hollow, minimal movement ───────────────────────
+    if mood == "luxury_spa":
+        root, third, fifth = 250.0, 315.0, 375.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"{_aphaser(in_gain=0.3, out_gain=0.6, delay=5.0, decay=0.5, speed=0.15)},"
+            f"lowpass=f=900,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.12"
+        )
+        return _run(expr, af, "luxury_spa")
+
+    # ── mysterious: low hollow chord, very slow phaser ───────────────────────
+    if mood == "mysterious":
+        root, third, fifth = 100.0, 126.0, 150.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = (
+            f"{_aphaser(in_gain=0.4, out_gain=0.6, delay=5.0, decay=0.6, speed=0.1)},"
+            f"lowpass=f=700,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, "mysterious")
+
+    # ── dramatic: low piano swell, tremolo for gravitas ──────────────────────
+    if mood == "dramatic":
+        root, third, fifth = 80.0, 100.0, 120.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = f"{_tremolo(freq=0.8, depth=0.35)},lowpass=f=600,{_fades(d, fade_out)},volume=0.14"
+        return _run(expr, af, "dramatic")
+
+    # ── epic / overblown_epic: very low, rich harmonics, slow swell ──────────
+    if mood in ("epic", "overblown_epic"):
+        root = 55.0 if mood == "overblown_epic" else 65.0
+        third, fifth = root * 1.25, root * 1.5
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = f"{_tremolo(freq=0.5, depth=0.3)},lowpass=f=500,{_fades(d, fade_out)},volume=0.14"
+        return _run(expr, af, mood)
+
+    # ── showroom: mid piano, slight phaser for polish ────────────────────────
+    if mood == "showroom":
+        root, third, fifth = 300.0, 375.0, 450.0
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"{_aphaser(in_gain=0.35, out_gain=0.7, delay=3.0, decay=0.4, speed=0.35)},"
+            f"{_fades(d, fade_out)},volume=0.13"
+        )
+        return _run(expr, af, "showroom")
+
+    # ── stadium: low hollow chord, strong tremolo ─────────────────────────────
+    if mood == "stadium":
+        root, third, fifth = 100.0, 150.0, 200.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = f"{_tremolo(freq=1.2, depth=0.4)},lowpass=f=800,{_fades(d, fade_out)},volume=0.14"
+        return _run(expr, af, "stadium")
+
+    # ── motorway: low rumble + sawtooth texture ───────────────────────────────
+    if mood == "motorway":
+        root, third, fifth = 55.0, 82.0, 110.0
+        expr = _pad_expr(root, third, fifth, _saw)
+        af = f"{_tremolo(freq=1.5, depth=0.2)},lowpass=f=400,{_fades(d, fade_out)},volume=0.13"
+        return _run(expr, af, "motorway")
+
+    # ── beach / cafe: light piano at mid frequencies ──────────────────────────
+    if mood in ("beach", "cafe"):
+        root = 174.0 if mood == "cafe" else 196.0
+        third, fifth = root * 1.25, root * 1.5
+        expr = _pad_expr(root, third, fifth, _piano)
+        af = (
+            f"{_aphaser(in_gain=0.35, out_gain=0.7, delay=3.5, decay=0.4, speed=0.3)},"
+            f"highpass=f=120,"
+            f"{_fades(d, fade_out)},"
+            f"volume=0.13"
+        )
+        return _run(expr, af, mood)
+
+    # ── occult_basement: lowest hollow, barely moving ────────────────────────
+    if mood == "occult_basement":
+        root, third, fifth = 50.0, 63.0, 75.0
+        expr = _pad_expr(root, third, fifth, _hollow)
+        af = f"{_tremolo(freq=0.4, depth=0.45)},lowpass=f=350,{_fades(d, fade_out)},volume=0.13"
+        return _run(expr, af, "occult_basement")
+
+    # ── default fallback: warm lounge pad ────────────────────────────────────
+    root, third, fifth = 220.0, 330.0, 440.0
+    expr = _pad_expr(root, third, fifth, _piano)
+    af = (
+        f"{_aphaser(in_gain=0.4, out_gain=0.74, delay=4.0, decay=0.5, speed=0.25)},"
+        f"lowpass=f=1800,"
+        f"{_fades(d, fade_out)},"
+        f"volume=0.14"
+    )
+    return _run(expr, af, mood)
+
+
+def generate_foley_loop(output_path: Path, environment: str, duration_sec: float, *, variant: int = 0) -> Path:
+    """Generate a short ambient foley texture for the given ad environment.
+
+    Unlike the tonal music bed, foley uses noise-based synthesis to create
+    recognisable environmental textures: crowd chatter, road/engine noise,
+    ocean wash, water trickle, etc.  Sits at very low volume under the voice
+    and music bed so the spot feels alive without masking the copy.
+
+    Returns *output_path* unchanged (even on failure) so callers can test
+    ``output_path.exists()`` to decide whether to mix it in.
+    """
+    d = duration_sec
+    variant = max(0, int(variant)) % 3
+    fade_out = min(1.0, d / 4)
+    fades = f"afade=t=in:d=0.5,afade=t=out:st={d - fade_out}:d={fade_out}"
+
+    def _var_freq(freq: float) -> float:
+        if variant == 0:
+            return freq
+        return freq * (1.0 + 0.04 * variant)
+
+    def _var_depth(depth: float) -> float:
+        if variant == 0:
+            return depth
+        return min(0.95, depth + 0.03 * variant)
+
+    def _var_volume(volume: float) -> float:
+        if variant == 0:
+            return volume
+        return volume * (1.0 - 0.04 * variant)
+
+    def _noise(color: str, af: str) -> None:
+        """Run ffmpeg with an anoisesrc lavfi input."""
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anoisesrc=color={color}:r=48000:d={d}",
+            "-af",
+            af,
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+        _run_ffmpeg(cmd, f"foley loop ({environment})")
+
+    def _expr(expr: str, af: str) -> None:
+        """Run ffmpeg with an aevalsrc lavfi input (for harmonic textures)."""
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
+            "-af",
+            af,
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+        _run_ffmpeg(cmd, f"foley loop ({environment})")
+
+    try:
+        if environment == "cafe":
+            # Distant café: bandpass pink noise → room chatter texture.
+            # Very slow tremolo → natural energy ebb in a busy room.
+            _noise(
+                "pink",
+                f"bandpass=f=1100:w=900,{_tremolo(freq=_var_freq(0.07), depth=_var_depth(0.12))},"
+                f"volume={_fmt_num(_var_volume(0.055))},{fades}",
+            )
+
+        elif environment == "motorway":
+            # Engine harmonics (aevalsrc) + fast piston tremolo → car in motion.
+            base = _var_freq(82)
+            engine = (
+                f"0.28*sin(2*PI*{_fmt_num(base)}*t)"
+                f"+0.18*sin(2*PI*{_fmt_num(base * 2)}*t)"
+                f"+0.10*sin(2*PI*{_fmt_num(base * 3)}*t)"
+                f"+0.06*sin(2*PI*{_fmt_num(base * 4)}*t)"
+            )
+            _expr(
+                engine,
+                f"{_tremolo(freq=_var_freq(13), depth=_var_depth(0.28))},lowpass=f=380,"
+                f"volume={_fmt_num(_var_volume(0.11))},{fades}",
+            )
+
+        elif environment == "beach":
+            # Ocean wash: pink noise lowpass + very slow tremolo (wave rhythm ~6 s/cycle).
+            _noise(
+                "pink",
+                f"lowpass=f=650,highpass=f=55,{_tremolo(freq=_var_freq(0.16), depth=_var_depth(0.62))},"
+                f"volume={_fmt_num(_var_volume(0.08))},{fades}",
+            )
+
+        elif environment == "stadium":
+            # Crowd roar: pink noise bandpass + short aecho for stadium reverb.
+            _noise(
+                "pink",
+                f"bandpass=f=750:w=650,aecho=0.7:0.35:30|65:0.07|0.03,volume={_fmt_num(_var_volume(0.09))},{fades}",
+            )
+
+        elif environment == "luxury_spa":
+            # Water trickle: highpass pink noise + slow tremolo.
+            _noise(
+                "pink",
+                f"highpass=f=1400,lowpass=f=6500,{_tremolo(freq=_var_freq(0.32), depth=_var_depth(0.48))},"
+                f"volume={_fmt_num(_var_volume(0.05))},{fades}",
+            )
+
+        elif environment == "showroom":
+            # Subtle room tone: very quiet broadband noise, mostly sub-perceptual.
+            _noise(
+                "pink",
+                f"highpass=f=180,lowpass=f=3500,volume={_fmt_num(_var_volume(0.04))},{fades}",
+            )
+
+        elif environment == "shopping_channel":
+            # Bright studio energy: white noise bandpass → phones/audience shimmer.
+            _noise(
+                "white",
+                f"bandpass=f=2200:w=1600,volume={_fmt_num(_var_volume(0.05))},{fades}",
+            )
+
+        else:
+            # Unknown environment — nothing to generate.
+            return output_path
+
+        logger.info("Generated foley loop: %s (%s, %.1fs)", output_path.name, environment, d)
+
+    except Exception as exc:
+        logger.warning("Foley loop generation failed (%s): %s — skipping", environment, exc)
+        # Do not create the file; caller checks output_path.exists()
+
+    return output_path
+
+
+def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_scale: float = 0.12) -> Path:
+    """Layer a music bed under voice audio. Default bed at -18dB relative to voice."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(voice_path),
+        "-i",
+        str(bed_path),
+        "-filter_complex",
+        f"[1:a]volume={volume_scale}[bed];[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "192k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "mix voice+bed")
+    logger.info("Mixed voice + bed -> %s", output_path.name)
+    return output_path
+
+
+def mix_oneshot_layers(
+    base_path: Path,
+    layers: Sequence[tuple[Path, float, float, float]],
+    output_path: Path,
+) -> Path:
+    """Overlay at most two dry cues onto a base render in one FFmpeg pass.
+
+    Each layer is ``(path, offset_sec, gain_db, max_duration_sec)``.  The base
+    remains the first amix input, so it defines the output duration.  This
+    deliberately does not run ``loudnorm``: callers can place the recipe mix
+    before their one final mastering/reconciliation stage instead of remastering
+    once for every small foreground accent.
+    """
+    if len(layers) > 2:
+        raise ValueError("at most two one-shot layers may be mixed with one base")
+    if base_path == output_path and layers:
+        raise ValueError("mix_oneshot_layers requires a distinct output path")
+    validated_layers: list[tuple[Path, float, float, float]] = []
+    for cue_path, raw_offset_sec, raw_gain_db, raw_max_duration_sec in layers:
+        try:
+            offset_sec = float(raw_offset_sec)
+            gain_db = float(raw_gain_db)
+            max_duration_sec = float(raw_max_duration_sec)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("one-shot layer values must be numeric") from exc
+        if not all(math.isfinite(value) for value in (offset_sec, gain_db, max_duration_sec)):
+            raise ValueError("one-shot layer values must be finite")
+        if offset_sec < 0 or max_duration_sec <= 0:
+            raise ValueError("one-shot offsets must be non-negative and durations positive")
+        validated_layers.append((cue_path, offset_sec, gain_db, max_duration_sec))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not layers:
+        if base_path != output_path:
+            shutil.copy2(base_path, output_path)
+        return output_path
+
+    command = ["ffmpeg", "-y", "-i", str(base_path)]
+    filter_parts = ["[0:a]asetpts=PTS-STARTPTS[base]"]
+    mix_inputs = ["[base]"]
+    for input_index, (cue_path, offset_sec, gain_db, max_duration_sec) in enumerate(validated_layers, start=1):
+        command.extend(["-i", str(cue_path)])
+        cue_label = f"cue{input_index}"
+        delay_ms = round(offset_sec * 1000)
+        filter_parts.append(
+            f"[{input_index}:a]atrim=0:{_fmt_num(max_duration_sec)},asetpts=PTS-STARTPTS,"
+            f"volume={_fmt_num(gain_db)}dB,adelay={delay_ms}:all=1[{cue_label}]"
+        )
+        mix_inputs.append(f"[{cue_label}]")
+    # Keep the rendered voice/bed base at unity throughout. FFmpeg's default
+    # amix normalization re-scales it as delayed cue streams begin/end, which
+    # creates an audible level jump that final mastering cannot undo.
+    filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:normalize=0[out]")
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[out]",
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+    )
+    _run_ffmpeg(command, "mix imaging one-shot layers")
+    logger.info("Mixed base + %d one-shot imaging layers -> %s", len(layers), output_path.name)
+    return output_path
+
+
+def loop_audio_bed(
+    input_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    *,
+    target_lufs: float = -18.0,
+    fade_out_sec: float = 0.0,
+) -> Path:
+    """Loop a pre-rendered bed to an exact duration at a predictable level.
+
+    This is deliberately a small, reusable primitive: station imaging and ad
+    production can use authored packaged beds without having to regenerate an
+    oscillator texture at runtime.  Callers still own their final voice mix and
+    its loudness reconciliation.
+    """
+    duration = max(float(duration_sec), 0.5)
+    fade = min(max(float(fade_out_sec), 0.0), duration / 2)
+    fade_filter = f",afade=t=out:st={_fmt_num(duration - fade)}:d={_fmt_num(fade)}" if fade > 0 else ""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        (
+            f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB{fade_filter},"
+            f"loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"
+        ),
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        _fmt_num(duration),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "loop packaged audio bed")
+    return output_path
+
+
+def fit_audio_oneshot(
+    input_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    *,
+    target_lufs: float = -16.0,
+    fade_out_sec: float = 0.0,
+) -> Path:
+    """Trim or silence-pad a one-shot to a fixed duration without repeating it."""
+    duration = max(float(duration_sec), 0.5)
+    fade = min(max(float(fade_out_sec), 0.0), duration / 2)
+    fade_filter = f",afade=t=out:st={_fmt_num(duration - fade)}:d={_fmt_num(fade)}" if fade > 0 else ""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        (
+            f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB{fade_filter},"
+            f"apad=whole_dur={_fmt_num(duration)},atrim=0:{_fmt_num(duration)},"
+            f"loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"
+        ),
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        _fmt_num(duration),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "fit packaged audio one-shot")
+    return output_path
+
+
+def generate_transition_sting(
+    from_type_name: str,
+    to_type_name: str,
+    output_path: Path,
+    motif_notes: list[int] | None = None,
+    *,
+    variant: int = 0,
+) -> Path:
+    """Generate a station-branded transition sting for music/speech boundaries."""
+    from_name = from_type_name.strip().lower()
+    to_name = to_type_name.strip().lower()
+    speech_types = {"banter", "news_flash", "ad", "station_id", "time_check", "sweeper"}
+    notes = motif_notes or [523, 659, 784, 1047]
+    variant_index = max(0, int(variant)) % 3
+    rotated_notes = notes[1:] + notes[:1] if len(notes) > 1 else notes
+
+    tmp = Path(tempfile.mkdtemp())
+    parts: list[Path] = []
+    try:
+        if from_name == "music" and to_name in speech_types:
+            if variant_index == 0:
+                sweep_path = tmp / "transition_sweep.mp3"
+                motif_path = tmp / "transition_motif.mp3"
+                generate_sweep(sweep_path, duration_sec=0.8)
+                generate_station_id_bed(motif_path, 1.2, notes)
+                parts = [sweep_path, motif_path]
+            elif variant_index == 1:
+                sweep_path = tmp / "transition_sweep_short.mp3"
+                motif_path = tmp / "transition_motif_reverse.mp3"
+                generate_sweep(sweep_path, duration_sec=0.55)
+                generate_station_id_bed(motif_path, 1.0, list(reversed(notes)))
+                parts = [sweep_path, motif_path]
+            else:
+                motif_path = tmp / "transition_motif_rotated.mp3"
+                bumper_path = tmp / "transition_bumper_short.mp3"
+                generate_station_id_bed(motif_path, 0.65, rotated_notes)
+                generate_bumper_jingle(bumper_path, 0.45)
+                parts = [motif_path, bumper_path]
+        elif from_name in speech_types and to_name == "music":
+            if variant_index == 0:
+                motif_path = tmp / "transition_motif.mp3"
+                bumper_path = tmp / "transition_bumper.mp3"
+                generate_station_id_bed(motif_path, 0.5, list(reversed(notes)))
+                generate_bumper_jingle(bumper_path, 0.5)
+                parts = [motif_path, bumper_path]
+            elif variant_index == 1:
+                bumper_path = tmp / "transition_bumper_open.mp3"
+                motif_path = tmp / "transition_motif_answer.mp3"
+                generate_bumper_jingle(bumper_path, 0.7)
+                generate_station_id_bed(motif_path, 0.45, notes)
+                parts = [bumper_path, motif_path]
+            else:
+                sweep_path = tmp / "transition_sweep_out.mp3"
+                bumper_path = tmp / "transition_bumper_tight.mp3"
+                generate_sweep(sweep_path, duration_sec=0.45)
+                generate_bumper_jingle(bumper_path, 0.55)
+                parts = [sweep_path, bumper_path]
+        else:
+            logger.warning(
+                "generate_transition_sting: unsupported pair %s->%s, using sweep fallback",
+                from_type_name,
+                to_type_name,
+            )
+            generate_sweep(output_path, duration_sec=[1.0, 0.65, 0.45][variant_index])
+            return output_path
+
+        concat_files(parts, output_path, silence_ms=0, loudnorm=False)
+        return output_path
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def mix_voice_with_bed(voice_path: Path, bed_path: Path, output_path: Path, bed_db: float = -18.0) -> Path:
+    """Mix a voice segment over a quiet music bed, clipping output to voice length."""
+    scale = 10 ** (bed_db / 20)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(voice_path),
+        "-i",
+        str(bed_path),
+        "-filter_complex",
+        f"[1:a]volume={_fmt_num(scale)}[bed];"
+        "[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2,"
+        "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "mix voice with talk bed")
+    _reconcile_lufs(output_path)
+    logger.info("Mixed voice + talk bed -> %s", output_path.name)
+    return output_path
+
+
+def generate_bumper_jingle(output_path: Path, duration_sec: float = 1.5) -> Path:
+    """Generate a short radio bumper jingle with pad, velocity variation, and reverb.
+
+    Ascending C-E-G-C6 arpeggio over a sustained C-major pad, with echo/reverb
+    tail and per-note velocity shaping. All tones in a single aevalsrc expression
+    with time-shifted plucked envelopes (8 inputs → 1).
+    """
+    fade = min(0.1, duration_sec / 4)
+    nd = duration_sec / 6  # note duration
+    d = duration_sec
+
+    # Melody notes with velocities and staggered onsets
+    # Each note: vel * sin(freq*t) * exp(-decay*(t-onset)) * gate(t>=onset)
+    # Notes: C5(523), E5(659), G5(784), C6(1047), G5(784), E5(659)
+    melody_parts = [
+        f"0.7*sin(2*PI*523*t)*exp(-{1.0 / nd * 3}*(t-0))*{_gate_after(0.0)}",
+        f"0.85*sin(2*PI*659*t)*exp(-{1.0 / nd * 3}*(t-{nd}))*{_gate_after(nd)}",
+        f"1.0*sin(2*PI*784*t)*exp(-{1.0 / nd * 3}*(t-{nd * 2}))*{_gate_after(nd * 2)}",
+        f"1.0*sin(2*PI*1047*t)*exp(-{1.0 / nd * 3}*(t-{nd * 3}))*{_gate_after(nd * 3)}",
+        f"0.8*sin(2*PI*784*t)*exp(-{1.0 / nd * 3}*(t-{nd * 4}))*{_gate_after(nd * 4)}",
+        f"0.6*sin(2*PI*659*t)*exp(-{1.0 / (nd * 1.5) * 3}*(t-{nd * 5}))*{_gate_after(nd * 5)}",
+    ]
+    # Pad: sustained C3(131) + G3(196) with gentle tremolo approximated by AM
+    pad_parts = [
+        "0.15*sin(2*PI*131*t)*(1+0.2*sin(2*PI*3*t))",
+        "0.12*sin(2*PI*196*t)*(1+0.15*sin(2*PI*2.5*t))",
+    ]
+    expr = "+".join(melody_parts + pad_parts)
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
+        "-af",
+        f"volume=0.45,aecho=0.8:0.7:30|60|90:0.25|0.15|0.08,afade=t=in:d={fade},afade=t=out:st={d - fade}:d={fade}",
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        str(d),
+        str(output_path),
+    ]
+    try:
+        _run_ffmpeg(cmd, "bumper jingle")
+    except subprocess.CalledProcessError:
+        logger.warning("Bumper synthesis fallback: using simpler jingle after aevalsrc failure")
+        fallback_cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=523:sample_rate=48000:duration={_fmt_num(d)}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=784:sample_rate=48000:duration={_fmt_num(d)}",
+            "-filter_complex",
+            (
+                "[0:a]volume=0.8[a0];"
+                "[1:a]volume=0.55,adelay=80|80[a1];"
+                "[a0][a1]amix=inputs=2:duration=first,"
+                f"aecho=0.8:0.6:35|70:0.20|0.10,"
+                f"afade=t=in:d={_fmt_num(fade)},"
+                f"afade=t=out:st={_fmt_num(d - fade)}:d={_fmt_num(fade)}"
+            ),
+            *_MP3_OUTPUT_ARGS,
+            "-t",
+            str(d),
+            str(output_path),
+        ]
+        _run_ffmpeg(fallback_cmd, "bumper jingle fallback")
+    logger.info("Generated bumper jingle: %s", output_path.name)
+    return output_path
+
+
+def generate_brand_motif(output_path: Path, sonic_signature: str, sfx_dir: Path | None = None) -> Path:
+    """Parse a sonic_signature like 'ice_clink+startup_synth' into a short brand jingle.
+
+    Each component is generated as an SFX capped at 0.5s, concatenated into a
+    motif capped at 2.0s total. Prepend-only (before the ad voice).
+    """
+    components = [c.strip() for c in sonic_signature.split("+") if c.strip()]
+    if not components:
+        raise ValueError("Empty sonic_signature")
+
+    tmp = Path(tempfile.mkdtemp())
+    parts: list[Path] = []
+    try:
+        total_dur = 0.0
+        for comp in components:
+            if total_dur >= 2.0:
+                break
+            part_path = tmp / f"motif_{comp}_{len(parts)}.mp3"
+            generate_sfx(part_path, comp, sfx_dir)
+            parts.append(part_path)
+            total_dur += 0.5
+
+        if len(parts) == 1:
+            shutil.move(str(parts[0]), str(output_path))
+        else:
+            concat_files(parts, output_path, silence_ms=100)
+            for p in parts:
+                p.unlink(missing_ok=True)
+
+        logger.info("Generated brand motif: %s (%d components)", output_path.name, len(parts))
+        return output_path
+    except Exception:
+        for p in parts:
+            p.unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def crossfade_voice_over_music(
+    music_path: Path,
+    voice_path: Path,
+    output_path: Path,
+    tail_seconds: float = 8.0,
+    voice_volume: float = 1.0,
+    music_fade_volume: float = 0.5,
+    voice_delay_ms: int = 150,
+) -> Path:
+    """Overlay voice on the tail of a music track, fading music down underneath.
+
+    Takes the last `tail_seconds` of the music, fades it to `music_fade_volume`,
+    and mixes the voice on top. The result is a "DJ talking over the outro" effect.
+    """
+    delay_ms = max(0, int(voice_delay_ms))
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-sseof",
+        f"-{tail_seconds}",
+        "-i",
+        str(music_path),
+        "-i",
+        str(voice_path),
+        "-filter_complex",
+        f"[0:a]afade=t=out:st=0:d={tail_seconds},volume={music_fade_volume}[music];"
+        f"[1:a]volume={voice_volume},adelay={delay_ms}|{delay_ms}[voice];"
+        f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
+        f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "crossfade voice over music")
+    logger.info("Crossfade voice over music -> %s", output_path.name)
+    return output_path
+
+
+def generate_station_id_bed(
+    output_path: Path,
+    duration_sec: float = 3.0,
+    motif_notes: list[int] | None = None,
+) -> Path:
+    """Generate a short musical sting for station ID: ascending chord + reverb tail.
+
+    Uses the Rhodes-style motif notes from [sonic_brand].motif_notes in radio.toml.
+    The last note sustains longer for a reverb tail effect.
+    """
+    notes = (motif_notes or [523, 659, 784, 1047])[:8]  # cap at 8 notes (ffmpeg label limit)
+    note_dur = duration_sec / len(notes)
+    fade = min(0.15, duration_sec / 5)
+
+    # Build lavfi inputs — last note sustains longer
+    inputs: list[str] = []
+    for i, freq in enumerate(notes):
+        dur = duration_sec * 0.6 if i == len(notes) - 1 else note_dur
+        inputs.extend(["-f", "lavfi", "-i", f"sine=frequency={freq}:duration={dur}"])
+
+    # Build filter: stagger each note with adelay, mix, add echo
+    labels = "abcdefgh"[: len(notes)]
+    filter_parts = []
+    for i, label in enumerate(labels):
+        delay_ms = int(note_dur * 400 * i)
+        filter_parts.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[{label}]")
+
+    mix_inputs = "".join(f"[{ch}]" for ch in labels)
+    filter_parts.append(
+        f"{mix_inputs}amix=inputs={len(notes)}:duration=longest,volume=0.4,"
+        f"aecho=0.8:0.7:40|80:0.3|0.2,"
+        f"afade=t=in:d={fade},afade=t=out:st={duration_sec - fade * 2}:d={fade * 2}[out]"
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        *inputs,
+        "-filter_complex",
+        ";".join(filter_parts),
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        str(duration_sec),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "station ID bed")
+    logger.info("Generated station ID bed: %s", output_path.name)
+    return output_path
+
+
+def mix_voice_with_sting(
+    voice_path: Path,
+    sting_path: Path,
+    output_path: Path,
+) -> Path:
+    """Mix a voice tag centered over a musical sting, with the sting quieter underneath."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        # ``loudnorm`` inside a multi-threaded complex graph is not bit-stable:
+        # identical short ID renders can differ at decoded-sample level, which
+        # invalidates digest-bound listening receipts. This mix is only a few
+        # seconds long, so one filter thread is effectively free and keeps both
+        # runtime and offline approval renders deterministic.
+        "-filter_complex_threads",
+        "1",
+        "-i",
+        str(sting_path),
+        "-i",
+        str(voice_path),
+        "-filter_complex",
+        "[0:a]volume=0.15[bed];"
+        "[1:a]adelay=400|400,volume=1.2[voice];"
+        # Preserve the authored 0.15/1.2 gain relationship instead of letting
+        # amix renormalize the voice when the shorter bed reaches EOF.  Apart
+        # from the audible level jump, dropout renormalization can land on one
+        # of two adjacent decoded samples and makes otherwise identical renders
+        # nondeterministic.
+        "[bed][voice]amix=inputs=2:duration=longest:normalize=0,"
+        "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "mix voice with sting")
+    _reconcile_lufs(output_path)
+    logger.info("Mixed voice + sting -> %s", output_path.name)
+    return output_path
+
+
+def normalize_ad(input_path: Path, output_path: Path) -> Path:
+    """Broadcast-style processing for ad audio — loud, bright, and punchy.
+
+    Chain: heavy compressor (fast attack squashes transients, low threshold
+    catches everything) → presence boost at 3kHz for clarity → air boost at
+    8kHz for sparkle → bass shelf cut to avoid muddiness under compression →
+    aggressive loudnorm (I=-14, LRA=7 for minimal dynamic range, TP=-2.0 as
+    codec headroom for the decoded -1.0 dBTP ceiling).
+
+    The I=-14 stage gives ads their punch; a final loudness-reconciliation pass
+    (``_reconcile_lufs(ad=True)``) then settles the aired level to ad_lufs_target
+    (default -15 LUFS — 1 LU hotter than music's -16, not the raw 2 LU of this
+    stage), so ads pop without the old jarring jump. Narrower dynamic range and
+    brighter than music throughout — the standard broadcast approach.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        # Heavy broadcast compressor: low threshold, high ratio, fast attack
+        "acompressor=threshold=-24dB:ratio=8:attack=3:release=40:makeup=6,"
+        # Presence/clarity boost + air
+        "treble=gain=4:frequency=3000,"
+        "treble=gain=2:frequency=8000,"
+        # Cut mud below 120Hz (ads don't need sub-bass)
+        "highpass=f=120:t=q:w=0.7,"
+        # EBU R128 loudness — louder and tighter than music
+        "loudnorm=I=-14:LRA=7:TP=-2.0",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"normalize_ad {input_path.name}")
+    _reconcile_lufs(output_path, ad=True)
+    logger.info("Ad broadcast processing: %s -> %s", input_path.name, output_path.name)
+    return output_path
+
+
+def mix_ad_with_bed(voiceover_path: Path, output_path: Path) -> Path:
+    """Mix an ad voiceover with a gentle ambient bed so the spot isn't dry voice-only.
+
+    The bed is a warm 220Hz+330Hz+440Hz sine chord with a slow 0.5Hz volume pulse,
+    generated to exactly match the voiceover length, then mixed at -18dB under the
+    voiceover. Output gets the same EBU R128 loudnorm pass as normalize_ad.
+
+    NOTE: synthesize_ad() already applies a mood-based bed via generate_station_id_bed().
+    Only call this function on raw voiceovers that bypassed synthesize_ad processing.
+    """
+    # Get voiceover duration so the aevalsrc bed is trimmed exactly. Bounded by a
+    # timeout: this holds an ffmpeg_slot, so a hung ffprobe must not pin one of the
+    # 2 Pi slots. A timeout falls back to the same 30s default as a probe failure.
+    try:
+        with ffmpeg_slot():
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(voiceover_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_FFMPEG_TIMEOUT_SEC,
+            )
+        duration = float(result.stdout.strip()) if result.returncode == 0 else 30.0
+    except (subprocess.TimeoutExpired, ValueError):
+        duration = 30.0
+
+    # Warm sine bed: three harmonics with a slow 0.5Hz LFO breathing envelope.
+    bed_expr = "0.03*sin(2*PI*220*t)+0.02*sin(2*PI*330*t)+0.01*sin(2*PI*440*t)"
+    # Multiply by breathing envelope: oscillates between 0.6 and 1.0 at 0.5Hz
+    bed_with_lfo = f"({bed_expr})*(0.8+0.2*sin(2*PI*0.5*t))"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(voiceover_path),
+        "-f",
+        "lavfi",
+        "-i",
+        f"aevalsrc={bed_with_lfo}|{bed_with_lfo}:d={duration:.3f}:s=48000:c=stereo",
+        "-filter_complex",
+        # bed at -18dB (volume≈0.126), voiceover at unity, then loudnorm
+        "[1:a]volume=0.126[bed];[0:a][bed]amix=inputs=2:duration=first[mixed];[mixed]loudnorm=I=-14:LRA=7:TP=-1.0[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, f"mix_ad_with_bed {voiceover_path.name}")
+    _reconcile_lufs(output_path, ad=True)
+    logger.info("Ad bed mix: %s -> %s", voiceover_path.name, output_path.name)
+    return output_path
+
+
+def mix_quiet_bleed(
+    base_path: Path,
+    bleed_path: Path,
+    output_path: Path,
+    bleed_volume_db: float = -22.0,
+    bleed_duration_sec: float = 4.0,
+) -> Path:
+    """Mix a very quiet snippet of *bleed_path* under the start of *base_path*.
+
+    Creates the "studio mic left on" atmosphere — faint Italian voices under
+    a music segment.  The bleed is faded in/out so it never pops.
+    """
+    fade = min(0.8, bleed_duration_sec / 3)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(base_path),
+        "-i",
+        str(bleed_path),
+        "-filter_complex",
+        (
+            f"[1:a]atrim=0:{bleed_duration_sec},"
+            f"volume={bleed_volume_db}dB,"
+            f"afade=t=in:d={fade},afade=t=out:st={bleed_duration_sec - fade}:d={fade}[bleed];"
+            "[0:a][bleed]amix=inputs=2:duration=first:dropout_transition=0,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5[out]"
+        ),
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "studio bleed mix")
+    return output_path
+
+
+def mix_oneshot_sfx(
+    base_path: Path,
+    sfx_path: Path,
+    output_path: Path,
+    offset_sec: float = 0.0,
+    sfx_volume_db: float = -18.0,
+) -> Path:
+    """Mix a short one-shot SFX into *base_path* at *offset_sec*."""
+    delay_ms = int(offset_sec * 1000)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(base_path),
+        "-i",
+        str(sfx_path),
+        "-filter_complex",
+        (
+            f"[1:a]volume={sfx_volume_db}dB,adelay={delay_ms}|{delay_ms}[sfx];"
+            "[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5[out]"
+        ),
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "oneshot SFX mix")
+    return output_path
+
+
+def generate_silence(output_path: Path, duration_sec: float = 3.0, *, rescue: bool = False) -> Path:
+    """Generate silent audio used for pauses and error recovery."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=48000:cl=stereo",
+        "-t",
+        str(duration_sec),
+        "-b:a",
+        "192k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "generate silence", rescue=rescue)
+    return output_path

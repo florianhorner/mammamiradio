@@ -476,7 +476,20 @@ DSP, and license metadata, plus the selected design and checksum inventory.
 The separate listening board stores the pack-scoped approval receipt. The
 installed manifest omits that receipt and the board previews. CI and add-on
 validation check the installed files against the inventory. `ATTRIBUTION.md`
-is generated from the runtime ledger. The exact inventory is in
+is generated from the runtime ledger.
+
+Each source also pins the generator script and every input it depends on by
+SHA-256. Byte-exact copies of those inputs live in the pack under
+`provenance/generator-src/`, at their repository paths plus a `.txt` suffix
+(so linters and code scanners do not read frozen copies as live source), and
+`scripts/validate_audio_asset_pack.py` verifies the pins by hashing those
+copies. The check needs no Git history, so it holds in a shallow clone or an
+exported tree; the Git revision in the manifest is a reference only. A missing,
+changed, linked, or unpinned file in that directory fails validation.
+`scripts/complete_audio_pack_gate.py` rewrites the directory whenever it builds
+a pack, and promotion carries it along. It is not runtime payload: the runtime
+inventory skips it, and both `.dockerignore` files keep it out of the Docker
+and add-on images. The exact inventory is in
 [`manifest.json`](../mammamiradio/assets/imaging/manifest.json); the local
 audition procedure is in
 [Operations](operations.md#audition-the-modern-night-drive-imaging-pack).

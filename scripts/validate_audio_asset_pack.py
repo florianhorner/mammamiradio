@@ -15,7 +15,11 @@ Schema version 2 keeps three linked inventories in ``manifest.json``:
 For an external recording, ``original_path`` remains an optional curator's
 archive pointer; its public URL and SHA-256 are the durable ledger. A
 project-authored deterministic master instead keeps that file in the pack and
-pins its generator, every declared Git dependency, and toolchain metadata.
+pins its generator, every declared dependency, and toolchain metadata. The exact
+generator input bytes travel with the pack under ``provenance/generator-src/``
+(each at its repository path plus a ``.txt`` suffix)
+and are verified by hashing those files, so validation needs no Git history;
+the recorded Git revision is an informational reference only.
 
 Usage:
     python scripts/validate_audio_asset_pack.py
@@ -65,6 +69,14 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_AUTHORED_PROVENANCE_TYPE = "project-authored-deterministic-master"
 PROJECT_GENERATOR_KIND = "git-committed-ffmpeg-generator"
+# Byte-exact copies of every pinned generator input, stored at their
+# repo-relative paths. This subtree is provenance evidence, not runtime
+# payload: the runtime inventory skips it and the snapshot check owns it.
+GENERATOR_SNAPSHOT_DIR = "provenance/generator-src"
+# Each copy keeps its repository path plus this suffix. The suffix marks the
+# copies as retained text, so linters, type checkers and code scanners do not
+# read frozen evidence as live source. The bytes are unchanged.
+GENERATOR_SNAPSHOT_SUFFIX = ".txt"
 QUALITY_GUARD_KEY = "quality_guard_allowlist"
 CORRELATION_THRESHOLD = 0.98
 CORRELATION_WINDOW_SEC = 0.5
@@ -816,24 +828,82 @@ def _resolve_original_path(pack_dir: Path, original_path: str) -> Path:
     return path if path.is_absolute() else pack_dir / path
 
 
-def _read_git_blob(revision: str, path: str) -> bytes:
-    """Read one committed generator input without consulting working-tree bytes."""
+def generator_snapshot_path(generator_path: str) -> str:
+    """Return the pack-relative snapshot path of one pinned generator input."""
+    return f"{GENERATOR_SNAPSHOT_DIR}/{generator_path}{GENERATOR_SNAPSHOT_SUFFIX}"
+
+
+def is_generator_snapshot_path(relative_path: str) -> bool:
+    """Tell whether a pack-relative path is the snapshot root or lies below it."""
+    return relative_path == GENERATOR_SNAPSHOT_DIR or relative_path.startswith(f"{GENERATOR_SNAPSHOT_DIR}/")
+
+
+def generator_snapshot_paths(manifest: Any) -> tuple[str, ...]:
+    """List the pack-relative snapshot files a manifest's generator pins require.
+
+    Tools that copy or enumerate a pack use this to carry the snapshot along;
+    it reads raw manifest JSON and leaves all judgement to the validator.
+    """
+    paths: set[str] = set()
+    sources = manifest.get("sources") if isinstance(manifest, dict) else None
+    for source in sources if isinstance(sources, list) else ():
+        generator = source.get("generator") if isinstance(source, dict) else None
+        if not isinstance(generator, dict):
+            continue
+        dependencies = generator.get("dependencies")
+        records = [generator, *(dependencies if isinstance(dependencies, list) else ())]
+        for record in records:
+            path = record.get("path") if isinstance(record, dict) else None
+            if isinstance(path, str) and path:
+                paths.add(generator_snapshot_path(path))
+    return tuple(sorted(paths))
+
+
+def _hash_generator_snapshot_file(pack_dir: Path, generator_path: str) -> str:
+    """Hash one snapshot file, refusing links and anything outside the pack."""
+    relative_path = generator_snapshot_path(generator_path)
+    current = pack_dir
+    for part in PurePosixPath(relative_path).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"snapshot path must not traverse a symlink: {relative_path}")
+    resolved = _resolve_asset_path(pack_dir, relative_path)
+    if not resolved.is_file():
+        raise ValueError(f"snapshot file is missing: {relative_path}")
     try:
-        completed = subprocess.run(
-            ["git", "show", f"{revision}:{path}"],
-            cwd=REPO_ROOT,
-            check=False,
-            capture_output=True,
-            timeout=15,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("git is required to validate project-authored generator provenance") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"git timed out reading {revision}:{path}") from exc
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(detail or f"git cannot read {revision}:{path}")
-    return completed.stdout
+        return _sha256_file(resolved)
+    except OSError as exc:
+        raise ValueError(f"snapshot file is unreadable: {relative_path}: {exc}") from exc
+
+
+def _scan_generator_snapshot(pack_dir: Path, errors: list[str]) -> set[str]:
+    """Enumerate snapshot files by pack-relative path; links and special entries fail."""
+    root = pack_dir.joinpath(*PurePosixPath(GENERATOR_SNAPSHOT_DIR).parts)
+    found: set[str] = set()
+    if root.is_symlink():
+        errors.append(f"generator snapshot directory must not be a symlink: {GENERATOR_SNAPSHOT_DIR}")
+        return found
+    if not root.exists():
+        return found
+    if not root.is_dir():
+        errors.append(f"generator snapshot must be a directory: {GENERATOR_SNAPSHOT_DIR}")
+        return found
+    try:
+        entries = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
+    except OSError as exc:
+        errors.append(f"cannot enumerate generator snapshot: {exc}")
+        return found
+    for entry in entries:
+        relative = entry.relative_to(root).as_posix()
+        if entry.is_symlink():
+            errors.append(f"generator snapshot contains symlink: {relative}")
+        elif entry.is_dir():
+            continue
+        elif entry.is_file():
+            found.add(f"{GENERATOR_SNAPSHOT_DIR}/{relative}")
+        else:
+            errors.append(f"generator snapshot contains special filesystem entry: {relative}")
+    return found
 
 
 def _probe_audio(path: Path) -> AudioProbe:
@@ -888,8 +958,8 @@ def _probe_audio(path: Path) -> AudioProbe:
 
 
 def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...], errors: list[str]) -> None:
-    pinned_blob_hashes: dict[tuple[str, str], str | RuntimeError] = {}
-    reported_pins: set[tuple[str, str, str]] = set()
+    snapshot_hashes: dict[str, str | ValueError] = {}
+    reported_pins: set[tuple[str, str]] = set()
     for source in sources:
         if source.original_path is not None:
             try:
@@ -916,36 +986,40 @@ def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...]
                             )
 
         # External sources retain the URL + checksum ledger. Project-authored
-        # masters additionally prove that every declared generator input exists
-        # at, and hashes to, the pinned Git revision.
+        # masters additionally prove that every declared generator input is
+        # retained in the pack snapshot and hashes to its manifest pin. The
+        # check reads only pack files, so it holds in any clone or export.
         if source.provenance_type != PROJECT_AUTHORED_PROVENANCE_TYPE or source.generator is None:
             continue
         generator = source.generator
         pins = [(generator.path, generator.sha256)]
         pins.extend((dependency.path, dependency.sha256) for dependency in generator.dependencies)
         for path, expected_sha256 in pins:
-            key = (generator.revision, path)
-            result = pinned_blob_hashes.get(key)
+            result = snapshot_hashes.get(path)
             if result is None:
                 try:
-                    blob = _read_git_blob(*key)
-                except RuntimeError as exc:
+                    result = _hash_generator_snapshot_file(pack_dir, path)
+                except ValueError as exc:
                     result = exc
-                else:
-                    result = hashlib.sha256(blob).hexdigest()
-                pinned_blob_hashes[key] = result
-            report_key = (*key, expected_sha256)
+                snapshot_hashes[path] = result
+            report_key = (path, expected_sha256)
             if report_key in reported_pins:
                 continue
-            if isinstance(result, RuntimeError):
-                errors.append(f"cannot verify generated-source Git blob {generator.revision}:{path}: {result}")
+            if isinstance(result, ValueError):
+                errors.append(f"cannot verify generator snapshot {path}: {result}")
                 reported_pins.add(report_key)
             elif result != expected_sha256:
                 errors.append(
-                    f"generated-source Git blob {generator.revision}:{path} SHA-256 differs from manifest "
-                    f"({result} != {expected_sha256})"
+                    f"generator snapshot {path} SHA-256 differs from manifest ({result} != {expected_sha256})"
                 )
                 reported_pins.add(report_key)
+
+    # The snapshot sits outside the runtime inventory, so it must hold exactly
+    # the pinned inputs: an unpinned file there would be unverified bytes.
+    pinned_files = {generator_snapshot_path(path) for path in snapshot_hashes}
+    undeclared = sorted(_scan_generator_snapshot(pack_dir, errors) - pinned_files)
+    if undeclared:
+        errors.append(f"generator snapshot contains files no generator pins: {', '.join(undeclared)}")
 
 
 def _validate_assets(
@@ -1085,7 +1159,11 @@ def _canonical_inventory_path(value: Any, label: str, errors: list[str]) -> str 
 
 
 def _scan_pack_inventory(pack_dir: Path, errors: list[str]) -> dict[str, str]:
-    """Hash every regular pack file except the self-describing manifest."""
+    """Hash every regular runtime file except the self-describing manifest.
+
+    The generator snapshot is skipped: it is not runtime payload, and the
+    source check verifies it against the manifest's generator pins instead.
+    """
     files: dict[str, str] = {}
     try:
         entries = sorted(pack_dir.rglob("*"), key=lambda item: item.relative_to(pack_dir).as_posix())
@@ -1095,6 +1173,8 @@ def _scan_pack_inventory(pack_dir: Path, errors: list[str]) -> dict[str, str]:
 
     for entry in entries:
         relative_path = entry.relative_to(pack_dir).as_posix()
+        if is_generator_snapshot_path(relative_path):
+            continue
         try:
             if entry.is_symlink():
                 errors.append(f"pack inventory contains symlink: {relative_path}")
@@ -2452,9 +2532,16 @@ def render_attribution(report: ValidationReport) -> str:
         "",
         redistribution_line,
         "",
-        source_heading,
-        "",
     ]
+    if includes_project_masters:
+        lines.extend(
+            [
+                f"Generator links open the byte-exact inputs retained in `{GENERATOR_SNAPSHOT_DIR}/`;",
+                "each SHA-256 below is checked against those files.",
+                "",
+            ]
+        )
+    lines.extend([source_heading, ""])
     for source in sorted(report.sources, key=lambda item: (item.id.casefold(), item.id)):
         lines.extend(
             [
@@ -2469,13 +2556,16 @@ def render_attribution(report: ValidationReport) -> str:
             generator = source.generator
             lines.extend(
                 [
-                    f"- Generator: [`{generator.path}`]({generator.url})",
-                    f"- Generator revision: `{generator.revision}`",
+                    f"- Generator: [`{generator.path}`]({generator_snapshot_path(generator.path)})",
+                    f"- Generator revision (reference only): `{generator.revision}`",
                     f"- Generator SHA-256: `{generator.sha256}`",
                 ]
             )
             for dependency in generator.dependencies:
-                lines.append(f"- Generator dependency: [`{dependency.path}`]({dependency.url}) — `{dependency.sha256}`")
+                lines.append(
+                    f"- Generator dependency: [`{dependency.path}`]({generator_snapshot_path(dependency.path)})"
+                    f" — `{dependency.sha256}`"
+                )
             lines.extend(
                 [
                     f"- Generator runtime: Python `{generator.runtime.python}`; FFmpeg `{generator.runtime.ffmpeg}`",
