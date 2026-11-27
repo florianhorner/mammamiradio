@@ -4029,6 +4029,67 @@ def _producer_buffered_seconds(queue: asyncio.Queue[Segment]) -> float:
     return buffered_audio_seconds(seg.duration_sec for seg in list(internal))
 
 
+def _on_air_remaining_seconds(state: StationState, now_ts: float) -> float:
+    """Seconds left of the segment on air, or 0.0 when that is not known.
+
+    ``now_streaming`` carries the selection timestamp and the segment's probed
+    duration. Placeholder rows (stopped, skipping) and segments with an unknown
+    duration have no usable remainder, so they contribute nothing.
+    """
+    now_streaming = state.now_streaming if isinstance(state.now_streaming, dict) else {}
+    try:
+        started = float(now_streaming.get("started") or 0.0)
+        duration = float(now_streaming.get("duration_sec") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if started <= 0 or duration <= 0 or not math.isfinite(started) or not math.isfinite(duration):
+        return 0.0
+    return min(max(started + duration - now_ts, 0.0), duration)
+
+
+def _time_check_lead_seconds(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    *,
+    air_next: bool,
+    now_ts: float,
+) -> float:
+    """Seconds of audio that will air before a time check rendered right now.
+
+    A natural time check is appended behind everything already queued. An
+    operator Air Next pick is front-inserted, so only urgent warnings already
+    at the head (which keep their place) air before it. Both wait for the rest
+    of the segment on air.
+    """
+    on_air = _on_air_remaining_seconds(state, now_ts)
+    if not air_next:
+        return on_air + _producer_buffered_seconds(queue)
+    ahead: list[float | None] = []
+    for queued in list(getattr(queue, "_queue", None) or ()):
+        if not queued.metadata.get(URGENT_INTERRUPT_PRIORITY_KEY):
+            break
+        ahead.append(queued.duration_sec)
+    return on_air + buffered_audio_seconds(ahead)
+
+
+def _projected_air_time(now: datetime.datetime, lead_seconds: float) -> datetime.datetime:
+    """Clock time at which audio queued ``lead_seconds`` behind the air point plays."""
+    if not math.isfinite(lead_seconds) or lead_seconds <= 0:
+        return now
+    return now + datetime.timedelta(seconds=lead_seconds)
+
+
+def _time_check_text(air_time: datetime.datetime, station_name: str) -> str:
+    """Spoken time-check line for the minute the listener hears it."""
+    hour = air_time.hour
+    minute = air_time.minute
+    # Italian grammar: "È l'una" for 1:00/13:00, "Sono le N" otherwise
+    hour_str = "È l'una" if hour in (1, 13) else f"Sono le {hour}"
+    if minute == 0:
+        return f"{hour_str} su {station_name}."
+    return f"{hour_str} e {minute} su {station_name}."
+
+
 def _max_observable_runway_slots(queue: asyncio.Queue[Segment], lookahead_segments: int) -> int:
     """Slots the producer can see filled immediately before a natural decision."""
     maxsize = int(getattr(queue, "maxsize", 0) or 0)
@@ -6563,13 +6624,18 @@ async def _run_producer_inner(
                 # Protect norm files currently in the playback queue — and the
                 # capacity-exempt continuity slot — from eviction. Evicting ready
                 # audio would break delivery mid-stream.
-                queued_paths = _cache_eviction_protected_paths(queue, state)
-                await asyncio.to_thread(
-                    evict_cache_lru,
-                    config.cache_dir,
-                    config.max_cache_size_mb,
-                    queued_paths,
-                )
+                # Housekeeping runs outside the per-segment recovery try and nothing
+                # restarts this task, so a failure here must never end the loop.
+                try:
+                    queued_paths = _cache_eviction_protected_paths(queue, state)
+                    await asyncio.to_thread(
+                        evict_cache_lru,
+                        config.cache_dir,
+                        config.max_cache_size_mb,
+                        queued_paths,
+                    )
+                except Exception:
+                    logger.warning("Cache eviction failed; retrying at the next interval", exc_info=True)
             # Periodically refresh the chart playlist mid-session so long-running
             # stations don't loop the same 50 tracks after ~3 hours.  Only merges
             # tracks not already in the playlist — played_tracks history is preserved.
@@ -6579,28 +6645,33 @@ async def _run_producer_inner(
                 and now - _last_playlist_refresh >= _playlist_refresh_interval
             ):
                 _last_playlist_refresh = now
-                refresh_source_revision = state.source_revision
-                refresh_source_readiness = state.source_readiness
-                existing_ids = {t.spotify_id for t in state.playlist}
-                new_tracks = await asyncio.to_thread(fetch_chart_refresh, existing_ids)
-                if (
-                    refresh_source_revision != state.source_revision
-                    or state.playlist_source is None
-                    or state.playlist_source.kind != "charts"
-                ):
-                    logger.info("Discarding chart refresh completed after playlist source switch")
-                else:
-                    # Doorway: a banned song must not slip back in via the mid-session
-                    # chart refresh either (no restart needed to reintroduce it).
-                    new_tracks = filter_blocklisted(new_tracks, state.blocklist)
-                    if new_tracks:
-                        state.playlist.extend(new_tracks)
-                        refresh_source_readiness.observe_tracks(new_tracks)
-                        logger.info(
-                            "Chart refresh: merged %d new track(s) into playlist (%d total)",
-                            len(new_tracks),
-                            len(state.playlist),
-                        )
+                # Same rule as the eviction above: a failed refresh keeps the current
+                # playlist and is retried at the next interval.
+                try:
+                    refresh_source_revision = state.source_revision
+                    refresh_source_readiness = state.source_readiness
+                    existing_ids = {t.spotify_id for t in state.playlist}
+                    new_tracks = await asyncio.to_thread(fetch_chart_refresh, existing_ids)
+                    if (
+                        refresh_source_revision != state.source_revision
+                        or state.playlist_source is None
+                        or state.playlist_source.kind != "charts"
+                    ):
+                        logger.info("Discarding chart refresh completed after playlist source switch")
+                    else:
+                        # Doorway: a banned song must not slip back in via the mid-session
+                        # chart refresh either (no restart needed to reintroduce it).
+                        new_tracks = filter_blocklisted(new_tracks, state.blocklist)
+                        if new_tracks:
+                            state.playlist.extend(new_tracks)
+                            refresh_source_readiness.observe_tracks(new_tracks)
+                            logger.info(
+                                "Chart refresh: merged %d new track(s) into playlist (%d total)",
+                                len(new_tracks),
+                                len(state.playlist),
+                            )
+                except Exception:
+                    logger.warning("Chart refresh failed; keeping the current playlist", exc_info=True)
             await asyncio.sleep(0.5)
             continue
 
@@ -8505,16 +8576,16 @@ async def _run_producer_inner(
 
             elif seg_type == SegmentType.TIME_CHECK:
                 logger.info("Producing TIME CHECK")
-                dt_now = datetime.datetime.now()
-                hour = dt_now.hour
-                minute = dt_now.minute
-                station_name = config.display_station_name
-                # Italian grammar: "È l'una" for 1:00/13:00, "Sono le N" otherwise
-                hour_str = "È l'una" if hour in (1, 13) else f"Sono le {hour}"
-                if minute == 0:
-                    time_text = f"{hour_str} su {station_name}."
-                else:
-                    time_text = f"{hour_str} e {minute} su {station_name}."
+                # The line is frozen into audio now but heard only after the
+                # segment on air and the audio queued ahead of it, so announce
+                # the minute it airs, not the minute it was rendered.
+                time_text = _time_check_text(
+                    _projected_air_time(
+                        datetime.datetime.now(),
+                        _time_check_lead_seconds(queue, state, air_next=is_operator_forced, now_ts=time.time()),
+                    ),
+                    config.display_station_name,
+                )
 
                 voice_path = config.tmp_dir / f"time_voice_{uuid4().hex[:8]}.mp3"
                 chime_path = config.tmp_dir / f"time_chime_{uuid4().hex[:8]}.mp3"

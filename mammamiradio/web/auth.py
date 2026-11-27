@@ -83,6 +83,7 @@ def _enforce_csrf_for_basic_auth(request: Request, credentials: HTTPBasicCredent
     if request.method.upper() not in _MUTATING_METHODS:
         return
     if _is_loopback_client(request):
+        _enforce_cross_site_guard_for_loopback(request, config)
         return
 
     ingress_prefix = request.headers.get("X-Ingress-Path", "")
@@ -141,6 +142,60 @@ def _is_loopback_client(request: Request) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _is_trusted_literal_host(request: Request) -> bool:
+    """Return whether the request Host is localhost or a literal loopback/private IP.
+
+    The Host is supplied by the client, so a DNS-rebinding page reaches the
+    station under its own hostname. A name an attacker can point anywhere is
+    never trusted; a literal local address cannot be rebound.
+    """
+    try:
+        request_host = request.url.hostname or ""
+        host_address = ipaddress.ip_address(request_host)
+    except ValueError:
+        host_address = None
+    return request_host == "localhost" or bool(
+        host_address is not None
+        and (host_address.is_loopback or any(host_address in network for network in _TRUSTED_NETWORKS))
+    )
+
+
+def _enforce_cross_site_guard_for_loopback(request: Request, config) -> None:
+    """Refuse browser cross-site writes that arrive from the station machine itself.
+
+    A loopback peer is not proof of a trusted caller: any web page open in a
+    browser on the station machine can post to http://127.0.0.1:<port>. Callers
+    that send neither Origin nor Sec-Fetch-Site (curl, scripts, Home Assistant
+    rest_command) are not browsers and stay trusted, as does the admin page
+    itself (same-origin on a literal local address). GET/HEAD are unchanged.
+    """
+    if request.method.upper() not in _MUTATING_METHODS:
+        return
+
+    origin = request.headers.get("Origin", "")
+    cross_site = request.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site"
+    if origin and not _same_origin(request, origin):
+        cross_site = True
+    # Same-origin alone is not enough: under DNS rebinding the attacker's
+    # Origin matches the Host it chose.
+    if origin and not _is_trusted_literal_host(request):
+        cross_site = True
+    if not cross_site:
+        return
+
+    admin_token_header = request.headers.get("X-Radio-Admin-Token", "")
+    if config.admin_token and admin_token_header and secrets.compare_digest(admin_token_header, config.admin_token):
+        return
+    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
+    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="Cross-site admin write blocked. Reload the dashboard and retry.",
+    )
 
 
 def _is_private_network(request: Request) -> bool:
@@ -209,8 +264,10 @@ def require_admin_access(
     """Authorize admin-only routes using configured credentials or local trust."""
     config = request.app.state.config
 
-    # Loopback is fully trusted — same machine, no CSRF risk.
+    # Loopback skips credentials (same machine), but a browser on that machine
+    # can still be steered into a cross-site write by any page it has open.
     if _is_loopback_client(request):
+        _enforce_cross_site_guard_for_loopback(request, config)
         return
 
     # HA Supervisor network is Docker-internal (not user-accessible), so

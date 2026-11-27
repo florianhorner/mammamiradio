@@ -6941,6 +6941,51 @@ async def test_credentials_no_recognised_fields():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "payload", "headers"),
+    [
+        ("/api/credentials", {"openai_api_key": "$(touch pwned)"}, {}),
+        (
+            "/api/setup/save-keys",
+            {"OPENAI_API_KEY": "$(touch pwned)"},
+            {"Origin": "http://testserver", "Host": "127.0.0.1", "X-Radio-CSRF-Token": "csrf-for-this-test"},
+        ),
+    ],
+)
+async def test_credential_routes_refuse_shell_active_values(tmp_path, monkeypatch, path, payload, headers):
+    """A value bash would expand when start.sh sources .env is refused, not stored or applied."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-before")
+    app = _make_test_app()
+    app.state.config.openai_api_key = "sk-before"
+    app.state.csrf_token = "csrf-for-this-test"
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    from mammamiradio.web import persistence
+
+    with (
+        # Shadow the module-wide no-op: this test needs the real writer, in tmp_path.
+        patch("mammamiradio.web.streamer._save_dotenv", persistence._save_dotenv),
+        patch(
+            "mammamiradio.web.provider_verdict.check_provider_keys",
+            new=AsyncMock(return_value={"ok": True, "providers": {}}),
+        ),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post(path, json=payload, headers=headers)
+
+    assert resp.status_code == 422, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    # Human copy with a way out, never the raw exception.
+    assert "nothing was saved" in body["error"]
+    assert "paste it in" in body["error"]
+    assert "pwned" not in body["error"]
+    assert not (tmp_path / ".env").exists()
+    assert app.state.config.openai_api_key == "sk-before"
+    assert os.environ["OPENAI_API_KEY"] == "sk-before"
+
+
+@pytest.mark.asyncio
 async def test_credentials_saves_valid_key(tmp_path):
     """Valid anthropic_api_key updates config and triggers file write."""
     app = _make_test_app()

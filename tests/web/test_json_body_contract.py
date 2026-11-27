@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -266,3 +267,211 @@ def test_web_routes_do_not_await_request_json_directly():
                 failures.append(f"{path}:{node.lineno}")
 
     assert failures == []
+
+
+# ---------------------------------------------------------------------------
+# Public listener-request body bounds. The route is unauthenticated and its
+# parsing runs on the event loop that feeds the audio stream, so the body must
+# be bounded BEFORE it is buffered or decoded, and a throttled caller must be
+# turned away before a single body byte is read.
+# ---------------------------------------------------------------------------
+
+_LISTENER_CLIENT = ("203.0.113.9", 40000)
+
+
+class _ChunkedDedication:
+    """ASGI receive serving a valid oversized dedication in 1 KiB chunks.
+
+    ``served`` counts the chunks handed to the app, so a test can prove the
+    reader stopped early instead of buffering the whole body.
+    """
+
+    def __init__(self, total_chunks: int = 1000) -> None:
+        filler = b"a" * 1024
+        head = b'{"name": "Luca", "message": "'
+        tail = b'"}'
+        self._chunks = [head + filler[: 1024 - len(head)]]
+        self._chunks += [filler] * (total_chunks - 2)
+        self._chunks.append(filler[: 1024 - len(tail)] + tail)
+        self.served = 0
+
+    async def __call__(self) -> dict[str, Any]:
+        if self.served >= len(self._chunks):
+            return {"type": "http.disconnect"}
+        chunk = self._chunks[self.served]
+        self.served += 1
+        return {"type": "http.request", "body": chunk, "more_body": self.served < len(self._chunks)}
+
+
+async def _post_raw(
+    app: FastAPI,
+    receive: _ChunkedDedication,
+    *,
+    content_length: int | None,
+) -> tuple[int, dict[str, Any]]:
+    headers = [(b"content-type", b"application/json"), (b"host", b"testserver")]
+    if content_length is not None:
+        headers.append((b"content-length", str(content_length).encode()))
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/listener-request",
+        "raw_path": b"/api/listener-request",
+        "query_string": b"",
+        "root_path": "",
+        "headers": headers,
+        "client": _LISTENER_CLIENT,
+        "server": ("testserver", 80),
+    }
+    sent: list[dict[str, Any]] = []
+
+    async def send(message: Any) -> None:
+        sent.append(message)
+
+    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
+        await app(scope, receive, send)
+    status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    return status, json.loads(body)
+
+
+def _assert_nothing_admitted(app: FastAPI) -> None:
+    state = app.state.station_state
+    assert state.pending_requests == []
+    assert state._listener_request_rl == {}
+
+
+@pytest.mark.asyncio
+async def test_listener_request_refuses_oversized_content_length_without_reading_body(tmp_path: Path):
+    app = _make_test_app(tmp_path)
+    receive = _ChunkedDedication()
+
+    status, payload = await _post_raw(app, receive, content_length=1024 * 1000)
+
+    assert status == 413
+    assert payload["ok"] is False
+    assert "too long" in payload["error"]
+    assert receive.served == 0, "an oversized declared body must be refused before any byte is read"
+    _assert_nothing_admitted(app)
+
+
+@pytest.mark.asyncio
+async def test_listener_request_stops_reading_oversized_chunked_body_early(tmp_path: Path):
+    app = _make_test_app(tmp_path)
+    receive = _ChunkedDedication()
+
+    status, payload = await _post_raw(app, receive, content_length=None)
+
+    assert status == 413
+    assert payload["ok"] is False
+    # 8 KiB cap over 1 KiB chunks: the reader must give up on the 9th chunk,
+    # never buffer the remaining ~990 KiB.
+    assert receive.served <= 9, f"reader consumed {receive.served} chunks of an oversized body"
+    _assert_nothing_admitted(app)
+
+
+@pytest.mark.asyncio
+async def test_listener_request_understated_content_length_is_still_bounded(tmp_path: Path):
+    app = _make_test_app(tmp_path)
+    receive = _ChunkedDedication()
+
+    status, _payload = await _post_raw(app, receive, content_length=100)
+
+    assert status == 413
+    assert receive.served <= 9
+    _assert_nothing_admitted(app)
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rate_limited_caller_is_refused_before_body_read(tmp_path: Path):
+    from mammamiradio.web.listener_requests import _hash_submitter_ip
+
+    app = _make_test_app(tmp_path)
+    state = app.state.station_state
+    key = _hash_submitter_ip(_LISTENER_CLIENT[0], app.state.config)
+    stamped = time.time()
+    state._listener_request_rl = {key: stamped}
+    receive = _ChunkedDedication()
+
+    status, payload = await _post_raw(app, receive, content_length=None)
+
+    assert status == 429
+    assert payload["ok"] is False
+    assert 0 < payload["retry_after"] <= 30
+    assert receive.served == 0, "a throttled caller must cost no body read"
+    assert state._listener_request_rl == {key: stamped}, "a refusal must not move the window"
+    assert state.pending_requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("field", "length"), [("name", 241), ("message", 2001)])
+async def test_listener_request_refuses_overlong_raw_text_without_queueing(tmp_path: Path, field: str, length: int):
+    app = _make_test_app(tmp_path)
+    body = {"name": "Luca", "message": "Ciao!"}
+    body[field] = "b" * length
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=_LISTENER_CLIENT),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post("/api/listener-request", json=body)
+
+    assert response.status_code == 413
+    payload = response.json()
+    assert payload["ok"] is False
+    assert "too long" in payload["error"]
+    _assert_nothing_admitted(app)
+
+
+@pytest.mark.asyncio
+async def test_listener_request_long_but_legitimate_text_is_still_accepted(tmp_path: Path):
+    """Text at the raw bounds keeps the old outcome: accepted, then truncated."""
+    app = _make_test_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=_LISTENER_CLIENT),
+        base_url="http://testserver",
+    ) as client:
+        with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock):
+            response = await client.post(
+                "/api/listener-request",
+                json={"name": "N" * 240, "message": "ciao " * 400},
+            )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    pending = app.state.station_state.pending_requests
+    assert len(pending) == 1
+    # The sanitiser still truncates exactly as before (cap plus an ellipsis).
+    assert pending[0]["name"].startswith("N" * 60)
+    assert len(pending[0]["name"]) <= 63
+    assert len(pending[0]["message"]) <= 203
+
+
+@pytest.mark.asyncio
+async def test_read_json_object_max_bytes_parses_small_body_and_default_is_unbounded():
+    small = b'{"name": "Luca", "message": "Ciao!"}'
+    body, error = await read_json_object(await _request_with_body(small), max_bytes=8 * 1024)
+    assert error is None
+    assert body == {"name": "Luca", "message": "Ciao!"}
+
+    big = b'{"message": "' + b"a" * (64 * 1024) + b'"}'
+    body, error = await read_json_object(await _request_with_body(big))
+    assert error is None
+    assert len(body["message"]) == 64 * 1024
+
+    body, error = await read_json_object(await _request_with_body(big), max_bytes=8 * 1024)
+    assert body == {}
+    assert error is not None
+    assert error.status_code == 413
+
+
+@pytest.mark.parametrize("raw", [b"", b"{bad", b"\x80", b'["x"]'])
+@pytest.mark.asyncio
+async def test_read_json_object_bounded_path_keeps_parse_layer_422(raw: bytes):
+    parsed, error = await read_json_object(await _request_with_body(raw), max_bytes=8 * 1024)
+    assert parsed == {}
+    assert error is not None
+    assert error.status_code == 422

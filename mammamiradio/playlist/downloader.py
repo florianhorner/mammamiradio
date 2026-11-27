@@ -269,33 +269,43 @@ def evict_cache_lru(
     # Within each group, oldest-by-atime first, so a cold or stale-chain-version bake goes
     # before a hot one and a file that is about to play is the least likely to be removed
     # mid-stream (matching the long-standing norm_ safety baseline).
-    regular = []
-    processed = []
+    # Each candidate is stat'ed exactly once, here. Other tasks rename and remove
+    # cache files while this runs in a worker thread, so a file listed by the glob
+    # may be gone a moment later: skip it instead of failing the whole pass.
+    regular: list[tuple[float, int, Path]] = []
+    processed: list[tuple[float, int, Path]] = []
     for f in cache_dir.glob("*.mp3"):
         if f.name in _CACHE_PROTECTED:
             continue
         if f.name in protected_names:
             continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        entry = (st.st_atime, st.st_size, f)
         if f.name.startswith(("norm_", "fm_")):
-            processed.append(f)
+            processed.append(entry)
         else:
-            regular.append(f)
-    regular.sort(key=lambda f: f.stat().st_atime)
-    processed.sort(key=lambda f: f.stat().st_atime)
+            regular.append(entry)
+    regular.sort(key=lambda entry: entry[0])
+    processed.sort(key=lambda entry: entry[0])
     mp3_files = regular + processed
 
-    total_bytes = sum(f.stat().st_size for f in mp3_files)
+    total_bytes = sum(size for _atime, size, _f in mp3_files)
     max_bytes = max_size_mb * 1024 * 1024
     evicted = 0
 
-    for f in mp3_files:
+    for _atime, size, f in mp3_files:
         if total_bytes <= max_bytes:
             break
-        size = f.stat().st_size
         try:
             f.unlink()
             total_bytes -= size
             evicted += 1
+        except FileNotFoundError:
+            # Already gone: its bytes no longer count against the cache.
+            total_bytes -= size
         except OSError as exc:
             logger.warning("Cache eviction failed for %s: %s", f.name, exc)
 
