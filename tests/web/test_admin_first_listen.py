@@ -656,6 +656,34 @@ def test_no_ai_key_is_needed_for_first_audio() -> None:
     assert html.count('placeholder="Leave blank to keep saved key"') == 4
 
 
+def test_a_refused_key_save_shows_the_station_reason_not_a_lost_connection() -> None:
+    """A 422 refusal is a definite "nothing was saved"; telling the operator to
+    check their connection and retry would send them round a loop that cannot work."""
+    save = _function("setupSaveKeys", "copySetupSnippet")
+    evidence = _function("firstListenConnectionEvidence", "firstListenVoiceEvidence")
+    refusal = save.index("response.status===422")
+    assert refusal < save.index("throw new Error('save_unconfirmed')")
+    refusal_branch = save[refusal : save.index("return;", refusal)]
+    assert "_firstListenUi.keySaveRefused=result.error" in refusal_branch
+    assert "_firstListenUi.keySaveUnconfirmed=false" in refusal_branch
+    # The refusal wins over the "not confirmed" copy and carries the server's way out.
+    assert evidence.index("keySaveRefused") < evidence.index("keySaveUnconfirmed")
+    assert "label:'Not saved',detail:_firstListenUi.keySaveRefused" in evidence
+    # A later success or a genuinely lost save clears a stale refusal.
+    assert save.count("_firstListenUi.keySaveRefused=''") == 2
+    # The voices stage shows the same refusal instead of falling back to "voices available".
+    voices = _function("firstListenVoiceEvidence", "firstListenHouseholdProofRequired")
+    assert "_firstListenUi.keySaveRefused" in voices.split("\n")[1]
+    # The refusal never sticks: editing a key, changing stage, or re-checking clears it.
+    html = _html()
+    edited = _function("firstListenKeyEdited", "openFirstListenKeyEditor")
+    assert "_firstListenUi.keySaveRefused=''" in edited
+    assert html.count('oninput="firstListenKeyEdited()"') == 5
+    assert 'oninput="updateFirstListenKeySaveState()"' not in html
+    assert "_firstListenUi.keySaveRefused=''" in _function("showFirstListenConnection", "returnToFirstListenSetup")
+    assert "_firstListenUi.keySaveRefused=''" in _function("checkFirstListenConnection", "firstListenKeyFields")
+
+
 def test_not_yet_has_warm_bounded_repair_and_no_volume_mutation() -> None:
     html = _html()
     repair_start = html.index('id="firstListenRepair"')

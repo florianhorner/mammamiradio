@@ -392,6 +392,7 @@ def test_listener_request_outcomes_are_localized_and_failure_reset_preserves_inp
         "form_rate_limited",
         "form_queue_full",
         "form_declined",
+        "form_too_long",
         "form_network_error",
     ):
         assert re.search(rf"_t\(\s*'{key}'", submit), f"request outcome bypasses localized {key} copy"

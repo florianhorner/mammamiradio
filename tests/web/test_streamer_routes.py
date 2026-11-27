@@ -15891,3 +15891,105 @@ async def test_unresolved_home_evidence_blocks_preview_enable_and_old_proof(tmp_
     audio.assert_not_awaited()
     fetch.assert_not_awaited()
     persist.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Loopback row of the admin-access matrix: same machine is not same site.
+# Any page open in a browser on the station machine can post to 127.0.0.1.
+# ---------------------------------------------------------------------------
+
+
+async def _loopback_stop(app, *, base_url="http://127.0.0.1:8000", headers=None):
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Live", "started": time.time()}
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url=base_url) as client:
+        return await client.post("/api/stop", headers={"Content-Type": "text/plain", **(headers or {})}, content=b"{}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "headers"),
+    [
+        ("http://127.0.0.1:8000", {"Origin": "https://evil.example"}),
+        ("http://127.0.0.1:8000", {"Sec-Fetch-Site": "cross-site"}),
+        ("http://127.0.0.1:8000", {"Sec-Fetch-Site": "Cross-Site", "Origin": "http://127.0.0.1:8000"}),
+        # DNS rebinding: the attacker's Origin matches the Host it chose.
+        ("http://evil.example:8000", {"Origin": "http://evil.example:8000"}),
+        # A wrong token must not open the door.
+        ("http://127.0.0.1:8000", {"Origin": "https://evil.example", "X-Radio-CSRF-Token": "guess"}),
+    ],
+    ids=["foreign-origin", "sec-fetch-site-only", "sec-fetch-site-beats-origin", "dns-rebinding", "wrong-csrf"],
+)
+@pytest.mark.parametrize("admin_password", ["", "secret123"], ids=["no-creds", "password-set"])
+async def test_loopback_cross_site_write_is_refused_and_station_keeps_playing(base_url, headers, admin_password):
+    app = _make_test_app(admin_password=admin_password)
+    response = await _loopback_stop(app, base_url=base_url, headers=headers)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Cross-site admin write blocked. Reload the dashboard and retry."}
+    assert app.state.station_state.session_stopped is False
+    assert app.state.station_state.now_streaming["label"] == "Live"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "headers"),
+    [
+        # curl, scripts, Home Assistant rest_command: no browser headers at all.
+        ("http://127.0.0.1:8000", {}),
+        ("http://testserver", {}),
+        # The admin page itself, on a literal loopback address or localhost.
+        ("http://127.0.0.1:8000", {"Origin": "http://127.0.0.1:8000", "Sec-Fetch-Site": "same-origin"}),
+        ("http://localhost:8000", {"Origin": "http://localhost:8000"}),
+    ],
+    ids=["no-origin", "no-origin-named-host", "same-origin-loopback", "same-origin-localhost"],
+)
+async def test_loopback_trusted_write_still_stops_the_station(base_url, headers):
+    app = _make_test_app()
+    response = await _loopback_stop(app, base_url=base_url, headers=headers)
+
+    assert response.status_code == 200
+    assert app.state.station_state.session_stopped is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "origin"),
+    [("http://127.0.0.1:8000", "https://evil.example"), ("http://radio.example:8000", "http://radio.example:8000")],
+    ids=["foreign-origin", "named-host"],
+)
+async def test_loopback_cross_site_write_with_valid_csrf_token_is_allowed(base_url, origin):
+    app = _make_test_app()
+    app.state.csrf_token = "dashboard-token"
+    response = await _loopback_stop(
+        app,
+        base_url=base_url,
+        headers={"Origin": origin, "Sec-Fetch-Site": "cross-site", "X-Radio-CSRF-Token": "dashboard-token"},
+    )
+
+    assert response.status_code == 200
+    assert app.state.station_state.session_stopped is True
+
+
+@pytest.mark.asyncio
+async def test_loopback_cross_site_write_with_valid_admin_token_is_allowed():
+    app = _make_test_app(admin_token="station-token")
+    response = await _loopback_stop(
+        app, headers={"Origin": "https://evil.example", "X-Radio-Admin-Token": "station-token"}
+    )
+
+    assert response.status_code == 200
+    assert app.state.station_state.session_stopped is True
+
+
+@pytest.mark.asyncio
+async def test_loopback_cross_site_read_is_unchanged():
+    app = _make_test_app(admin_password="secret123")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8000") as client:
+        response = await client.get(
+            "/admin", headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}
+        )
+
+    assert response.status_code == 200

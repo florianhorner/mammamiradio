@@ -2780,6 +2780,76 @@ async def test_chart_refresh_discards_results_after_source_switch():
                 pass
 
 
+@pytest.mark.asyncio
+async def test_idle_housekeeping_failures_never_end_the_producer(tmp_path):
+    """A failing cache eviction or chart refresh in the idle branch must not kill the producer.
+
+    Both run outside the per-segment recovery try and nothing restarts the producer
+    task, so an escape there would leave the station on looping rescue audio until a
+    restart. Drive the real full-queue idle branch with both housekeeping calls
+    raising, then free a queue slot and require the same task to produce again.
+    """
+    import http.client
+
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.playlist[1].youtube_id = "yt_demo2"
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config()
+    config.pacing.lookahead_segments = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    seed = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "seed.mp3",
+        duration_sec=300.0,
+        metadata={"type": "music"},
+    )
+    await queue.put(seed)
+
+    evict_called = threading.Event()
+    refresh_called = threading.Event()
+
+    def raising_evict(*_args, **_kwargs):
+        evict_called.set()
+        raise FileNotFoundError(2, "No such file or directory", "fm_x.staging_deadbeef.mp3")
+
+    def raising_refresh(_existing_ids):
+        refresh_called.set()
+        raise http.client.IncompleteRead(b"x")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.PLAYLIST_REFRESH_INTERVAL_SECONDS", 0),
+        patch(f"{PRODUCER_MODULE}.CACHE_EVICTION_INTERVAL_SECONDS", 0),
+        patch(f"{PRODUCER_MODULE}.evict_cache_lru", side_effect=raising_evict),
+        patch(f"{PRODUCER_MODULE}.fetch_chart_refresh", side_effect=raising_refresh),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            assert await asyncio.to_thread(evict_called.wait, 2.0)
+            assert await asyncio.to_thread(refresh_called.wait, 2.0)
+            await asyncio.sleep(0.1)
+            assert not task.done(), task.exception()
+
+            # Playback claims the queued song: the surviving producer must refill.
+            assert queue.get_nowait() is seed
+            produced = await asyncio.wait_for(queue.get(), timeout=5.0)
+            assert produced.type == SegmentType.MUSIC
+            assert produced.metadata["youtube_id"] in {"yt_demo1", "yt_demo2"}
+            assert not task.done()
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
 def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
     """The eviction protection set includes the out-of-band continuity slot.
 

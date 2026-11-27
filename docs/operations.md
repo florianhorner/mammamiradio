@@ -534,6 +534,12 @@ The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentional
 `POST /api/listener-request` is public and rate-limited per listener identity.
 The identity is used only as input to the HMAC-backed rate-limit key; raw IP
 addresses are not stored in listener-request state or returned by the API.
+A caller still inside the 30-second window gets `429` before any of the body is
+read. The body is capped at 8 KiB before it is buffered or decoded (a larger
+`Content-Length` is refused outright; a chunked or understated body is abandoned
+as soon as it passes the cap), and a raw name over 240 characters or message
+over 2000 characters is refused, never sliced; all three answer `413` in the
+usual `{"ok": false, "error": ...}` shape and queue nothing.
 
 When the app is served through Home Assistant Supervisor ingress, Supervisor
 appends the caller chain in `X-Forwarded-For`. The station trusts forwarded
@@ -561,6 +567,7 @@ Admin (access follows the [Admin access model](#admin-access-model) below):
 - `GET /api/pacing`, `PATCH /api/pacing`
 - `GET /api/hosts`, `PATCH /api/hosts/{host_name}/personality`, `POST /api/hosts/{host_name}/personality/reset`
 - `POST /api/credentials`, `POST /api/track-rules`
+  - Standalone credential saves (`POST /api/credentials`, `POST /api/setup/save-keys`) return `422` and write nothing unless every value uses only letters, digits, and `. _ ~ + / = : @ -`. The start scripts `source` the `.env`, so any other character (quotes, `$`, backticks, spaces, `;`, Unicode line separators) could run as shell code on the next start. Existing `.env` lines are split on newlines only, so a hand-edited line the shell reads as one line stays one line. The add-on path is unaffected: it shell-quotes into `/config/secrets.env`, which is parsed and never sourced.
 - `GET /api/listener-requests`, `POST /api/listener-requests/dismiss`
 - `GET /api/search`, `POST /api/playlist/add`, `POST /api/playlist/remove`, `POST /api/playlist/move`, `POST /api/playlist/move_to_next`, `POST /api/playlist/load`, `POST /api/playlist/add-external`
 - `POST /api/hot-reload` — reload `language_policy.py`, `prompt_world.py`, `relationship.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results). `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. Reload failures return HTTP 500 with `{"ok": false, "error_code": "reload_failed", "stream_status": "unaffected", "retryable": true}`; exception details and tracebacks stay in server logs. Check those logs, correct the module, and retry.
@@ -1018,7 +1025,7 @@ design — see the per-request table for what that LAN may then do.
 
 | Caller origin | Creds configured | Result |
 | --- | --- | --- |
-| Loopback | any | Allow (no CSRF — same machine) |
+| Loopback | any | Allow reads, and writes from non-browser callers (no `Origin`, no `Sec-Fetch-Site`: curl, scripts, HA `rest_command`) and from the admin page itself. A browser write is **`403`** when `Sec-Fetch-Site` is `cross-site`, when `Origin` is not same-origin, or when `Origin` is sent and the `Host` is not `localhost` or a literal loopback/private IP, unless it carries a valid `X-Radio-CSRF-Token` or `X-Radio-Admin-Token` |
 | HA Supervisor net, add-on mode | any | Allow (no CSRF — Docker-internal, used by HA automations) |
 | Private network (LAN / Tailscale / IPv6 ULA+link-local) | `ADMIN_TOKEN` set | Require `X-Radio-Admin-Token` header (`401` if missing/wrong) |
 | Private network | `ADMIN_PASSWORD` set | Require Basic auth + CSRF on writes (`401` if wrong) |
@@ -1034,6 +1041,12 @@ Two invariants this table preserves:
   "allow read on the LAN" row only applies when no credential is configured.
 - **Public IPs never reach `/admin` without a credential.** The credential-less
   LAN fallback is scoped to private networks; a public client is rejected.
+
+- **Being on the station machine is not proof of a trusted page.** Any website
+  open in a browser on that machine can post to `http://127.0.0.1:<port>`, so
+  loopback writes that a browser marks as coming from another site are refused.
+  If the dashboard itself shows "Cross-site admin write blocked", reload
+  `/admin` and retry.
 
 This model reads `request.client.host` raw, so the bind must not sit behind an
 untrusted reverse proxy — one that rewrites the client address would make every
