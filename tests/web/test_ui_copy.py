@@ -47,6 +47,9 @@ _BRAND_GUARD_SELF = Path(__file__).resolve().relative_to(_REPO_ROOT).as_posix()
 #   - scripts/complete_audio_pack_gate.py generates those rows.
 #   - tests/audio/test_sonic_asset_pack.py pins their hashes.
 #   - ATTRIBUTION.md ships as package data through pyproject.toml.
+# The pack also retains a byte-exact copy of the generator that wrote those
+# rows; its SHA-256 is pinned in the manifest, so it cannot be corrected in
+# place and is excluded by exact path.
 # Whole-file exclusions can hide new occurrences in these paths. Regenerate the
 # pack and remove the exclusions in a separate change.
 _FROZEN_BRAND_PROVENANCE = frozenset(
@@ -54,6 +57,7 @@ _FROZEN_BRAND_PROVENANCE = frozenset(
         "mammamiradio/assets/imaging/manifest.json",
         "mammamiradio/assets/imaging/ATTRIBUTION.md",
         "scripts/complete_audio_pack_gate.py",
+        "mammamiradio/assets/imaging/provenance/generator-src/scripts/complete_audio_pack_gate.py",
         "tests/audio/test_sonic_asset_pack.py",
     }
 )

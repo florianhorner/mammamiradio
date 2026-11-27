@@ -1519,6 +1519,9 @@ VALIDATE_ADDON_BACKUP_CONTRACT = (
 )
 
 
+IMAGING_GENERATOR_SNAPSHOT_IGNORE = "mammamiradio/assets/imaging/provenance/generator-src/"
+
+
 def _create_validate_addon_repo(
     tmp_path: Path,
     *,
@@ -1529,6 +1532,8 @@ def _create_validate_addon_repo(
     _init_git_repo(tmp_path)
     _run(["git", "remote", "add", "origin", "https://github.com/florianhorner/fakeitaliradio.git"], cwd=tmp_path)
 
+    for ignore_file in (".dockerignore", "ha-addon/mammamiradio/.dockerignore"):
+        _write(tmp_path / ignore_file, f"{IMAGING_GENERATOR_SNAPSHOT_IGNORE}\n")
     _write(
         tmp_path / "ha-addon/mammamiradio/config.yaml",
         "\n".join(
@@ -2417,15 +2422,50 @@ def _run_installed_imaging_validator(
     exec(compile(_installed_imaging_validator_python(), str(VALIDATE_ADDON), "exec"), {})
 
 
-def _copy_installed_imaging_pack(tmp_path: Path) -> tuple[Path, Path]:
+def _copy_installed_imaging_pack(tmp_path: Path, *, with_generator_snapshot: bool = False) -> tuple[Path, Path]:
+    """Copy the pack as an image installs it: the build contexts ignore generator-src."""
     package_root = tmp_path / "package"
     imaging_dir = package_root / "assets" / "imaging"
+    ignored = [".DS_Store"] if with_generator_snapshot else [".DS_Store", "generator-src"]
     shutil.copytree(
         ROOT / "mammamiradio" / "assets" / "imaging",
         imaging_dir,
-        ignore=shutil.ignore_patterns(".DS_Store"),
+        ignore=shutil.ignore_patterns(*ignored),
     )
     return package_root, imaging_dir
+
+
+def test_validate_addon_rejects_generator_snapshot_inside_the_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retained generator inputs are repository evidence, never image payload."""
+    package_root, _imaging_dir = _copy_installed_imaging_pack(tmp_path, with_generator_snapshot=True)
+
+    with pytest.raises(SystemExit, match=r"runtime tree differs from its inventory.*provenance/generator-src/"):
+        _run_installed_imaging_validator(package_root, monkeypatch)
+
+
+@pytest.mark.parametrize("ignore_file", [".dockerignore", "ha-addon/mammamiradio/.dockerignore"])
+def test_both_build_contexts_ignore_the_generator_snapshot(ignore_file: str) -> None:
+    assert IMAGING_GENERATOR_SNAPSHOT_IGNORE in (ROOT / ignore_file).read_text().splitlines()
+
+
+@pytest.mark.parametrize("ignore_file", [".dockerignore", "ha-addon/mammamiradio/.dockerignore"])
+def test_validate_addon_fails_when_a_build_context_stops_ignoring_the_snapshot(
+    tmp_path: Path,
+    ignore_file: str,
+) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    (tmp_path / ignore_file).write_text("# nothing ignored\n")
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert f"{ignore_file} must list {IMAGING_GENERATOR_SNAPSHOT_IGNORE}" in result.stdout
 
 
 def test_validate_addon_build_checks_installed_modern_night_drive_pack() -> None:

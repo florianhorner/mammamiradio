@@ -12247,7 +12247,12 @@ def test_every_continuity_slot_write_is_accounted_for():
         ("mammamiradio/web/streamer.py", "stop_session"),
     }
     found: set[tuple[str, str]] = set()
+    # Retained audio-pack generator inputs are frozen provenance copies, not
+    # running code; the live modules they were copied from are scanned here.
+    retained_inputs = repo / "mammamiradio" / "assets" / "imaging" / "provenance" / "generator-src"
     for path in sorted((repo / "mammamiradio").rglob("*.py")):
+        if retained_inputs in path.parents:
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for func in ast.walk(tree):
             if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
