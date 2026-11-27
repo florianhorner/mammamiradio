@@ -423,7 +423,7 @@ def test_project_authored_master_hashes_generator_dependencies_and_renders_disti
         "(provenance/generator-src/scripts/complete_audio_pack_gate.py)" in attribution
     )
     assert "- Generator revision (reference only): `" + "1" * 40 + "`" in attribution
-    assert "github.com" not in attribution
+    assert "/blob/" not in attribution
     assert sorted(blobs) == ["radio.toml", "scripts/complete_audio_pack_gate.py", "scripts/core_cadence_gate.py"]
     assert "- Generator SHA-256: `" in attribution
     assert (

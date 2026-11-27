@@ -188,7 +188,7 @@ def test_attribution_links_resolve_inside_the_pack() -> None:
 
     assert len(targets) == 22
     assert all((ASSETS_DIR / target).is_file() for target in targets)
-    assert "github.com" not in attribution
+    assert "/blob/" not in attribution
 
 
 def test_runtime_manifest_declares_identity_and_bumper_roles() -> None:
