@@ -178,7 +178,7 @@ def test_generator_snapshot_holds_the_exact_pinned_bytes() -> None:
         dependency["sha256"] for dependency in generator["dependencies"] if dependency["path"] == generator["path"]
     )
     for dependency in generator["dependencies"]:
-        retained = ASSETS_DIR / "provenance" / "generator-src" / dependency["path"]
+        retained = ASSETS_DIR / validate_audio_asset_pack.generator_snapshot_path(dependency["path"])
         assert hashlib.sha256(retained.read_bytes()).hexdigest() == dependency["sha256"], dependency["path"]
 
 

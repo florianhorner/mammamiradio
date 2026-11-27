@@ -2000,7 +2000,7 @@ def test_generator_snapshot_is_written_from_pinned_blobs_and_replaces_the_previo
         if path.is_file()
     }
     assert not stale.exists()
-    assert written == {path: _fixture_dependency_bytes(path) for path in gate.GENERATOR_DEPENDENCIES}
+    assert written == {f"{path}.txt": _fixture_dependency_bytes(path) for path in gate.GENERATOR_DEPENDENCIES}
     assert reads == [("a" * 40, path) for path in gate.GENERATOR_DEPENDENCIES]
 
 
@@ -2026,7 +2026,7 @@ def test_candidate_carries_the_generator_snapshot_outside_the_runtime_inventory(
 def test_candidate_missing_a_generator_snapshot_file_is_rejected(candidate: Candidate) -> None:
     (candidate.pack_dir / gate._validator.generator_snapshot_path("radio.toml")).unlink()
 
-    expected = r"board inventory differs \(missing=\['pack/provenance/generator-src/radio.toml'\]"
+    expected = r"board inventory differs \(missing=\['pack/provenance/generator-src/radio.toml.txt'\]"
     with pytest.raises(ValueError, match=expected):
         gate.validate_complete_audio_pack(candidate.manifest_path)
 
@@ -2034,6 +2034,8 @@ def test_candidate_missing_a_generator_snapshot_file_is_rejected(candidate: Cand
 def test_candidate_with_an_unpinned_generator_snapshot_file_is_rejected(candidate: Candidate) -> None:
     _write(candidate.pack_dir / gate._validator.generator_snapshot_path("scripts/unpinned.py"), b"extra")
 
-    expected = r"board inventory differs \(missing=\[\], extra=\['pack/provenance/generator-src/scripts/unpinned.py'\]"
+    expected = (
+        r"board inventory differs \(missing=\[\], extra=\['pack/provenance/generator-src/scripts/unpinned.py.txt'\]"
+    )
     with pytest.raises(ValueError, match=expected):
         gate.validate_complete_audio_pack(candidate.manifest_path)

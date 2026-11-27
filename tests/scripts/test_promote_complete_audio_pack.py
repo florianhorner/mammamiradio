@@ -17,7 +17,7 @@ from scripts import promote_complete_audio_pack as promoter
 CONTENT_DIGEST = "c" * 64
 OTHER_CONTENT_DIGEST = "d" * 64
 GENERATOR_PATH = "scripts/generator.py"
-SNAPSHOT_FILE = f"provenance/generator-src/{GENERATOR_PATH}"
+SNAPSHOT_FILE = f"provenance/generator-src/{GENERATOR_PATH}.txt"
 
 
 def _write(path: Path, content: bytes) -> Path:
@@ -75,7 +75,7 @@ def _write_runtime_pack(pack: Path, marker: str) -> dict[str, Any]:
     asset = _write(pack / "audio" / "station.mp3", f"asset::{marker}".encode())
     master = _write(pack / "provenance" / "source-masters" / "station.mp3", f"asset::{marker}".encode())
     generator_bytes = f"generator::{marker}".encode()
-    _write(pack / "provenance" / "generator-src" / GENERATOR_PATH, generator_bytes)
+    _write(pack / SNAPSHOT_FILE, generator_bytes)
     generator_sha256 = hashlib.sha256(generator_bytes).hexdigest()
     files = sorted(
         [
@@ -215,7 +215,7 @@ def test_promotion_carries_the_generator_snapshot_and_drops_the_previous_one(tmp
     candidate = _candidate(tmp_path)
     target = tmp_path / "installed"
     _write_runtime_pack(target, "old")
-    retired = _write(target / "provenance" / "generator-src" / "scripts" / "retired.py", b"old input")
+    retired = _write(target / "provenance" / "generator-src" / "scripts" / "retired.py.txt", b"old input")
 
     promoter.promote_complete_audio_pack(candidate.board_manifest, CONTENT_DIGEST, target=target)
 

@@ -2937,15 +2937,15 @@
   },
   "generated_at": "20260817T085600Z",
   "inventory": {
-    "digest": "23013413a85349ae3b1247079fd2e02f1b4a1978c8f21acae4699ceb44fb35d8",
+    "digest": "991717ed1758c670f6caa93406e47c351d203aef0e67bfb0bdb28f5759c48e2f",
     "files": [
       {
         "path": "ATTRIBUTION.md",
-        "sha256": "869811b3732bc5bb1bf6c6c7179a22d201815c49d171ca1c1d3bf7a3fdddcae4"
+        "sha256": "feaf2fe20773be5a502137888705bc94acb8106895437857d1fd87ed919c4828"
       },
       {
         "path": "README.md",
-        "sha256": "6fd29959cc76f8f66f87894dbf0463cdb40cab6549e7e73f19b711a0f46f0ac1"
+        "sha256": "49a11bdc10190c5778a89e0e990f7a86cab40470a171ee371b7a25fec17234dc"
       },
       {
         "path": "ads/beds/bureaucracy_stamp.mp3",

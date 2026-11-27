@@ -1039,7 +1039,7 @@ def _write_generator_snapshot(pack_dir: Path) -> None:
         committed_bytes = _git_blob(revision, relative_path)
         if hashlib.sha256(committed_bytes).hexdigest() != record["sha256"]:
             raise ValueError(f"Complete-pack generator dependency changed while it was retained: {relative_path}")
-        destination = snapshot_root.joinpath(*PurePosixPath(relative_path).parts)
+        destination = pack_dir.joinpath(*PurePosixPath(_validator.generator_snapshot_path(relative_path)).parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(committed_bytes)
 
@@ -1607,9 +1607,10 @@ separate candidate board and its digest-bound listening receipt authorize this
 exact immutable runtime projection before promotion.
 
 `provenance/generator-src/` keeps a byte-exact copy of every generator input
-the manifest pins, stored at its repository path. Validation hashes those
-copies, so the pack proves which bytes generated it in any checkout, with no
-Git history or tags. The Git revision recorded in the manifest is a reference
+the manifest pins, stored at its repository path plus a `.txt` suffix so
+tools do not read the copies as live source. Validation hashes those copies,
+so the pack proves which bytes generated it in any checkout, with no Git
+history or tags. The Git revision recorded in the manifest is a reference
 only. The directory is provenance evidence, not runtime payload: it sits
 outside the runtime file inventory and is left out of the Docker and add-on
 images.

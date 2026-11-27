@@ -17,6 +17,7 @@ archive pointer; its public URL and SHA-256 are the durable ledger. A
 project-authored deterministic master instead keeps that file in the pack and
 pins its generator, every declared dependency, and toolchain metadata. The exact
 generator input bytes travel with the pack under ``provenance/generator-src/``
+(each at its repository path plus a ``.txt`` suffix)
 and are verified by hashing those files, so validation needs no Git history;
 the recorded Git revision is an informational reference only.
 
@@ -72,6 +73,10 @@ PROJECT_GENERATOR_KIND = "git-committed-ffmpeg-generator"
 # repo-relative paths. This subtree is provenance evidence, not runtime
 # payload: the runtime inventory skips it and the snapshot check owns it.
 GENERATOR_SNAPSHOT_DIR = "provenance/generator-src"
+# Each copy keeps its repository path plus this suffix. The suffix marks the
+# copies as retained text, so linters, type checkers and code scanners do not
+# read frozen evidence as live source. The bytes are unchanged.
+GENERATOR_SNAPSHOT_SUFFIX = ".txt"
 QUALITY_GUARD_KEY = "quality_guard_allowlist"
 CORRELATION_THRESHOLD = 0.98
 CORRELATION_WINDOW_SEC = 0.5
@@ -825,7 +830,7 @@ def _resolve_original_path(pack_dir: Path, original_path: str) -> Path:
 
 def generator_snapshot_path(generator_path: str) -> str:
     """Return the pack-relative snapshot path of one pinned generator input."""
-    return f"{GENERATOR_SNAPSHOT_DIR}/{generator_path}"
+    return f"{GENERATOR_SNAPSHOT_DIR}/{generator_path}{GENERATOR_SNAPSHOT_SUFFIX}"
 
 
 def is_generator_snapshot_path(relative_path: str) -> bool:
@@ -872,7 +877,7 @@ def _hash_generator_snapshot_file(pack_dir: Path, generator_path: str) -> str:
 
 
 def _scan_generator_snapshot(pack_dir: Path, errors: list[str]) -> set[str]:
-    """Enumerate snapshot files by generator path; links and special entries fail."""
+    """Enumerate snapshot files by pack-relative path; links and special entries fail."""
     root = pack_dir.joinpath(*PurePosixPath(GENERATOR_SNAPSHOT_DIR).parts)
     found: set[str] = set()
     if root.is_symlink():
@@ -895,7 +900,7 @@ def _scan_generator_snapshot(pack_dir: Path, errors: list[str]) -> set[str]:
         elif entry.is_dir():
             continue
         elif entry.is_file():
-            found.add(relative)
+            found.add(f"{GENERATOR_SNAPSHOT_DIR}/{relative}")
         else:
             errors.append(f"generator snapshot contains special filesystem entry: {relative}")
     return found
@@ -1011,7 +1016,8 @@ def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...]
 
     # The snapshot sits outside the runtime inventory, so it must hold exactly
     # the pinned inputs: an unpinned file there would be unverified bytes.
-    undeclared = sorted(_scan_generator_snapshot(pack_dir, errors) - set(snapshot_hashes))
+    pinned_files = {generator_snapshot_path(path) for path in snapshot_hashes}
+    undeclared = sorted(_scan_generator_snapshot(pack_dir, errors) - pinned_files)
     if undeclared:
         errors.append(f"generator snapshot contains files no generator pins: {', '.join(undeclared)}")
 

@@ -21,9 +21,10 @@ separate candidate board and its digest-bound listening receipt authorize this
 exact immutable runtime projection before promotion.
 
 `provenance/generator-src/` keeps a byte-exact copy of every generator input
-the manifest pins, stored at its repository path. Validation hashes those
-copies, so the pack proves which bytes generated it in any checkout, with no
-Git history or tags. The Git revision recorded in the manifest is a reference
+the manifest pins, stored at its repository path plus a `.txt` suffix so
+tools do not read the copies as live source. Validation hashes those copies,
+so the pack proves which bytes generated it in any checkout, with no Git
+history or tags. The Git revision recorded in the manifest is a reference
 only. The directory is provenance evidence, not runtime payload: it sits
 outside the runtime file inventory and is left out of the Docker and add-on
 images.

@@ -57,7 +57,7 @@ _FROZEN_BRAND_PROVENANCE = frozenset(
         "mammamiradio/assets/imaging/manifest.json",
         "mammamiradio/assets/imaging/ATTRIBUTION.md",
         "scripts/complete_audio_pack_gate.py",
-        "mammamiradio/assets/imaging/provenance/generator-src/scripts/complete_audio_pack_gate.py",
+        "mammamiradio/assets/imaging/provenance/generator-src/scripts/complete_audio_pack_gate.py.txt",
         "tests/audio/test_sonic_asset_pack.py",
     }
 )

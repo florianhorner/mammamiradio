@@ -420,7 +420,7 @@ def test_project_authored_master_hashes_generator_dependencies_and_renders_disti
     assert "## Source recordings and masters\n" in attribution
     assert (
         "- Generator: [`scripts/complete_audio_pack_gate.py`]"
-        "(provenance/generator-src/scripts/complete_audio_pack_gate.py)" in attribution
+        "(provenance/generator-src/scripts/complete_audio_pack_gate.py.txt)" in attribution
     )
     assert "- Generator revision (reference only): `" + "1" * 40 + "`" in attribution
     assert "/blob/" not in attribution
@@ -428,7 +428,7 @@ def test_project_authored_master_hashes_generator_dependencies_and_renders_disti
     assert "- Generator SHA-256: `" in attribution
     assert (
         "- Generator dependency: [`scripts/core_cadence_gate.py`]"
-        "(provenance/generator-src/scripts/core_cadence_gate.py)" in attribution
+        "(provenance/generator-src/scripts/core_cadence_gate.py.txt)" in attribution
     )
     assert "- Generator runtime: Python `Python 3.12.11`; FFmpeg `ffmpeg 8.0`" in attribution
     assert f"- Master SHA-256: `{generated_source['source_sha256']}`" in attribution
@@ -639,9 +639,24 @@ def test_generator_snapshot_rejects_files_no_generator_pins(tmp_path: Path, fake
 
     with pytest.raises(
         validator.AudioAssetPackValidationError,
-        match=r"generator snapshot contains files no generator pins: scripts/unpinned\.py",
+        match=r"contains files no generator pins: provenance/generator-src/scripts/unpinned\.py\.txt",
     ):
         validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_generator_snapshot_rejects_a_pinned_file_stored_without_the_suffix(tmp_path: Path, fake_probe: None) -> None:
+    """A copy under its bare repository name would read as live source to scanners."""
+    pack_dir = tmp_path / "pack"
+    _generated_pack(pack_dir)
+    stored = pack_dir / validator.generator_snapshot_path("radio.toml")
+    stored.rename(stored.with_name("radio.toml"))
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+
+    message = str(caught.value)
+    assert "cannot verify generator snapshot radio.toml: snapshot file is missing" in message
+    assert "contains files no generator pins: provenance/generator-src/radio.toml" in message
 
 
 def test_pack_without_generators_rejects_a_generator_snapshot(tmp_path: Path, fake_probe: None) -> None:
@@ -669,7 +684,7 @@ def test_runtime_inventory_excludes_the_generator_snapshot(tmp_path: Path, fake_
     assert not [path for path in scanned if validator.is_generator_snapshot_path(path)]
     payload = json.loads((pack_dir / "manifest.json").read_text(encoding="utf-8"))
     assert validator.generator_snapshot_paths(payload) == tuple(
-        sorted(f"provenance/generator-src/{path}" for path in blobs)
+        sorted(f"provenance/generator-src/{path}.txt" for path in blobs)
     )
 
 
