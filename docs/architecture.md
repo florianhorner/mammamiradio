@@ -289,6 +289,7 @@ always remains best-effort and never blocks or delays audio.
   The frozen v1 integration preview retains its existing prediction semantics.
 - banter triggers when `songs_since_banter` crosses the configured threshold, with a small random jitter outside preview mode
 - after a natural pacing decision, `producer.py` applies a runway governor to optional speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`): if the real queued audio is below 240 seconds and the bounded queue can still build more runway, that pick becomes `MUSIC`; if the queue is effectively saturated below the floor, the due speech is allowed; operator forces, chaos first-strike, release-campaign forced banter, bridges, and error recovery stay outside that gate
+- because a governed `TIME_CHECK` is rendered minutes before it airs, its spoken minute is the projected air moment, not the render moment: the wall clock plus the rest of the segment on air (`now_streaming` `started` + `duration_sec`, zero when unknown, e.g. right after a restart) plus the queued audio ahead of it. A natural time check is appended, so all queued audio counts; an operator air-next time check is front-inserted, so only urgent warnings that keep the head count. Hour and day rollover follow the clock (23:58 plus five minutes is announced as 0 e 3)
 
 `producer.py` turns that pacing decision into actual audio files:
 
@@ -902,6 +903,8 @@ When a standalone operator has deliberately enabled `external-media` and selecte
 charts as the base, the producer may check every 90 minutes and merge new chart
 entries without resetting `played_tracks` history. This path is absent from both
 add-ons and never substitutes for the offline starter release floor.
+A failed refresh (network drop, truncated or malformed feed) merges nothing,
+keeps the current playlist, and is retried at the next interval.
 
 ## Playback and fanout
 
@@ -1632,7 +1635,7 @@ responses are accepted only for the query generation that started them.
 
 ### CSRF protection
 
-Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients are exempt.
+Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients skip credentials and keep working without any of these when they send no `Origin` and no `Sec-Fetch-Site` header (curl, scripts, HA `rest_command`), but a loopback write that a browser marks as cross-site (`Sec-Fetch-Site: cross-site`, a non-same-origin `Origin`, or an `Origin` with a `Host` that is not `localhost` or a literal loopback/private IP) is refused with `403` unless it carries the CSRF token or the admin token.
 
 First Listen, setup credential actions, speaker playback, and Home entity
 privacy controls use an additional DNS-rebinding boundary. Their setup-status
@@ -1755,6 +1758,7 @@ This repo is biased toward "keep the station on air."
   immediately continue with local/starter music
 - natural optional speech yields to music when real queued audio is below the producer runway floor while queue capacity remains; packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, never ephemeral scratch
 - missing Home Assistant context is ignored
+- idle housekeeping never ends the producer: the hourly cache eviction and the optional chart refresh run while the queue is full, outside the per-segment rescue ladder, so each is wrapped to log a warning and retry at its next interval; `evict_cache_lru` skips a file that is renamed or removed between listing and `stat`, and the chart fetch returns an empty list for a truncated response, a non-UTF-8 or malformed body, or an unexpected feed shape
 - missing ad brands disables live ads; an approved active-mode packaged bank can still fill the break
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 

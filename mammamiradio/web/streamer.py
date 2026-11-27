@@ -271,6 +271,7 @@ from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/t
     _is_hassio_or_loopback,
     _is_loopback_client,
     _is_private_network,
+    _is_trusted_literal_host,
     _same_origin,
     has_valid_admin_basic_credentials,
     require_admin_access,
@@ -284,6 +285,7 @@ from mammamiradio.web.persistence import (
     _CREDENTIAL_ENV_TO_FIELD,
     _CREDENTIAL_FIELDS,
     _SECRET_WRITE_DURABLE,
+    UnsafeEnvValueError,
     _AddonPersistenceError,
     _apply_live_credentials,
     _sanitize_credential_value,
@@ -699,15 +701,7 @@ def _require_active_setup_access(request: Request, credentials=Depends(security)
         peer_address = None
     ingress = request.headers.get("X-Ingress-Path", "")
     trusted_ingress = bool(config.is_addon and ingress and peer_address is not None and peer_address in _HASSIO_NETWORK)
-    try:
-        request_host = request.url.hostname or ""
-        host_address = ipaddress.ip_address(request_host)
-    except ValueError:
-        host_address = None
-    trusted_literal_host = request_host == "localhost" or bool(
-        host_address is not None
-        and (host_address.is_loopback or any(host_address in network for network in _TRUSTED_NETWORKS))
-    )
+    trusted_literal_host = _is_trusted_literal_host(request)
     if not (trusted_ingress or trusted_literal_host):
         if config.is_addon:
             title = "Open Mamma Mi Radio from Home Assistant"
@@ -8424,11 +8418,28 @@ async def save_keys(request: Request, _: None = Depends(_require_active_setup_ac
 
     try:
         await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    except UnsafeEnvValueError:
+        return _unsafe_credential_response()
     except _AddonPersistenceError:
         logger.error("Failed to persist add-on credentials", exc_info=True)
         return JSONResponse(status_code=500, content={"ok": False, "error": "failed to save credentials"})
 
     return {"ok": True, "saved": list(updates.keys())}
+
+
+def _unsafe_credential_response() -> JSONResponse:
+    """Nothing was saved: tell the operator why, and what to do next."""
+    logger.warning("Refused a credential save: a value held a character that is unsafe in .env")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "ok": False,
+            "error": (
+                "One of those keys has a character we can't store safely, so nothing was saved. "
+                "Copy the key again straight from your provider's page, without spaces or quotes, and paste it in."
+            ),
+        },
+    )
 
 
 def _credential_updates_from_env_payload(body: dict, *, require_nonempty: bool) -> dict[str, str]:
@@ -10333,6 +10344,8 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
 
     try:
         await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    except UnsafeEnvValueError:
+        return _unsafe_credential_response()
     except _AddonPersistenceError:
         logger.error("Failed to persist add-on credentials", exc_info=True)
         return JSONResponse(status_code=500, content={"ok": False, "error": "failed to save credentials"})

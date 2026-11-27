@@ -268,6 +268,7 @@ def test_request_outcome_copy_is_complete_in_both_modes():
         "form_rate_limited",
         "form_queue_full",
         "form_declined",
+        "form_too_long",
         "form_network_error",
     )
     for lang in ("en", "it"):
