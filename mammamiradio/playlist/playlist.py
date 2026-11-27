@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import random
@@ -332,17 +333,27 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
     try:
         with urlopen(_APPLE_MUSIC_IT_CHARTS_URL, timeout=4.0) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
-    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    except (URLError, TimeoutError, OSError, http.client.HTTPException, ValueError) as exc:
+        # HTTPException covers a connection closed mid-body (IncompleteRead,
+        # BadStatusLine); ValueError covers invalid JSON and a non-UTF-8 body.
         logger.warning("Live charts fetch failed: %s", exc)
         return []
 
-    results = payload.get("feed", {}).get("results", [])
+    # The feed is third-party data: any shape other than the documented
+    # {"feed": {"results": [{...}, ...]}} is a failed fetch, never an exception.
+    feed = payload.get("feed") if isinstance(payload, dict) else None
+    results = feed.get("results") if isinstance(feed, dict) else None
+    if not isinstance(results, list):
+        logger.warning("Live charts fetch failed: the charts feed came back in an unexpected shape")
+        return []
     tracks: list[Track] = []
     artist_counts: dict[str, int] = {}
     rejected = 0
     for item in results:
         if len(tracks) >= limit:
             break
+        if not isinstance(item, dict):
+            continue
         title = str(item.get("name", "")).strip()
         artist = str(item.get("artistName", "")).strip()
         item_id = str(item.get("id", "")).strip()

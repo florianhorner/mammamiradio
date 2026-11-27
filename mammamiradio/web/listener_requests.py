@@ -379,10 +379,51 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     return {"ok": True, "removed": len(removed_requests)}
 
 
+# Public-route input bounds. The body cap is checked before the body is
+# buffered or decoded; the raw text caps sit well above the lengths the hosts
+# ever read (name 60 / message 200 after sanitising), so they only ever refuse
+# text nobody could have meant as a dedication.
+LISTENER_REQUEST_MAX_BODY_BYTES = 8 * 1024
+LISTENER_REQUEST_MAX_RAW_NAME_CHARS = 240
+LISTENER_REQUEST_MAX_RAW_MESSAGE_CHARS = 2000
+LISTENER_REQUEST_WINDOW_SECONDS = 30
+
+_REQUEST_TOO_LONG_COPY = (
+    "That dedication is too long for the hosts to read out. Trim it to a couple of lines and send it again."
+)
+_NAME_TOO_LONG_COPY = "That name is too long for the hosts to read out. Shorten it and send your dedication again."
+
+
+def _listener_request_retry_after(state: Any, submitter_ip_hash: str, now: float) -> int | None:
+    """Seconds this listener still has to wait, or None when they may send. Read-only."""
+    last = state._listener_request_rl.get(submitter_ip_hash, 0)
+    if now - last < LISTENER_REQUEST_WINDOW_SECONDS:
+        return int(LISTENER_REQUEST_WINDOW_SECONDS - (now - last))
+    return None
+
+
 @router.post("/api/listener-request")
 async def listener_request(request: Request):
     """Accept a listener shoutout or song wish. Public endpoint, IP rate-limited."""
-    body, error = await read_json_object(request, error_message="Write your request and try again.")
+    # Cheapest refusal first: a caller still inside the 30s window is turned
+    # away from the client address alone, before a single body byte is read.
+    # This look-up never writes, so a refused request still costs no slot; the
+    # authoritative check-and-reserve stays below, after validation.
+    config = request.app.state.config
+    state = request.app.state.station_state
+    submitter_ip_hash = _hash_submitter_ip(_client_ip_for_rate_limit(request), config)
+    retry_after = _listener_request_retry_after(state, submitter_ip_hash, time.time())
+    if retry_after is not None:
+        return JSONResponse({"ok": False, "retry_after": retry_after}, status_code=429)
+
+    # The body is bounded BEFORE it is buffered or decoded: this route is
+    # public and its parsing shares the event loop that feeds the stream.
+    body, error = await read_json_object(
+        request,
+        error_message="Write your request and try again.",
+        max_bytes=LISTENER_REQUEST_MAX_BODY_BYTES,
+        too_large_message=_REQUEST_TOO_LONG_COPY,
+    )
     if error is not None:
         return error
     raw_name = body.get("name")
@@ -391,6 +432,13 @@ async def listener_request(request: Request):
         return JSONResponse({"ok": False, "error": "name must be a string"}, status_code=400)
     if raw_message is not None and not isinstance(raw_message, str):
         return JSONResponse({"ok": False, "error": "message must be a string"}, status_code=400)
+    # Refuse (never slice) over-long raw text before any full-string work
+    # below. Slicing here would reopen the padded-blocked-name bypass the
+    # moderation gate closes; refusing keeps the gate on the complete text.
+    if raw_name is not None and len(raw_name) > LISTENER_REQUEST_MAX_RAW_NAME_CHARS:
+        return JSONResponse({"ok": False, "error": _NAME_TOO_LONG_COPY}, status_code=413)
+    if raw_message is not None and len(raw_message) > LISTENER_REQUEST_MAX_RAW_MESSAGE_CHARS:
+        return JSONResponse({"ok": False, "error": _REQUEST_TOO_LONG_COPY}, status_code=413)
     from mammamiradio.hosts.scriptwriter import _sanitize_prompt_data
 
     raw_name_str = (raw_name or "Un ascoltatore").strip()
@@ -403,7 +451,6 @@ async def listener_request(request: Request):
     # ellipsis, so a blocked name padded to that boundary would be split and slip
     # past the word-boundary match. Matching the raw text closes that bypass.
     # Rejects before the request is queued and before the rate-limit window below.
-    config = request.app.state.config
     moderation = getattr(config, "moderation", None)
     blocked_names = getattr(moderation, "blocked_names", [])
     if is_blocked(raw_name_str, blocked_names) or is_blocked(raw_message_str, blocked_names):
@@ -414,14 +461,14 @@ async def listener_request(request: Request):
     if not message:
         return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
 
-    # IP rate limit: 1 request per 30s per listener identity.
-    ip = _client_ip_for_rate_limit(request)
-    state = request.app.state.station_state
-    submitter_ip_hash = _hash_submitter_ip(ip, config)
+    # IP rate limit: 1 request per 30s per listener identity. Checked again
+    # here because the body read above awaits: two requests from one listener
+    # can both pass the early look-up, and only this check runs without an
+    # await before the window is reserved further down.
     now = time.time()
-    last = state._listener_request_rl.get(submitter_ip_hash, 0)
-    if now - last < 30:
-        return JSONResponse({"ok": False, "retry_after": int(30 - (now - last))}, status_code=429)
+    retry_after = _listener_request_retry_after(state, submitter_ip_hash, now)
+    if retry_after is not None:
+        return JSONResponse({"ok": False, "retry_after": retry_after}, status_code=429)
 
     # Prune stale entries on every non-rate-limited request so a sustained
     # queue_full rejection wave can't grow the dict without bound.  Note:

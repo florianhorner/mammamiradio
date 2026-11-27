@@ -102,6 +102,7 @@ COPY: dict[str, dict[str, str]] = {
         "form_rate_limited": "Give the DJ {s}s before sending another dedication.",
         "form_queue_full": "The dedication queue is full — wait a moment and try again.",
         "form_declined": "That dedication didn't go through — wait a moment and try again.",
+        "form_too_long": "That dedication is too long to read on air — trim it to a couple of lines and send it again.",
         "form_network_error": "We lost the connection — check it and try again.",
         # listener.js dynamic labels (served via /public-status payload)
         "now": "now",
@@ -239,6 +240,7 @@ COPY: dict[str, dict[str, str]] = {
         "form_rate_limited": "Aspetta {s}s prima di mandare un'altra dedica.",
         "form_queue_full": "La coda delle dediche è piena — aspetta un attimo e riprova.",
         "form_declined": "La dedica non è partita — aspetta un attimo e riprova.",
+        "form_too_long": "La dedica è troppo lunga da leggere in onda — accorciala a un paio di righe e rimandala.",
         "form_network_error": "Abbiamo perso la connessione — controllala e riprova.",
         "now": "adesso",
         "minutes_ago": "min fa",

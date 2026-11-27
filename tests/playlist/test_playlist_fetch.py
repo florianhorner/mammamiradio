@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 from pathlib import Path
 from typing import Literal
@@ -588,6 +589,57 @@ def test_chart_refresh_filters_existing_ids():
 def test_chart_refresh_propagates_empty_fetch_as_empty():
     with patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[]):
         assert fetch_chart_refresh(set()) == []
+
+
+def _raw_chart_response(body: bytes | None = None, *, read_error: Exception | None = None) -> MagicMock:
+    response = MagicMock()
+    if read_error is not None:
+        response.read.side_effect = read_error
+    else:
+        response.read.return_value = body
+    response.__enter__ = lambda value: value
+    response.__exit__ = MagicMock(return_value=False)
+    return response
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param(_raw_chart_response(read_error=http.client.IncompleteRead(b"x")), id="incomplete-read"),
+        pytest.param(_raw_chart_response(b"[]"), id="list-body"),
+        pytest.param(_raw_chart_response(b'{"feed": null}'), id="null-feed"),
+        pytest.param(_raw_chart_response(b'{"feed": {"results": {"oops": 1}}}'), id="results-not-list"),
+        pytest.param(_raw_chart_response(b"\xff\xfe\x00"), id="non-utf8-body"),
+    ],
+)
+def test_chart_refresh_returns_empty_on_broken_feed(response):
+    """The mid-session refresh keeps its "empty list on failure" promise for any broken feed."""
+    with patch("mammamiradio.playlist.playlist.urlopen", return_value=response):
+        assert fetch_chart_refresh(set()) == []
+
+
+def test_chart_refresh_returns_empty_on_bad_status_line():
+    with patch("mammamiradio.playlist.playlist.urlopen", side_effect=http.client.BadStatusLine("x")):
+        assert fetch_chart_refresh(set()) == []
+
+
+def test_chart_refresh_skips_non_dict_items_and_keeps_real_songs():
+    body = json.dumps(
+        {
+            "feed": {
+                "results": [
+                    None,
+                    "stray string",
+                    ["nested"],
+                    {"id": "it1", "name": "Canzone Vera", "artistName": "Artista Vero"},
+                ]
+            }
+        }
+    ).encode()
+    with patch("mammamiradio.playlist.playlist.urlopen", return_value=_raw_chart_response(body)):
+        result = fetch_chart_refresh(set())
+
+    assert [(track.title, track.artist) for track in result] == [("Canzone Vera", "Artista Vero")]
 
 
 def test_local_loader_ignores_unsupported_and_empty_files(tmp_path):

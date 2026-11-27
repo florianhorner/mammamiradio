@@ -453,3 +453,18 @@ def test_inject_csrf_token():
     result = _inject_csrf_token(html, "abc123")
     assert "abc123" in result
     assert "__MAMMAMIRADIO_CSRF_TOKEN__" not in result
+
+
+def test_enforce_basic_auth_loopback_refuses_cross_site_origin():
+    """The loopback exemption does not cover a write a browser sent from another site."""
+    req = _mock_request(
+        client_host="127.0.0.1",
+        headers={"Origin": "https://evil.example"},
+        url_scheme="http",
+        url_hostname="127.0.0.1",
+        url_port=8000,
+    )
+    with pytest.raises(HTTPException) as exc:
+        _enforce_csrf_for_basic_auth(req, MagicMock(), _mock_config(admin_password="pw"))
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Cross-site admin write blocked. Reload the dashboard and retry."

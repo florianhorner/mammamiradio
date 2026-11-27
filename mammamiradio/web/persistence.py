@@ -9,6 +9,7 @@ route handlers stay in ``web.streamer``.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import stat
 import threading
@@ -65,6 +66,41 @@ def _sanitize_credential_value(value: str) -> str:
     correctly and still fail its own post-write verification.
     """
     return value.replace("\n", "").replace("\r", "").strip()
+
+
+class UnsafeEnvValueError(ValueError):
+    """A value that cannot be written to a shell-sourced ``.env`` safely."""
+
+
+# start.sh, the Mac launchers, and the Conductor scripts ``source`` the .env, and
+# bash still expands ``$(...)``, backticks, and ``$VAR`` inside double quotes. Only
+# a strict allowlist is safe: a denylist missed Unicode line separators (U+2028,
+# U+0085), which the shell reads as ordinary bytes but Python's ``splitlines``
+# breaks on, so a later save split the line and flipped the quoting of every line
+# after it. Every real provider key, region, toggle, and profile name fits.
+_DOTENV_SAFE_VALUE_RE = re.compile(r"[A-Za-z0-9._~+/=:@-]*")
+
+
+def _dotenv_assignment(key: str, value: str) -> str:
+    """Serialize a KEY="VALUE" line that is inert when a shell sources the .env."""
+    if not _DOTENV_SAFE_VALUE_RE.fullmatch(value):
+        raise UnsafeEnvValueError(f"{key} contains a character that is unsafe in a shell-sourced .env")
+    return f'{key}="{value}"'
+
+
+def _dotenv_lines(text: str) -> list[str]:
+    """Split .env text into lines without breaking on Unicode line separators.
+
+    ``str.splitlines`` also breaks on U+2028, U+2029, U+0085 and friends, which
+    the shell reads as ordinary bytes, so it would rewrite one shell line into
+    two. Callers read with ``Path.read_text``, whose universal-newline mode has
+    already turned ``\\r\\n`` and a bare ``\\r`` into ``\\n``; values this module
+    writes never contain either.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def _env_assignment(key: str, value: str) -> str:
@@ -164,9 +200,12 @@ def _save_dotenv(updates: dict[str, str]) -> None:
     """Write key=value pairs to .env, updating existing keys or appending new ones."""
     with _DOTENV_LOCK:
         env_path = Path(".env")
-        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        lines = _dotenv_lines(env_path.read_text()) if env_path.exists() else []
 
         safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items()}
+        # Refuse the whole save before touching the file: a partly written .env
+        # would persist some keys and silently drop others.
+        assignments = {k: _dotenv_assignment(k, v) for k, v in safe_updates.items()}
 
         written = set()
         new_lines = []
@@ -175,14 +214,14 @@ def _save_dotenv(updates: dict[str, str]) -> None:
             if stripped and not stripped.startswith("#") and "=" in stripped:
                 key = stripped.split("=", 1)[0].strip()
                 if key in safe_updates:
-                    new_lines.append(f'{key}="{safe_updates[key]}"')
+                    new_lines.append(assignments[key])
                     written.add(key)
                     continue
             new_lines.append(line)
 
-        for key, value in safe_updates.items():
+        for key in safe_updates:
             if key not in written:
-                new_lines.append(f'{key}="{value}"')
+                new_lines.append(assignments[key])
 
         tmp = env_path.with_suffix(".env.tmp")
         # The .env holds provider API keys; create it 0600 so it is not
@@ -212,7 +251,10 @@ def _save_media_source_settings(
 
     with lock:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            text = path.read_text(encoding="utf-8")
+            # Only the standalone .env is sourced by a shell; the add-on secrets
+            # file keeps the splitter its Python readers use.
+            lines = text.splitlines() if addon else _dotenv_lines(text)
         except FileNotFoundError:
             lines = []
 
@@ -226,14 +268,14 @@ def _save_media_source_settings(
                 if key in safe_updates:
                     value = safe_updates[key]
                     if value:
-                        new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+                        new_lines.append(_env_assignment(key, value) if addon else _dotenv_assignment(key, value))
                     written.add(key)
                     continue
             new_lines.append(line)
 
         for key, value in safe_updates.items():
             if key not in written and value:
-                new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+                new_lines.append(_env_assignment(key, value) if addon else _dotenv_assignment(key, value))
 
         tmp = path.with_suffix(path.suffix + ".tmp")
         _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")
