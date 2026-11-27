@@ -54,8 +54,15 @@ export GH_REPO="$LAND_REPO"
 # Both the probe and merge carry the safety guard's repository/cleanup flags.
 merge_help="$(gh pr merge --help --delete-branch --repo "$LAND_REPO")" \
   || die "could not inspect gh merge options; check the error above, then re-run."
-printf '%s\n' "$merge_help" | grep -- '--match-head-commit' >/dev/null \
-  || die "this gh CLI does not support --match-head-commit (needs gh >= 2.49). Upgrade gh, then re-run."
+if ! printf '%s\n' "$merge_help" | grep -- '--match-head-commit' >/dev/null; then
+  # A shell function or wrapper in front of gh can answer the probe itself;
+  # its reply is not gh's help, so an upgrade would not help.
+  if ! printf '%s\n' "$merge_help" | grep -- 'gh pr merge' >/dev/null; then
+    reply="$(printf '%s\n' "$merge_help" | sed -n '/[^[:space:]]/{p;q;}' | cut -c1-200)"
+    die "gh pr merge --help did not return gh's own help, so something in front of gh answered: \"${reply:-<no output>}\". Check what runs as gh with: type -a gh, then re-run."
+  fi
+  die "this gh CLI does not support --match-head-commit (needs gh >= 2.49). Upgrade gh, then re-run."
+fi
 
 [ "$#" -ge 1 ] || die "usage: scripts/land-pr.sh <pr-number> [<pr-number>...]"
 
