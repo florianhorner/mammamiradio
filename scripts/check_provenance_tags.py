@@ -140,7 +140,8 @@ def check_provenance_tags(
         target = tags.get(f"refs/tags/{tag}")
         push_fix = (
             f"`git tag -a {tag} {revision} -m 'Keep audio-pack generator revision fetchable'` "
-            f"then `git push origin refs/tags/{tag}`"
+            f"then `git push <upstream> refs/tags/{tag}`, where <upstream> is the base repository "
+            f"(a fork contributor asks a maintainer to push it)"
         )
         if target is None:
             errors.append(

@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts import check_provenance_tags as guard
 from scripts import validate_audio_asset_pack as validator
@@ -105,7 +106,7 @@ def test_fails_when_tag_is_missing(remote: tuple[Path, list[str]]) -> None:
     tag = guard.provenance_tag_for(first)
     assert len(errors) == 1
     assert f"the tag {tag!r} is not on" in errors[0]
-    assert f"git push origin refs/tags/{tag}" in errors[0]
+    assert f"git push <upstream> refs/tags/{tag}" in errors[0]
 
 
 def test_fails_when_tag_points_at_a_different_commit(remote: tuple[Path, list[str]]) -> None:
@@ -171,3 +172,17 @@ def test_checked_in_manifest_pins_are_well_formed() -> None:
     revisions = guard.pinned_revisions(manifest)
     assert revisions
     assert all(validator.GIT_REVISION_RE.fullmatch(revision) for revision in revisions)
+
+
+def test_quality_workflow_checks_tags_on_the_base_repository() -> None:
+    """The CI step must ask the base repository, never the PR head or a fork."""
+    workflow = yaml.safe_load((guard.REPO_ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["tests"]["steps"]
+    names = [step.get("name") for step in steps]
+    step = next(s for s in steps if "check_provenance_tags.py" in str(s.get("run", "")))
+    assert step["env"]["BASE_REMOTE"] == "${{ github.server_url }}/${{ github.repository }}.git"
+    assert '--remote "$BASE_REMOTE"' in step["run"]
+    assert "head" not in step["env"]["BASE_REMOTE"]
+    # Runs after the coverage gate, and even when it fails, so it never hides test results.
+    assert names.index(step["name"]) > names.index("Coverage gate (runs pytest + per-module floors)")
+    assert step["if"] == "${{ !cancelled() }}"
