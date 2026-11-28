@@ -92,6 +92,16 @@ jobs:
         with:
           install-ffmpeg: "true"
 
+      # A re-pin PR still reaches its new generator commit through the PR
+      # branch, so the blob check passes without the provenance tag; main goes
+      # red only after the squash merge. Ask the base repository for the tag
+      # (github.repository is the base even on fork PRs) so neither a tag in
+      # this clone nor one pushed to a fork can satisfy the check.
+      - name: Audio-pack provenance tags on the base repository
+        env:
+          BASE_REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: python scripts/check_provenance_tags.py --remote "$BASE_REMOTE"
+
       # `addopts = -m 'not requires_ffmpeg'` deselects these by default, so the
       # coverage gate below never runs them. They are the only proof that a
       # manifest-approved payload which is not really audio still fails ffprobe.
