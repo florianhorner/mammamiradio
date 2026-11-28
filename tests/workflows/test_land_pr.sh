@@ -83,7 +83,15 @@ if [[ "$*" == *"--help"* ]]; then
   if [[ "${GH_MOCK_HELP_FAIL:-0}" == "1" ]]; then
     echo 'mock guard denied help' >&2; exit 1
   fi
-  [[ "${GH_MOCK_OLD_HELP:-0}" != "1" ]] || exit 0
+  if [[ "${GH_MOCK_INTERCEPT_HELP:-0}" == "1" ]]; then
+    printf '%s\n' 'GitHub hours: held until 18:00. Continue local work.'; exit 0
+  fi
+  if [[ "${GH_MOCK_INTERCEPT_HELP:-0}" == "named" ]]; then
+    printf '%s\n' 'working-hours guard: gh pr merge is held until 18:00.'; exit 0
+  fi
+  if [[ "${GH_MOCK_OLD_HELP:-0}" == "1" ]]; then
+    printf '%s\n' 'USAGE' '  gh pr merge [<number> | <url> | <branch>] [flags]'; exit 0
+  fi
   printf '%s\n' "--match-head-commit"
   if [ -n "${GH_MOCK_HELP_LINES:-}" ]; then
     seq 1 "$GH_MOCK_HELP_LINES"
@@ -215,6 +223,21 @@ run_land "$(empty_reader)" GH_MOCK_OLD_HELP=1
 never_merged || fail "missing head-pin support must never merge"
 printf '%s' "$RUN_OUT" | grep -q 'Upgrade gh' || fail "old CLI needs upgrade guidance"
 pass "missing head-pin support remains fail-closed"
+
+run_land "$(empty_reader)" GH_MOCK_INTERCEPT_HELP=1
+[ "$RUN_RC" -ne 0 ] || fail "an intercepted help probe must stop"
+never_merged || fail "an intercepted help probe must never merge"
+printf '%s' "$RUN_OUT" | grep -q 'GitHub hours: held until 18:00' || fail "show what answered instead of gh"
+printf '%s' "$RUN_OUT" | grep -q 'type -a gh' || fail "point at what runs as gh"
+! printf '%s' "$RUN_OUT" | grep -q 'Upgrade gh' || fail "a wrapper reply is not an obsolete CLI"
+pass "a wrapper answering the help probe is named, not blamed on the gh version"
+
+run_land "$(empty_reader)" GH_MOCK_INTERCEPT_HELP=named
+[ "$RUN_RC" -ne 0 ] || fail "a wrapper naming the command must stop"
+never_merged || fail "a wrapper naming the command must never merge"
+printf '%s' "$RUN_OUT" | grep -q 'working-hours guard' || fail "show the wrapper reply that names the command"
+! printf '%s' "$RUN_OUT" | grep -q 'Upgrade gh' || fail "a reply naming gh pr merge is still not gh's help"
+pass "a wrapper reply that names the command is not mistaken for gh help"
 
 # Case 1: CLEAN PR arms with pinned real head; legacy inputs are ignored.
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
