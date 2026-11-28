@@ -56,8 +56,10 @@ merge_help="$(gh pr merge --help --delete-branch --repo "$LAND_REPO")" \
   || die "could not inspect gh merge options; check the error above, then re-run."
 if ! printf '%s\n' "$merge_help" | grep -- '--match-head-commit' >/dev/null; then
   # A shell function or wrapper in front of gh can answer the probe itself;
-  # its reply is not gh's help, so an upgrade would not help.
-  if ! printf '%s\n' "$merge_help" | grep -- 'gh pr merge' >/dev/null; then
+  # its reply is not gh's help, so an upgrade would not help. gh's own help
+  # carries the usage line "  gh pr merge [<number> | ...]"; a wrapper message that
+  # merely names the command does not start a line that way.
+  if ! printf '%s\n' "$merge_help" | grep -E -- '^[[:space:]]*gh pr merge \[' >/dev/null; then
     reply="$(printf '%s\n' "$merge_help" | sed -n '/[^[:space:]]/{p;q;}' | cut -c1-200)"
     die "gh pr merge --help did not return gh's own help, so something in front of gh answered: \"${reply:-<no output>}\". Check what runs as gh with: type -a gh, then re-run."
   fi
