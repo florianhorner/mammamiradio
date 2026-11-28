@@ -9240,3 +9240,143 @@ def test_resolve_ad_role_accepts_a_space_separated_label():
     voices = {"hammer": AdVoice(name="V", voice="v", style="s", role="hammer")}
     assert _resolve_ad_role("Disclaimer Goblin", voices) == DISCLAIMER_ROLE
     assert _resolve_ad_role("DISCLAIMER GOBLIN (V)", voices) == DISCLAIMER_ROLE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_playback", [True, False])
+async def test_transition_track_and_cues_share_the_selected_history(config, state, use_playback):
+    heard = Track(title="Heard Song", artist="First Artist", duration_ms=1000, youtube_id="heard")
+    queued = Track(title="Queued Song", artist="Second Artist", duration_ms=1000, youtube_id="queued")
+    state.played_tracks.append(queued)
+    selected = heard if use_playback else queued
+    kwargs = {"playback_tracks": (heard,), "song_cues": [{"text": "stale cue"}]} if use_playback else {}
+    copy = f"You just heard {selected.title} from {selected.artist}, amici."
+    with (
+        patch("mammamiradio.playlist.song_cues.get_cues", new_callable=AsyncMock, return_value=[]) as cues,
+        patch.object(
+            scriptwriter_module,
+            "_generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value={"text": copy},
+        ) as writer,
+    ):
+        _, text, ref = await write_transition(state, config, **kwargs)
+    assert ref == selected.cache_key and text == copy
+    assert cues.await_args.args[1] == selected.youtube_id
+    prompt = writer.await_args.kwargs["prompt"]
+    assert "Just finished playing: " + selected.display in prompt
+    assert (queued if use_playback else heard).display not in prompt
+    assert ("Name the song just heard" in prompt) is use_playback
+    assert "stale cue" not in prompt
+    assert list(state.played_tracks) == [queued]
+
+
+@pytest.mark.asyncio
+async def test_no_audible_music_gives_neutral_transition_even_with_queued_music(config, state):
+    state.played_tracks.append(Track(title="Queued Song", artist="Second Artist", duration_ms=1000))
+    with (
+        patch("mammamiradio.playlist.song_cues.get_cues", new_callable=AsyncMock) as cues,
+        patch.object(
+            scriptwriter_module, "_generate_json_response_with_language_guard", new_callable=AsyncMock
+        ) as writer,
+    ):
+        _, text, ref = await write_transition(state, config, playback_tracks=())
+    assert ref is None and text == scriptwriter_module._transition_fallback_text(config, "banter")
+    writer.assert_not_awaited()
+    cues.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["banter", "repair", "news", "ad"])
+@pytest.mark.parametrize("has_audible_song", [True, False])
+async def test_front_insert_music_context_excludes_render_ahead(config, state, surface, has_audible_song):
+    heard = Track(title="Heard Song", artist="First Artist", duration_ms=1000, youtube_id="heard")
+    queued = Track(title="Queued Song", artist="Second Artist", duration_ms=1000, youtube_id="queued")
+    state.played_tracks.append(queued)
+    kwargs = {"playback_tracks": (heard,) if has_audible_song else ()}
+    with (
+        patch("mammamiradio.playlist.song_cues.get_cues", new_callable=AsyncMock, return_value=[]) as cues,
+        patch.object(
+            scriptwriter_module,
+            "_generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("captured prompt"),
+        ) as writer,
+    ):
+        if surface == "banter":
+            await write_banter(state, config, **kwargs)
+        elif surface == "repair":
+            await repair_banter_without_listener_context(state, config, **kwargs)
+        elif surface == "news":
+            await write_news_flash(state, config, **kwargs)
+        else:
+            voices = {"hammer": AdVoice(name="V", voice="v", style="s", role="hammer")}
+            brand = AdBrand(name="TestBrand", tagline="Classic", category="food")
+            await write_ad(brand, voices, state, config, **kwargs)
+    prompt = writer.await_args.kwargs["prompt"]
+    assert (heard.display in prompt) is has_audible_song
+    assert queued.title not in prompt
+    if surface == "banter" and has_audible_song:
+        assert cues.await_args.args[1] == heard.youtube_id
+    else:
+        cues.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("generated", "preserve"),
+    [
+        ("Silver Band lit up the room with that one.", False),
+        ("That was Burning Down by Silver Band, amici.", False),
+        ("That was Burn Notice by Silver Band, amici.", False),
+        ("That was Burn by Green Hill. Silver Band is up next.", False),
+        ("That was Burn by Silver Band Orchestra, amici.", False),
+        ("You just heard Silver Band with Burn, amici.", True),
+        ("That was Burn by Green Hill, amici.", False),
+        ("You just heard Burn by Silver Band, amici.", True),
+    ],
+)
+async def test_air_next_spoken_title_and_artist(config, state, generated, preserve):
+    song = Track(title="Burn (feat. Green Hill)", artist="Silver Band", duration_ms=1000)
+    with patch.object(
+        scriptwriter_module,
+        "_generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": generated},
+    ) as provider:
+        _, spoken, ref = await write_transition(state, config, playback_tracks=(song,))
+    assert spoken == (generated if preserve else "That was “Burn” by Silver Band.")
+    assert ref == song.cache_key
+    provider.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_normal_tail_can_still_react_without_a_literal_title(config, state):
+    state.played_tracks.append(Track(title="Burn", artist="Silver Band", duration_ms=1000))
+    generated = "That bassline just knocked my coffee off the desk, amici."
+    with patch.object(
+        scriptwriter_module,
+        "_generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": generated},
+    ):
+        _, spoken, ref = await write_transition(state, config)
+    assert spoken == generated and ref == state.played_tracks[-1].cache_key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "super_italian", "artist", "expected"),
+    [
+        ("en", False, "", "That was “Piano”."),
+        ("it", True, "Lina", "Avete appena ascoltato «Piano» di Lina."),
+        ("it", False, "Lina", "That was “Piano” by Lina."),
+    ],
+)
+async def test_named_operator_fallback_without_a_writer(config, state, language, super_italian, artist, expected):
+    config.station.language = language
+    config.super_italian_mode = super_italian
+    song = Track(title="Piano", artist=artist, duration_ms=1000)
+    with patch.object(scriptwriter_module, "has_script_llm", return_value=False):
+        _, spoken, ref = await write_transition(state, config, playback_tracks=(song,))
+    assert spoken == expected and ref == song.cache_key

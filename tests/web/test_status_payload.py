@@ -11,6 +11,7 @@ from typing import Literal
 import pytest
 
 from mammamiradio.core.models import (
+    AIR_NEXT_PREDECESSOR_EPOCH_KEY,
     LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
     LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
     LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
@@ -308,6 +309,7 @@ def test_public_segment_metadata_redacts_transition_track_ref():
     metadata = {
         "source": "banter",
         "transition_track_ref": "youtube|abc123",
+        AIR_NEXT_PREDECESSOR_EPOCH_KEY: 13,
         PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY: "starter-test-id",
     }
 

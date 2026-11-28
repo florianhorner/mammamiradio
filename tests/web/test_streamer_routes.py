@@ -39,6 +39,7 @@ from mammamiradio.core.first_listen import (
 )
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
+    AIR_NEXT_PREDECESSOR_EPOCH_KEY,
     LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
     LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
     LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
@@ -857,6 +858,84 @@ async def test_exact_packaged_banter_rechecks_its_audible_predecessor(tmp_path):
         await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
         assert state.now_streaming["label"] == "Exact banter"
         assert state.discard_by_reason[GenerationWasteReason.STALE_PLAYED_TRACK_REF] == 1
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("predecessor_change", ["skipped", "before_selection", "during_prelude"])
+@pytest.mark.parametrize("newer_directive", [None, "pending", "consumed"])
+async def test_air_next_rechecks_song_at_listener_boundary(tmp_path, monkeypatch, predecessor_change, newer_directive):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state.on_stream_segment(
+        Segment(type=SegmentType.MUSIC, path=tmp_path / "heard.mp3", duration_sec=30.0, metadata={"title": "Heard"})
+    )
+    expected_epoch = state.audible_playback_epoch
+    # The producer consumed the operator's trigger while Heard was still the last
+    # delivered music. A selected second song can deliver its first byte after admission.
+    state.set_force_next(SegmentType.BANTER)
+    state.clear_force_next()
+    consumed_revision = state.force_next_revision
+    audio = b"that was Heard"
+    path = tmp_path / "back-announcement.mp3"
+    path.write_bytes(audio)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=path,
+        duration_sec=1.0,
+        metadata={"queue_id": "air-next", AIR_NEXT_PREDECESSOR_EPOCH_KEY: expected_epoch},
+        air_next_force_revision=consumed_revision,
+        ephemeral=False,
+    )
+    other = Segment(
+        type=SegmentType.MUSIC, path=tmp_path / "second.mp3", duration_sec=2.0, metadata={"title": "Second"}
+    )
+    if predecessor_change == "before_selection":
+        state.on_stream_segment_selected(other)
+    app.state.queue.put_nowait(segment)
+    state.queued_segments = [{"id": "air-next", "type": "banter"}]
+    if newer_directive is not None:
+        state.set_force_next(SegmentType.NEWS_FLASH)
+        if newer_directive == "pending":
+            state.operator_force_pending = SegmentType.NEWS_FLASH
+        else:
+            state.clear_force_next()
+    if predecessor_change == "skipped":
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/skip")).status_code == 200
+        assert not state._last_audible_stream
+        assert state.audible_playback_epoch == expected_epoch
+    elif predecessor_change == "before_selection":
+        state.on_stream_segment_audible(other)
+    else:
+
+        async def _air_other_segment(**_kwargs):
+            state.on_stream_segment(other)
+
+        monkeypatch.setattr("mammamiradio.web.streamer._broadcast_boundary_prelude", _air_other_segment)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=2.0)
+        if predecessor_change == "skipped":
+            assert listener_queue.get_nowait() == audio
+            assert GenerationWasteReason.STALE_PLAYED_TRACK_REF not in state.discard_by_reason
+        else:
+            assert listener_queue.empty()
+            assert state.discard_by_reason[GenerationWasteReason.STALE_PLAYED_TRACK_REF] == 1
+        expected_force = None
+        if newer_directive == "pending":
+            expected_force = SegmentType.NEWS_FLASH
+        elif newer_directive is None and predecessor_change != "skipped":
+            expected_force = SegmentType.BANTER
+        assert state.force_next is expected_force
+        assert state.operator_force_pending is expected_force
+        assert not state.queued_segments
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
