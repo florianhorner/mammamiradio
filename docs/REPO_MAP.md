@@ -83,7 +83,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 
 The `tests/` tree mirrors the source tree exactly. To find the test for `mammamiradio/hosts/persona.py`, look in `tests/hosts/test_persona.py`.
 
-| Source nave              | Test dir              |
+| Source module            | Test dir              |
 |---------------------------|-----------------------|
 | `mammamiradio/core/`     | `tests/core/`         |
 | `mammamiradio/audio/`    | `tests/audio/`        |
