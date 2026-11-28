@@ -109,6 +109,19 @@ jobs:
           COVERAGE_RATCHET_JUNIT: pytest-results.xml
         run: python scripts/coverage-ratchet.py check
 
+      # A re-pin PR still reaches its new generator commit through the PR
+      # branch, so the blob check passes without the provenance tag; main goes
+      # red only after the squash merge. Ask the base repository for the tag
+      # (github.repository is the base even on fork PRs) so neither a tag in
+      # this clone nor one pushed to a fork can satisfy the check. It runs
+      # after the coverage gate, and even when that fails, so a missing tag
+      # or an unreachable remote never hides the test results.
+      - name: Audio-pack provenance tags on the base repository
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: python scripts/check_provenance_tags.py --remote "$BASE_REMOTE"
+
       - name: Upload pytest results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0

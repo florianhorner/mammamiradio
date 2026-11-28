@@ -173,10 +173,19 @@ that is `provenance/audio-pack-7a903df2`.
   enforces this yet: no GitHub tag ruleset covers the pattern, so the tag is
   protected only by this rule until one is created to block deletion and
   updates.
-- Re-pinning the pack to a new revision means pushing the matching tag in the
-  same change. CI does not catch a forgotten tag on the re-pin PR itself,
-  because the new commit is still reachable from the PR branch; `main` fails
-  only after the squash merge.
+- Re-pinning the pack to a new revision means pushing the matching tag before
+  the PR can merge. The blob check alone would pass on the re-pin PR, because
+  the new commit is still reachable from the PR branch, so the Quality
+  workflow's `tests` job also runs `scripts/check_provenance_tags.py`. For
+  every distinct `generator.revision` it asks the base repository (never the
+  clone or a fork) with `git ls-remote` for
+  `refs/tags/provenance/audio-pack-<first 8 hex>` and requires the tag to peel
+  to exactly that commit. A missing tag fails with the `git tag -a` and
+  `git push` commands that fix it; a tag on a different commit fails without
+  suggesting a move, because provenance tags are never moved. Run it locally
+  with `python scripts/check_provenance_tags.py` (default remote `origin`).
+  Whether a red run blocks the merge depends on the branch's required checks,
+  which this page does not record.
 - Once the tag is missing and its commit unreachable, CI fails:
   `actions/checkout` with `fetch-depth: 0` fetches all tags, and
   `scripts/validate_audio_asset_pack.py` reports one error that names the
