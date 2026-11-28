@@ -823,18 +823,81 @@ def test_on_stream_segment_records_played_track_log_at_play_time():
     assert state.played_track_log[0].played_at > 0
 
 
+def test_air_next_music_uses_only_the_immediate_listener_audible_segment():
+    state = StationState()
+    music = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/heard.mp3"),
+        duration_sec=60.0,
+        metadata={
+            "title": "Artist – Heard",
+            "artist": "Artist",
+            "spotify_id": "spotify-id",
+            "youtube_id": "youtube-id",
+            "provider_track_id": "provider-id",
+            "source_kind": "starter",
+        },
+    )
+    state.on_stream_segment_selected(music)
+    assert state.audible_music_for_air_next() is None
+    state.on_stream_segment_audible(music)
+    state.after_music(_track(2))
+    speech = Segment(type=SegmentType.BANTER, path=Path("/tmp/next.mp3"), duration_sec=3)
+    state.on_stream_segment_selected(speech)
+    assert state.audible_music_for_air_next() == Track(
+        title="Heard",
+        artist="Artist",
+        duration_ms=60_000,
+        spotify_id="spotify-id",
+        youtube_id="youtube-id",
+        provider_track_id="provider-id",
+        source="starter",
+    )
+    state.on_stream_segment_audible(speech)
+    assert state.audible_music_for_air_next() is None
+
+
+def test_air_next_title_only_does_not_invent_an_artist():
+    state = StationState()
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/local.mp3"),
+            duration_sec=100.0,
+            metadata={"title_only": "Song – Live", "source_kind": "local"},
+        )
+    )
+    assert state.audible_music_for_air_next() == Track(
+        title="Song – Live", artist="", duration_ms=100_000, source="local"
+    )
+
+
+def test_air_next_recognizes_audible_song_before_duration_is_known():
+    state = StationState()
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/heard.mp3"),
+            metadata={"title_only": "Heard", "artist": "Artist"},
+        )
+    )
+    assert state.audible_music_for_air_next() == Track(title="Heard", artist="Artist", duration_ms=0)
+    assert not state.played_track_log
+
+
 def test_on_stream_segment_skips_degraded_music_in_played_track_log():
     state = StationState()
     seg = Segment(
         type=SegmentType.MUSIC,
         path=Path("/tmp/silence.mp3"),
         duration_sec=180.0,
-        metadata={"error": "ffmpeg died with SIGABRT"},
+        metadata={"title": "Failed song", "error": "ffmpeg died with SIGABRT"},
     )
 
     state.on_stream_segment(seg)
 
     assert list(state.played_track_log) == []
+    assert state.audible_music_for_air_next() is None
 
 
 @pytest.mark.parametrize(
@@ -874,6 +937,7 @@ def test_on_stream_segment_skips_rescue_music_in_played_track_log(metadata):
     state.on_stream_segment(seg)
 
     assert list(state.played_track_log) == []
+    assert state.audible_music_for_air_next() is None
 
 
 def test_on_stream_segment_skips_placeholder_music_in_played_track_log():
@@ -888,6 +952,7 @@ def test_on_stream_segment_skips_placeholder_music_in_played_track_log():
     state.on_stream_segment(seg)
 
     assert list(state.played_track_log) == []
+    assert state.audible_music_for_air_next() is None
 
 
 def test_switch_playlist_clears_played_track_log():

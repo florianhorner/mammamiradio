@@ -19,6 +19,7 @@ from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
+    AIR_NEXT_PREDECESSOR_EPOCH_KEY,
     LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
     URGENT_INTERRUPT_PRIORITY_KEY,
     ChaosSubtype,
@@ -4021,6 +4022,99 @@ async def test_operator_air_next_banter_leaves_listener_request_for_adjacent_bre
     assert state.pinned_track is None
 
 
+@pytest.mark.parametrize("scenario", ["delivered", "selected_only", "urgent_speech_ahead", "boundary_during_render"])
+@pytest.mark.asyncio
+async def test_air_next_banter_uses_the_listener_audible_song(tmp_path, scenario):
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    audible, future = state.playlist
+
+    def music(track):
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / f"{track.spotify_id}.mp3",
+            duration_sec=track.duration_ms / 1000,
+            metadata={
+                "title": track.display,
+                "title_only": track.title,
+                "artist": track.artist,
+                "spotify_id": track.spotify_id,
+                "queue_id": track.spotify_id,
+            },
+            ephemeral=False,
+        )
+
+    opening = music(audible)
+    opening_epoch = state.on_stream_segment_selected(opening)
+    if scenario != "selected_only":
+        state.on_stream_segment_audible(opening)
+    if scenario == "urgent_speech_ahead":
+        urgent = Segment(
+            type=SegmentType.BANTER,
+            path=tmp_path / "warning.mp3",
+            metadata={URGENT_INTERRUPT_PRIORITY_KEY: True, "queue_id": "warning"},
+        )
+        queue.put_nowait(urgent)
+        state.queued_segments.append({"id": "warning", "label": "Warning", "type": "banter"})
+    buffered = music(future)
+    queue.put_nowait(buffered)
+    state.queued_segments.append({"id": future.spotify_id, "label": future.display, "type": "music"})
+    state.after_music(future)
+    state.set_force_next(SegmentType.BANTER)
+    state.operator_force_pending = SegmentType.BANTER
+
+    replacement = Track(title="Finale", artist="Trio", duration_ms=90_000, spotify_id="finale")
+
+    def transition(*args, playback_tracks=(), **kwargs):
+        track = playback_tracks[-1] if playback_tracks else None
+        return host, f"That was {track.title}." if track else "Here we are.", track.cache_key if track else None
+
+    def synthesize_dialogue(*args, **kwargs):
+        if scenario == "boundary_during_render" and state.playback_epoch == opening_epoch:
+            state.on_stream_segment(music(replacement))
+        return _fake_path()
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, side_effect=transition) as intro,
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([DialogueLine(host, "Back in the studio.")], None),
+        ) as banter,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, side_effect=synthesize_dialogue),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queue_depth(queue, state, config, queue.qsize() + 1)
+
+    expected = () if scenario in ("selected_only", "urgent_speech_ahead") else (audible,)
+    assert intro.await_args_list[0].kwargs["playback_tracks"] == expected
+    assert banter.await_args_list[0].kwargs["playback_tracks"] == expected
+    if scenario == "urgent_speech_ahead":
+        assert queue.get_nowait() is urgent
+    segment = queue.get_nowait()
+    assert segment.type is SegmentType.BANTER
+    assert queue.get_nowait() is buffered
+    if not expected:
+        assert not segment.metadata.get("transition_track_ref")
+        assert AIR_NEXT_PREDECESSOR_EPOCH_KEY not in segment.metadata
+        assert segment.air_next_force_revision is None
+    else:
+        if scenario == "boundary_during_render":
+            assert intro.await_args_list[1].kwargs["playback_tracks"][-1] == replacement
+            assert banter.await_args_list[1].kwargs["playback_tracks"][-1] == replacement
+        predecessor = replacement if scenario == "boundary_during_render" else audible
+        assert segment.metadata["transition_track_ref"] == predecessor.cache_key
+        assert segment.metadata[AIR_NEXT_PREDECESSOR_EPOCH_KEY] == state.audible_playback_epoch
+        assert segment.air_next_force_revision == state.force_next_revision
+
+
 @pytest.mark.asyncio
 async def test_transition_failure_recovers_listener_pin_from_successful_banter_sibling():
     state = _make_state()
@@ -6607,6 +6701,7 @@ async def test_listener_truth_guard_repairs_final_assembled_copy(unsafe_text):
             config,
             unsafe_lines,
             transition_text="And back to the music.",
+            playback_tracks=(state.playlist[0],),
         )
 
     assert changed is True
@@ -6614,7 +6709,7 @@ async def test_listener_truth_guard_repairs_final_assembled_copy(unsafe_text):
     assert transition == "And back to the music."
     assert [(line.host, line.text) for line in lines] == safe_lines
     assert all(line.delivery == "neutral" for line in lines)
-    repair.assert_awaited_once()
+    repair.assert_awaited_once_with(state, config, playback_tracks=(state.playlist[0],))
 
 
 @pytest.mark.asyncio

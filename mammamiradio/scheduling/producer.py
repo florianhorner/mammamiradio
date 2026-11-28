@@ -62,6 +62,7 @@ from mammamiradio.core.listener_session import (
 )
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.models import (
+    AIR_NEXT_PREDECESSOR_EPOCH_KEY,
     LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
     LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
     LISTENER_REQUEST_PIN_REVISION_KEY,
@@ -2215,6 +2216,7 @@ async def _listener_truth_guard(
     lines: Sequence[DialogueLine | tuple[HostPersonality, str]],
     *,
     transition_text: str | None = None,
+    playback_tracks: tuple[Track, ...] | None = None,
 ) -> tuple[list[DialogueLine], str | None, bool, bool]:
     """Validate the final spoken copy and perform one bounded repair.
 
@@ -2238,7 +2240,7 @@ async def _listener_truth_guard(
     # The rejected exchange's line accounting describes copy that is about to be
     # thrown away; leaving it set would attach it to the repair's ledger row.
     state.last_banter_line_loss = None
-    repaired_lines = await _sw.repair_banter_without_listener_context(state, config)
+    repaired_lines = await _sw.repair_banter_without_listener_context(state, config, playback_tracks=playback_tracks)
     if repaired_lines is None or contains_unsafe_listener_claims(_dialogue_line_text(line) for line in repaired_lines):
         logger.error("Listener-truth repair remained unsafe; abandoning generated banter")
         repaired_lines = _sw._banter_fallback_pools(config)[0]
@@ -2781,6 +2783,14 @@ def _queue_shadow_entry(segment: Segment, *, reason: str | None = None) -> dict:
         "source_kind": segment.metadata.get("source_kind", ""),
         "duration_sec": round(segment.duration_sec or 0, 1),
     }
+
+
+def _air_next_has_preceding_speech(queue: asyncio.Queue[Segment], state: StationState) -> bool:
+    # These commitments can put speech between the audible song and an Air Next request.
+    items = getattr(queue, "_queue", ())
+    return bool(items and items[0].metadata.get(URGENT_INTERRUPT_PRIORITY_KEY)) or any(
+        is_protected_handoff_successor(state, item) for item in items
+    )
 
 
 def _front_insert_queue_and_shadow(
@@ -6771,6 +6781,21 @@ async def _run_producer_inner(
         rendered_handoff_tail = False
         attempt_owner.begin()
 
+        playback_tracks: tuple[Track, ...] | None = None
+        predecessor_epoch = None
+        if (is_operator_forced or urgent_interrupt_cycle) and seg_type in (
+            SegmentType.BANTER,
+            SegmentType.NEWS_FLASH,
+            SegmentType.AD,
+        ):
+            # Snapshot once so all writers in this break describe the same delivered audio.
+            playback_tracks = ()
+            if not urgent_interrupt_cycle and not _air_next_has_preceding_speech(queue, state):
+                audible_track = state.audible_music_for_air_next()
+                if audible_track is not None:
+                    playback_tracks = (audible_track,)
+                    predecessor_epoch = state.audible_playback_epoch
+
         def _discard_uncommitted_handoff_artifacts() -> None:
             """Release a rendered-but-unadmitted handoff and its dry fallback.
 
@@ -7596,6 +7621,7 @@ async def _run_producer_inner(
                                     config,
                                     chaos_subtype=chaos_subtype,
                                     include_listener_request=False,
+                                    playback_tracks=playback_tracks,
                                     submission_guard=_home_submission_guard,
                                 )
                                 _gen_ok = True
@@ -7607,7 +7633,7 @@ async def _run_producer_inner(
                                 _unused_transition,
                                 truth_changed,
                                 _transition_replaced,
-                            ) = await _listener_truth_guard(state, config, lines)
+                            ) = await _listener_truth_guard(state, config, lines, playback_tracks=playback_tracks)
                             if truth_changed:
                                 _abandon_banter_commit(state, listener_request_commit)
                                 _release_campaign_abandon_in_flight(state)
@@ -7650,9 +7676,12 @@ async def _run_producer_inner(
                             state.set_gen("writing", "banter", "Writing banter")
                             _gen_ok = False
                             try:
-                                transition_task = _sw.write_transition(state, config, next_segment="banter")
+                                transition_task = _sw.write_transition(
+                                    state, config, next_segment="banter", playback_tracks=playback_tracks
+                                )
 
                                 async def _write_banter_with_commit_handoff(
+                                    current_playback_tracks: tuple[Track, ...] | None = playback_tracks,
                                     current_prompt_fact: PromptFact | None = prompt_fact,
                                     current_use_directed_home_context: bool = use_directed_home_context,
                                     current_companionship_claim: ListenerSessionCueClaim | None = companionship_claim,
@@ -7667,6 +7696,7 @@ async def _run_producer_inner(
                                         prompt_fact=current_prompt_fact,
                                         use_directed_home_context=current_use_directed_home_context,
                                         include_listener_request=current_include_listener_request,
+                                        playback_tracks=current_playback_tracks,
                                         submission_guard=_home_submission_guard,
                                         companionship_context=(
                                             current_companionship_claim.prompt_context
@@ -7700,7 +7730,13 @@ async def _run_producer_inner(
                                 guarded_transition,
                                 truth_changed,
                                 transition_replaced,
-                            ) = await _listener_truth_guard(state, config, lines, transition_text=trans_text)
+                            ) = await _listener_truth_guard(
+                                state,
+                                config,
+                                lines,
+                                transition_text=trans_text,
+                                playback_tracks=playback_tracks,
+                            )
                             assert guarded_transition is not None
                             trans_text = guarded_transition
                             if truth_changed:
@@ -8168,6 +8204,8 @@ async def _run_producer_inner(
                 ritual_moment_id = state.last_banter_ritual_moment_id or ""
                 gag_moment_id = state.ha_running_gag_moment_id or ""
                 attach_moment_ids = canned is None and not impossible_tts
+                if canned is not None or impossible_tts:
+                    predecessor_epoch = None
                 home_fact = state.last_banter_home_fact if attach_moment_ids else None
                 home_fact_metadata: dict[str, str | int] = home_fact.segment_metadata() if home_fact is not None else {}
                 home_return_authority = state.last_banter_return_authority if attach_moment_ids else None
@@ -8339,6 +8377,7 @@ async def _run_producer_inner(
                             state,
                             config,
                             callback_gag=(_cb_gag[1].text if _cb_gag else None),
+                            playback_tracks=playback_tracks,
                             submission_guard=_home_submission_guard,
                         )
                         _gen_ok = True
@@ -8659,6 +8698,7 @@ async def _run_producer_inner(
                 success_callback = state.after_time_check
 
             elif seg_type == SegmentType.AD and _live_ad_programme_block(config, state) is not None:
+                predecessor_epoch = None
                 segment = await _packaged_ad_segment(config, state)
                 if segment is None:
                     state.ad_programme_available = ad_programme_available(config, state)
@@ -8771,6 +8811,7 @@ async def _run_producer_inner(
                 render_failure_scratch.update({ad_intro_path, ad_transition_path, ad_promo_path})
 
                 async def _build_intro(
+                    _playback_tracks=playback_tracks,
                     _handoff_task=ad_handoff_task,
                     _ipath=ad_intro_path,
                     _xout=ad_transition_path,
@@ -8780,7 +8821,9 @@ async def _run_producer_inner(
                     extra_parts: list[Path] = []
                     try:
                         with _timed_render_stage(state, "script"):
-                            ihost, itext, itrack_ref = await _sw.write_transition(state, config, next_segment="ad")
+                            ihost, itext, itrack_ref = await _sw.write_transition(
+                                state, config, next_segment="ad", playback_tracks=_playback_tracks
+                            )
                     except Exception:
                         ihost = random.choice(_sw._regular_hosts(config))
                         itext = _select_ad_wrapper_text(config, "select_ad_break_intro", "AD_BREAK_INTROS")
@@ -8931,6 +8974,7 @@ async def _run_producer_inner(
                 _cb_gag_text = _cb_gag[1].text if _cb_gag else None
 
                 async def _write_ad_scripts(
+                    _playback_tracks=playback_tracks,
                     _spot_params=tuple(spot_params),
                     _callback_gag_text=_cb_gag_text,
                 ) -> list[AdScript]:
@@ -8946,6 +8990,7 @@ async def _run_producer_inner(
                                     sonic=sn,
                                     spot_index=i,
                                     callback_gag=(_callback_gag_text if i == 0 else None),
+                                    playback_tracks=_playback_tracks,
                                     submission_guard=_home_submission_guard,
                                     require_generated=True,
                                 )
@@ -9256,6 +9301,7 @@ async def _run_producer_inner(
             continue
         except Exception as e:
             # Recoverable: network/ffmpeg/disk/httpx errors — use non-silent continuity audio.
+            predecessor_epoch = None
             _unlink_render_scratch(render_failure_scratch)
             logger.error("Failed to produce %s segment: %s", seg_type.value, e)
             # A recovery segment must not inherit queue/playback accounting from
@@ -9629,12 +9675,21 @@ async def _run_producer_inner(
                     prepared_handoff = None
                     rendered_handoff_tail = False
 
-                def _front_insert_stale_check(_segment: Segment = segment) -> bool:
-                    # Stale if the continuity/source/playlist/chaos gate fires OR
-                    # the home-fact policy changed for this segment.
-                    if bool(_enqueue_stale_reason()):
-                        return True
-                    return not _home_fact_policy_is_current(_segment)
+                if predecessor_epoch is not None:
+                    segment.metadata[AIR_NEXT_PREDECESSOR_EPOCH_KEY] = predecessor_epoch
+                    segment.air_next_force_revision = consumed_force_clear_revision
+
+                def _front_insert_stale_check(_segment: Segment = segment) -> str | None:
+                    if reason := _enqueue_stale_reason():
+                        return reason
+                    if not _home_fact_policy_is_current(_segment):
+                        return GenerationWasteReason.OPERATOR_PURGE
+                    epoch = _segment.metadata.get(AIR_NEXT_PREDECESSOR_EPOCH_KEY)
+                    if epoch is not None and (
+                        epoch != state.audible_playback_epoch or _air_next_has_preceding_speech(queue, state)
+                    ):
+                        return GenerationWasteReason.STALE_PLAYED_TRACK_REF
+                    return None
 
                 if not await _enqueue_with_egress(
                     queue,
@@ -9652,13 +9707,17 @@ async def _run_producer_inner(
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
                     _abandon_banter_commit(state, banter_commit)
-                    if is_operator_forced:
-                        state.operator_force_pending = None
-                    state.finish_render_timing(
-                        "discarded",
-                        reason=_enqueue_rejection_reason(state, segment, _enqueue_stale_reason)
-                        or GenerationWasteReason.AIR_NEXT_OVERFLOW,
-                    )
+                    reason = _enqueue_rejection_reason(state, segment, _front_insert_stale_check)
+                    if is_operator_forced and state.operator_force_pending is seg_type:
+                        if (
+                            reason == GenerationWasteReason.STALE_PLAYED_TRACK_REF
+                            and state.force_next is None
+                            and state.force_next_revision == consumed_force_clear_revision
+                        ):
+                            state.set_force_next(seg_type)
+                        elif state.force_next is not seg_type:
+                            state.operator_force_pending = None
+                    state.finish_render_timing("discarded", reason=reason or GenerationWasteReason.AIR_NEXT_OVERFLOW)
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
                 # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.

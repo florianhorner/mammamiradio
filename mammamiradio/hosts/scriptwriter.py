@@ -44,6 +44,7 @@ from mammamiradio.core.models import (
     listener_request_force_revision,
     listener_request_pin_revision,
 )
+from mammamiradio.core.song_identity import normalize_song_identity_text, split_title_feature_credit
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.hosts.ad_creative import (
     _FORMAT_ROLES,
@@ -1751,18 +1752,19 @@ def _sanitize_prompt_data(text: str, max_len: int = 80) -> str:
     return text
 
 
-async def _load_song_cues_for_current_track(
-    state: StationState,
+def _music_history(state: StationState, playback_tracks: tuple[Track, ...] | None) -> tuple[Track, ...]:
+    """Use the operator break's audible history when supplied, including an empty one."""
+    return tuple(state.played_tracks) if playback_tracks is None else playback_tracks
+
+
+async def _load_song_cues(
+    last_track: Track | None,
     config: StationConfig,
     *,
     limit: int,
 ) -> list[dict]:
     """Load structured cues for the most recently played track, if any."""
-    if not state.played_tracks:
-        return []
-
-    last_track = list(state.played_tracks)[-1]
-    if not last_track.youtube_id:
+    if last_track is None or not last_track.youtube_id:
         return []
 
     try:
@@ -2642,6 +2644,7 @@ async def write_banter(
     companionship_context: CompanionshipPromptContext | None = None,
     include_listener_request: bool = True,
     submission_guard: Callable[[], bool] | None = None,
+    playback_tracks: tuple[Track, ...] | None = None,
 ) -> tuple[list[DialogueLine], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
@@ -2669,14 +2672,15 @@ async def write_banter(
         )
         return [DialogueLine(host, fallback)], None
 
-    recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
+    tracks = _music_history(state, playback_tracks)
+    last_track = tracks[-1] if tracks else None
+    recent = [_sanitize_prompt_data(t.display) for t in tracks[-3:]]
     jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
 
     # Track memory — per-track song cues + legacy operator rules
     track_rules_block = ""
-    cues = await _load_song_cues_for_current_track(state, config, limit=5)
-    if cues and state.played_tracks:
-        last_track = list(state.played_tracks)[-1]
+    cues = await _load_song_cues(last_track, config, limit=5)
+    if cues and last_track is not None:
         cue_lines = []
         for c in cues:
             label = c["type"]
@@ -3119,7 +3123,7 @@ GUEST HOST GATE:
 
     prompt = f"""Write a short radio banter between the hosts. {exchange_count} exchanges total.
 
-Just played: {recent if recent else "opening of the show"}
+Just played: {recent or ("no recent song" if playback_tracks is not None else "opening of the show")}
 Running jokes to optionally callback: {jokes if jokes else "none yet, you may seed one"}
 {ha_block}
 {mood_block}{weather_mood_fusion}<context_awareness>
@@ -3369,9 +3373,8 @@ Return JSON:
         memory_extraction_commit: MemoryExtractionCommit | None = None
         if persona_store and persona_block:
             known_yt = ""
-            if state.played_tracks:
-                _last_track = list(state.played_tracks)[-1]
-                known_yt = getattr(_last_track, "youtube_id", "") or ""
+            if last_track is not None:
+                known_yt = getattr(last_track, "youtube_id", "") or ""
             memory_extraction_commit = MemoryExtractionCommit(
                 script_lines=[{"host": line.host.name, "text": line.text} for line in result],
                 persona_context=persona_ctx,
@@ -3518,6 +3521,8 @@ Return JSON:
 async def repair_banter_without_listener_context(
     state: StationState,
     config: StationConfig,
+    *,
+    playback_tracks: tuple[Track, ...] | None = None,
 ) -> list[DialogueLine] | None:
     """Make one bounded, identity-free repair after a final truth violation.
 
@@ -3531,10 +3536,10 @@ async def repair_banter_without_listener_context(
     hosts = _regular_hosts(config)
     fallback_host = hosts[0] if hosts else HostPersonality(name="Host", voice="en-US-GuyNeural", style="")
     host_names = {host.name.casefold(): host for host in hosts}
-    recent = [_sanitize_prompt_data(track.display) for track in list(state.played_tracks)[-2:]]
+    recent = [_sanitize_prompt_data(track.display) for track in _music_history(state, playback_tracks)[-2:]]
     prompt = f"""Write a short two-host radio exchange in JSON.
 
-Recent music: {recent if recent else "the show opening"}
+Recent music: {recent or ("no recent song" if playback_tracks is not None else "the show opening")}
 Use only the station world, the music, and broad time-of-day context.
 Do not mention listeners, audience arrivals, tuning in, joining, returning,
 welcoming anyone back, or identifying who is listening. Aggregate phrases such
@@ -3860,6 +3865,8 @@ async def write_news_flash(
     category: str | None = None,
     callback_gag: str | None = None,
     submission_guard: Callable[[], bool] | None = None,
+    *,
+    playback_tracks: tuple[Track, ...] | None = None,
 ) -> tuple[HostPersonality, str, str]:
     """Generate an absurd news/traffic/sports flash bulletin with Italian station character.
 
@@ -3908,7 +3915,7 @@ async def write_news_flash(
             f"<weather_data>\nReal local forecast: {real_weather}{mood_line}\n</weather_data>\n"
         )
 
-    recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
+    recent_tracks = [_sanitize_prompt_data(t.display) for t in _music_history(state, playback_tracks)[-3:]]
 
     host = _pick_news_flash_host(config, category)
 
@@ -3917,7 +3924,7 @@ async def write_news_flash(
 CATEGORY: {category}
 {cat_desc}{weather_context_block}
 
-Recent music: {recent_tracks if recent_tracks else "show just started"}{_callback_block(callback_gag)}
+Recent music: {recent_tracks or ("no recent song" if playback_tracks is not None else "show just started")}{_callback_block(callback_gag)}
 
 RULES:
 - Single host delivers this: {host.name} ({host.style})
@@ -3962,6 +3969,47 @@ Return JSON:
         return (host, _news_flash_fallback(config), category)
 
 
+def _named_back_announcement(title: str, artist: str, config: StationConfig) -> str:
+    """A model-independent track credit for the actual playback boundary."""
+    if _spoken_fallback_language(config) == "it":
+        return f"Avete appena ascoltato «{title}»" + (f" di {artist}." if artist else ".")
+    return f"That was “{title}”" + (f" by {artist}." if artist else ".")
+
+
+def _contains_track_credit(text: str, title: str, artist: str) -> bool:
+    """Recognize a complete credit in the opening clause, in either spoken mode."""
+    # A title and an artist appearing somewhere in a reaction do not establish
+    # attribution. Compare the complete credit, leaving a DJ free to pivot after it.
+    clause = re.split(r"[,;:.!?–—](?=\s|$)", text, maxsplit=1)[0]
+    credit = normalize_song_identity_text(clause)
+    title = normalize_song_identity_text(title)
+    artist = normalize_song_identity_text(artist)
+    if not title:
+        return False
+    for opener in (
+        "that was ",
+        "this was ",
+        "you just heard ",
+        "we just heard ",
+        "avete appena ascoltato ",
+        "abbiamo appena ascoltato ",
+        "questa era ",
+        "era ",
+    ):
+        if credit.startswith(opener):
+            credit = credit.removeprefix(opener)
+            break
+    if not artist:
+        return credit == title and normalize_song_identity_text(text) == normalize_song_identity_text(clause)
+    return credit in {
+        f"{title} by {artist}",
+        f"{title} from {artist}",
+        f"{title} di {artist}",
+        f"{artist} with {title}",
+        f"{artist} con {title}",
+    }
+
+
 async def write_transition(
     state: StationState,
     config: StationConfig,
@@ -3969,6 +4017,8 @@ async def write_transition(
     style: str | None = None,
     song_cues: list[dict] | None = None,
     role: str | None = None,
+    *,
+    playback_tracks: tuple[Track, ...] | None = None,
 ) -> tuple[HostPersonality, str, str | None]:
     """Generate a short host transition line to talk over the end of a song.
 
@@ -3987,14 +4037,25 @@ async def write_transition(
     - ``"react"`` — explicitly use the default react-to-the-song style
 
     Omit ``song_cues`` or pass ``None`` to auto-load cues for the current track.
-    Pass ``[]`` explicitly to suppress cue loading.
+    With ``playback_tracks``, cue lookup follows the audible song even if
+    render-ahead cues were supplied. Pass ``[]`` to suppress cues in either mode.
     """
+    tracks = _music_history(state, playback_tracks)
+    last_track = tracks[-1] if tracks else None
+    fallback: tuple[str, str | None] = (_transition_fallback_text(config, next_segment), None)
+    title = artist = ""
+    if playback_tracks is not None:
+        if last_track is None or not last_track.title.strip():
+            return (random.choice(_regular_hosts(config)), *fallback)
+        credit = split_title_feature_credit(last_track.title)
+        title = credit[0] if credit else last_track.title.strip()
+        artist = last_track.artist.strip()
+        fallback = (_named_back_announcement(title, artist, config), last_track.cache_key)
     if not has_script_llm(config):
-        host = random.choice(_regular_hosts(config))
-        return (host, _transition_fallback_text(config, next_segment), None)
+        return (random.choice(_regular_hosts(config)), *fallback)
 
-    if song_cues is None:
-        song_cues = await _load_song_cues_for_current_track(state, config, limit=3)
+    if song_cues is None or (playback_tracks is not None and song_cues):
+        song_cues = await _load_song_cues(last_track, config, limit=3)
 
     # Auto-select style: exclaim 10% / echo 10% / react 80% (cues); echo 20% / react 80% (no cues)
     if style is None:
@@ -4006,8 +4067,13 @@ async def write_transition(
         else:
             style = "react"
 
-    current = _sanitize_prompt_data(state.played_tracks[-1].display) if state.played_tracks else "the opening"
-    played_track_ref = state.played_tracks[-1].cache_key if state.played_tracks else None
+    current = _sanitize_prompt_data(last_track.display) if last_track is not None else "the opening"
+    played_track_ref = last_track.cache_key if last_track is not None else None
+    back_announce = (
+        "\nName the song just heard in the opening clause with its exact title and artist, then pivot. Never translate or paraphrase the title."
+        if playback_tracks is not None
+        else ""
+    )
     host = random.choice(_regular_hosts(config))
     recent_texts = list(state.recent_transition_texts)[-4:]
     recent_openers = [_transition_stem(text) for text in recent_texts if text]
@@ -4041,7 +4107,7 @@ async def write_transition(
     prompt = f"""Write a SHORT transition line for {host.name} to say OVER the end of the current song.
 This plays while the music is fading out — the classic radio DJ move.
 
-Just finished playing: {current}
+Just finished playing: {current}{back_announce}
 What's next: {hint}
 Time context: {time_hint}
 {cues_block}
@@ -4073,7 +4139,7 @@ Return JSON:
         raw_text = data.get("text")
         if not isinstance(raw_text, str) or not _transition_text_usable(raw_text):
             logger.warning("Transition response was unusable; using deterministic stock copy")
-            return (host, _transition_fallback_text(config, next_segment), None)
+            return (host, *fallback)
         text = _massage_transition_text(
             raw_text,
             next_segment,
@@ -4082,17 +4148,20 @@ Return JSON:
         )
         if not _transition_text_usable(text):
             logger.warning("Massaged transition response was unusable; using deterministic stock copy")
-            return (host, _transition_fallback_text(config, next_segment), None)
+            return (host, *fallback)
         if not _normal_mode_language_ok([text], config, surface="transition"):
             state.language_guard_failures += 1
             logger.warning("Massaged transition failed final Normal Mode language check; using stock copy")
-            return (host, _transition_fallback_text(config, next_segment), None)
+            return (host, *fallback)
+        if playback_tracks is not None and not _contains_track_credit(text, title, artist):
+            logger.info("Air-next transition omitted the literal track credit; using the playback title and artist")
+            return (host, *fallback)
         logger.info("Generated transition: %s", text[:50])
         return (host, text, played_track_ref)
 
     except Exception as e:
         logger.error("Transition generation failed: %s", e)
-        return (host, _transition_fallback_text(config, next_segment), None)
+        return (host, *fallback)
 
 
 async def write_ad(
@@ -4106,6 +4175,8 @@ async def write_ad(
     callback_gag: str | None = None,
     submission_guard: Callable[[], bool] | None = None,
     require_generated: bool = False,
+    *,
+    playback_tracks: tuple[Track, ...] | None = None,
 ) -> AdScript:
     """Generate a structured fictional ad script for one brand with role-based voices.
 
@@ -4140,7 +4211,7 @@ async def write_ad(
         else ["(nessuna pubblicità ancora)"]
     )
 
-    recent_tracks = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
+    recent_tracks = [_sanitize_prompt_data(t.display) for t in _music_history(state, playback_tracks)[-3:]]
 
     # Find same-brand history for campaign arcs
     same_brand_ads = [e.summary for e in state.ad_history if e.brand == brand.name][-3:]
@@ -4293,7 +4364,7 @@ IMPORTANT: These are NOT radio hosts. These are separate commercial voices.
 Recent ads from OTHER brands that aired (you may cleverly reference or mock these):
 {chr(10).join(recent_ads)}
 
-Recently played music: {recent_tracks if recent_tracks else "show just started"}{_callback_block(callback_gag)}
+Recently played music: {recent_tracks or ("no recent song" if playback_tracks is not None else "show just started")}{_callback_block(callback_gag)}
 {ad_ha_block}
 
 RULES:

@@ -16,6 +16,7 @@ from fastapi.encoders import jsonable_encoder
 
 from mammamiradio.core.config import jamendo_source_configured
 from mammamiradio.core.models import (
+    AIR_NEXT_PREDECESSOR_EPOCH_KEY,
     LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     SOURCE_READINESS_KINDS,
@@ -796,6 +797,7 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        AIR_NEXT_PREDECESSOR_EPOCH_KEY,
         PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
         "clip_audio_class",
         # Render-scoped playlist identity keeps provider truth stable across a

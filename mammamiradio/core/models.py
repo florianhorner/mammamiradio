@@ -51,6 +51,7 @@ _RUNTIME_PROVIDER_OBSERVATION_TOKEN: ContextVar[str] = ContextVar(
 # remains queued, so listener-audible provider truth must travel with the audio
 # rather than being reconstructed from mutable global state.
 SEGMENT_PLAYLIST_SOURCE_KIND_KEY = "_playlist_source_kind"
+AIR_NEXT_PREDECESSOR_EPOCH_KEY = "air_next_predecessor_epoch"
 
 
 PartyMode = Literal["festival"]
@@ -893,6 +894,9 @@ class Segment:
     playback_start_callback: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
     audible_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     release_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    # Revision after the producer consumed an operator request that names a predecessor.
+    # Queue-only ownership follows the segment through egress without entering status metadata.
+    air_next_force_revision: int | None = field(default=None, repr=False, compare=False)
     _playback_started: bool = field(default=False, init=False, repr=False, compare=False)
     _audible_committed: bool = field(default=False, init=False, repr=False, compare=False)
     _released: bool = field(default=False, init=False, repr=False, compare=False)
@@ -2170,6 +2174,18 @@ class StationState:
         # rejection cannot leave a claimed companionship cue retryable.
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         self.release_listener_request_admitted_reservation(segment)
+        if (
+            reason == GenerationWasteReason.STALE_PLAYED_TRACK_REF
+            and already_counted_in_produced
+            and segment.air_next_force_revision == self.force_next_revision
+            and not self.session_stopped
+            and self.force_next is None
+            and self.operator_force_pending is None
+        ):
+            # The admitted copy missed its audible boundary. Keep the operator's request
+            # alive only while its consumed revision still owns the next-segment directive.
+            self.set_force_next(segment.type)
+            self.operator_force_pending = segment.type
         if metadata.get("listener_session_cue") == "companionship":
             cue_epoch = metadata.get("listener_session_epoch")
             if isinstance(cue_epoch, int) and not isinstance(cue_epoch, bool):
@@ -2973,8 +2989,6 @@ class StationState:
             logging.getLogger("mammamiradio.home_context_director").debug(
                 "Home context director activation failed", exc_info=True
             )
-        seg_type = segment.type.value
-        label = metadata.get("title", metadata.get("brand", seg_type))
         # Record only the previous listener-audible music segment as completed.
         # Readable selections that never reached a listener are deliberately
         # absent from this history.
@@ -3050,38 +3064,44 @@ class StationState:
         # Only add to studio-bleed pool once banter truly starts streaming.
         if segment.type == SegmentType.BANTER and not metadata.get("canned"):
             self.recent_banter_paths.append(segment.path)
-        if segment.type == SegmentType.MUSIC:
-            title = str(metadata.get("title_only") or metadata.get("title") or "")
-            artist = str(metadata.get("artist") or "")
-            if " – " in title and not artist:
-                artist, title = title.split(" – ", 1)
-            duration_ms = metadata.get("duration_ms")
-            if not isinstance(duration_ms, int):
-                duration_ms = int(max(segment.duration_sec, 0.0) * 1000)
-            title_key = title.strip().lower()
-            label_key = str(label).strip().lower()
-            placeholder_titles = {"", "music", "unknown", "unknown title", "untitled", "none"}
-            has_real_title = title_key not in placeholder_titles and not (
-                title_key == label_key and label_key in placeholder_titles
-            )
-            if not metadata.get("error") and not fallback_active and duration_ms > 0 and has_real_title:
-                self.played_track_log.append(
-                    PlayedEntry(
-                        track=Track(
-                            title=title,
-                            artist=artist,
-                            duration_ms=duration_ms,
-                            spotify_id=str(metadata.get("spotify_id") or ""),
-                            youtube_id=str(metadata.get("youtube_id") or ""),
-                            album_art=str(metadata.get("album_art") or ""),
-                            source=metadata.get("source_kind") or "youtube",
-                        ),
-                        played_at=time.monotonic(),
-                    )
-                )
         self._last_audible_stream = dict(self.now_streaming)
+        track = self.audible_music_for_air_next()
+        if track is not None and track.duration_ms > 0:
+            self.played_track_log.append(PlayedEntry(track=track, played_at=time.monotonic()))
         self.last_state_change_at = now
         return True
+
+    def audible_music_for_air_next(self) -> Track | None:
+        """Identify the immediate listener-audible predecessor for a front insertion."""
+        stream = self._last_audible_stream
+        if stream.get("type") != SegmentType.MUSIC.value or stream.get("epoch") != self.audible_playback_epoch:
+            return None
+        metadata = stream.get("metadata")
+        if not isinstance(metadata, dict) or metadata.get("error") or is_fallback_active(metadata):
+            return None
+        title_only = str(metadata.get("title_only") or "").strip()
+        title = title_only or str(metadata.get("title") or "")
+        artist = str(metadata.get("artist") or "").strip()
+        if not title_only and " – " in title:
+            prefix, remainder = title.split(" – ", 1)
+            if not artist or prefix.strip() == artist:
+                artist, title = prefix.strip(), remainder
+        title = title.strip()
+        duration_ms = metadata.get("duration_ms")
+        if not isinstance(duration_ms, int):
+            duration_ms = int(max(stream.get("duration_sec") or 0.0, 0.0) * 1000)
+        if title.lower() in {"", "music", "unknown", "unknown title", "untitled", "none"}:
+            return None
+        return Track(
+            title=title,
+            artist=artist,
+            duration_ms=max(duration_ms, 0),
+            spotify_id=str(metadata.get("spotify_id") or ""),
+            youtube_id=str(metadata.get("youtube_id") or ""),
+            provider_track_id=str(metadata.get("provider_track_id") or ""),
+            album_art=str(metadata.get("album_art") or ""),
+            source=metadata.get("source_kind") or metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY) or "youtube",
+        )
 
     def on_stream_segment(self, segment: Segment) -> None:
         """Compatibility helper that commits both selection and audibility.

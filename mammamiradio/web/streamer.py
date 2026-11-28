@@ -94,6 +94,7 @@ from mammamiradio.core.first_listen_show import (
 )
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
+    AIR_NEXT_PREDECESSOR_EPOCH_KEY,
     LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
     LISTENER_REQUEST_FORCE_REVISION_KEY,
     LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
@@ -1305,6 +1306,19 @@ def _segment_is_listener_reserved(state: StationState, segment: Segment) -> bool
     if segment.path is not None and segment.path.name.startswith("norm_"):
         return _is_listener_reserved_cache_file(segment.path, reservations)
     return False
+
+
+def _speech_predecessor_is_current(state: StationState, segment: Segment) -> bool:
+    """Recheck the audible predecessor claimed by generated or packaged speech."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if AIR_NEXT_PREDECESSOR_EPOCH_KEY in metadata:
+        epoch = metadata[AIR_NEXT_PREDECESSOR_EPOCH_KEY]
+        # A skip clears the snapshot used for taste accounting. Its audible
+        # epoch remains the predecessor until another segment reaches a listener.
+        if type(epoch) is not int or epoch <= 0 or epoch != state.audible_playback_epoch:
+            return False
+    return _packaged_banter_predecessor_is_current(state, segment)
 
 
 def _packaged_banter_predecessor_is_current(state: StationState, segment: Segment) -> bool:
@@ -6500,11 +6514,8 @@ async def run_playback_loop(app) -> None:
             gap_clips_served = 0
             continue
 
-        if not _packaged_banter_predecessor_is_current(state, segment):
-            # The clip was selected while its named starter was at queue-tail,
-            # but a later queue/source mutation removed or rejected that song.
-            # Drop at the last unstarted boundary rather than naming whichever
-            # unrelated track actually aired before it.
+        if not _speech_predecessor_is_current(state, segment):
+            # Queued speech can outlive the song it names when playback changes.
             state.record_discard(
                 segment,
                 reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF,
@@ -6517,7 +6528,7 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
-            logger.info("Discarding exact-track packaged banter after its predecessor changed")
+            logger.info("Discarding speech after its referenced track changed")
             continue
 
         if segment.released:
@@ -6681,7 +6692,7 @@ async def run_playback_loop(app) -> None:
                         pre_air_discard_reason = prelude.abort_reason
                     elif retained_chunk and not _home_context_generation_is_current(state, config, segment):
                         pre_air_discard_reason = GenerationWasteReason.OPERATOR_PURGE
-                    elif retained_chunk and not _packaged_banter_predecessor_is_current(state, segment):
+                    elif retained_chunk and not _speech_predecessor_is_current(state, segment):
                         pre_air_discard_reason = GenerationWasteReason.STALE_PLAYED_TRACK_REF
                     elif (
                         retained_chunk
